@@ -478,13 +478,17 @@ fn replace_on_columns_of_right_ordering(
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
         for item in right_ordering.iter_mut() {
-            let new_expr = item.expr.clone().transform_up(&|e| {
-                if e.eq(right_col) {
-                    Ok(Transformed::Yes(left_col.clone()))
-                } else {
-                    Ok(Transformed::No(e))
-                }
-            })?;
+            let new_expr = item
+                .expr
+                .clone()
+                .transform_up(&|e| {
+                    if e.eq(right_col) {
+                        Ok(Transformed::yes(left_col.clone()))
+                    } else {
+                        Ok(Transformed::no(e))
+                    }
+                })?
+                .data;
             item.expr = new_expr;
         }
     }

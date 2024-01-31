@@ -778,6 +778,7 @@ impl EquivalenceProperties {
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .map(|t| t.data)
             // Guaranteed to always return `Ok`.
             .unwrap()
     }
@@ -816,9 +817,9 @@ fn update_ordering(
         // We have a Literal, which is the other possible leaf node type:
         node.data = node.expr.get_ordering(&[]);
     } else {
-        return Transformed::No(node);
+        return Transformed::no(node);
     }
-    Transformed::Yes(node)
+    Transformed::yes(node)
 }
 
 /// This function determines whether the provided expression is constant

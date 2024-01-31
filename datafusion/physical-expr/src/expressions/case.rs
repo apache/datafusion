@@ -972,11 +972,12 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    Transformed::yes(transformed)
                 } else {
-                    Transformed::No(e)
+                    Transformed::no(e)
                 })
             })
+            .map(|t| t.data)
             .unwrap();
 
         let expr3 = expr
@@ -993,11 +994,12 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    Transformed::yes(transformed)
                 } else {
-                    Transformed::No(e)
+                    Transformed::no(e)
                 })
             })
+            .map(|t| t.data)
             .unwrap();
 
         assert!(expr.ne(&expr2));

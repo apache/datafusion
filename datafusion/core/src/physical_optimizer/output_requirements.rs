@@ -196,15 +196,17 @@ impl PhysicalOptimizerRule for OutputRequirements {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),
-            RuleMode::Remove => plan.transform_up(&|plan| {
-                if let Some(sort_req) =
-                    plan.as_any().downcast_ref::<OutputRequirementExec>()
-                {
-                    Ok(Transformed::Yes(sort_req.input()))
-                } else {
-                    Ok(Transformed::No(plan))
-                }
-            }),
+            RuleMode::Remove => plan
+                .transform_up(&|plan| {
+                    if let Some(sort_req) =
+                        plan.as_any().downcast_ref::<OutputRequirementExec>()
+                    {
+                        Ok(Transformed::yes(sort_req.input()))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                })
+                .map(|t| t.data),
         }
     }
 

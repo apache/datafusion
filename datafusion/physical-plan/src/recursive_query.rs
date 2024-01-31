@@ -317,16 +317,17 @@ fn assign_work_table(
                 )
             } else {
                 work_table_refs += 1;
-                Ok(Transformed::Yes(Arc::new(
+                Ok(Transformed::yes(Arc::new(
                     exec.with_work_table(work_table.clone()),
                 )))
             }
         } else if plan.as_any().is::<RecursiveQueryExec>() {
             not_impl_err!("Recursive queries cannot be nested")
         } else {
-            Ok(Transformed::No(plan))
+            Ok(Transformed::no(plan))
         }
     })
+    .map(|t| t.data)
 }
 
 impl Stream for RecursiveQueryStream {

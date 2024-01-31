@@ -374,15 +374,19 @@ pub fn sort_exec(
 /// TODO: Once [`ExecutionPlan`] implements [`PartialEq`], string comparisons should be
 /// replaced with direct plan equality checks.
 pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
-    context.transform_up(&|node| {
-        let children_plans = node.plan.children();
-        assert_eq!(node.children.len(), children_plans.len());
-        for (child_plan, child_node) in children_plans.iter().zip(node.children.iter()) {
-            assert_eq!(
-                displayable(child_plan.as_ref()).one_line().to_string(),
-                displayable(child_node.plan.as_ref()).one_line().to_string()
-            );
-        }
-        Ok(Transformed::No(node))
-    })
+    context
+        .transform_up(&|node| {
+            let children_plans = node.plan.children();
+            assert_eq!(node.children.len(), children_plans.len());
+            for (child_plan, child_node) in
+                children_plans.iter().zip(node.children.iter())
+            {
+                assert_eq!(
+                    displayable(child_plan.as_ref()).one_line().to_string(),
+                    displayable(child_node.plan.as_ref()).one_line().to_string()
+                );
+            }
+            Ok(Transformed::no(node))
+        })
+        .map(|t| t.data)
 }

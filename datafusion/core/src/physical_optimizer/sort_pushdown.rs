@@ -87,7 +87,7 @@ pub(crate) fn pushdown_sorts(
             }
             // Can push down requirements
             child.data = None;
-            return Ok(Transformed::Yes(child));
+            return Ok(Transformed::yes(child));
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
@@ -112,7 +112,7 @@ pub(crate) fn pushdown_sorts(
         requirements = add_sort_above(requirements, sort_reqs, None);
         assign_initial_requirements(&mut requirements);
     }
-    Ok(Transformed::Yes(requirements))
+    Ok(Transformed::yes(requirements))
 }
 
 fn pushdown_requirement_to_children(

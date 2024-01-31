@@ -284,14 +284,16 @@ pub fn convert_sort_expr_with_filter_schema(
     if all_columns_are_included {
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
-        let converted_filter_expr = expr.transform_up(&|p| {
-            convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
-                match transformed {
-                    Some(transformed) => Transformed::Yes(transformed),
-                    None => Transformed::No(p),
-                }
-            })
-        })?;
+        let converted_filter_expr = expr
+            .transform_up(&|p| {
+                convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
+                    match transformed {
+                        Some(transformed) => Transformed::yes(transformed),
+                        None => Transformed::no(p),
+                    }
+                })
+            })?
+            .data;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
         // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(

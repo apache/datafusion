@@ -95,12 +95,12 @@ impl MyAnalyzerRule {
             Ok(match plan {
                 LogicalPlan::Filter(filter) => {
                     let predicate = Self::analyze_expr(filter.predicate.clone())?;
-                    Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+                    Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         filter.input,
                     )?))
                 }
-                _ => Transformed::No(plan),
+                _ => Transformed::no(plan),
             })
         })
     }
@@ -111,11 +111,11 @@ impl MyAnalyzerRule {
             Ok(match expr {
                 Expr::Literal(ScalarValue::Int64(i)) => {
                     // transform to UInt64
-                    Transformed::Yes(Expr::Literal(ScalarValue::UInt64(
+                    Transformed::yes(Expr::Literal(ScalarValue::UInt64(
                         i.map(|i| i as u64),
                     )))
                 }
-                _ => Transformed::No(expr),
+                _ => Transformed::no(expr),
             })
         })
     }
@@ -175,12 +175,12 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
                 let low: Expr = *low;
                 let high: Expr = *high;
                 if negated {
-                    Transformed::Yes(expr.clone().lt(low).or(expr.gt(high)))
+                    Transformed::yes(expr.clone().lt(low).or(expr.gt(high)))
                 } else {
-                    Transformed::Yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
+                    Transformed::yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
                 }
             }
-            _ => Transformed::No(expr),
+            _ => Transformed::no(expr),
         })
     })
 }

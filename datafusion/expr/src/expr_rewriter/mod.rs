@@ -37,12 +37,13 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
         Ok({
             if let Expr::Column(c) = expr {
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::Yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(col))
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
 }
 
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
@@ -61,12 +62,13 @@ pub fn normalize_col_with_schemas(
         Ok({
             if let Expr::Column(c) = expr {
                 let col = c.normalize_with_schemas(schemas, using_columns)?;
-                Transformed::Yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(col))
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
 }
 
 /// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
@@ -80,12 +82,13 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
             if let Expr::Column(c) = expr {
                 let col =
                     c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::Yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(col))
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
 }
 
 /// Recursively normalize all [`Column`] expressions in a list of expression trees
@@ -106,14 +109,15 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
-                    Some(new_c) => Transformed::Yes(Expr::Column((*new_c).to_owned())),
-                    None => Transformed::No(expr),
+                    Some(new_c) => Transformed::yes(Expr::Column((*new_c).to_owned())),
+                    None => Transformed::no(expr),
                 }
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -129,12 +133,13 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
                     relation: None,
                     name: c.name,
                 };
-                Transformed::Yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(col))
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
     .expect("Unnormalize is infallable")
 }
 
@@ -167,12 +172,13 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform_up(&|expr| {
         Ok({
             if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::Yes(Expr::Column(col))
+                Transformed::yes(Expr::Column(col))
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             }
         })
     })
+    .map(|t| t.data)
     .expect("strip_outer_reference is infallable")
 }
 
@@ -253,7 +259,7 @@ where
     R: TreeNodeRewriter<Node = Expr>,
 {
     let original_name = expr.name_for_alias()?;
-    let expr = expr.rewrite(rewriter)?;
+    let expr = expr.rewrite(rewriter)?.data;
     expr.alias_if_changed(original_name)
 }
 
@@ -263,7 +269,7 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeRewriter};
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
     use std::ops::Add;
 
@@ -275,14 +281,14 @@ mod test {
     impl TreeNodeRewriter for RecordingRewriter {
         type Node = Expr;
 
-        fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
+        fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
             self.v.push(format!("Previsited {expr}"));
-            Ok((expr, TreeNodeRecursion::Continue))
+            Ok(Transformed::no(expr))
         }
 
-        fn f_up(&mut self, expr: Expr) -> Result<Expr> {
+        fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
             self.v.push(format!("Mutated {expr}"));
-            Ok(expr)
+            Ok(Transformed::no(expr))
         }
     }
 
@@ -297,10 +303,10 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::Yes(lit(utf8_val)))
+                    Ok(Transformed::yes(lit(utf8_val)))
                 }
                 // otherwise, return None
-                _ => Ok(Transformed::No(expr)),
+                _ => Ok(Transformed::no(expr)),
             }
         };
 
@@ -308,6 +314,7 @@ mod test {
         let rewritten = col("state")
             .eq(lit("foo"))
             .transform_up(&transformer)
+            .map(|t| t.data)
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
@@ -315,6 +322,7 @@ mod test {
         let rewritten = col("state")
             .eq(lit("baz"))
             .transform_up(&transformer)
+            .map(|t| t.data)
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
@@ -452,8 +460,8 @@ mod test {
         impl TreeNodeRewriter for TestRewriter {
             type Node = Expr;
 
-            fn f_up(&mut self, _: Expr) -> Result<Expr> {
-                Ok(self.rewrite_to.clone())
+            fn f_up(&mut self, _: Expr) -> Result<Transformed<Expr>> {
+                Ok(Transformed::yes(self.rewrite_to.clone()))
             }
         }
 

@@ -263,11 +263,12 @@ impl EquivalenceGroup {
             .transform_up(&|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
-                        return Ok(Transformed::Yes(cls.canonical_expr().unwrap()));
+                        return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
                     }
                 }
-                Ok(Transformed::No(expr))
+                Ok(Transformed::no(expr))
             })
+            .map(|t| t.data)
             .unwrap_or(expr)
     }
 
@@ -458,11 +459,12 @@ impl EquivalenceGroup {
                                         column.index() + left_size,
                                     ))
                                         as _;
-                                    return Ok(Transformed::Yes(new_column));
+                                    return Ok(Transformed::yes(new_column));
                                 }
 
-                                Ok(Transformed::No(expr))
+                                Ok(Transformed::no(expr))
                             })
+                            .map(|t| t.data)
                             .unwrap();
                         result.add_equal_conditions(&new_lhs, &new_rhs);
                     }

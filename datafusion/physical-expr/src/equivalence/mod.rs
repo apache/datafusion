@@ -48,12 +48,13 @@ pub fn add_offset_to_expr(
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+        Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
             col.name(),
             offset + col.index(),
         )))),
-        None => Ok(Transformed::No(e)),
+        None => Ok(Transformed::no(e)),
     })
+    .map(|t| t.data)
     .unwrap()
     // Note that we can safely unwrap here since our transform always returns
     // an `Ok` value.

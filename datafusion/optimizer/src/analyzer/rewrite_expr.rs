@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRewriter;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::utils::list_ndims;
 use datafusion_common::DFSchema;
 use datafusion_common::DFSchemaRef;
@@ -96,8 +96,8 @@ pub(crate) struct OperatorToFunctionRewriter {
 impl TreeNodeRewriter for OperatorToFunctionRewriter {
     type Node = Expr;
 
-    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        Ok(match expr {
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 op,
@@ -119,16 +119,16 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                     // Convert &Box<Expr> -> Expr
                     let left = (**left).clone();
                     let right = (**right).clone();
-                    return Ok(Expr::ScalarFunction(ScalarFunction {
+                    return Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
                         func_def: ScalarFunctionDefinition::BuiltIn(fun),
                         args: vec![left, right],
-                    }));
+                    })));
                 }
 
-                Ok(expr)
+                Transformed::no(expr)
             }
-            _ => Ok(expr),
-        }
+            _ => Transformed::no(expr),
+        })
     }
 }
 

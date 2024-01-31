@@ -1022,13 +1022,14 @@ pub fn replace_cols_by_name(
     e.transform_up(&|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::Yes(new_c.clone()),
-                None => Transformed::No(expr),
+                Some(new_c) => Transformed::yes(new_c.clone()),
+                None => Transformed::no(expr),
             }
         } else {
-            Transformed::No(expr)
+            Transformed::no(expr)
         })
     })
+    .map(|t| t.data)
 }
 
 /// check whether the expression uses the columns in `check_map`.

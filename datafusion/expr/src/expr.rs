@@ -1268,8 +1268,9 @@ impl Expr {
                 rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
                 rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
             }
-            Ok(Transformed::Yes(expr))
+            Ok(Transformed::yes(expr))
         })
+        .map(|t| t.data)
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated

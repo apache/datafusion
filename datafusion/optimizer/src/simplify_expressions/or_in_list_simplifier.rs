@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use datafusion_common::tree_node::TreeNodeRewriter;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_expr::expr::InList;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
@@ -39,7 +39,7 @@ impl OrInListSimplifier {
 impl TreeNodeRewriter for OrInListSimplifier {
     type Node = Expr;
 
-    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if *op == Operator::Or {
                 let left = as_inlist(left);
@@ -66,13 +66,13 @@ impl TreeNodeRewriter for OrInListSimplifier {
                             list,
                             negated: false,
                         };
-                        return Ok(Expr::InList(merged_inlist));
+                        return Ok(Transformed::yes(Expr::InList(merged_inlist)));
                     }
                 }
             }
         }
 
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 

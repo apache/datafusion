@@ -32,6 +32,7 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
+use datafusion_common::tree_node::Transformed;
 use itertools::izip;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -185,7 +186,7 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 pub fn with_new_children_if_necessary(
     expr: Arc<dyn PhysicalExpr>,
     children: Vec<Arc<dyn PhysicalExpr>>,
-) -> Result<Arc<dyn PhysicalExpr>> {
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     let old_children = expr.children();
     if children.len() != old_children.len() {
         internal_err!("PhysicalExpr: Wrong number of children")
@@ -195,9 +196,9 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
-        expr.with_new_children(children)
+        Ok(Transformed::yes(expr.with_new_children(children)?))
     } else {
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 

@@ -34,8 +34,8 @@ impl DynTreeNode for dyn ExecutionPlan {
         &self,
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
-    ) -> Result<Arc<Self>> {
-        with_new_children_if_necessary(arc_self, new_children).map(Transformed::into)
+    ) -> Result<Transformed<Arc<Self>>> {
+        with_new_children_if_necessary(arc_self, new_children)
     }
 }
 
@@ -63,7 +63,7 @@ impl<T> PlanContext<T> {
 
     pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.into();
+        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.data;
         Ok(self)
     }
 }

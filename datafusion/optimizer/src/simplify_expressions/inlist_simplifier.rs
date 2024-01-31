@@ -19,7 +19,7 @@
 
 use std::collections::HashSet;
 
-use datafusion_common::tree_node::TreeNodeRewriter;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_expr::expr::InList;
 use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
@@ -51,30 +51,30 @@ impl InListSimplifier {
 impl TreeNodeRewriter for InListSimplifier {
     type Node = Expr;
 
-    fn f_up(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
                 (left.as_ref(), op, right.as_ref())
             {
                 if l1.expr == l2.expr && !l1.negated && !l2.negated {
-                    return inlist_intersection(l1, l2, false);
+                    return Ok(Transformed::yes(inlist_intersection(l1, l2, false)?));
                 } else if l1.expr == l2.expr && l1.negated && l2.negated {
-                    return inlist_union(l1, l2, true);
+                    return Ok(Transformed::yes(inlist_union(l1, l2, true)?));
                 } else if l1.expr == l2.expr && !l1.negated && l2.negated {
-                    return inlist_except(l1, l2);
+                    return Ok(Transformed::yes(inlist_except(l1, l2)?));
                 } else if l1.expr == l2.expr && l1.negated && !l2.negated {
-                    return inlist_except(l2, l1);
+                    return Ok(Transformed::yes(inlist_except(l2, l1)?));
                 }
             } else if let (Expr::InList(l1), Operator::Or, Expr::InList(l2)) =
                 (left.as_ref(), op, right.as_ref())
             {
                 if l1.expr == l2.expr && l1.negated && l2.negated {
-                    return inlist_intersection(l1, l2, true);
+                    return Ok(Transformed::yes(inlist_intersection(l1, l2, true)?));
                 }
             }
         }
 
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 

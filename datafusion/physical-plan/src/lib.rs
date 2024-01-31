@@ -489,9 +489,9 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
-        Ok(Transformed::Yes(plan.with_new_children(children)?))
+        Ok(Transformed::yes(plan.with_new_children(children)?))
     } else {
-        Ok(Transformed::No(plan))
+        Ok(Transformed::no(plan))
     }
 }
 

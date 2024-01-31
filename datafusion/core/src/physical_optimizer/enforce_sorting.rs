@@ -158,33 +158,35 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
+        let adjusted = plan_requirements.transform_up(&ensure_sorting)?.data;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            let parallel =
-                plan_with_coalesce_partitions.transform_up(&parallelize_sorts)?;
+            let parallel = plan_with_coalesce_partitions
+                .transform_up(&parallelize_sorts)?
+                .data;
             parallel.plan
         } else {
             adjusted.plan
         };
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
-        let updated_plan =
-            plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
+        let updated_plan = plan_with_pipeline_fixer
+            .transform_up(&|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
                     true,
                     config,
                 )
-            })?;
+            })?
+            .data;
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
+        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?.data;
         Ok(adjusted.plan)
     }
 
@@ -221,7 +223,7 @@ fn parallelize_sorts(
         // `SortPreservingMergeExec` or a `CoalescePartitionsExec`, and they
         // all have a single child. Therefore, if the first child has no
         // connection, we can return immediately.
-        Ok(Transformed::No(requirements))
+        Ok(Transformed::no(requirements))
     } else if (is_sort(&requirements.plan)
         || is_sort_preserving_merge(&requirements.plan))
         && requirements.plan.output_partitioning().partition_count() <= 1
@@ -250,7 +252,7 @@ fn parallelize_sorts(
         }
 
         let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
-        Ok(Transformed::Yes(
+        Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(spm.with_fetch(fetch)),
                 false,
@@ -264,7 +266,7 @@ fn parallelize_sorts(
         // For the removal of self node which is also a `CoalescePartitionsExec`.
         requirements = requirements.children.swap_remove(0);
 
-        Ok(Transformed::Yes(
+        Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
                 false,
@@ -272,7 +274,7 @@ fn parallelize_sorts(
             ),
         ))
     } else {
-        Ok(Transformed::Yes(requirements))
+        Ok(Transformed::yes(requirements))
     }
 }
 
@@ -285,10 +287,12 @@ fn ensure_sorting(
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
     if requirements.children.is_empty() {
-        return Ok(Transformed::No(requirements));
+        return Ok(Transformed::no(requirements));
     }
     let maybe_requirements = analyze_immediate_sort_removal(requirements);
-    let Transformed::No(mut requirements) = maybe_requirements else {
+    requirements = if !maybe_requirements.transformed {
+        maybe_requirements.data
+    } else {
         return Ok(maybe_requirements);
     };
 
@@ -327,17 +331,17 @@ fn ensure_sorting(
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
     if is_window(plan) && child_node.data {
-        return adjust_window_sort_removal(requirements).map(Transformed::Yes);
+        return adjust_window_sort_removal(requirements).map(Transformed::yes);
     } else if is_sort_preserving_merge(plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition.
         let child_node = requirements.children.swap_remove(0);
-        return Ok(Transformed::Yes(child_node));
+        return Ok(Transformed::yes(child_node));
     }
 
-    update_sort_ctx_children(requirements, false).map(Transformed::Yes)
+    update_sort_ctx_children(requirements, false).map(Transformed::yes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
@@ -367,10 +371,10 @@ fn analyze_immediate_sort_removal(
                 child.data = false;
             }
             node.data = false;
-            return Transformed::Yes(node);
+            return Transformed::yes(node);
         }
     }
-    Transformed::No(node)
+    Transformed::no(node)
 }
 
 /// Adjusts a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
@@ -641,7 +645,7 @@ mod tests {
             {
                 let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
                 let adjusted = plan_requirements
-                    .transform_up(&ensure_sorting)
+                    .transform_up(&ensure_sorting).map(|t| t.data)
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
@@ -649,7 +653,7 @@ mod tests {
                     let plan_with_coalesce_partitions =
                         PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
                     let parallel = plan_with_coalesce_partitions
-                        .transform_up(&parallelize_sorts)
+                        .transform_up(&parallelize_sorts).map(|t| t.data)
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     parallel.plan
@@ -666,14 +670,14 @@ mod tests {
                             true,
                             state.config_options(),
                         )
-                    })
+                    }).map(|t| t.data)
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
                 let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
                 assign_initial_requirements(&mut sort_pushdown);
                 sort_pushdown
-                    .transform_down(&pushdown_sorts)
+                    .transform_down(&pushdown_sorts).map(|t| t.data)
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }

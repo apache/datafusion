@@ -172,7 +172,7 @@ mod tests {
         let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
         let placeholder_2 =
-            with_new_children_if_necessary(placeholder.clone(), vec![])?.into();
+            with_new_children_if_necessary(placeholder.clone(), vec![])?.data;
         assert_eq!(placeholder.schema(), placeholder_2.schema());
 
         let too_many_kids = vec![placeholder_2];

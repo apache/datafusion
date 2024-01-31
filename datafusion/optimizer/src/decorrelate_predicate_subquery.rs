@@ -228,7 +228,7 @@ fn build_join(
         collected_count_expr_map: Default::default(),
         pull_up_having_expr: None,
     };
-    let new_plan = subquery.clone().rewrite(&mut pull_up)?;
+    let new_plan = subquery.clone().rewrite(&mut pull_up)?.data;
     if !pull_up.can_pull_up {
         return Ok(None);
     }

@@ -647,29 +647,29 @@ impl LogicalPlan {
                 // Decimal128(Some(69999999999999),30,15)
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
-                fn unalias_down(
-                    expr: Expr,
-                ) -> Result<(Transformed<Expr>, TreeNodeRecursion)> {
+                fn unalias_down(expr: Expr) -> Result<Transformed<Expr>> {
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
                         | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
-                            Ok((Transformed::No(expr), TreeNodeRecursion::Skip))
+                            Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip))
                         }
-                        Expr::Alias(_) => Ok((
-                            Transformed::Yes(expr.unalias()),
+                        Expr::Alias(_) => Ok(Transformed::new(
+                            expr.unalias(),
+                            true,
                             TreeNodeRecursion::Skip,
                         )),
-                        _ => Ok((Transformed::No(expr), TreeNodeRecursion::Continue)),
+                        _ => Ok(Transformed::no(expr)),
                     }
                 }
 
-                fn dummy_up(expr: Expr) -> Result<Expr> {
-                    Ok(expr)
+                fn dummy_up(expr: Expr) -> Result<Transformed<Expr>> {
+                    Ok(Transformed::no(expr))
                 }
 
-                let predicate = predicate.transform(&mut unalias_down, &mut dummy_up)?;
+                let predicate =
+                    predicate.transform(&mut unalias_down, &mut dummy_up)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs[0].clone()))
                     .map(LogicalPlan::Filter)
@@ -1243,19 +1243,20 @@ impl LogicalPlan {
                 Expr::Placeholder(Placeholder { id, .. }) => {
                     let value = param_values.get_placeholders_with_values(id)?;
                     // Replace the placeholder with the value
-                    Ok(Transformed::Yes(Expr::Literal(value)))
+                    Ok(Transformed::yes(Expr::Literal(value)))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Transformed::Yes(Expr::ScalarSubquery(Subquery {
+                    Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
                     })))
                 }
-                _ => Ok(Transformed::No(expr)),
+                _ => Ok(Transformed::no(expr)),
             }
         })
+        .map(|t| t.data)
     }
 }
 
@@ -3310,10 +3311,11 @@ digraph {
                         Arc::new(LogicalPlan::TableScan(table)),
                     )
                     .unwrap();
-                    Ok(Transformed::Yes(LogicalPlan::Filter(filter)))
+                    Ok(Transformed::yes(LogicalPlan::Filter(filter)))
                 }
-                x => Ok(Transformed::No(x)),
+                x => Ok(Transformed::no(x)),
             })
+            .map(|t| t.data)
             .unwrap();
 
         let expected = "Explain\

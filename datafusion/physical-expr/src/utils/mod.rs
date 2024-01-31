@@ -172,7 +172,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
         // Set the data field of the input expression node to the corresponding node index.
         node.data = Some(node_idx);
         // Return the mutated expression node.
-        Ok(Transformed::Yes(node))
+        Ok(Transformed::yes(node))
     }
 }
 
@@ -193,7 +193,9 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init.transform_up_mut(&mut |node| builder.mutate(node))?;
+    let root = init
+        .transform_up_mut(&mut |node| builder.mutate(node))?
+        .data;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -230,13 +232,14 @@ pub fn reassign_predicate_columns(
                 Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Transformed::Yes(Arc::new(Column::new(
+            return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
                 index,
             ))));
         }
-        Ok(Transformed::No(expr))
+        Ok(Transformed::no(expr))
     })
+    .map(|t| t.data)
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window

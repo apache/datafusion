@@ -109,11 +109,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     });
 
             Ok(if let Some(transformed) = transformed {
-                Transformed::Yes(transformed)
+                Transformed::yes(transformed)
             } else {
-                Transformed::No(plan)
+                Transformed::no(plan)
             })
         })
+        .map(|t| t.data)
     }
 
     fn name(&self) -> &str {
@@ -185,11 +186,12 @@ fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalEx
                     None => None,
                 };
             Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(normalized_form)
+                Transformed::yes(normalized_form)
             } else {
-                Transformed::No(expr)
+                Transformed::no(expr)
             })
         })
+        .map(|t| t.data)
         .unwrap_or(group_expr)
 }
 

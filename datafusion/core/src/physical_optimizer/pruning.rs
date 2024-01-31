@@ -840,12 +840,13 @@ fn rewrite_column_expr(
     e.transform_up(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
-                return Ok(Transformed::Yes(Arc::new(column_new.clone())));
+                return Ok(Transformed::yes(Arc::new(column_new.clone())));
             }
         }
 
-        Ok(Transformed::No(expr))
+        Ok(Transformed::no(expr))
     })
+    .map(|t| t.data)
 }
 
 fn reverse_operator(op: Operator) -> Result<Operator> {

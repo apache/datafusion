@@ -41,21 +41,6 @@ macro_rules! handle_tree_recursion {
     };
 }
 
-macro_rules! handle_tree_recursion_without_stop {
-    ($TNR:expr, $NODE:expr) => {
-        match $TNR {
-            TreeNodeRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children, let
-            // the recursion continue:
-            TreeNodeRecursion::Skip => return Ok($NODE),
-            // Stop is not (yet) supported
-            TreeNodeRecursion::Stop => {
-                panic!("Stop can't be used in `TreeNode::transform()` and `TreeNode::rewrite()`")
-            }
-        }
-    };
-}
-
 /// Defines a visitable and rewriteable a tree node. This trait is
 /// implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as
 /// well as expression trees ([`PhysicalExpr`], [`Expr`]) in
@@ -138,66 +123,65 @@ pub trait TreeNode: Sized {
     /// f_up(ParentNode)
     /// ```
     ///
-    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled,
-    /// and please note that [`TreeNodeRecursion::Stop`] is not supported.
+    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
     ///
     /// If `f_down` or `f_up` returns [`Err`], recursion is stopped immediately.
-    fn transform<FD, FU>(self, f_down: &mut FD, f_up: &mut FU) -> Result<Self>
+    fn transform<FD, FU>(
+        self,
+        f_down: &mut FD,
+        f_up: &mut FU,
+    ) -> Result<Transformed<Self>>
     where
-        FD: FnMut(Self) -> Result<(Transformed<Self>, TreeNodeRecursion)>,
-        FU: FnMut(Self) -> Result<Self>,
+        FD: FnMut(Self) -> Result<Transformed<Self>>,
+        FU: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let (new_node, tnr) = f_down(self).map(|(t, tnr)| (t.into(), tnr))?;
-        handle_tree_recursion_without_stop!(tnr, new_node);
-        let node_with_new_children =
-            new_node.map_children(|node| node.transform(f_down, f_up))?;
-        f_up(node_with_new_children)
+        f_down(self)?.and_then_transform_children(|t| {
+            t.map_children(|node| node.transform(f_down, f_up))?
+                .and_then_transform_sibling(f_up)
+        })
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
     /// children(Preorder Traversal).
     /// When the `op` does not apply to a given node, it is left unchanged.
-    fn transform_down<F>(self, op: &F) -> Result<Self>
+    fn transform_down<F>(self, f: &F) -> Result<Transformed<Self>>
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        let after_op = op(self)?.into();
-        after_op.map_children(|node| node.transform_down(op))
+        f(self)?.and_then_transform_children(|t| t.map_children(|n| n.transform_down(f)))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
     /// children(Preorder Traversal) using a mutable function, `F`.
     /// When the `op` does not apply to a given node, it is left unchanged.
-    fn transform_down_mut<F>(self, op: &mut F) -> Result<Self>
+    fn transform_down_mut<F>(self, f: &mut F) -> Result<Transformed<Self>>
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let after_op = op(self)?.into();
-        after_op.map_children(|node| node.transform_down_mut(op))
+        f(self)?
+            .and_then_transform_children(|t| t.map_children(|n| n.transform_down_mut(f)))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
     /// children and then itself(Postorder Traversal).
     /// When the `op` does not apply to a given node, it is left unchanged.
-    fn transform_up<F>(self, op: &F) -> Result<Self>
+    fn transform_up<F>(self, f: &F) -> Result<Transformed<Self>>
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        let after_op_children = self.map_children(|node| node.transform_up(op))?;
-        let new_node = op(after_op_children)?.into();
-        Ok(new_node)
+        self.map_children(|node| node.transform_up(f))?
+            .and_then_transform_sibling(f)
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
     /// children and then itself(Postorder Traversal) using a mutable function, `F`.
     /// When the `op` does not apply to a given node, it is left unchanged.
-    fn transform_up_mut<F>(self, op: &mut F) -> Result<Self>
+    fn transform_up_mut<F>(self, f: &mut F) -> Result<Transformed<Self>>
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let after_op_children = self.map_children(|node| node.transform_up_mut(op))?;
-        let new_node = op(after_op_children)?.into();
-        Ok(new_node)
+        self.map_children(|n| n.transform_up_mut(f))?
+            .and_then_transform_sibling(f)
     }
 
     /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
@@ -220,17 +204,18 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
     ///
-    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled,
-    /// and please note that [`TreeNodeRecursion::Stop`] is not supported.
+    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
     ///
     /// If [`TreeNodeRewriter::f_down()`] or [`TreeNodeRewriter::f_up()`] returns [`Err`],
     /// recursion is stopped immediately.
-    fn rewrite<R: TreeNodeRewriter<Node = Self>>(self, rewriter: &mut R) -> Result<Self> {
-        let (new_node, tnr) = rewriter.f_down(self)?;
-        handle_tree_recursion_without_stop!(tnr, new_node);
-        let node_with_new_children =
-            new_node.map_children(|node| node.rewrite(rewriter))?;
-        rewriter.f_up(node_with_new_children)
+    fn rewrite<R: TreeNodeRewriter<Node = Self>>(
+        self,
+        rewriter: &mut R,
+    ) -> Result<Transformed<Self>> {
+        rewriter.f_down(self)?.and_then_transform_children(|t| {
+            t.map_children(|n| n.rewrite(rewriter))?
+                .and_then_transform_sibling(|t| rewriter.f_up(t))
+        })
     }
 
     /// Apply the closure `F` to the node's children
@@ -239,9 +224,9 @@ pub trait TreeNode: Sized {
         F: FnMut(&Self) -> Result<TreeNodeRecursion>;
 
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>;
+        F: FnMut(Self) -> Result<Transformed<Self>>;
 }
 
 /// Implements the [visitor
@@ -291,20 +276,20 @@ pub trait TreeNodeRewriter: Sized {
     /// Invoked while traversing down the tree before any children are rewritten /
     /// visited.
     /// Default implementation returns the node unmodified and continues recursion.
-    fn f_down(&mut self, node: Self::Node) -> Result<(Self::Node, TreeNodeRecursion)> {
-        Ok((node, TreeNodeRecursion::Continue))
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        Ok(Transformed::no(node))
     }
 
     /// Invoked while traversing up the tree after all children have been rewritten /
     /// visited.
     /// Default implementation returns the node unmodified.
-    fn f_up(&mut self, node: Self::Node) -> Result<Self::Node> {
-        Ok(node)
+    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        Ok(Transformed::no(node))
     }
 }
 
 /// Controls how [`TreeNode`] recursions should proceed.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TreeNodeRecursion {
     /// Continue recursion with the next node.
     Continue,
@@ -314,26 +299,146 @@ pub enum TreeNodeRecursion {
     Stop,
 }
 
-pub enum Transformed<T> {
-    /// The item was transformed / rewritten somehow
-    Yes(T),
-    /// The item was not transformed
-    No(T),
+pub struct Transformed<T> {
+    pub data: T,
+    pub transformed: bool,
+    pub tnr: TreeNodeRecursion,
 }
 
 impl<T> Transformed<T> {
-    pub fn into(self) -> T {
-        match self {
-            Transformed::Yes(t) => t,
-            Transformed::No(t) => t,
+    pub fn new(data: T, transformed: bool, tnr: TreeNodeRecursion) -> Self {
+        Self {
+            data,
+            transformed,
+            tnr,
         }
     }
 
-    pub fn into_pair(self) -> (T, bool) {
-        match self {
-            Transformed::Yes(t) => (t, true),
-            Transformed::No(t) => (t, false),
+    pub fn yes(data: T) -> Self {
+        Self {
+            data,
+            transformed: true,
+            tnr: TreeNodeRecursion::Continue,
         }
+    }
+
+    pub fn no(data: T) -> Self {
+        Self {
+            data,
+            transformed: false,
+            tnr: TreeNodeRecursion::Continue,
+        }
+    }
+
+    pub fn map_data<U, F: FnOnce(T) -> U>(self, f: F) -> Transformed<U> {
+        Transformed {
+            data: f(self.data),
+            transformed: self.transformed,
+            tnr: self.tnr,
+        }
+    }
+
+    pub fn flat_map_data<U, F: FnOnce(T) -> Result<U>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<U>> {
+        Ok(Transformed {
+            data: f(self.data)?,
+            transformed: self.transformed,
+            tnr: self.tnr,
+        })
+    }
+
+    fn and_then_transform<F: FnOnce(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+        children: bool,
+    ) -> Result<Transformed<T>> {
+        match self.tnr {
+            TreeNodeRecursion::Continue => {}
+            TreeNodeRecursion::Skip => {
+                // If the next transformation would happen on children return immediately
+                // on `Skip`.
+                if children {
+                    return Ok(Transformed {
+                        tnr: TreeNodeRecursion::Continue,
+                        ..self
+                    });
+                }
+            }
+            TreeNodeRecursion::Stop => return Ok(self),
+        };
+        let t = f(self.data)?;
+        Ok(Transformed {
+            transformed: t.transformed || self.transformed,
+            ..t
+        })
+    }
+
+    pub fn and_then_transform_sibling<F: FnOnce(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<T>> {
+        self.and_then_transform(f, false)
+    }
+
+    pub fn and_then_transform_children<F: FnOnce(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<T>> {
+        self.and_then_transform(f, true)
+    }
+}
+
+pub trait TransformedIterator: Iterator {
+    fn map_till_continue_and_collect<F>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Vec<Self::Item>>>
+    where
+        F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>,
+        Self: Sized;
+}
+
+impl<I: Iterator> TransformedIterator for I {
+    fn map_till_continue_and_collect<F>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Vec<Self::Item>>>
+    where
+        F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>,
+    {
+        let mut new_tnr = TreeNodeRecursion::Continue;
+        let mut new_transformed = false;
+        let new_data = self
+            .map(|i| {
+                if new_tnr == TreeNodeRecursion::Continue
+                    || new_tnr == TreeNodeRecursion::Skip
+                {
+                    let Transformed {
+                        data,
+                        transformed,
+                        tnr,
+                    } = f(i)?;
+                    new_tnr = if tnr == TreeNodeRecursion::Skip {
+                        // Iterator always considers the elements as siblings so `Skip`
+                        // can be safely converted to `Continue`.
+                        TreeNodeRecursion::Continue
+                    } else {
+                        tnr
+                    };
+                    new_transformed |= transformed;
+                    Ok(data)
+                } else {
+                    Ok(i)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Transformed {
+            data: new_data,
+            transformed: new_transformed,
+            tnr: new_tnr,
+        })
     }
 }
 
@@ -350,7 +455,7 @@ pub trait DynTreeNode {
         &self,
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
-    ) -> Result<Arc<Self>>;
+    ) -> Result<Transformed<Arc<Self>>>;
 }
 
 /// Blanket implementation for Arc for any tye that implements
@@ -367,18 +472,18 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         let children = self.arc_children();
         if !children.is_empty() {
-            let new_children =
-                children.into_iter().map(transform).collect::<Result<_>>()?;
+            let t = children.into_iter().map_till_continue_and_collect(f)?;
+            // TODO: once we trust `t.transformed` don't create new node if not necessary
             let arc_self = Arc::clone(&self);
-            self.with_new_arc_children(arc_self, new_children)
+            self.with_new_arc_children(arc_self, t.data)
         } else {
-            Ok(self)
+            Ok(Transformed::no(self))
         }
     }
 }
@@ -409,17 +514,19 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         let (new_self, children) = self.take_children();
         if !children.is_empty() {
-            let new_children =
-                children.into_iter().map(transform).collect::<Result<_>>()?;
-            new_self.with_new_children(new_children)
+            children
+                .into_iter()
+                .map_till_continue_and_collect(f)?
+                // TODO: once we trust `transformed` don't create new node if not necessary
+                .flat_map_data(|new_children| new_self.with_new_children(new_children))
         } else {
-            Ok(new_self)
+            Ok(Transformed::no(new_self))
         }
     }
 }

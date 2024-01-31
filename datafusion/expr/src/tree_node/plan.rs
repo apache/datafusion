@@ -19,7 +19,9 @@
 
 use crate::LogicalPlan;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::tree_node::{
+    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
 use datafusion_common::{handle_tree_recursion, Result};
 
 impl TreeNode for LogicalPlan {
@@ -76,26 +78,28 @@ impl TreeNode for LogicalPlan {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         let old_children = self.inputs();
-        let new_children = old_children
+        let t = old_children
             .iter()
-            .map(|&c| c.clone())
-            .map(transform)
-            .collect::<Result<Vec<_>>>()?;
-
-        // if any changes made, make a new child
+            .map(|c| (*c).clone())
+            .map_till_continue_and_collect(f)?;
+        // TODO: once we trust `t.transformed` remove additional check
         if old_children
             .iter()
-            .zip(new_children.iter())
+            .zip(t.data.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            self.with_new_exprs(self.expressions(), new_children.as_slice())
+            Ok(Transformed::new(
+                self.with_new_exprs(self.expressions(), t.data.as_slice())?,
+                true,
+                t.tnr,
+            ))
         } else {
-            Ok(self)
+            Ok(Transformed::new(self, false, t.tnr))
         }
     }
 }

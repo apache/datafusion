@@ -25,7 +25,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
-    TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -745,24 +745,24 @@ struct CommonSubexprRewriter<'a> {
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
         if expr.short_circuits() || is_volatile_expression(&expr)? {
-            return Ok((expr, TreeNodeRecursion::Skip));
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip));
         }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok((expr, TreeNodeRecursion::Skip));
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip));
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok((expr, TreeNodeRecursion::Continue));
+            return Ok(Transformed::no(expr));
         }
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
@@ -771,7 +771,11 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
                     // This expr tree is finished.
                     if self.curr_index >= self.id_array.len() {
-                        return Ok((expr, TreeNodeRecursion::Skip));
+                        return Ok(Transformed::new(
+                            expr,
+                            false,
+                            TreeNodeRecursion::Skip,
+                        ));
                     }
 
                     let (series_number, id) = &self.id_array[self.curr_index];
@@ -784,7 +788,11 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                         || id.is_empty()
                         || expr_set_item.1 <= 1
                     {
-                        return Ok((expr, TreeNodeRecursion::Skip));
+                        return Ok(Transformed::new(
+                            expr,
+                            false,
+                            TreeNodeRecursion::Skip,
+                        ));
                     }
 
                     self.max_series_number = *series_number;
@@ -799,10 +807,14 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     // Alias this `Column` expr to it original "expr name",
                     // `projection_push_down` optimizer use "expr name" to eliminate useless
                     // projections.
-                    Ok((col(id).alias(expr_name), TreeNodeRecursion::Skip))
+                    Ok(Transformed::new(
+                        col(id).alias(expr_name),
+                        true,
+                        TreeNodeRecursion::Skip,
+                    ))
                 } else {
                     self.curr_index += 1;
-                    Ok((expr, TreeNodeRecursion::Continue))
+                    Ok(Transformed::no(expr))
                 }
             }
             _ => internal_err!("expr_set invalid state"),
@@ -823,6 +835,7 @@ fn replace_common_expr(
         max_series_number: 0,
         curr_index: 0,
     })
+    .map(|t| t.data)
 }
 
 #[cfg(test)]

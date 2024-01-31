@@ -241,7 +241,9 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let state = pipeline.transform_up(&|p| apply_subrules(p, &subrules, config))?;
+        let state = pipeline
+            .transform_up(&|p| apply_subrules(p, &subrules, config))?
+            .data;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
         // - For a hash join with partition mode [`PartitionMode::Auto`], we will
@@ -256,13 +258,16 @@ impl PhysicalOptimizerRule for JoinSelection {
         let config = &config.optimizer;
         let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        state.plan.transform_up(&|plan| {
-            statistical_join_selection_subrule(
-                plan,
-                collect_threshold_byte_size,
-                collect_threshold_num_rows,
-            )
-        })
+        state
+            .plan
+            .transform_up(&|plan| {
+                statistical_join_selection_subrule(
+                    plan,
+                    collect_threshold_byte_size,
+                    collect_threshold_num_rows,
+                )
+            })
+            .map(|t| t.data)
     }
 
     fn name(&self) -> &str {
@@ -438,9 +443,9 @@ fn statistical_join_selection_subrule(
         };
 
     Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
+        Transformed::yes(transformed)
     } else {
-        Transformed::No(plan)
+        Transformed::no(plan)
     })
 }
 
@@ -671,7 +676,7 @@ fn apply_subrules(
         // etc. If this doesn't happen, the final `PipelineChecker` rule will
         // catch this and raise an error anyway.
         .unwrap_or(true);
-    Ok(Transformed::Yes(input))
+    Ok(Transformed::yes(input))
 }
 
 #[cfg(test)]
@@ -836,6 +841,7 @@ mod tests_statistical {
         ];
         let state = pipeline
             .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .map(|t| t.data)
             .and_then(check_integrity)?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;

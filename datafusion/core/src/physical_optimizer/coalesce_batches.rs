@@ -71,14 +71,15 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                     })
                     .unwrap_or(false);
             if wrap_in_coalesce {
-                Ok(Transformed::Yes(Arc::new(CoalesceBatchesExec::new(
+                Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,
                     target_batch_size,
                 ))))
             } else {
-                Ok(Transformed::No(plan))
+                Ok(Transformed::no(plan))
             }
         })
+        .map(|t| t.data)
     }
 
     fn name(&self) -> &str {

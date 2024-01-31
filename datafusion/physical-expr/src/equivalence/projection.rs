@@ -68,10 +68,11 @@ impl ProjectionMapping {
                             let matching_input_field = input_schema.field(idx);
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
-                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                            Ok(Transformed::yes(Arc::new(matching_input_column)))
                         }
-                        None => Ok(Transformed::No(e)),
+                        None => Ok(Transformed::no(e)),
                     })
+                    .map(|t| t.data)
                     .map(|source_expr| (source_expr, target_expr))
             })
             .collect::<Result<Vec<_>>>()

@@ -42,7 +42,7 @@ impl InlineTableScan {
 
 impl AnalyzerRule for InlineTableScan {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_up(&analyze_internal)
+        plan.transform_up(&analyze_internal).map(|t| t.data)
     }
 
     fn name(&self) -> &str {
@@ -71,16 +71,16 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 // that reference this table.
                 .alias(table_name)?
                 .build()?;
-            Transformed::Yes(plan)
+            Transformed::yes(plan)
         }
         LogicalPlan::Filter(filter) => {
-            let new_expr = filter.predicate.transform_up(&rewrite_subquery)?;
-            Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+            let new_expr = filter.predicate.transform_up(&rewrite_subquery)?.data;
+            Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                 new_expr,
                 filter.input,
             )?))
         }
-        _ => Transformed::No(plan),
+        _ => Transformed::no(plan),
     })
 }
 
@@ -88,9 +88,9 @@ fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
     match expr {
         Expr::Exists(Exists { subquery, negated }) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?;
+            let new_plan = plan.transform_up(&analyze_internal)?.data;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::Exists(Exists { subquery, negated })))
+            Ok(Transformed::yes(Expr::Exists(Exists { subquery, negated })))
         }
         Expr::InSubquery(InSubquery {
             expr,
@@ -98,19 +98,19 @@ fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
             negated,
         }) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?;
+            let new_plan = plan.transform_up(&analyze_internal)?.data;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::InSubquery(InSubquery::new(
+            Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                 expr, subquery, negated,
             ))))
         }
         Expr::ScalarSubquery(subquery) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?;
+            let new_plan = plan.transform_up(&analyze_internal)?.data;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::ScalarSubquery(subquery)))
+            Ok(Transformed::yes(Expr::ScalarSubquery(subquery)))
         }
-        _ => Ok(Transformed::No(expr)),
+        _ => Ok(Transformed::no(expr)),
     }
 }
 

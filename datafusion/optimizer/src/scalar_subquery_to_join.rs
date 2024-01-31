@@ -56,7 +56,7 @@ impl ScalarSubqueryToJoin {
             sub_query_info: vec![],
             alias_gen,
         };
-        let new_expr = predicate.clone().rewrite(&mut extract)?;
+        let new_expr = predicate.clone().rewrite(&mut extract)?.data;
         Ok((extract.sub_query_info, new_expr))
     }
 }
@@ -86,20 +86,22 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         build_join(&subquery, &cur_input, &alias)?
                     {
                         if !expr_check_map.is_empty() {
-                            rewrite_expr =
-                                rewrite_expr.clone().transform_up(&|expr| {
+                            rewrite_expr = rewrite_expr
+                                .clone()
+                                .transform_up(&|expr| {
                                     if let Expr::Column(col) = &expr {
                                         if let Some(map_expr) =
                                             expr_check_map.get(&col.name)
                                         {
-                                            Ok(Transformed::Yes(map_expr.clone()))
+                                            Ok(Transformed::yes(map_expr.clone()))
                                         } else {
-                                            Ok(Transformed::No(expr))
+                                            Ok(Transformed::no(expr))
                                         }
                                     } else {
-                                        Ok(Transformed::No(expr))
+                                        Ok(Transformed::no(expr))
                                     }
-                                })?;
+                                })?
+                                .data;
                         }
                         cur_input = optimized_subquery;
                     } else {
@@ -141,20 +143,22 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 if let Some(rewrite_expr) =
                                     expr_to_rewrite_expr_map.get(expr)
                                 {
-                                    let new_expr =
-                                        rewrite_expr.clone().transform_up(&|expr| {
+                                    let new_expr = rewrite_expr
+                                        .clone()
+                                        .transform_up(&|expr| {
                                             if let Expr::Column(col) = &expr {
                                                 if let Some(map_expr) =
                                                     expr_check_map.get(&col.name)
                                                 {
-                                                    Ok(Transformed::Yes(map_expr.clone()))
+                                                    Ok(Transformed::yes(map_expr.clone()))
                                                 } else {
-                                                    Ok(Transformed::No(expr))
+                                                    Ok(Transformed::no(expr))
                                                 }
                                             } else {
-                                                Ok(Transformed::No(expr))
+                                                Ok(Transformed::no(expr))
                                             }
-                                        })?;
+                                        })?
+                                        .data;
                                     expr_to_rewrite_expr_map.insert(expr, new_expr);
                                 }
                             }
@@ -203,7 +207,7 @@ struct ExtractScalarSubQuery {
 impl TreeNodeRewriter for ExtractScalarSubQuery {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: Expr) -> Result<(Expr, TreeNodeRecursion)> {
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
             Expr::ScalarSubquery(subquery) => {
                 let subqry_alias = self.alias_gen.next("__scalar_sq");
@@ -213,15 +217,16 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                     .subquery
                     .head_output_expr()?
                     .map_or(plan_err!("single expression required."), Ok)?;
-                Ok((
+                Ok(Transformed::new(
                     Expr::Column(create_col_from_scalar_expr(
                         &scalar_expr,
                         subqry_alias,
                     )?),
+                    true,
                     TreeNodeRecursion::Skip,
                 ))
             }
-            _ => Ok((expr, TreeNodeRecursion::Continue)),
+            _ => Ok(Transformed::no(expr)),
         }
     }
 }
@@ -278,7 +283,7 @@ fn build_join(
         collected_count_expr_map: Default::default(),
         pull_up_having_expr: None,
     };
-    let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?;
+    let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?.data;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
