@@ -471,7 +471,7 @@ CREATE SCHEMA [ IF NOT EXISTS ] [ <i><b>catalog.</i></b> ] <b><i>schema_name</i>
 <p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement registers a location on a local
 file system or remote object store as a named table which can be queried.</p>
 <p>The supported syntax is:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">EXTERNAL</span> <span class="n">TABLE</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="p">[</span><span class="n">UNBOUNDED</span><span class="p">]</span> <span class="n">EXTERNAL</span> <span class="n">TABLE</span>
 <span class="p">[</span> <span class="n">IF</span> <span class="n">NOT</span> <span class="n">EXISTS</span> <span class="p">]</span>
 <span class="o">&lt;</span><span class="n">TABLE_NAME</span><span class="o">&gt;</span><span class="p">[</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_definition</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="n">STORED</span> <span class="n">AS</span> <span class="o">&lt;</span><span class="n">file_type</span><span class="o">&gt;</span>
@@ -549,6 +549,13 @@ table (multiple files with the same schema)</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/directory/of/files&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+<p>With <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">UNBOUNDED</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. We can create unbounded data sources such as following:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="n">UNBOUNDED</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/tripdata.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Note that this statement actually reads data from a fixed-size file, so a better example would involve reading from a FIFO file. Nevertheless, once Datafusion sees the <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span></code> keyword in a data source, it tries to execute queries that refer to this unbounded source in streaming fashion. If this is not possible according to query specifications, plan generation fails stating it is not possible to execute given query in streaming fashion. Note that queries that can run with unbounded sources (i.e. in streaming mode) are a subset of those that can with bounded sources. A query that fails with unbounded source(s) may work with bounded source(s).</p>
 <p>When creating an output from a data source that is already ordered by
 an expression, you can pre-specify the order of the data using the
 <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause. This applies even if the expression used for
