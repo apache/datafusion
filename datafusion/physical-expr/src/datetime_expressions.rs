@@ -53,8 +53,7 @@ use datafusion_common::cast::{
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarType,
-    ScalarValue,
+    exec_err, not_impl_err, DataFusionError, Result, ScalarType, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -165,7 +164,7 @@ where
     F: Fn(&'a str) -> Result<O::Native>,
 {
     if args.len() != 1 {
-        return internal_err!(
+        return exec_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
             name
@@ -202,7 +201,7 @@ where
     F2: Fn(O::Native) -> O::Native,
 {
     if args.len() < 2 {
-        return internal_err!(
+        return exec_err!(
             "{:?} args were supplied but {} takes 2 or more arguments",
             args.len(),
             name
@@ -218,7 +217,7 @@ where
             }
             ColumnarValue::Scalar(s) => match s {
                 ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
-                other => internal_err!(
+                other => exec_err!(
                     "Unexpected scalar type encountered '{other}' for function '{name}'"
                 ),
             },
@@ -420,7 +419,7 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
             |n| n / factor,
             name,
         ),
-        _ => internal_err!("Unsupported 0 argument count for function {name}"),
+        _ => exec_err!("Unsupported 0 argument count for function {name}"),
     }
 }
 
@@ -1185,7 +1184,7 @@ macro_rules! extract_date_part {
                         .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
             },
-            datatype => internal_err!("Extract does not support datatype {:?}", datatype),
+            datatype => exec_err!("Extract does not support datatype {:?}", datatype),
         }
     };
 }
@@ -1311,7 +1310,7 @@ where
             let n: i64 = n.into();
             n as f64 / 1_000_f64
         }),
-        _ => return internal_err!("Can not convert {:?} to epoch", array.data_type()),
+        _ => return exec_err!("Can not convert {:?} to epoch", array.data_type()),
     };
     Ok(b)
 }
@@ -1326,7 +1325,7 @@ fn validate_to_timestamp_data_types(
                 // all good
             }
             _ => {
-                return Some(internal_err!(
+                return Some(exec_err!(
                     "{name} function unsupported data type at index {}: {}",
                     idx + 1,
                     a.data_type()
@@ -1341,7 +1340,7 @@ fn validate_to_timestamp_data_types(
 /// to_timestamp() SQL function implementation
 pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "to_timestamp function requires 1 or more arguments, got {}",
             args.len()
         );
@@ -1367,7 +1366,7 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ),
         DataType::Utf8 => to_timestamp(args),
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function to_timestamp",
                 other
             )
@@ -1378,7 +1377,7 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// to_timestamp_millis() SQL function implementation
 pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "to_timestamp_millis function requires 1 or more arguments, got {}",
             args.len()
         );
@@ -1403,7 +1402,7 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
         ),
         DataType::Utf8 => to_timestamp_millis(args),
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function to_timestamp_millis",
                 other
             )
@@ -1414,7 +1413,7 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 /// to_timestamp_micros() SQL function implementation
 pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "to_timestamp_micros function requires 1 or more arguments, got {}",
             args.len()
         );
@@ -1439,7 +1438,7 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
         ),
         DataType::Utf8 => to_timestamp_micros(args),
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function to_timestamp_micros",
                 other
             )
@@ -1450,7 +1449,7 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
 /// to_timestamp_nanos() SQL function implementation
 pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "to_timestamp_nanos function requires 1 or more arguments, got {}",
             args.len()
         );
@@ -1475,7 +1474,7 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
         ),
         DataType::Utf8 => to_timestamp_nanos(args),
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function to_timestamp_nanos",
                 other
             )
@@ -1486,7 +1485,7 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
 /// to_timestamp_seconds() SQL function implementation
 pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "to_timestamp_seconds function requires 1 or more arguments, got {}",
             args.len()
         );
@@ -1510,7 +1509,7 @@ pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarVal
         }
         DataType::Utf8 => to_timestamp_seconds(args),
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function to_timestamp_seconds",
                 other
             )
@@ -1521,7 +1520,7 @@ pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarVal
 /// from_unixtime() SQL function implementation
 pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 1 {
-        return internal_err!(
+        return exec_err!(
             "from_unixtime function requires 1 argument, got {}",
             args.len()
         );
@@ -1532,7 +1531,7 @@ pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
         }
         other => {
-            internal_err!(
+            exec_err!(
                 "Unsupported data type {:?} for function from_unixtime",
                 other
             )
