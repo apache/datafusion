@@ -144,7 +144,7 @@ macro_rules! assert_not_contains {
     };
 }
 
-/// Returns the arrow test data directory, which is by default rooted at `datafusion/core/tests/data`.
+/// Returns the datafusion test data directory, which is by default rooted at `datafusion/core/tests/data`.
 ///
 /// The default can be overridden by the optional environment
 /// variable `DATAFUSION_TEST_DATA`

@@ -29,13 +29,12 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion_test_data();
 
-    // File is ordered by ts ASC. This is an invariant, it is the responsibility of the user to make sure
-    // that file indeed satisfies this condition.
-    let sort_expr = vec![Expr::Sort(Sort {
-        expr: Box::new(Expr::Column(Column::from_name("ts"))),
-        asc: true,
-        nulls_first: true,
-    })];
+    // Register a table source and tell DataFusion the file is ordered by `ts ASC`. 
+    // Note it is the responsibility of the user to make sure
+    // that file indeed satisfies this condition or else incorrect answers may be produced.
+    let asc  = true;
+    let nulls_first = true;
+    let sort_expr = vec![col("ts").sort(asc, nulls_first)];
     // register csv file with the execution context
     ctx.register_csv(
         "ordered_table",
@@ -47,6 +46,9 @@ async fn main() -> Result<()> {
     // execute the query
     // Following query can be executed with unbounded sources because group by expressions (e.g ts) is
     // already ordered at the source.
+    //
+    // Unbounded sources means that if the input came from a "never ending" source (such as a FIFO
+    // file on unix) the query could produce results incrementally as data was read. 
     let df = ctx
         .sql(
             "SELECT ts, MIN(inc_col), MAX(inc_col) \
@@ -59,7 +61,7 @@ async fn main() -> Result<()> {
 
     // execute the query
     // Following query can be executed with unbounded sources because window executor can calculate
-    // its result in streaming, when its required ordering is already satisfied at the source.
+    // its result in streaming fashion, because its required ordering is already satisfied at the source.
     let df = ctx
         .sql(
             "SELECT ts, SUM(inc_col) OVER(ORDER BY ts ASC) \
