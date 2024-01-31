@@ -35,7 +35,7 @@ tokio = "1.0"
 
 ## Add DataFusion latest codebase as a dependency
 
-Cargo supports adding dependency directly from Github which allows to test out latest DataFusion codebase without waiting the code to be released
+Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
 according to the [DataFusion release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
 
 ```toml
