@@ -76,6 +76,12 @@ jobs:
 
       - name: Check workspace with all features
         run: cargo check --workspace --benches --features avro,json
+
+      # Ensure that the datafusion crate can be built with only a subset of the function
+      # packages enabled.
+      - name: Check function packages (encoding_expressions)
+        run: cargo check --no-default-features --features=encoding_expressions -p datafusion
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory

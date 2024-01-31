@@ -380,9 +380,10 @@ impl Optimizer {
                 Some(plan) => plan,
                 None => old_plan.clone(),
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        Ok(Some(plan.with_new_exprs(plan.expressions(), &new_inputs)?))
+        let exprs = plan.expressions();
+        plan.with_new_exprs(exprs, new_inputs).map(Some)
     }
 
     /// Use a rule to optimize the whole plan.

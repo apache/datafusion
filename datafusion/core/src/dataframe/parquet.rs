@@ -53,7 +53,6 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::PARQUET,
-            options.single_file_output,
             copy_options,
         )?
         .build()?;
