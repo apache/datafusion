@@ -489,6 +489,7 @@ pub fn coerced_type_with_base_type_only(
     }
 }
 
+/// Recursively coerce and `FixedSizeList` elements to `List`
 pub fn coerced_fixed_size_list_to_list(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field) | DataType::FixedSizeList(field, _) => {
