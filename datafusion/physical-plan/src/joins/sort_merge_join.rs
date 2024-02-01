@@ -1172,8 +1172,11 @@ impl SMJStream {
                         .collect::<Vec<_>>()
                 };
 
-            let filter_columns =
-                get_filter_column(&self.filter, &streamed_columns, &buffered_columns);
+            let filter_columns = if matches!(self.join_type, JoinType::Right) {
+                get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+            } else {
+                get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+            };
 
             let columns = if matches!(self.join_type, JoinType::Right) {
                 buffered_columns.extend(streamed_columns);
