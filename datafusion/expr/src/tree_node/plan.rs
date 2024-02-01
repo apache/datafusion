@@ -87,12 +87,15 @@ impl TreeNode for LogicalPlan {
             .iter()
             .map(|c| (*c).clone())
             .map_till_continue_and_collect(f)?;
-        // TODO: once we trust `t.transformed` remove additional check
-        if old_children
+        // TODO: Currently `t.transformed` quality comes from if the transformation
+        //  closures fill the field correctly. Once we trust `t.transformed` we can remove
+        //  the additional `t2` check.
+        //  Please note that we need to propagate up `t.tnr` though.
+        let t2 = old_children
             .into_iter()
             .zip(t.data.iter())
-            .any(|(c1, c2)| c1 != c2)
-        {
+            .any(|(c1, c2)| c1 != c2);
+        if t2 {
             Ok(Transformed::new(
                 self.with_new_exprs(self.expressions(), t.data)?,
                 true,

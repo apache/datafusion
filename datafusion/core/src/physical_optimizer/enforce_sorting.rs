@@ -113,7 +113,7 @@ fn update_sort_ctx_children(
     }
 
     node.data = data;
-    node.update_plan_from_children()
+    node.update_plan_from_children().map(|t| t.data)
 }
 
 /// This object is used within the [`EnforceSorting`] rule to track the closest
@@ -477,7 +477,7 @@ fn remove_corresponding_coalesce_in_sub_plan(
             .collect::<Result<_>>()?;
     }
 
-    requirements.update_plan_from_children()
+    requirements.update_plan_from_children().map(|t| t.data)
 }
 
 /// Updates child to remove the unnecessary sort below it.

@@ -479,9 +479,13 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
         let children = self.arc_children();
         if !children.is_empty() {
             let t = children.into_iter().map_till_continue_and_collect(f)?;
-            // TODO: once we trust `t.transformed` don't create new node if not necessary
+            // TODO: Currently `t.transformed` quality comes from if the transformation
+            //  closures fill the field correctly. Once we trust `t.transformed` we can
+            //  remove the additional `t2` check.
+            //  Please note that we need to propagate up `t.tnr` though.
             let arc_self = Arc::clone(&self);
-            self.with_new_arc_children(arc_self, t.data)
+            let t2 = self.with_new_arc_children(arc_self, t.data)?;
+            Ok(Transformed::new(t2.data, t2.transformed, t.tnr))
         } else {
             Ok(Transformed::no(self))
         }
@@ -499,7 +503,7 @@ pub trait ConcreteTreeNode: Sized {
     fn take_children(self) -> (Self, Vec<Self>);
 
     /// Reattaches updated child nodes to the node, returning the updated node.
-    fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
+    fn with_new_children(self, children: Vec<Self>) -> Result<Transformed<Self>>;
 }
 
 impl<T: ConcreteTreeNode> TreeNode for T {
@@ -520,11 +524,13 @@ impl<T: ConcreteTreeNode> TreeNode for T {
     {
         let (new_self, children) = self.take_children();
         if !children.is_empty() {
-            children
-                .into_iter()
-                .map_till_continue_and_collect(f)?
-                // TODO: once we trust `transformed` don't create new node if not necessary
-                .flat_map_data(|new_children| new_self.with_new_children(new_children))
+            let t = children.into_iter().map_till_continue_and_collect(f)?;
+            // TODO: Currently `t.transformed` quality comes from if the transformation
+            //  closures fill the field correctly. Once we trust `t.transformed` we can
+            //  remove the additional `t2` check.
+            //  Please note that we need to propagate up `t.tnr` though.
+            let t2 = new_self.with_new_children(t.data)?;
+            Ok(Transformed::new(t2.data, t2.transformed, t.tnr))
         } else {
             Ok(Transformed::no(new_self))
         }

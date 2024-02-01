@@ -61,10 +61,11 @@ impl<T> PlanContext<T> {
         }
     }
 
-    pub fn update_plan_from_children(mut self) -> Result<Self> {
+    pub fn update_plan_from_children(mut self) -> Result<Transformed<Self>> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
-        self.plan = with_new_children_if_necessary(self.plan, children_plans)?.data;
-        Ok(self)
+        let t = with_new_children_if_necessary(self.plan, children_plans)?;
+        self.plan = t.data;
+        Ok(Transformed::new(self, t.transformed, t.tnr))
     }
 }
 
@@ -94,7 +95,7 @@ impl<T> ConcreteTreeNode for PlanContext<T> {
         (self, children)
     }
 
-    fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
+    fn with_new_children(mut self, children: Vec<Self>) -> Result<Transformed<Self>> {
         self.children = children;
         self.update_plan_from_children()
     }
