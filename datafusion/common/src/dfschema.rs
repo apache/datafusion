@@ -140,6 +140,31 @@ impl DFSchema {
         Ok(new_self)
     }
 
+    // TODO ADD TESTS FOR THIS NEW FUNCTION
+    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
+    pub fn from_field_specific_qualified_schema<'a>(
+        qualifiers: Vec<Option<impl Into<TableReference<'a>>>>,
+        schema: &SchemaRef,
+    ) -> Result<Self> {
+        let owned_qualifiers = qualifiers
+            .into_iter()
+            .map(|maybe_q| {
+                maybe_q.map(|q| {
+                    let qualifier = q.into();
+                    let owned_qualifier = qualifier.to_owned_reference();
+                    owned_qualifier
+                })
+            })
+            .collect();
+        let new_self = Self {
+            inner: schema.clone(),
+            field_qualifiers: owned_qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        // new_self.check_names()?;
+        Ok(new_self)
+    }
+
     /// Create a `DFSchema` from an Arrow where all fields have no qualifier.
     pub fn from_unqualified_schema(schema: &SchemaRef) -> Result<Self> {
         let new_self = Self {
