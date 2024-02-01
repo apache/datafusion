@@ -135,9 +135,9 @@ pub trait TreeNode: Sized {
         FD: FnMut(Self) -> Result<Transformed<Self>>,
         FU: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        f_down(self)?.and_then_transform_children(|t| {
-            t.map_children(|node| node.transform(f_down, f_up))?
-                .and_then_transform_sibling(f_up)
+        f_down(self)?.and_then_transform_children(|n| {
+            n.map_children(|c| c.transform(f_down, f_up))?
+                .and_then_transform(f_up)
         })
     }
 
@@ -148,7 +148,7 @@ pub trait TreeNode: Sized {
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        f(self)?.and_then_transform_children(|t| t.map_children(|n| n.transform_down(f)))
+        f(self)?.and_then_transform_children(|n| n.map_children(|c| c.transform_down(f)))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
@@ -159,7 +159,7 @@ pub trait TreeNode: Sized {
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         f(self)?
-            .and_then_transform_children(|t| t.map_children(|n| n.transform_down_mut(f)))
+            .and_then_transform_children(|n| n.map_children(|c| c.transform_down_mut(f)))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
@@ -169,8 +169,8 @@ pub trait TreeNode: Sized {
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        self.map_children(|node| node.transform_up(f))?
-            .and_then_transform_sibling(f)
+        self.map_children(|c| c.transform_up(f))?
+            .and_then_transform(f)
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
@@ -180,8 +180,8 @@ pub trait TreeNode: Sized {
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        self.map_children(|n| n.transform_up_mut(f))?
-            .and_then_transform_sibling(f)
+        self.map_children(|c| c.transform_up_mut(f))?
+            .and_then_transform(f)
     }
 
     /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
@@ -212,9 +212,9 @@ pub trait TreeNode: Sized {
         self,
         rewriter: &mut R,
     ) -> Result<Transformed<Self>> {
-        rewriter.f_down(self)?.and_then_transform_children(|t| {
-            t.map_children(|n| n.rewrite(rewriter))?
-                .and_then_transform_sibling(|t| rewriter.f_up(t))
+        rewriter.f_down(self)?.and_then_transform_children(|n| {
+            n.map_children(|c| c.rewrite(rewriter))?
+                .and_then_transform(|n| rewriter.f_up(n))
         })
     }
 
@@ -349,7 +349,7 @@ impl<T> Transformed<T> {
         })
     }
 
-    fn and_then_transform<F: FnOnce(T) -> Result<Transformed<T>>>(
+    fn and_then<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
         children: bool,
@@ -375,18 +375,18 @@ impl<T> Transformed<T> {
         })
     }
 
-    pub fn and_then_transform_sibling<F: FnOnce(T) -> Result<Transformed<T>>>(
+    pub fn and_then_transform<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
     ) -> Result<Transformed<T>> {
-        self.and_then_transform(f, false)
+        self.and_then(f, false)
     }
 
     pub fn and_then_transform_children<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
     ) -> Result<Transformed<T>> {
-        self.and_then_transform(f, true)
+        self.and_then(f, true)
     }
 }
 

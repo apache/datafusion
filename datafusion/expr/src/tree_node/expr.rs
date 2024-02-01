@@ -164,7 +164,7 @@ impl TreeNode for Expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 transform_box(left, &mut f)?
                     .map_data(|new_left| (new_left, right))
-                    .and_then_transform_sibling(|(new_left, right)| {
+                    .and_then_transform(|(new_left, right)| {
                         Ok(transform_box(right, &mut f)?
                             .map_data(|new_right| (new_left, new_right)))
                     })?
@@ -180,7 +180,7 @@ impl TreeNode for Expr {
                 case_insensitive,
             }) => transform_box(expr, &mut f)?
                 .map_data(|new_expr| (new_expr, pattern))
-                .and_then_transform_sibling(|(new_expr, pattern)| {
+                .and_then_transform(|(new_expr, pattern)| {
                     Ok(transform_box(pattern, &mut f)?
                         .map_data(|new_pattern| (new_expr, new_pattern)))
                 })?
@@ -201,7 +201,7 @@ impl TreeNode for Expr {
                 case_insensitive,
             }) => transform_box(expr, &mut f)?
                 .map_data(|new_expr| (new_expr, pattern))
-                .and_then_transform_sibling(|(new_expr, pattern)| {
+                .and_then_transform(|(new_expr, pattern)| {
                     Ok(transform_box(pattern, &mut f)?
                         .map_data(|new_pattern| (new_expr, new_pattern)))
                 })?
@@ -241,11 +241,11 @@ impl TreeNode for Expr {
                 high,
             }) => transform_box(expr, &mut f)?
                 .map_data(|new_expr| (new_expr, low, high))
-                .and_then_transform_sibling(|(new_expr, low, high)| {
+                .and_then_transform(|(new_expr, low, high)| {
                     Ok(transform_box(low, &mut f)?
                         .map_data(|new_low| (new_expr, new_low, high)))
                 })?
-                .and_then_transform_sibling(|(new_expr, new_low, high)| {
+                .and_then_transform(|(new_expr, new_low, high)| {
                     Ok(transform_box(high, &mut f)?
                         .map_data(|new_high| (new_expr, new_low, new_high)))
                 })?
@@ -258,13 +258,13 @@ impl TreeNode for Expr {
                 else_expr,
             }) => transform_option_box(expr, &mut f)?
                 .map_data(|new_expr| (new_expr, when_then_expr, else_expr))
-                .and_then_transform_sibling(|(new_expr, when_then_expr, else_expr)| {
+                .and_then_transform(|(new_expr, when_then_expr, else_expr)| {
                     Ok(when_then_expr
                         .into_iter()
                         .map_till_continue_and_collect(|(when, then)| {
                             transform_box(when, &mut f)?
                                 .map_data(|new_when| (new_when, then))
-                                .and_then_transform_sibling(|(new_when, then)| {
+                                .and_then_transform(|(new_when, then)| {
                                     Ok(transform_box(then, &mut f)?
                                         .map_data(|new_then| (new_when, new_then)))
                                 })
@@ -273,13 +273,11 @@ impl TreeNode for Expr {
                             (new_expr, new_when_then_expr, else_expr)
                         }))
                 })?
-                .and_then_transform_sibling(
-                    |(new_expr, new_when_then_expr, else_expr)| {
-                        Ok(transform_option_box(else_expr, &mut f)?.map_data(
-                            |new_else_expr| (new_expr, new_when_then_expr, new_else_expr),
-                        ))
-                    },
-                )?
+                .and_then_transform(|(new_expr, new_when_then_expr, else_expr)| {
+                    Ok(transform_option_box(else_expr, &mut f)?.map_data(
+                        |new_else_expr| (new_expr, new_when_then_expr, new_else_expr),
+                    ))
+                })?
                 .map_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                     Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
@@ -314,12 +312,12 @@ impl TreeNode for Expr {
                 window_frame,
             }) => transform_vec(args, &mut f)?
                 .map_data(|new_args| (new_args, partition_by, order_by))
-                .and_then_transform_sibling(|(new_args, partition_by, order_by)| {
+                .and_then_transform(|(new_args, partition_by, order_by)| {
                     Ok(transform_vec(partition_by, &mut f)?.map_data(
                         |new_partition_by| (new_args, new_partition_by, order_by),
                     ))
                 })?
-                .and_then_transform_sibling(|(new_args, new_partition_by, order_by)| {
+                .and_then_transform(|(new_args, new_partition_by, order_by)| {
                     Ok(transform_vec(order_by, &mut f)?.map_data(|new_order_by| {
                         (new_args, new_partition_by, new_order_by)
                     }))
@@ -341,11 +339,11 @@ impl TreeNode for Expr {
                 order_by,
             }) => transform_vec(args, &mut f)?
                 .map_data(|new_args| (new_args, filter, order_by))
-                .and_then_transform_sibling(|(new_args, filter, order_by)| {
+                .and_then_transform(|(new_args, filter, order_by)| {
                     Ok(transform_option_box(filter, &mut f)?
                         .map_data(|new_filter| (new_args, new_filter, order_by)))
                 })?
-                .and_then_transform_sibling(|(new_args, new_filter, order_by)| {
+                .and_then_transform(|(new_args, new_filter, order_by)| {
                     Ok(transform_option_vec(order_by, &mut f)?
                         .map_data(|new_order_by| (new_args, new_filter, new_order_by)))
                 })?
@@ -390,7 +388,7 @@ impl TreeNode for Expr {
                 negated,
             }) => transform_box(expr, &mut f)?
                 .map_data(|new_expr| (new_expr, list))
-                .and_then_transform_sibling(|(new_expr, list)| {
+                .and_then_transform(|(new_expr, list)| {
                     Ok(transform_vec(list, &mut f)?
                         .map_data(|new_list| (new_expr, new_list)))
                 })?
