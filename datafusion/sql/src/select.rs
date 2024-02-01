@@ -280,24 +280,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut array_exprs_to_unnest = vec![];
+        let mut exprs_to_unnest = vec![];
 
         for expr in select_exprs.iter() {
-            if let Expr::Unnest(Unnest { exprs: array_expr }) = expr {
-                array_exprs_to_unnest.push(array_expr[0].clone());
+            if let Expr::Unnest(Unnest { exprs }) = expr {
+                exprs_to_unnest.push(exprs[0].clone());
             }
         }
 
         // Do the final projection
-        if array_exprs_to_unnest.is_empty() {
+        if exprs_to_unnest.is_empty() {
             LogicalPlanBuilder::from(input)
                 .project(select_exprs)?
                 .build()
         } else {
-            // Only support single unnest expression for now
-            assert_eq!(array_exprs_to_unnest.len(), 1);
+            if exprs_to_unnest.len() > 1 {
+                return not_impl_err!("Only support single unnest expression for now");
+            }
 
-            let expr = array_exprs_to_unnest[0].clone();
+            let expr = exprs_to_unnest[0].clone();
             let column = expr.display_name()?;
 
             LogicalPlanBuilder::from(input)

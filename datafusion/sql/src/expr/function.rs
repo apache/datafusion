@@ -17,15 +17,15 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
-    Result,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError,
+    Dependency, Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFunctionDefinition,
+    expr, AggregateFunction, BuiltinScalarFunction, Expr, ScalarFunctionDefinition,
+    WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
@@ -74,6 +74,43 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if name.eq("unnest") {
             let exprs =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
+            match exprs.len() {
+                0 => {
+                    return exec_err!("unnest() requires at least one argument");
+                }
+                1 => {
+                    if let Expr::ScalarFunction(ScalarFunction {
+                        func_def:
+                            ScalarFunctionDefinition::BuiltIn(
+                                BuiltinScalarFunction::MakeArray,
+                            ),
+                        ..
+                    }) = exprs[0]
+                    {
+                        // valid
+                    } else if let Expr::Column(_) = exprs[0] {
+                        // valid
+                    } else if let Expr::ScalarFunction(ScalarFunction {
+                        func_def:
+                            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Struct),
+                        ..
+                    }) = exprs[0]
+                    {
+                        return not_impl_err!("unnest() does not support struct yet");
+                    } else {
+                        return plan_err!(
+                            "unnest() can only be applied to array and structs and null"
+                        );
+                    }
+                }
+                _ => {
+                    return not_impl_err!(
+                        "unnest() does not support multiple arguments yet"
+                    );
+                }
+            }
+
             return Ok(Expr::Unnest(Unnest { exprs }));
         }
 
