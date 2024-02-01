@@ -603,14 +603,12 @@ impl ExecutionPlan for AggregateExec {
             // First stage aggregation will not change the output partitioning,
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
-            let input_eq_properties = self.input.equivalence_properties();
-            // First stage Aggregation will not change the output partitioning but need to respect the Alias
-            let input_partition = self.input.output_partitioning();
             if let Partitioning::Hash(exprs, part) = input_partition {
                 let normalized_exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        input_eq_properties
+                        self.input
+                            .equivalence_properties()
                             .project_expr(&expr, &self.projection_mapping)
                             .unwrap_or_else(|| {
                                 Arc::new(UnKnownColumn::new(&expr.to_string()))
