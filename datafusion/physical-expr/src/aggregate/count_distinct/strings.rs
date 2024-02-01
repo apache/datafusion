@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Specialized implementation of `COUNT DISTINCT` for `StringArray` and `LargeStringArray`
+//! Specialized implementation of `COUNT DISTINCT` for [`StringArray`]
+//! and [`LargeStringArray`]
+//!
+//! [`StringArray`]: arrow::array::StringArray
+//! [`LargeStringArray`]: arrow::array::LargeStringArray
 
 use ahash::RandomState;
 use arrow_array::cast::AsArray;
