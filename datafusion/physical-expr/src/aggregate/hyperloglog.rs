@@ -34,8 +34,8 @@
 //!
 //! This module also borrows some code structure from [pdatastructs.rs](https://github.com/crepererum/pdatastructs.rs/blob/3997ed50f6b6871c9e53c4c5e0f48f431405fc63/src/hyperloglog.rs).
 
-use ahash::{AHasher, RandomState};
-use std::hash::{BuildHasher, Hash, Hasher};
+use ahash::RandomState;
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 /// The greater is P, the smaller the error.
@@ -102,9 +102,7 @@ where
     /// reasonable performance.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
-        let mut hasher: AHasher = SEED.build_hasher();
-        obj.hash(&mut hasher);
-        hasher.finish()
+        SEED.hash_one(obj)
     }
 
     /// Adds an element to the HyperLogLog.
