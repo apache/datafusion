@@ -1380,16 +1380,16 @@ mod tests {
     fn test_update_projected_exprs() -> Result<()> {
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("a", 0)),
+                Arc::new(Column::new("a", 3)),
                 Operator::Divide,
-                Arc::new(Column::new("e", 4)),
+                Arc::new(Column::new("e", 5)),
             )),
             Arc::new(CastExpr::new(
-                Arc::new(Column::new("a", 0)),
+                Arc::new(Column::new("a", 3)),
                 DataType::Float32,
                 None,
             )),
-            Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
+            Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
                 Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
@@ -1397,10 +1397,10 @@ mod tests {
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
                         Operator::Divide,
-                        Arc::new(Column::new("c", 2)),
+                        Arc::new(Column::new("c", 0)),
                     )),
                     Arc::new(BinaryExpr::new(
-                        Arc::new(Column::new("c", 2)),
+                        Arc::new(Column::new("c", 0)),
                         Operator::Divide,
                         Arc::new(Column::new("b", 1)),
                     )),
@@ -1409,39 +1409,39 @@ mod tests {
                 None,
             )),
             Arc::new(CaseExpr::try_new(
-                Some(Arc::new(Column::new("d", 3))),
+                Some(Arc::new(Column::new("d", 2))),
                 vec![
                     (
-                        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                        Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Column::new("d", 3)),
+                            Arc::new(Column::new("d", 2)),
                             Operator::Plus,
-                            Arc::new(Column::new("e", 4)),
+                            Arc::new(Column::new("e", 5)),
                         )) as Arc<dyn PhysicalExpr>,
                     ),
                     (
-                        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                        Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Column::new("e", 4)),
+                            Arc::new(Column::new("e", 5)),
                             Operator::Plus,
-                            Arc::new(Column::new("d", 3)),
+                            Arc::new(Column::new("d", 2)),
                         )) as Arc<dyn PhysicalExpr>,
                     ),
                 ],
                 Some(Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("a", 0)),
+                    Arc::new(Column::new("a", 3)),
                     Operator::Modulo,
-                    Arc::new(Column::new("e", 4)),
+                    Arc::new(Column::new("e", 5)),
                 ))),
             )?),
         ];
         let projected_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
-            (Arc::new(Column::new("a", 0)), "a".to_owned()),
+            (Arc::new(Column::new("a", 3)), "a".to_owned()),
             (Arc::new(Column::new("b", 1)), "b_new".to_owned()),
-            (Arc::new(Column::new("c", 2)), "c".to_owned()),
-            (Arc::new(Column::new("d", 3)), "d_new".to_owned()),
-            (Arc::new(Column::new("e", 4)), "e".to_owned()),
-            (Arc::new(Column::new("f", 5)), "f_new".to_owned()),
+            (Arc::new(Column::new("c", 0)), "c".to_owned()),
+            (Arc::new(Column::new("d", 2)), "d_new".to_owned()),
+            (Arc::new(Column::new("e", 5)), "e".to_owned()),
+            (Arc::new(Column::new("f", 4)), "f_new".to_owned()),
         ];
 
         let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -1503,6 +1503,7 @@ mod tests {
         ];
 
         for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
+            println!("expr: {:?}", expr);
             assert!(update_expr(&expr, &projected_exprs, false)?
                 .unwrap()
                 .eq(&expected_expr));
