@@ -191,11 +191,11 @@ impl Accumulator for BoolAndAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Boolean(self.acc))
     }
 
@@ -309,7 +309,7 @@ struct BoolOrAccumulator {
 }
 
 impl Accumulator for BoolOrAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
@@ -328,7 +328,7 @@ impl Accumulator for BoolOrAccumulator {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Boolean(self.acc))
     }
 

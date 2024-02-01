@@ -496,7 +496,7 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
 
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
-        #[doc = $DOC ]
+        #[doc = $DOC]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction(ScalarFunction::new(
                 built_in_function::BuiltinScalarFunction::$ENUM,
@@ -612,7 +612,7 @@ scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
-    "returns 1 for an empty array or 0 for a non-empty array."
+    "returns true for an empty array or false for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -729,6 +729,12 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArrayReverse,
+    array_reverse,
+    array,
+    "reverses the order of elements in the array."
+);
+scalar_expr!(
     ArraySlice,
     array_slice,
     array begin end stride,
@@ -795,9 +801,8 @@ scalar_expr!(
     "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
-scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
-scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
+scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -830,6 +835,7 @@ scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
+scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
@@ -919,6 +925,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
     Isnan,
@@ -1367,11 +1374,10 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
-        test_scalar_expr!(Encode, encode, string, encoding);
-        test_scalar_expr!(Decode, decode, string, encoding);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
+        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
@@ -1410,6 +1416,7 @@ mod test {
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
+        test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
         test_scalar_expr!(Substr, substring, string, position, count);
@@ -1475,36 +1482,6 @@ mod test {
         }) = digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn encode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = encode(col("tableA.a"), lit("base64"))
-        {
-            let name = BuiltinScalarFunction::Encode;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn decode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = decode(col("tableA.a"), lit("hex"))
-        {
-            let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
         } else {

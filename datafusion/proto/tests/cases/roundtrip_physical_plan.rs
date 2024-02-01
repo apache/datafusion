@@ -35,6 +35,8 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -44,10 +46,10 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr, Sum,
+    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr,
+    StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -73,8 +75,8 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{FileTypeWriterOptions, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, Signature, SimpleAggregateUDF,
-    WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
+    SimpleAggregateUDF, WindowFrame, WindowFrameBound,
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
@@ -190,8 +192,8 @@ fn roundtrip_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
@@ -329,20 +331,45 @@ fn rountrip_aggregate() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-        cast(col("b", &schema)?, &schema, DataType::Float64)?,
-        "AVG(b)".to_string(),
-        DataType::Float64,
-    ))];
+    let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
+        // AVG
+        vec![Arc::new(Avg::new(
+            cast(col("b", &schema)?, &schema, DataType::Float64)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))],
+        // NTH_VALUE
+        vec![Arc::new(NthValueAgg::new(
+            col("b", &schema)?,
+            1,
+            "NTH_VALUE(b, 1)".to_string(),
+            DataType::Int64,
+            false,
+            Vec::new(),
+            Vec::new(),
+        ))],
+        // STRING_AGG
+        vec![Arc::new(StringAgg::new(
+            cast(col("b", &schema)?, &schema, DataType::Utf8)?,
+            lit(ScalarValue::Utf8(Some(",".to_string()))),
+            "STRING_AGG(name, ',')".to_string(),
+            DataType::Utf8,
+        ))],
+    ];
 
-    roundtrip_test(Arc::new(AggregateExec::try_new(
-        AggregateMode::Final,
-        PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
-        vec![None],
-        Arc::new(EmptyExec::new(schema.clone())),
-        schema,
-    )?))
+    for aggregates in test_cases {
+        let schema = schema.clone();
+        roundtrip_test(Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new_single(groups.clone()),
+            aggregates,
+            vec![None],
+            Arc::new(EmptyExec::new(schema.clone())),
+            schema,
+        )?))?;
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -354,7 +381,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     #[derive(Debug)]
     struct Example;
     impl Accumulator for Example {
-        fn state(&self) -> Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
             Ok(vec![ScalarValue::Int64(Some(0))])
         }
 
@@ -366,7 +393,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&self) -> Result<ScalarValue> {
+        fn evaluate(&mut self) -> Result<ScalarValue> {
             Ok(ScalarValue::Int64(Some(0)))
         }
 
@@ -551,8 +578,9 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
+        false,
     );
 
     let project =
@@ -569,9 +597,12 @@ fn roundtrip_scalar_udf() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",
@@ -587,6 +618,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        false,
     );
 
     let project =
@@ -721,6 +753,8 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
         GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
+            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                as Arc<dyn PhysicalExpr>,
         },
     ));
 
@@ -760,7 +794,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
@@ -796,7 +829,6 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
@@ -855,7 +887,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::Parquet(
             ParquetWriterOptions::new(WriterProperties::default()),
@@ -884,8 +915,8 @@ fn roundtrip_sym_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);

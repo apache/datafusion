@@ -15,6 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod strings;
+
+use std::any::Any;
+use std::cmp::Eq;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::Arc;
+
+use ahash::RandomState;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use arrow_array::types::{
     ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
@@ -25,23 +36,15 @@ use arrow_array::types::{
 };
 use arrow_array::PrimitiveArray;
 
-use std::any::Any;
-use std::cmp::Eq;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::sync::Arc;
-
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
-use std::collections::HashSet;
-
-use crate::aggregate::utils::{down_cast_any_ref, Hashable};
-use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+
+use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
+use crate::aggregate::utils::{down_cast_any_ref, Hashable};
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 
 type DistinctScalarValues = ScalarValue;
 
@@ -61,26 +64,14 @@ impl DistinctCount {
     pub fn new(
         input_data_type: DataType,
         expr: Arc<dyn PhysicalExpr>,
-        name: String,
+        name: impl Into<String>,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             state_data_type: input_data_type,
             expr,
         }
     }
-}
-
-macro_rules! native_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(NativeDistinctCountAccumulator::<$TYPE>::new()))
-    }};
-}
-
-macro_rules! float_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(FloatDistinctCountAccumulator::<$TYPE>::new()))
-    }};
 }
 
 impl AggregateExpr for DistinctCount {
@@ -109,54 +100,61 @@ impl AggregateExpr for DistinctCount {
         use DataType::*;
         use TimeUnit::*;
 
-        match &self.state_data_type {
-            Int8 => native_distinct_count_accumulator!(Int8Type),
-            Int16 => native_distinct_count_accumulator!(Int16Type),
-            Int32 => native_distinct_count_accumulator!(Int32Type),
-            Int64 => native_distinct_count_accumulator!(Int64Type),
-            UInt8 => native_distinct_count_accumulator!(UInt8Type),
-            UInt16 => native_distinct_count_accumulator!(UInt16Type),
-            UInt32 => native_distinct_count_accumulator!(UInt32Type),
-            UInt64 => native_distinct_count_accumulator!(UInt64Type),
-            Decimal128(_, _) => native_distinct_count_accumulator!(Decimal128Type),
-            Decimal256(_, _) => native_distinct_count_accumulator!(Decimal256Type),
+        Ok(match &self.state_data_type {
+            Int8 => Box::new(NativeDistinctCountAccumulator::<Int8Type>::new()),
+            Int16 => Box::new(NativeDistinctCountAccumulator::<Int16Type>::new()),
+            Int32 => Box::new(NativeDistinctCountAccumulator::<Int32Type>::new()),
+            Int64 => Box::new(NativeDistinctCountAccumulator::<Int64Type>::new()),
+            UInt8 => Box::new(NativeDistinctCountAccumulator::<UInt8Type>::new()),
+            UInt16 => Box::new(NativeDistinctCountAccumulator::<UInt16Type>::new()),
+            UInt32 => Box::new(NativeDistinctCountAccumulator::<UInt32Type>::new()),
+            UInt64 => Box::new(NativeDistinctCountAccumulator::<UInt64Type>::new()),
+            Decimal128(_, _) => {
+                Box::new(NativeDistinctCountAccumulator::<Decimal128Type>::new())
+            }
+            Decimal256(_, _) => {
+                Box::new(NativeDistinctCountAccumulator::<Decimal256Type>::new())
+            }
 
-            Date32 => native_distinct_count_accumulator!(Date32Type),
-            Date64 => native_distinct_count_accumulator!(Date64Type),
+            Date32 => Box::new(NativeDistinctCountAccumulator::<Date32Type>::new()),
+            Date64 => Box::new(NativeDistinctCountAccumulator::<Date64Type>::new()),
             Time32(Millisecond) => {
-                native_distinct_count_accumulator!(Time32MillisecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time32MillisecondType>::new())
             }
             Time32(Second) => {
-                native_distinct_count_accumulator!(Time32SecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time32SecondType>::new())
             }
             Time64(Microsecond) => {
-                native_distinct_count_accumulator!(Time64MicrosecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time64MicrosecondType>::new())
             }
             Time64(Nanosecond) => {
-                native_distinct_count_accumulator!(Time64NanosecondType)
+                Box::new(NativeDistinctCountAccumulator::<Time64NanosecondType>::new())
             }
-            Timestamp(Microsecond, _) => {
-                native_distinct_count_accumulator!(TimestampMicrosecondType)
-            }
-            Timestamp(Millisecond, _) => {
-                native_distinct_count_accumulator!(TimestampMillisecondType)
-            }
+            Timestamp(Microsecond, _) => Box::new(NativeDistinctCountAccumulator::<
+                TimestampMicrosecondType,
+            >::new()),
+            Timestamp(Millisecond, _) => Box::new(NativeDistinctCountAccumulator::<
+                TimestampMillisecondType,
+            >::new()),
             Timestamp(Nanosecond, _) => {
-                native_distinct_count_accumulator!(TimestampNanosecondType)
+                Box::new(NativeDistinctCountAccumulator::<TimestampNanosecondType>::new())
             }
             Timestamp(Second, _) => {
-                native_distinct_count_accumulator!(TimestampSecondType)
+                Box::new(NativeDistinctCountAccumulator::<TimestampSecondType>::new())
             }
 
-            Float16 => float_distinct_count_accumulator!(Float16Type),
-            Float32 => float_distinct_count_accumulator!(Float32Type),
-            Float64 => float_distinct_count_accumulator!(Float64Type),
+            Float16 => Box::new(FloatDistinctCountAccumulator::<Float16Type>::new()),
+            Float32 => Box::new(FloatDistinctCountAccumulator::<Float32Type>::new()),
+            Float64 => Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
 
-            _ => Ok(Box::new(DistinctCountAccumulator {
+            Utf8 => Box::new(StringDistinctCountAccumulator::<i32>::new()),
+            LargeUtf8 => Box::new(StringDistinctCountAccumulator::<i64>::new()),
+
+            _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
                 state_data_type: self.state_data_type.clone(),
-            })),
-        }
+            }),
+        })
     }
 
     fn name(&self) -> &str {
@@ -212,7 +210,7 @@ impl DistinctCountAccumulator {
 }
 
 impl Accumulator for DistinctCountAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
         let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
         Ok(vec![ScalarValue::List(arr)])
@@ -244,12 +242,12 @@ impl Accumulator for DistinctCountAccumulator {
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
         let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
         for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars)
+            self.values.extend(scalars);
         }
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
@@ -288,7 +286,7 @@ where
     T: ArrowPrimitiveType + Send + Debug,
     T::Native: Eq + Hash,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().cloned(),
         )) as ArrayRef;
@@ -331,7 +329,7 @@ where
         })
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
@@ -374,7 +372,7 @@ impl<T> Accumulator for FloatDistinctCountAccumulator<T>
 where
     T: ArrowPrimitiveType + Send + Debug,
 {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().map(|v| v.0),
         )) as ArrayRef;
@@ -418,7 +416,7 @@ where
         })
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
@@ -440,9 +438,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::expressions::NoOp;
-
-    use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -454,9 +449,14 @@ mod tests {
     };
     use arrow_array::Decimal256Array;
     use arrow_buffer::i256;
+
     use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
     use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
+
+    use crate::expressions::NoOp;
+
+    use super::*;
 
     macro_rules! state_to_vec_primitive {
         ($LIST:expr, $DATA_TYPE:ident) => {{

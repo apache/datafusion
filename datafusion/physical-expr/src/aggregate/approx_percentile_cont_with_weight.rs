@@ -129,7 +129,7 @@ impl ApproxPercentileWithWeightAccumulator {
 }
 
 impl Accumulator for ApproxPercentileWithWeightAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.approx_percentile_cont_accumulator.state()
     }
 
@@ -155,7 +155,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         self.approx_percentile_cont_accumulator.evaluate()
     }
 

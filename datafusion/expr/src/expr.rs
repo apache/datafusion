@@ -33,7 +33,7 @@ use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -421,8 +421,12 @@ pub enum GetFieldAccess {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Box<Expr> },
-    /// List range, for example `list[i:j]`
-    ListRange { start: Box<Expr>, stop: Box<Expr> },
+    /// List stride, for example `list[i:j:k]`
+    ListRange {
+        start: Box<Expr>,
+        stop: Box<Expr>,
+        stride: Box<Expr>,
+    },
 }
 
 /// Returns the field of a [`arrow::array::ListArray`] or
@@ -849,13 +853,8 @@ const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl PartialOrd for Expr {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let mut hasher = SEED.build_hasher();
-        self.hash(&mut hasher);
-        let s = hasher.finish();
-
-        let mut hasher = SEED.build_hasher();
-        other.hash(&mut hasher);
-        let o = hasher.finish();
+        let s = SEED.hash_one(self);
+        let o = SEED.hash_one(other);
 
         Some(s.cmp(&o))
     }
@@ -1209,7 +1208,7 @@ impl Expr {
     /// # use datafusion_expr::{lit, col};
     /// let expr = col("c1")
     ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
     /// ```
     pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
@@ -1217,6 +1216,7 @@ impl Expr {
             field: GetFieldAccess::ListRange {
                 start: Box::new(start),
                 stop: Box::new(stop),
+                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
             },
         })
     }
@@ -1530,8 +1530,12 @@ impl fmt::Display for Expr {
                     write!(f, "({expr})[{name}]")
                 }
                 GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange { start, stop } => {
-                    write!(f, "({expr})[{start}:{stop}]")
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    write!(f, "({expr})[{start}:{stop}:{stride}]")
                 }
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -1732,10 +1736,15 @@ fn create_name(e: &Expr) -> Result<String> {
                     let key = create_name(key)?;
                     Ok(format!("{expr}[{key}]"))
                 }
-                GetFieldAccess::ListRange { start, stop } => {
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_name(start)?;
                     let stop = create_name(stop)?;
-                    Ok(format!("{expr}[{start}:{stop}]"))
+                    let stride = create_name(stride)?;
+                    Ok(format!("{expr}[{start}:{stop}:{stride}]"))
                 }
             }
         }

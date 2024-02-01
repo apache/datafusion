@@ -24,7 +24,7 @@ mod json;
 mod parquet;
 
 use crate::{
-    catalog::{CatalogList, MemoryCatalogList},
+    catalog::{CatalogProviderList, MemoryCatalogProviderList},
     datasource::{
         cte_worktable::CteWorkTable,
         function::{TableFunction, TableFunctionImpl},
@@ -1173,8 +1173,8 @@ impl SessionContext {
         Arc::downgrade(&self.state)
     }
 
-    /// Register [`CatalogList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
+    /// Register [`CatalogProviderList`] in [`SessionState`]
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
     }
 }
@@ -1245,7 +1245,7 @@ pub struct SessionState {
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogProviderList>,
     /// Table Functions
     table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
@@ -1285,7 +1285,8 @@ impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        let catalog_list =
+            Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>;
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
 
@@ -1297,11 +1298,11 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogList`]
+    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     pub fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
@@ -1339,7 +1340,7 @@ impl SessionState {
             );
         }
 
-        SessionState {
+        let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
@@ -1355,7 +1356,13 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
-        }
+        };
+
+        // register built in functions
+        datafusion_functions::register_all(&mut new_self)
+            .expect("can not register built in functions");
+
+        new_self
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
@@ -1366,7 +1373,7 @@ impl SessionState {
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
         Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
@@ -1840,7 +1847,7 @@ impl SessionState {
     }
 
     /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
+    pub fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         self.catalog_list.clone()
     }
 
@@ -1974,6 +1981,10 @@ impl FunctionRegistry for SessionState {
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
         })
+    }
+
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 }
 

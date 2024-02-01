@@ -118,6 +118,11 @@ pub trait PartitionEvaluator: Debug + Send {
         }
     }
 
+    /// Get whether evaluator needs future data for its result (if so returns `false`) or not
+    fn is_causal(&self) -> bool {
+        false
+    }
+
     /// Evaluate a window function on an entire input partition.
     ///
     /// This function is called once per input *partition* for window

@@ -17,7 +17,7 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion/wasmtest", "datafusion-examples", "docs", "test-utils", "benchmarks",
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/functions", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion/wasmtest", "datafusion-examples", "docs", "test-utils", "benchmarks",
 ]
 resolver = "2"
 
@@ -28,7 +28,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.70"
+rust-version = "1.72"
 version = "35.0.0"
 
 [workspace.dependencies]
@@ -49,6 +49,7 @@ datafusion = { path = "datafusion/core", version = "35.0.0" }
 datafusion-common = { path = "datafusion/common", version = "35.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "35.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "35.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "35.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "35.0.0" }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "35.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "35.0.0" }
@@ -70,7 +71,7 @@ parquet = { version = "50.0.0", default-features = false, features = ["arrow", "
 rand = "0.8"
 rstest = "0.18.0"
 serde_json = "1"
-sqlparser = { version = "0.41.0", features = ["visitor"] }
+sqlparser = { version = "0.43.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 url = "2.2"

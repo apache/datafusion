@@ -78,15 +78,9 @@ pub async fn partitioned_sym_join_with_filter(
 ) -> Result<Vec<RecordBatch>> {
     let partition_count = 4;
 
-    let left_expr = on
-        .iter()
-        .map(|(l, _)| Arc::new(l.clone()) as _)
-        .collect::<Vec<_>>();
+    let left_expr = on.iter().map(|(l, _)| l.clone() as _).collect::<Vec<_>>();
 
-    let right_expr = on
-        .iter()
-        .map(|(_, r)| Arc::new(r.clone()) as _)
-        .collect::<Vec<_>>();
+    let right_expr = on.iter().map(|(_, r)| r.clone() as _).collect::<Vec<_>>();
 
     let join = SymmetricHashJoinExec::try_new(
         Arc::new(RepartitionExec::try_new(
@@ -133,7 +127,7 @@ pub async fn partitioned_hash_join_with_filter(
     let partition_count = 4;
     let (left_expr, right_expr) = on
         .iter()
-        .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+        .map(|(l, r)| (l.clone() as _, r.clone() as _))
         .unzip();
 
     let join = Arc::new(HashJoinExec::try_new(

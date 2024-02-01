@@ -34,18 +34,20 @@ use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{
-    array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    scalar_subquery, sum, wildcard, AggregateFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
+    placeholder, scalar_subquery, sum, when, wildcard, AggregateFunction, Expr,
+    ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
@@ -1430,6 +1432,60 @@ async fn unnest_analyze_metrics() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn consecutive_projection_same_schema() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    let batch =
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![0, 1]))])
+            .unwrap();
+
+    let df = ctx.read_batch(batch).unwrap();
+    df.clone().show().await.unwrap();
+
+    // Add `t` column full of nulls
+    let df = df
+        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .unwrap();
+    df.clone().show().await.unwrap();
+
+    let df = df
+        // (case when id = 1 then 10 else t) as t
+        .with_column(
+            "t",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap()
+        // (case when id = 1 then 10 else t) as t2
+        .with_column(
+            "t2",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap();
+
+    let results = df.collect().await?;
+    let expected = [
+        "+----+----+----+",
+        "| id | t  | t2 |",
+        "+----+----+----+",
+        "| 0  |    |    |",
+        "| 1  | 10 | 10 |",
+        "+----+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -1701,6 +1757,75 @@ async fn test_array_agg() -> Result<()> {
         "+-------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = $0 [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // The placeholder is not replaced with a value,
+    // so the filter data type is not know, i.e. a = $0.
+    // Therefore, the optimization fails.
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_err());
+    assert!(optimized_plan
+        .unwrap_err()
+        .to_string()
+        .contains("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+
+    // Prodiving a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap()
+        .with_param_values(vec![("0", ScalarValue::from(3i32))]) // <-- provide parameter value
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = Int32(3) [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_ok());
+
+    let actual = optimized_plan.unwrap().display_indent_schema().to_string();
+    let expected = "EmptyRelation [a:Int32]";
+    assert_eq!(expected, actual);
 
     Ok(())
 }

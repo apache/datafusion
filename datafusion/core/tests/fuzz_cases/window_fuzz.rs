@@ -22,7 +22,6 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -38,7 +37,6 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
@@ -156,67 +154,162 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         schema.clone(),
         None,
     )?);
-    let window_fn = WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
-    let fn_name = "COUNT".to_string();
-    let args = vec![col("x", &schema)?];
+
+    // Different window functions to test causality
+    let window_functions = vec![
+        // Simulate cases of the following form:
+        // COUNT(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+            // its name
+            "COUNT",
+            // window function argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            None,
+        ),
+        // Simulate cases of the following form:
+        // ROW_NUMBER() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::RowNumber,
+            ),
+            // its name
+            "ROW_NUMBER",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // LAG(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+            // its name
+            "LAG",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // LEAD(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            // its name
+            "LEAD",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(false),
+        ),
+        // Simulate cases of the following form:
+        // RANK() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            // its name
+            "RANK",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // DENSE_RANK() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::DenseRank,
+            ),
+            // its name
+            "DENSE_RANK",
+            // no argument
+            vec![],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+    ];
+
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
-    // Simulate cases of the following form:
-    // COUNT(x) OVER (
-    //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
-    // )
-    for is_preceding in [false, true] {
-        for end_bound in [0, 1, 2, 3] {
-            let end_bound = if is_preceding {
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
-            } else {
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
-            };
-            let window_frame = WindowFrame::new_bounds(
-                WindowFrameUnits::Rows,
-                start_bound.clone(),
-                end_bound,
-            );
-            let causal = window_frame.is_causal();
+    for (window_fn, fn_name, args, expected_causal) in window_functions {
+        for is_preceding in [false, true] {
+            for end_bound in [0, 1, 2, 3] {
+                let end_bound = if is_preceding {
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(Some(end_bound)))
+                } else {
+                    WindowFrameBound::Following(ScalarValue::UInt64(Some(end_bound)))
+                };
+                let window_frame = WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    start_bound.clone(),
+                    end_bound,
+                );
+                let causal = if let Some(expected_causal) = expected_causal {
+                    expected_causal
+                } else {
+                    // If there is no expected causality
+                    // calculate it from window frame
+                    window_frame.is_causal()
+                };
 
-            let window_expr = create_window_expr(
-                &window_fn,
-                fn_name.clone(),
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame),
-                schema.as_ref(),
-            )?;
-            let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
-                vec![window_expr],
-                memory_exec.clone(),
-                vec![],
-                InputOrderMode::Linear,
-            )?);
-            let task_ctx = ctx.task_ctx();
-            let mut collected_results = collect(running_window_exec, task_ctx).await?;
-            collected_results.retain(|batch| batch.num_rows() > 0);
-            let input_batch_sizes = batches
-                .iter()
-                .map(|batch| batch.num_rows())
-                .collect::<Vec<_>>();
-            let result_batch_sizes = collected_results
-                .iter()
-                .map(|batch| batch.num_rows())
-                .collect::<Vec<_>>();
-            if causal {
-                // For causal window frames, we can generate results immediately
-                // for each input batch. Hence, batch sizes should match.
-                assert_eq!(input_batch_sizes, result_batch_sizes);
-            } else {
-                // For non-causal window frames, we cannot generate results
-                // immediately for each input batch. Hence, batch sizes shouldn't
-                // match.
-                assert_ne!(input_batch_sizes, result_batch_sizes);
+                let window_expr = create_window_expr(
+                    &window_fn,
+                    fn_name.to_string(),
+                    &args,
+                    &partitionby_exprs,
+                    &orderby_exprs,
+                    Arc::new(window_frame),
+                    schema.as_ref(),
+                )?;
+                let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+                    vec![window_expr],
+                    memory_exec.clone(),
+                    vec![],
+                    InputOrderMode::Linear,
+                )?);
+                let task_ctx = ctx.task_ctx();
+                let mut collected_results =
+                    collect(running_window_exec, task_ctx).await?;
+                collected_results.retain(|batch| batch.num_rows() > 0);
+                let input_batch_sizes = batches
+                    .iter()
+                    .map(|batch| batch.num_rows())
+                    .collect::<Vec<_>>();
+                let result_batch_sizes = collected_results
+                    .iter()
+                    .map(|batch| batch.num_rows())
+                    .collect::<Vec<_>>();
+                if causal {
+                    // For causal window frames, we can generate results immediately
+                    // for each input batch. Hence, batch sizes should match.
+                    assert_eq!(input_batch_sizes, result_batch_sizes);
+                } else {
+                    // For non-causal window frames, we cannot generate results
+                    // immediately for each input batch. Hence, batch sizes shouldn't
+                    // match.
+                    assert_ne!(input_batch_sizes, result_batch_sizes);
+                }
             }
         }
     }
@@ -229,14 +322,14 @@ fn get_random_function(
     rng: &mut StdRng,
     is_linear: bool,
 ) -> (WindowFunctionDefinition, Vec<Arc<dyn PhysicalExpr>>, String) {
-    let mut args = if is_linear {
+    let arg = if is_linear {
         // In linear test for the test version with WindowAggExec we use insert SortExecs to the plan to be able to generate
         // same result with BoundedWindowAggExec which doesn't use any SortExec. To make result
         // non-dependent on table order. We should use column a in the window function
         // (Given that we do not use ROWS for the window frame. ROWS also introduces dependency to the table order.).
-        vec![col("a", schema).unwrap()]
+        col("a", schema).unwrap()
     } else {
-        vec![col("x", schema).unwrap()]
+        col("x", schema).unwrap()
     };
     let mut window_fn_map = HashMap::new();
     // HashMap values consists of tuple first element is WindowFunction, second is additional argument
@@ -245,28 +338,28 @@ fn get_random_function(
         "sum",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "count",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "min",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "max",
         (
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     if !is_linear {
@@ -307,6 +400,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lead,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -319,6 +413,7 @@ fn get_random_function(
                     BuiltInWindowFunction::Lag,
                 ),
                 vec![
+                    arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
                 ],
@@ -331,7 +426,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::FirstValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -340,7 +435,7 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::LastValue,
             ),
-            vec![],
+            vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
@@ -349,23 +444,26 @@ fn get_random_function(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::NthValue,
             ),
-            vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
+            vec![
+                arg.clone(),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+            ],
         ),
     );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
-    let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    let mut args = args.clone();
     if let WindowFunctionDefinition::AggregateFunction(f) = window_fn {
-        let a = args[0].clone();
-        let dt = a.data_type(schema.as_ref()).unwrap();
-        let sig = f.signature();
-        let coerced = coerce_types(f, &[dt], &sig).unwrap();
-        args[0] = cast(a, schema, coerced[0].clone()).unwrap();
-    }
-
-    for new_arg in new_args {
-        args.push(new_arg.clone());
+        if !args.is_empty() {
+            // Do type coercion first argument
+            let a = args[0].clone();
+            let dt = a.data_type(schema.as_ref()).unwrap();
+            let sig = f.signature();
+            let coerced = coerce_types(f, &[dt], &sig).unwrap();
+            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+        }
     }
 
     (window_fn.clone(), args, fn_name.to_string())
@@ -534,39 +632,6 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
 
-    // The schema needs to be enriched before the `create_window_expr`
-    // The reason for this is window expressions datatypes are derived from the schema
-    // The datafusion code enriches the schema on physical planner and this test copies the same behavior manually
-    // Also bunch of functions dont require input arguments thus just send an empty vec for such functions
-    let data_types = if [
-        "row_number",
-        "rank",
-        "dense_rank",
-        "percent_rank",
-        "ntile",
-        "cume_dist",
-    ]
-    .contains(&fn_name.as_str())
-    {
-        vec![]
-    } else {
-        args.iter()
-            .map(|e| e.clone().as_ref().data_type(&schema))
-            .collect::<Result<Vec<_>>>()?
-    };
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
-    let mut window_fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect_vec();
-    window_fields.extend_from_slice(&[Field::new(
-        &fn_name,
-        window_expr_return_type,
-        true,
-    )]);
-    let extended_schema = Arc::new(Schema::new(window_fields));
-
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -576,7 +641,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                &extended_schema,
+                schema.as_ref(),
             )
             .unwrap()],
             exec1,
@@ -598,7 +663,7 @@ async fn run_window_test(
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
-                extended_schema.as_ref(),
+                schema.as_ref(),
             )
             .unwrap()],
             exec2,
