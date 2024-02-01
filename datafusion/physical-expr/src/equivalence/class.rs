@@ -19,7 +19,7 @@ use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
     physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalSortExpr,
+    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::TreeNode;
@@ -427,7 +427,7 @@ impl EquivalenceGroup {
         right_equivalences: &Self,
         join_type: &JoinType,
         left_size: usize,
-        on: &[(Column, Column)],
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
     ) -> Self {
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
@@ -445,9 +445,25 @@ impl EquivalenceGroup {
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
                     for (lhs, rhs) in on.iter() {
-                        let index = rhs.index() + left_size;
-                        let new_lhs = Arc::new(lhs.clone()) as _;
-                        let new_rhs = Arc::new(Column::new(rhs.name(), index)) as _;
+                        let new_lhs = lhs.clone() as _;
+                        // Rewrite rhs to point to the right side of the join:
+                        let new_rhs = rhs
+                            .clone()
+                            .transform(&|expr| {
+                                if let Some(column) =
+                                    expr.as_any().downcast_ref::<Column>()
+                                {
+                                    let new_column = Arc::new(Column::new(
+                                        column.name(),
+                                        column.index() + left_size,
+                                    ))
+                                        as _;
+                                    return Ok(Transformed::Yes(new_column));
+                                }
+
+                                Ok(Transformed::No(expr))
+                            })
+                            .unwrap();
                         result.add_equal_conditions(&new_lhs, &new_rhs);
                     }
                 }

@@ -918,7 +918,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         file_format: FileType::from_str(&copy.file_type)?,
-                        single_file_output: copy.single_file_output,
                         copy_options,
                     },
                 ))
@@ -1640,7 +1639,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,
-                single_file_output,
                 file_format,
                 copy_options,
             }) => {
@@ -1723,7 +1721,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
-                            single_file_output: *single_file_output,
                             output_url: output_url.to_string(),
                             file_type: file_format.to_string(),
                             copy_options: copy_options_proto,

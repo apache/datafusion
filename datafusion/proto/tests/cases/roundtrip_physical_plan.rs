@@ -35,6 +35,8 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -190,8 +192,8 @@ fn roundtrip_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
@@ -336,17 +338,16 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)".to_string(),
             DataType::Float64,
         ))],
-        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
-        // // NTH_VALUE
-        // vec![Arc::new(NthValueAgg::new(
-        //     col("b", &schema)?,
-        //     1,
-        //     "NTH_VALUE(b, 1)".to_string(),
-        //     DataType::Int64,
-        //     false,
-        //     Vec::new(),
-        //     Vec::new(),
-        // ))],
+        // NTH_VALUE
+        vec![Arc::new(NthValueAgg::new(
+            col("b", &schema)?,
+            1,
+            "NTH_VALUE(b, 1)".to_string(),
+            DataType::Int64,
+            false,
+            Vec::new(),
+            Vec::new(),
+        ))],
         // STRING_AGG
         vec![Arc::new(StringAgg::new(
             cast(col("b", &schema)?, &schema, DataType::Utf8)?,
@@ -577,8 +578,9 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
+        false,
     );
 
     let project =
@@ -616,6 +618,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        false,
     );
 
     let project =
@@ -750,6 +753,8 @@ fn roundtrip_get_indexed_field_list_range() -> Result<()> {
         GetFieldAccessExpr::ListRange {
             start: col_start,
             stop: col_stop,
+            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
+                as Arc<dyn PhysicalExpr>,
         },
     ));
 
@@ -789,7 +794,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
@@ -825,7 +829,6 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
@@ -884,7 +887,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::Parquet(
             ParquetWriterOptions::new(WriterProperties::default()),
@@ -913,8 +915,8 @@ fn roundtrip_sym_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
