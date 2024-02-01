@@ -1503,7 +1503,6 @@ mod tests {
         ];
 
         for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-            println!("expr: {:?}", expr);
             assert!(update_expr(&expr, &projected_exprs, false)?
                 .unwrap()
                 .eq(&expected_expr));
