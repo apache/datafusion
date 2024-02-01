@@ -1380,16 +1380,16 @@ mod tests {
     fn test_update_projected_exprs() -> Result<()> {
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("a", 3)),
+                Arc::new(Column::new("a", 0)),
                 Operator::Divide,
-                Arc::new(Column::new("e", 5)),
+                Arc::new(Column::new("e", 4)),
             )),
             Arc::new(CastExpr::new(
-                Arc::new(Column::new("a", 3)),
+                Arc::new(Column::new("a", 0)),
                 DataType::Float32,
                 None,
             )),
-            Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
+            Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
                 Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
@@ -1397,10 +1397,10 @@ mod tests {
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
                         Operator::Divide,
-                        Arc::new(Column::new("c", 0)),
+                        Arc::new(Column::new("c", 2)),
                     )),
                     Arc::new(BinaryExpr::new(
-                        Arc::new(Column::new("c", 0)),
+                        Arc::new(Column::new("c", 2)),
                         Operator::Divide,
                         Arc::new(Column::new("b", 1)),
                     )),
@@ -1409,29 +1409,29 @@ mod tests {
                 None,
             )),
             Arc::new(CaseExpr::try_new(
-                Some(Arc::new(Column::new("d", 2))),
+                Some(Arc::new(Column::new("d", 3))),
                 vec![
                     (
-                        Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
+                        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Column::new("d", 2)),
+                            Arc::new(Column::new("d", 3)),
                             Operator::Plus,
-                            Arc::new(Column::new("e", 5)),
+                            Arc::new(Column::new("e", 4)),
                         )) as Arc<dyn PhysicalExpr>,
                     ),
                     (
-                        Arc::new(Column::new("a", 3)) as Arc<dyn PhysicalExpr>,
+                        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Column::new("e", 5)),
+                            Arc::new(Column::new("e", 4)),
                             Operator::Plus,
-                            Arc::new(Column::new("d", 2)),
+                            Arc::new(Column::new("d", 3)),
                         )) as Arc<dyn PhysicalExpr>,
                     ),
                 ],
                 Some(Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("a", 3)),
+                    Arc::new(Column::new("a", 0)),
                     Operator::Modulo,
-                    Arc::new(Column::new("e", 5)),
+                    Arc::new(Column::new("e", 4)),
                 ))),
             )?),
         ];
