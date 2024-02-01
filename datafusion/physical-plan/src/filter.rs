@@ -89,7 +89,7 @@ impl FilterExec {
         default_selectivity: u8,
     ) -> Result<Self, DataFusionError> {
         if default_selectivity > 100 {
-            return plan_err!("Default flter selectivity needs to be less than 100");
+            return plan_err!("Default filter selectivity needs to be less than 100");
         }
         self.default_selectivity = default_selectivity;
         Ok(self)
