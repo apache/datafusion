@@ -27,6 +27,7 @@ AS VALUES
     ([6], [11,12], 3)
 ;
 
+## Basic unnest expression
 query I
 select unnest([1,2,3]);
 ----
@@ -34,17 +35,12 @@ select unnest([1,2,3]);
 2
 3
 
+## Unnest empty array
 query ?
 select unnest([]);
 ----
 
-query ?
-select column1 from unnest_table;
-----
-[1, 2, 3]
-[4, 5]
-[6]
-
+## Unnest column
 query I
 select unnest(column1) from unnest_table;
 ----
@@ -55,16 +51,20 @@ select unnest(column1) from unnest_table;
 5
 6
 
+## Unnest multiple columns
 query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
 select unnest(column1), unnest(column2) from unnest_table;
 
+## Unnest scalar
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and structs and null
 select unnest(1);
 
+## Unnest column with scalars
 # TODO: This should be an error, but unnest is able to process scalar values now.
 # query error
 # select unnest(column3) from unnest_table;
 
+## Unnest empty expression
 query error DataFusion error: Execution error: unnest\(\) requires at least one argument
 select unnest();
 
