@@ -90,6 +90,13 @@ make_package!(
     "Hex and binary `encode` and `decode` functions."
 );
 
+make_package!(
+    regex,
+    "regex_expressions",
+    "Regular Expressions `regexp_match` and `regexp_replace` functions."
+);
+
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "encoding_expressions")]

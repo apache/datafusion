@@ -33,6 +33,9 @@ rust-version = { workspace = true }
 default = ["encoding_expressions"]
 # enable the encode/decode functions
 encoding_expressions = ["base64", "hex"]
+# enable regexp_match/regexp_replace functions
+regex_expressions = ["regex", "hashbrown"]
+
 
 
 [lib]
@@ -49,3 +52,5 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
 log = "0.4.20"
+regex = { version = "1.8", optional = true }
+hashbrown = { version = "0.14", features = ["raw"], optional = true }

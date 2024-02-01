@@ -21,12 +21,7 @@
 
 //! Regex expressions
 
-use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
-    OffsetSizeTrait,
-};
-use arrow_array::builder::{GenericStringBuilder, ListBuilder};
-use arrow_schema::ArrowError;
+use arrow::array::{new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray, OffsetSizeTrait, GenericStringBuilder, ListBuilder};
 use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
@@ -35,10 +30,8 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
 use regex::Regex;
 use std::sync::{Arc, OnceLock};
+use arrow::error::ArrowError;
 
-use crate::functions::{
-    make_scalar_function_inner, make_scalar_function_with_hints, Hint,
-};
 
 /// Get the first argument from the given string array.
 ///
