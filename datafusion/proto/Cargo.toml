@@ -26,7 +26,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.70"
+# Specify MSRV here as `cargo msrv` doesn't support workspace version
+rust-version = "1.72"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
