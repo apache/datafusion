@@ -181,7 +181,8 @@ impl ExecutionPlan for ProjectionExec {
             let normalized_exprs = exprs
                 .into_iter()
                 .map(|expr| {
-                    self.equivalence_properties
+                    self.input
+                        .equivalence_properties()
                         .project_expr(&expr, &self.projection_mapping)
                         .unwrap_or_else(|| {
                             Arc::new(UnKnownColumn::new(&expr.to_string()))
