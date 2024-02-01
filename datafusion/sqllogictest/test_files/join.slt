@@ -679,3 +679,9 @@ Trevor R Jeyork
 John B Shalk
 Alice B ShuttlP
 Samanta J ShuttlP
+
+statement ok
+DROP TABLE companies
+
+statement ok
+DROP TABLE leads
