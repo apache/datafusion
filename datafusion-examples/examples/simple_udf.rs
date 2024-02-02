@@ -28,7 +28,6 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::cast::as_float64_array;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::functions::columnar_values_to_array;
 use std::sync::Arc;
 
 /// create local execution context with an in-memory table:
@@ -71,13 +70,15 @@ async fn main() -> Result<()> {
         // this is guaranteed by DataFusion based on the function's signature.
         assert_eq!(args.len(), 2);
 
-        let args = columnar_values_to_array(args)?;
+        // Expand the arguments to arrays (this is simple, but inefficient for
+        // single constant values).
+        let args = ColumnarValue::values_to_arrays(args)?;
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
         let base = as_float64_array(&args[0]).expect("cast failed");
         let exponent = as_float64_array(&args[1]).expect("cast failed");
 
-        // this is guaranteed by DataFusion. We place it just to make it obvious.
+        // The array lengths is guaranteed by DataFusion. We assert here to make it obvious.
         assert_eq!(exponent.len(), base.len());
 
         // 2. perform the computation
