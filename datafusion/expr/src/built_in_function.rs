@@ -551,7 +551,12 @@ impl BuiltinScalarFunction {
                             DataType::List(_) => get_base_type(field.data_type()),
                             _ => Ok(data_type.to_owned()),
                         },
-                        _ => internal_err!("Not reachable, data_type should be List"),
+                        DataType::LargeList(field) => match field.data_type() {
+                            DataType::LargeList(_) => get_base_type(field.data_type()),
+                            _ => Ok(data_type.to_owned()),
+                        },
+                        DataType::Null => Ok(data_type.to_owned()),
+                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
                     }
                 }
 
