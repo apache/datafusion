@@ -1011,10 +1011,9 @@ mod tests {
     use arrow::datatypes::DataType;
 
     #[test]
-    fn qualifier_in_name() -> Result<()> {
+    fn test_lookup_unqualified_name_with_qualifier_inside() -> Result<()> {
         let col = Column::from_name("`t1.c0`");
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
