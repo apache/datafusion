@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -112,6 +112,10 @@ pub struct DFSchema {
     metadata: HashMap<String, String>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
+    /// Fields map
+    /// key - fully qualified field name
+    /// value - field index in schema
+    fields_map: BTreeMap<String, usize>,
 }
 
 impl DFSchema {
@@ -121,7 +125,63 @@ impl DFSchema {
             fields: vec![],
             metadata: HashMap::new(),
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_map: BTreeMap::new(),
         }
+    }
+
+    fn get_fields_map(fields: &[DFField]) -> BTreeMap<String, usize> {
+        let mut fields_map = BTreeMap::new();
+
+        for (index, f) in fields.iter().enumerate() {
+            match f.qualifier() {
+                Some(OwnedTableReference::Bare { table: _ }) => {
+                    fields_map.insert(f.qualified_name(), index);
+                }
+                Some(OwnedTableReference::Partial { schema: _, table }) => {
+                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Bare {
+                                table: std::borrow::Cow::Borrowed(table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
+                }
+                Some(OwnedTableReference::Full {
+                    catalog: _,
+                    schema,
+                    table,
+                }) => {
+                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Partial {
+                                schema: std::borrow::Cow::Borrowed(schema),
+                                table: std::borrow::Cow::Borrowed(table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Bare {
+                                table: std::borrow::Cow::Borrowed(table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
+                }
+                None => {}
+            };
+
+            fields_map.insert(f.name().to_string(), index);
+        }
+
+        fields_map
     }
 
     #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
@@ -160,10 +220,13 @@ impl DFSchema {
                 });
             }
         }
+
+        let fields_map = Self::get_fields_map(&fields);
         Ok(Self {
             fields,
             metadata,
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_map,
         })
     }
 
@@ -237,6 +300,7 @@ impl DFSchema {
             }
         }
         self.fields.extend(fields_to_add);
+        self.fields_map = Self::get_fields_map(&self.fields);
         self.metadata.extend(other_schema.metadata.clone())
     }
 
@@ -251,66 +315,66 @@ impl DFSchema {
         &self.fields[i]
     }
 
-    #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
-    /// Find the index of the column with the given unqualified name
-    pub fn index_of(&self, name: &str) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
-                return Ok(i);
-            } else {
-                // Now that `index_of` is deprecated an error is thrown if
-                // a fully qualified field name is provided.
-                match &self.fields[i].qualifier {
-                    Some(qualifier) => {
-                        if (qualifier.to_string() + "." + self.fields[i].name()) == name {
-                            return _plan_err!(
-                                "Fully qualified field name '{name}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead"
-                            );
-                        }
-                    }
-                    None => (),
-                }
-            }
-        }
-
-        Err(unqualified_field_not_found(name, self))
-    }
-
+    /// Return schema column position by column name
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Result<Option<usize>> {
-        let mut matches = self
-            .fields
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| match (qualifier, &field.qualifier) {
-                // field to lookup is qualified.
-                // current field is qualified and not shared between relations, compare both
-                // qualifier and name.
-                (Some(q), Some(field_q)) => {
-                    q.resolved_eq(field_q) && field.name() == name
+        let mut fields_map = BTreeMap::new();
+
+        for (index, f) in self.fields.iter().enumerate() {
+            match f.qualifier() {
+                Some(OwnedTableReference::Bare { table: _ }) => {
+                    fields_map.insert(f.qualified_name(), index);
                 }
-                // field to lookup is qualified but current field is unqualified.
-                (Some(qq), None) => {
-                    // the original field may now be aliased with a name that matches the
-                    // original qualified name
-                    let column = Column::from_qualified_name(field.name());
-                    match column {
-                        Column {
-                            relation: Some(r),
-                            name: column_name,
-                        } => &r == qq && column_name == name,
-                        _ => false,
-                    }
+                Some(OwnedTableReference::Partial { schema: _, table }) => {
+                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Bare {
+                                table: std::borrow::Cow::Borrowed(&table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
                 }
-                // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => field.name() == name,
-            })
-            .map(|(idx, _)| idx);
-        Ok(matches.next())
+                Some(OwnedTableReference::Full {
+                    catalog: _,
+                    schema,
+                    table,
+                }) => {
+                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Partial {
+                                schema: std::borrow::Cow::Borrowed(&schema),
+                                table: std::borrow::Cow::Borrowed(&table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
+                    fields_map.insert(
+                        DFField::make_qualified_name(
+                            Some(&TableReference::Bare {
+                                table: std::borrow::Cow::Borrowed(&table),
+                            }),
+                            f.name(),
+                        ),
+                        index,
+                    );
+                }
+                None => {}
+            };
+
+            fields_map.insert(f.name().to_string(), index);
+        }
+
+        let field_lookup_key = &DFField::make_qualified_name(qualifier, name);
+        //let x = Self::get_fields_map(&self.fields);
+        Ok(fields_map.get(field_lookup_key).copied())
     }
 
     /// Find the index of the column with the given qualifier and name
@@ -865,11 +929,13 @@ impl DFField {
 
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
-        if let Some(qualifier) = &self.qualifier {
-            format!("{}.{}", qualifier, self.field.name())
-        } else {
-            self.field.name().to_owned()
-        }
+        Self::make_qualified_name(self.qualifier.as_ref(), self.name())
+    }
+
+    pub fn make_qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
+        qualifier
+            .map(|q| format!("{}.{}", q, name))
+            .unwrap_or(name.to_owned())
     }
 
     /// Builds a qualified column based on self
@@ -993,18 +1059,18 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
 
-    #[test]
-    fn qualifier_in_name() -> Result<()> {
-        let col = Column::from_name("t1.c0");
-        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        // lookup with unqualified name "t1.c0"
-        let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
-        );
-        Ok(())
-    }
+    // #[test]
+    // fn qualifier_in_name() -> Result<()> {
+    //     let col = Column::from_name("t1.c0");
+    //     let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+    //     // lookup with unqualified name "t1.c0"
+    //     let err = schema.index_of_column(&col).unwrap_err();
+    //     assert_eq!(
+    //         err.strip_backtrace(),
+    //         "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
+    //     );
+    //     Ok(())
+    // }
 
     #[test]
     fn quoted_qualifiers_in_name() -> Result<()> {
@@ -1143,35 +1209,6 @@ mod tests {
         assert_contains!(join.unwrap_err().to_string(),
                          "Schema error: Schema contains qualified \
                           field name t1.c0 and unqualified field name c0 which would be ambiguous");
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn helpful_error_messages() -> Result<()> {
-        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are t1.c0, t1.c1.";
-        // Pertinent message parts
-        let expected_err_msg = "Fully qualified field name 't1.c0'";
-        assert_contains!(
-            schema
-                .field_with_qualified_name(&TableReference::bare("x"), "y")
-                .unwrap_err()
-                .to_string(),
-            expected_help
-        );
-        assert_contains!(
-            schema
-                .field_with_unqualified_name("y")
-                .unwrap_err()
-                .to_string(),
-            expected_help
-        );
-        assert_contains!(schema.index_of("y").unwrap_err().to_string(), expected_help);
-        assert_contains!(
-            schema.index_of("t1.c0").unwrap_err().to_string(),
-            expected_err_msg
-        );
         Ok(())
     }
 

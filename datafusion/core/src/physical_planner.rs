@@ -2242,7 +2242,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
+        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] }, fields_map: {\"a\": 0} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
