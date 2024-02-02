@@ -479,13 +479,17 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
         let children = self.arc_children();
         if !children.is_empty() {
             let t = children.into_iter().map_till_continue_and_collect(f)?;
-            // TODO: Currently `t.transformed` quality comes from if the transformation
-            //  closures fill the field correctly. Once we trust `t.transformed` we can
-            //  remove the additional `t2` check.
-            //  Please note that we need to propagate up `t.tnr` though.
+            // TODO: Currently `assert_eq!(t.transformed, t2.transformed)` fails as
+            //  `t.transformed` quality comes from if the transformation closures fill the
+            //   field correctly.
+            //  Once we trust `t.transformed` we can remove the additional check in
+            //  `with_new_arc_children()`.
             let arc_self = Arc::clone(&self);
             let t2 = self.with_new_arc_children(arc_self, t.data)?;
-            Ok(Transformed::new(t2.data, t2.transformed, t.tnr))
+
+            // Propagate up `t.transformed` and `t.tnr` along with the node containing
+            // transformed children.
+            Ok(Transformed::new(t2.data, t.transformed, t.tnr))
         } else {
             Ok(Transformed::no(self))
         }
@@ -525,12 +529,16 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         let (new_self, children) = self.take_children();
         if !children.is_empty() {
             let t = children.into_iter().map_till_continue_and_collect(f)?;
-            // TODO: Currently `t.transformed` quality comes from if the transformation
-            //  closures fill the field correctly. Once we trust `t.transformed` we can
-            //  remove the additional `t2` check.
-            //  Please note that we need to propagate up `t.tnr` though.
+            // TODO: Currently `assert_eq!(t.transformed, t2.transformed)` fails as
+            //  `t.transformed` quality comes from if the transformation closures fill the
+            //   field correctly.
+            //  Once we trust `t.transformed` we can remove the additional check in
+            //  `with_new_children()`.
             let t2 = new_self.with_new_children(t.data)?;
-            Ok(Transformed::new(t2.data, t2.transformed, t.tnr))
+
+            // Propagate up `t.transformed` and `t.tnr` along with the node containing
+            // transformed children.
+            Ok(Transformed::new(t2.data, t.transformed, t.tnr))
         } else {
             Ok(Transformed::no(new_self))
         }

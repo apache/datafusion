@@ -111,7 +111,9 @@ pub fn remove_unnecessary_projections(
             let maybe_unified = try_unifying_projections(projection, child_projection)?;
             return if let Some(new_plan) = maybe_unified {
                 // To unify 3 or more sequential projections:
-                remove_unnecessary_projections(new_plan)
+                Ok(Transformed::yes(
+                    remove_unnecessary_projections(new_plan)?.data,
+                ))
             } else {
                 Ok(Transformed::no(plan))
             };
