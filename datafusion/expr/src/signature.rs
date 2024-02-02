@@ -122,7 +122,8 @@ pub enum TypeSignature {
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
     /// Specifies Signatures for array functions
-    ArraySignature(ArrayFunctionSignature),
+    /// Boolean value specifies whether null type coercion is allowed
+    ArraySignature(ArrayFunctionSignature, bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -146,13 +147,19 @@ pub enum ArrayFunctionSignature {
 }
 
 impl ArrayFunctionSignature {
+    /// Arguments to ArrayFunctionSignature
+    /// `current_types` - The data types of the arguments
+    /// `coercion` - Whether null type coercion is allowed
+    /// Returns the valid types for the function signature
     pub fn get_type_signature(
         &self,
         current_types: &[DataType],
+        allow_null_coercion: bool,
     ) -> Result<Vec<Vec<DataType>>> {
         fn array_append_or_prepend_valid_types(
             current_types: &[DataType],
             is_append: bool,
+            allow_null_coercion: bool,
         ) -> Result<Vec<Vec<DataType>>> {
             if current_types.len() != 2 {
                 return Ok(vec![vec![]]);
@@ -165,7 +172,7 @@ impl ArrayFunctionSignature {
             };
 
             // We follow Postgres on `array_append(Null, T)`, which is not valid.
-            if array_type.eq(&DataType::Null) {
+            if array_type.eq(&DataType::Null) && !allow_null_coercion {
                 return Ok(vec![vec![]]);
             }
 
@@ -217,8 +224,13 @@ impl ArrayFunctionSignature {
                 _ => Ok(vec![vec![]]),
             }
         }
-        fn array(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
-            if current_types.len() != 1 {
+        fn array(
+            current_types: &[DataType],
+            allow_null_coercion: bool,
+        ) -> Result<Vec<Vec<DataType>>> {
+            if current_types.len() != 1
+                || (current_types[0].is_null() && !allow_null_coercion)
+            {
                 return Ok(vec![vec![]]);
             }
 
@@ -231,7 +243,7 @@ impl ArrayFunctionSignature {
                     let array_type = coerced_fixed_size_list_to_list(array_type);
                     Ok(vec![vec![array_type]])
                 }
-                DataType::Null => Ok(vec![vec![array_type.to_owned()]]),
+                DataType::Null => Ok(vec![vec![array_type.clone()]]),
                 _ => Ok(vec![vec![DataType::List(Arc::new(Field::new(
                     "item",
                     array_type.to_owned(),
@@ -241,13 +253,21 @@ impl ArrayFunctionSignature {
         }
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
-                array_append_or_prepend_valid_types(current_types, true)
+                array_append_or_prepend_valid_types(
+                    current_types,
+                    true,
+                    allow_null_coercion,
+                )
             }
             ArrayFunctionSignature::ElementAndArray => {
-                array_append_or_prepend_valid_types(current_types, false)
+                array_append_or_prepend_valid_types(
+                    current_types,
+                    false,
+                    allow_null_coercion,
+                )
             }
             ArrayFunctionSignature::ArrayAndIndex => array_and_index(current_types),
-            ArrayFunctionSignature::Array => array(current_types),
+            ArrayFunctionSignature::Array => array(current_types, allow_null_coercion),
         }
     }
 }
@@ -302,7 +322,7 @@ impl TypeSignature {
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
             }
-            TypeSignature::ArraySignature(array_signature) => {
+            TypeSignature::ArraySignature(array_signature, _) => {
                 vec![array_signature.to_string()]
             }
         }
@@ -407,10 +427,11 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
-    pub fn array_and_element(volatility: Volatility) -> Self {
+    pub fn array_and_element(allow_null_coercion: bool, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndElement,
+                allow_null_coercion,
             ),
             volatility,
         }
@@ -425,27 +446,32 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(volatility: Volatility) -> Self {
+    pub fn element_and_array(allow_null_coercion: bool, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ElementAndArray,
+                allow_null_coercion,
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
-    pub fn array_and_index(volatility: Volatility) -> Self {
+    pub fn array_and_index(allow_null_coercion: bool, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndIndex,
+                allow_null_coercion,
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
-    pub fn array(volatility: Volatility) -> Self {
+    pub fn array(allow_null_coercion: bool, volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::Array,
+                allow_null_coercion,
+            ),
             volatility,
         }
     }

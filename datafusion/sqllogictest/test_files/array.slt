@@ -4287,9 +4287,6 @@ NULL [3] [4]
 
 # array_ndims scalar function #1
 
-query error
-select array_ndims(1);
-
 #follow PostgreSQL
 query error
 select

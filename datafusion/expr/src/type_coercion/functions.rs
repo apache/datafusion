@@ -110,8 +110,8 @@ fn get_valid_types(
         }
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArraySignature(ref function_signature) => {
-            function_signature.get_type_signature(current_types)?
+        TypeSignature::ArraySignature(ref function_signature, allow_null_coercion) => {
+            function_signature.get_type_signature(current_types, *allow_null_coercion)?
         }
 
         TypeSignature::Any(number) => {
