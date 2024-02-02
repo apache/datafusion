@@ -645,16 +645,18 @@ impl DFSchema {
     }
 
     /// Replace all field qualifier with new value in schema
-    pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
+    pub fn replace_qualifier(
+        self,
+        qualifier: impl Into<OwnedTableReference>,
+    ) -> Result<Self> {
         let qualifier = qualifier.into();
-        DFSchema {
-            fields: self
-                .fields
-                .into_iter()
-                .map(|f| DFField::from_qualified(qualifier.clone(), f.field))
-                .collect(),
-            ..self
-        }
+        let fields: Vec<DFField> = self
+            .fields
+            .into_iter()
+            .map(|f| DFField::from_qualified(qualifier.clone(), f.field))
+            .collect();
+        Self::new_with_metadata(fields, self.metadata)?
+            .with_functional_dependencies(self.functional_dependencies)
     }
 
     /// Get list of fully-qualified field names in this schema
