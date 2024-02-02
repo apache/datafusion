@@ -79,3 +79,11 @@ rstest = { workspace = true }
 [[bench]]
 harness = false
 name = "in_list"
+
+[[bench]]
+harness = false
+name = "make_date"
+
+[[bench]]
+harness = false
+name = "to_timestamp"

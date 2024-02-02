@@ -578,7 +578,6 @@ fn coerce_arguments_for_fun(
     if expressions.is_empty() {
         return Ok(vec![]);
     }
-
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
     // Cast Fixedsizelist to List for array functions

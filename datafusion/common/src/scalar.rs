@@ -1483,7 +1483,9 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
-            DataType::List(_) | DataType::LargeList(_) => build_list_array(scalars)?,
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => build_list_array(scalars)?,
             DataType::Struct(fields) => {
                 // Initialize a Vector to store the ScalarValues for each column
                 let mut columns: Vec<Vec<ScalarValue>> =
@@ -1595,7 +1597,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
-            | DataType::FixedSizeList(_, _)
             | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
