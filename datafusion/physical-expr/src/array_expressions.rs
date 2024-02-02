@@ -791,6 +791,7 @@ pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_front_list::<i64>(array)
         }
+        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_pop_front does not support type: {:?}",
             array_data_type
@@ -814,6 +815,7 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_back_list::<i64>(array)
         }
+        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_pop_back does not support type: {:?}",
             array_data_type

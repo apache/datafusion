@@ -31,7 +31,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -543,10 +543,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
-                        DataType::List(field) if matches!(field.data_type(), DataType::List(_)) => get_base_type(field.data_type()),
+                        DataType::List(field) | DataType::FixedSizeList(field, _) if matches!(field.data_type(), DataType::List(_)|DataType::FixedSizeList(_,_ )) => get_base_type(field.data_type()),
                         DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
                         DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
-                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
+                        DataType::FixedSizeList(field,_ ) => Ok(DataType::List(field.clone())),
+                        _ => exec_err!("Not reachable, data_type should be List, LargeList or FixedSizeList"),
                     }
                 }
 
@@ -930,10 +931,10 @@ impl BuiltinScalarFunction {
                 Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => {
-                Signature::array(false, self.volatility())
+                Signature::array(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayPopBack => {
-                Signature::array(false, self.volatility())
+                Signature::array(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
@@ -948,7 +949,7 @@ impl BuiltinScalarFunction {
                 Signature::array_and_index(false, self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::Flatten => Signature::array(false, self.volatility()),
+            BuiltinScalarFunction::Flatten => Signature::array(true, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
                 Signature::any(2, self.volatility())
             }

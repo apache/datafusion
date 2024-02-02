@@ -1303,6 +1303,13 @@ NULL 43
 
 ## array_pop_back (aliases: `list_pop_back`)
 
+# array_pop_back scalar function with null
+# follow clickhouse and duckdb
+query ?
+select array_pop_back(null);
+----
+NULL
+
 # array_pop_back scalar function #1
 query ??
 select array_pop_back(make_array(1, 2, 3, 4, 5)), array_pop_back(make_array('h', 'e', 'l', 'l', 'o'));
@@ -1408,6 +1415,13 @@ select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from arrayspop;
 [, 10, 11]
 
 ## array_pop_front (aliases: `list_pop_front`)
+
+# array_pop_front scalar function with null
+# follow clickhouse and duckdb
+query ?
+select array_pop_front(null);
+----
+NULL
 
 # array_pop_front scalar function #1
 query ??
@@ -4315,6 +4329,15 @@ AS SELECT
   arrow_cast(column4, 'LargeList(List(List(List(List(Int64)))))') as column4
 FROM array_ndims_table;
 
+statement ok
+CREATE TABLE fixed_array_ndims_table
+AS SELECT
+  column1,
+  arrow_cast(column2, 'FixedSizeList(3, Int64)') as column2,
+  arrow_cast(column3, 'FixedSizeList(3, List(Int64))') as column3,
+  arrow_cast(column4, 'FixedSizeList(3, List(List(List(List(Int64)))))') as column4
+FROM array_ndims_table;
+
 query IIII
 select
   array_ndims(column1),
@@ -4340,6 +4363,8 @@ from large_array_ndims_table;
 1 1 2 5
 NULL 1 2 5
 1 1 2 5
+
+
 
 statement ok
 drop table array_ndims_table;
@@ -5399,6 +5424,13 @@ query ???
 select flatten(arrow_cast(make_array(1, 2, 1, 3, 2), 'LargeList(Int64)')),
        flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)), 'LargeList(LargeList(Int64))')),
        flatten(arrow_cast(make_array([[1.1]], [[2.2]], [[3.3], [4.4]]), 'LargeList(LargeList(LargeList(Float64)))'));
+----
+[1, 2, 1, 3, 2] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
+
+query ???
+select flatten(arrow_cast(make_array(1, 2, 1, 3, 2), 'FixedSizeList(5, Int64)')),
+       flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)), 'FixedSizeList(4, List(Int64))')),
+       flatten(arrow_cast(make_array([[1.1], [2.2]], [[3.3], [4.4]]), 'FixedSizeList(2, List(List(Float64)))'));
 ----
 [1, 2, 1, 3, 2] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
 
