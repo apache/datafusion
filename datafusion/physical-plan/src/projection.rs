@@ -56,7 +56,8 @@ pub struct ProjectionExec {
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The output equivalence properties
+    /// The output equivalence properties. Cached here as computing them
+    /// can be expensive, see <https://github.com/apache/arrow-datafusion/issues/9084>
     equivalence_properties: EquivalenceProperties,
     /// The mapping used to normalize expressions like Partitioning and
     /// PhysicalSortExpr that maps input to output
