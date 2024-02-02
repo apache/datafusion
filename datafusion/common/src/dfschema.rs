@@ -321,60 +321,12 @@ impl DFSchema {
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Result<Option<usize>> {
-        let mut fields_map = BTreeMap::new();
-
-        for (index, f) in self.fields.iter().enumerate() {
-            match f.qualifier() {
-                Some(OwnedTableReference::Bare { table: _ }) => {
-                    fields_map.insert(f.qualified_name(), index);
-                }
-                Some(OwnedTableReference::Partial { schema: _, table }) => {
-                    fields_map.insert(f.qualified_name(), index);
-                    fields_map.insert(
-                        DFField::make_qualified_name(
-                            Some(&TableReference::Bare {
-                                table: std::borrow::Cow::Borrowed(&table),
-                            }),
-                            f.name(),
-                        ),
-                        index,
-                    );
-                }
-                Some(OwnedTableReference::Full {
-                    catalog: _,
-                    schema,
-                    table,
-                }) => {
-                    fields_map.insert(f.qualified_name(), index);
-                    fields_map.insert(
-                        DFField::make_qualified_name(
-                            Some(&TableReference::Partial {
-                                schema: std::borrow::Cow::Borrowed(&schema),
-                                table: std::borrow::Cow::Borrowed(&table),
-                            }),
-                            f.name(),
-                        ),
-                        index,
-                    );
-                    fields_map.insert(
-                        DFField::make_qualified_name(
-                            Some(&TableReference::Bare {
-                                table: std::borrow::Cow::Borrowed(&table),
-                            }),
-                            f.name(),
-                        ),
-                        index,
-                    );
-                }
-                None => {}
-            };
-
-            fields_map.insert(f.name().to_string(), index);
-        }
-
         let field_lookup_key = &DFField::make_qualified_name(qualifier, name);
-        //let x = Self::get_fields_map(&self.fields);
-        Ok(fields_map.get(field_lookup_key).copied())
+        //dbg!(&self.fields_map);
+        //dbg!(field_lookup_key);
+        //dbg!(&self.fields());
+        //panic!("123");
+        Ok(self.fields_map.get(field_lookup_key).copied())
     }
 
     /// Find the index of the column with the given qualifier and name
