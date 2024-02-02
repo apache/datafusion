@@ -1463,7 +1463,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Chr => &["chr"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::InStr => &["instr"],
+            BuiltinScalarFunction::InStr => &["instr", "position"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],
