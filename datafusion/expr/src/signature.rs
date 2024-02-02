@@ -18,7 +18,12 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
-use arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use crate::type_coercion::binary::comparison_coercion;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 
 /// Constant that is used as a placeholder for any valid timezone.
 /// This is used where a function can accept a timestamp type with any
@@ -136,6 +141,115 @@ pub enum ArrayFunctionSignature {
     ArrayAndIndex,
     /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
     ArrayAndElementAndOptionalIndex,
+    /// Specialized Signature for ArrayEmpty and similar functions
+    Array,
+}
+
+impl ArrayFunctionSignature {
+    pub fn get_type_signature(
+        &self,
+        current_types: &[DataType],
+    ) -> Result<Vec<Vec<DataType>>> {
+        fn array_append_or_prepend_valid_types(
+            current_types: &[DataType],
+            is_append: bool,
+        ) -> Result<Vec<Vec<DataType>>> {
+            if current_types.len() != 2 {
+                return Ok(vec![vec![]]);
+            }
+
+            let (array_type, elem_type) = if is_append {
+                (&current_types[0], &current_types[1])
+            } else {
+                (&current_types[1], &current_types[0])
+            };
+
+            // We follow Postgres on `array_append(Null, T)`, which is not valid.
+            if array_type.eq(&DataType::Null) {
+                return Ok(vec![vec![]]);
+            }
+
+            // We need to find the coerced base type, mainly for cases like:
+            // `array_append(List(null), i64)` -> `List(i64)`
+            let array_base_type = datafusion_common::utils::base_type(array_type);
+            let elem_base_type = datafusion_common::utils::base_type(elem_type);
+            let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
+
+            let new_base_type = new_base_type.ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
+                )
+            })?;
+
+            let array_type = datafusion_common::utils::coerced_type_with_base_type_only(
+                array_type,
+                &new_base_type,
+            );
+
+            match array_type {
+                DataType::List(ref field)
+                | DataType::LargeList(ref field)
+                | DataType::FixedSizeList(ref field, _) => {
+                    let elem_type = field.data_type();
+                    if is_append {
+                        Ok(vec![vec![array_type.clone(), elem_type.clone()]])
+                    } else {
+                        Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+                    }
+                }
+                _ => Ok(vec![vec![]]),
+            }
+        }
+        fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
+            if current_types.len() != 2 {
+                return Ok(vec![vec![]]);
+            }
+
+            let array_type = &current_types[0];
+
+            match array_type {
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _) => {
+                    let array_type = coerced_fixed_size_list_to_list(array_type);
+                    Ok(vec![vec![array_type, DataType::Int64]])
+                }
+                _ => Ok(vec![vec![]]),
+            }
+        }
+        fn array(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
+            if current_types.len() != 1 {
+                return Ok(vec![vec![]]);
+            }
+
+            let array_type = &current_types[0];
+
+            match array_type {
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _) => {
+                    let array_type = coerced_fixed_size_list_to_list(array_type);
+                    Ok(vec![vec![array_type]])
+                }
+                DataType::Null => Ok(vec![vec![array_type.to_owned()]]),
+                _ => Ok(vec![vec![DataType::List(Arc::new(Field::new(
+                    "item",
+                    array_type.to_owned(),
+                    true,
+                )))]]),
+            }
+        }
+        match self {
+            ArrayFunctionSignature::ArrayAndElement => {
+                array_append_or_prepend_valid_types(current_types, true)
+            }
+            ArrayFunctionSignature::ElementAndArray => {
+                array_append_or_prepend_valid_types(current_types, false)
+            }
+            ArrayFunctionSignature::ArrayAndIndex => array_and_index(current_types),
+            ArrayFunctionSignature::Array => array(current_types),
+        }
+    }
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -152,6 +266,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::ArrayAndIndex => {
                 write!(f, "array, index")
+            }
+            ArrayFunctionSignature::Array => {
+                write!(f, "array")
             }
         }
     }
@@ -322,6 +439,13 @@ impl Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndIndex,
             ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayEmpty and similar functions
+    pub fn array(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
             volatility,
         }
     }
