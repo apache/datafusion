@@ -713,11 +713,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::Position;
+        let fun = BuiltinScalarFunction::InStr;
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
-        let args = vec![substr, fullstr];
+        let args = vec![fullstr, substr];
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
     fn sql_agg_with_filter_to_expr(

@@ -671,7 +671,6 @@ enum ScalarFunction {
   ArrayResize = 130;
   EndsWith = 131;
   InStr = 132;
-  Position = 133;
 }
 
 message ScalarFunctionNode {
