@@ -129,6 +129,7 @@ impl DFSchema {
         }
     }
 
+    /// Generate a map from fields to provide O(1) on column lookups
     fn get_fields_map(fields: &[DFField]) -> BTreeMap<String, usize> {
         let mut fields_map = BTreeMap::new();
 
@@ -322,10 +323,6 @@ impl DFSchema {
         name: &str,
     ) -> Result<Option<usize>> {
         let field_lookup_key = &DFField::make_qualified_name(qualifier, name);
-        //dbg!(&self.fields_map);
-        //dbg!(field_lookup_key);
-        //dbg!(&self.fields());
-        //panic!("123");
         Ok(self.fields_map.get(field_lookup_key).copied())
     }
 
@@ -1013,18 +1010,18 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
 
-    // #[test]
-    // fn qualifier_in_name() -> Result<()> {
-    //     let col = Column::from_name("t1.c0");
-    //     let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-    //     // lookup with unqualified name "t1.c0"
-    //     let err = schema.index_of_column(&col).unwrap_err();
-    //     assert_eq!(
-    //         err.strip_backtrace(),
-    //         "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
-    //     );
-    //     Ok(())
-    // }
+    #[test]
+    fn qualifier_in_name() -> Result<()> {
+        let col = Column::from_name("`t1.c0`");
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        // lookup with unqualified name "t1.c0"
+        let err = schema.index_of_column(&col).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Schema error: No field named \"`t1.c0`\". Valid fields are t1.c0, t1.c1."
+        );
+        Ok(())
+    }
 
     #[test]
     fn quoted_qualifiers_in_name() -> Result<()> {
