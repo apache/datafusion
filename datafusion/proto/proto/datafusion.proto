@@ -641,7 +641,7 @@ enum ScalarFunction {
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
-  ArrayToString = 97;
+  // 97 was ArrayToString
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;

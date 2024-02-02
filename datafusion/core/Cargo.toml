@@ -38,11 +38,12 @@ path = "src/lib.rs"
 
 [features]
 # Used to enable the avro format
+array_expressions = ["datafusion-functions-array"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
+default = ["array_expressions", "crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
@@ -68,7 +69,8 @@ dashmap = { workspace = true }
 datafusion-common = { path = "../common", version = "35.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { path = "../functions", version = "35.0.0" }
+datafusion-functions = { workspace = true }
+datafusion-functions-array = { workspace = true, optional = true }
 datafusion-optimizer = { path = "../optimizer", version = "35.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }

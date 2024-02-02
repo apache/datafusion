@@ -1348,6 +1348,11 @@ impl SessionState {
         datafusion_functions::register_all(&mut new_self)
             .expect("can not register built in functions");
 
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        datafusion_functions_array::register_all(&mut new_self)
+            .expect("can not register array expressions");
+
         new_self
     }
     /// Returns new [`SessionState`] using the provided

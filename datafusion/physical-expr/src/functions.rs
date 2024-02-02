@@ -411,9 +411,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
-        BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_to_string)(args)
-        }),
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
         }),

@@ -175,8 +175,6 @@ pub enum BuiltinScalarFunction {
     ArrayReverse,
     /// array_slice
     ArraySlice,
-    /// array_to_string
-    ArrayToString,
     /// array_intersect
     ArrayIntersect,
     /// array_union
@@ -432,7 +430,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => Volatility::Immutable,
             BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
@@ -628,7 +625,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayResize => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::ArrayIntersect => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, DataType::Null) | (DataType::Null, _) => {
@@ -979,9 +975,6 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
 
-            BuiltinScalarFunction::ArrayToString => {
-                Signature::variadic_any(self.volatility())
-            }
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
@@ -1583,12 +1576,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
-            BuiltinScalarFunction::ArrayToString => &[
-                "array_to_string",
-                "list_to_string",
-                "array_join",
-                "list_join",
-            ],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
             BuiltinScalarFunction::Cardinality => &["cardinality"],
             BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
