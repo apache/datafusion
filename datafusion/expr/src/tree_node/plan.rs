@@ -85,7 +85,7 @@ impl TreeNode for LogicalPlan {
         let old_children = self.inputs();
         let t = old_children
             .iter()
-            .map(|c| (*c).clone())
+            .map(|&c| c.clone())
             .map_till_continue_and_collect(f)?;
         // TODO: Currently `assert_eq!(t.transformed, t2)` fails as
         //  `t.transformed` quality comes from if the transformation closures fill the

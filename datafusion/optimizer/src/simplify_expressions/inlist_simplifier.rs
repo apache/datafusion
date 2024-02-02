@@ -52,85 +52,92 @@ impl TreeNodeRewriter for InListSimplifier {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-            if let (Expr::InList(l1), Operator::And, Expr::InList(l2)) =
-                (left.as_ref(), op, right.as_ref())
-            {
-                if l1.expr == l2.expr && !l1.negated && !l2.negated {
-                    return Ok(Transformed::yes(inlist_intersection(l1, l2, false)?));
-                } else if l1.expr == l2.expr && l1.negated && l2.negated {
-                    return Ok(Transformed::yes(inlist_union(l1, l2, true)?));
-                } else if l1.expr == l2.expr && !l1.negated && l2.negated {
-                    return Ok(Transformed::yes(inlist_except(l1, l2)?));
-                } else if l1.expr == l2.expr && l1.negated && !l2.negated {
-                    return Ok(Transformed::yes(inlist_except(l2, l1)?));
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
+            match (*left, op, *right) {
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && !l1.negated && !l2.negated =>
+                {
+                    inlist_intersection(l1, l2, false).map(Transformed::yes)
                 }
-            } else if let (Expr::InList(l1), Operator::Or, Expr::InList(l2)) =
-                (left.as_ref(), op, right.as_ref())
-            {
-                if l1.expr == l2.expr && l1.negated && l2.negated {
-                    return Ok(Transformed::yes(inlist_intersection(l1, l2, true)?));
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && l2.negated =>
+                {
+                    inlist_union(l1, l2, true).map(Transformed::yes)
+                }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && !l1.negated && l2.negated =>
+                {
+                    inlist_except(l1, l2).map(Transformed::yes)
+                }
+                (Expr::InList(l1), Operator::And, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && !l2.negated =>
+                {
+                    inlist_except(l2, l1).map(Transformed::yes)
+                }
+                (Expr::InList(l1), Operator::Or, Expr::InList(l2))
+                    if l1.expr == l2.expr && l1.negated && l2.negated =>
+                {
+                    inlist_intersection(l1, l2, true).map(Transformed::yes)
+                }
+                (left, op, right) => {
+                    // put the expression back together
+                    Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    })))
                 }
             }
+        } else {
+            Ok(Transformed::no(expr))
         }
-
-        Ok(Transformed::no(expr))
     }
 }
 
-fn inlist_union(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
-    let mut seen: HashSet<Expr> = HashSet::new();
-    let list = l1
+/// Return the union of two inlist expressions
+/// maintaining the order of the elements in the two lists
+fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
+    // extend the list in l1 with the elements in l2 that are not already in l1
+    let l1_items: HashSet<_> = l1.list.iter().collect();
+
+    // keep all l2 items that do not also appear in l1
+    let keep_l2: Vec<_> = l2
         .list
-        .iter()
-        .chain(l2.list.iter())
-        .filter(|&e| seen.insert(e.to_owned()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let merged_inlist = InList {
-        expr: l1.expr.clone(),
-        list,
-        negated,
-    };
-    Ok(Expr::InList(merged_inlist))
+        .into_iter()
+        .filter_map(|e| if l1_items.contains(&e) { None } else { Some(e) })
+        .collect();
+
+    l1.list.extend(keep_l2);
+    l1.negated = negated;
+    Ok(Expr::InList(l1))
 }
 
-fn inlist_intersection(l1: &InList, l2: &InList, negated: bool) -> Result<Expr> {
-    let l1_set: HashSet<Expr> = l1.list.iter().cloned().collect();
-    let intersect_list: Vec<Expr> = l2
-        .list
-        .iter()
-        .filter(|x| l1_set.contains(x))
-        .cloned()
-        .collect();
+/// Return the intersection of two inlist expressions
+/// maintaining the order of the elements in the two lists
+fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
+    let l2_items = l2.list.iter().collect::<HashSet<_>>();
+
+    // remove all items from l1 that are not in l2
+    l1.list.retain(|e| l2_items.contains(e));
+
     // e in () is always false
     // e not in () is always true
-    if intersect_list.is_empty() {
+    if l1.list.is_empty() {
         return Ok(lit(negated));
     }
-    let merged_inlist = InList {
-        expr: l1.expr.clone(),
-        list: intersect_list,
-        negated,
-    };
-    Ok(Expr::InList(merged_inlist))
+    Ok(Expr::InList(l1))
 }
 
-fn inlist_except(l1: &InList, l2: &InList) -> Result<Expr> {
-    let l2_set: HashSet<Expr> = l2.list.iter().cloned().collect();
-    let except_list: Vec<Expr> = l1
-        .list
-        .iter()
-        .filter(|x| !l2_set.contains(x))
-        .cloned()
-        .collect();
-    if except_list.is_empty() {
+/// Return the all items in l1 that are not in l2
+/// maintaining the order of the elements in the two lists
+fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
+    let l2_items = l2.list.iter().collect::<HashSet<_>>();
+
+    // keep only items from l1 that are not in l2
+    l1.list.retain(|e| !l2_items.contains(e));
+
+    if l1.list.is_empty() {
         return Ok(lit(false));
     }
-    let merged_inlist = InList {
-        expr: l1.expr.clone(),
-        list: except_list,
-        negated: false,
-    };
-    Ok(Expr::InList(merged_inlist))
+    Ok(Expr::InList(l1))
 }
