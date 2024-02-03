@@ -18,6 +18,7 @@
 use arrow::array::{BooleanArray, Int32Array};
 use arrow::record_batch::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::{DFField, DFSchema};
 use datafusion::error::Result;
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use datafusion::physical_expr::execution_props::ExecutionProps;
@@ -29,6 +30,7 @@ use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{ColumnarValue, ExprSchemable, Operator};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
@@ -45,6 +47,7 @@ use std::sync::Arc;
 /// 2. Evaluate [`Exprs`] against data: [`evaluate_demo`]
 /// 3. Simplify expressions: [`simplify_demo`]
 /// 4. Analyze predicates for boundary ranges: [`range_analysis_demo`]
+/// 5. Get the types of the expressions: [`expression_type_demo`]
 #[tokio::main]
 async fn main() -> Result<()> {
     // The easiest way to do create expressions is to use the
@@ -67,6 +70,9 @@ async fn main() -> Result<()> {
 
     // See how to analyze ranges in expressions
     range_analysis_demo()?;
+
+    // See how to get the type of the expression
+    expression_type_demo()?;
 
     Ok(())
 }
@@ -255,4 +261,39 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
     let expr = simplifier.coerce(expr, df_schema.clone())?;
 
     create_physical_expr(&expr, df_schema.as_ref(), &props)
+}
+
+fn expression_type_demo() -> Result<()> {
+    let expr = col("c");
+
+    // Using a schema where the column `foo` is of type Utf8
+    let schema = DFSchema::new_with_metadata(
+        vec![DFField::new_unqualified("c", DataType::Utf8, true)],
+        HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
+
+    // Using a schema where the column `foo` is of type Int32
+    let schema = DFSchema::new_with_metadata(
+        vec![DFField::new_unqualified("c", DataType::Int32, true)],
+        HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
+
+    // Get the type of an expression that adds 2 columns. Adding an Int32
+    // and Float32 results in Float32 type
+    let expr = col("c1") + col("c2");
+    let schema = DFSchema::new_with_metadata(
+        vec![
+            DFField::new_unqualified("c1", DataType::Int32, true),
+            DFField::new_unqualified("c2", DataType::Float32, true),
+        ],
+        HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+
+    Ok(())
 }
