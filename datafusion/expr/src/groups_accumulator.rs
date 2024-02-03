@@ -71,7 +71,7 @@ impl EmitTo {
 /// Each group is assigned a `group_index` by the hash table and each
 /// accumulator manages the specific state, one per `group_index`.
 ///
-/// group_indexes are contiguous (there aren't gaps), and thus it is
+/// `group_index`es are contiguous (there aren't gaps), and thus it is
 /// expected that each `GroupAccumulator` will use something like `Vec<..>`
 /// to store the group states.
 ///

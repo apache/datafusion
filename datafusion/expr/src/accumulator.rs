@@ -21,12 +21,12 @@ use arrow::array::ArrayRef;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 
-/// Tracks an aggregate functions's state.
+/// Tracks an aggregate function's state.
 ///
 /// `Accumulator`s are stateful objects that implement a single group. They
 /// aggregate values from multiple rows together into a final output aggregate.
 ///
-/// [`GroupsAccumulator]` is a additional more performant (but also complex) API
+/// [`GroupsAccumulator]` is an additional more performant (but also complex) API
 /// that manages state for multiple groups at once.
 ///
 /// An accumulator knows how to:
