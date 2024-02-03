@@ -560,9 +560,21 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
+    // Currently when the schema for the file is set the partition columns
+    // are present, which is illegal because they aren't actually in the files.
+    // This is a workaround to remove them from the schema.
+    let file_schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| !table_partition_cols.contains(field))
+            .cloned()
+            .collect::<Vec<_>>(),
+    ));
+
     Ok(FileScanConfig {
         object_store_url,
-        file_schema: schema,
+        file_schema,
         file_groups,
         statistics,
         projection,
