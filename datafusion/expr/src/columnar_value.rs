@@ -84,7 +84,7 @@ impl ColumnarValue {
     /// permits using a single function in terms of arrays, but it can be
     /// inefficient compared to handling the scalar value directly.
     ///
-    /// Thus, It is recommended to provide specialized implementations for
+    /// Thus, it is recommended to provide specialized implementations for
     /// scalar values if performance is a concern.
     ///
     /// # Errors
@@ -104,7 +104,7 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
                         );
                     }
                 }
