@@ -63,9 +63,9 @@ impl ExprSchemable for Expr {
     /// ## Get the type of a single column expression using different schemas
     ///
     /// ```
-    /// # use arrow_schema::DataType;
-    /// # use datafusion::common::{DFField, DFSchema};
-    /// # use datafusion::logical_expr::{col, ExprSchemable};
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use datafusion_expr::{col, ExprSchemable};
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
@@ -93,11 +93,9 @@ impl ExprSchemable for Expr {
     /// ## and Float32 results in Float32 type
     ///
     /// ```
-    /// # use arrow_schema::DataType;
-    /// # use datafusion::common::DFField;
-    /// # use datafusion::common::DFSchema;
-    /// # use datafusion::logical_expr::col;
-    /// # use datafusion::logical_expr::ExprSchemable;
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use datafusion_expr::{col, ExprSchemable};
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
