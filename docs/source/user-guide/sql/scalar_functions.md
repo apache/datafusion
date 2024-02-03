@@ -641,6 +641,7 @@ nullif(expression1, expression2)
 - [levenshtein](#levenshtein)
 - [substr_index](#substr_index)
 - [find_in_set](#find_in_set)
+- [position](#position)
 
 ### `ascii`
 
@@ -1300,6 +1301,19 @@ regexp_replace(str, regexp, replacement, flags)
   - **g**: (global) Search globally and don't return after the first match.
   - **i**: (insensitive) Ignore case when matching.
 
+### `position`
+
+Returns the position of substr in orig_str
+
+```
+position(substr in origstr)
+```
+
+#### Arguments
+
+- **substr**: he pattern string.
+- **origstr**: The model string.
+
 ## Time and Date Functions
 
 - [now](#now)
@@ -1312,6 +1326,7 @@ regexp_replace(str, regexp, replacement, flags)
 - [datepart](#datepart)
 - [extract](#extract)
 - [today](#today)
+- [make_date](#make_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1499,6 +1514,44 @@ extract(field FROM source)
 
 - **source**: Source time expression to operate on.
   Can be a constant, column, or function.
+
+### `make_date`
+
+Make a date from year/month/day component parts.
+
+```
+make_date(year, month, day)
+```
+
+#### Arguments
+
+- **year**: Year to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **month**: Month to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **day**: Day to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```
+❯ select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+❯ select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
 
 ### `to_timestamp`
 
@@ -1754,6 +1807,7 @@ from_unixtime(expression)
 - [array_replace](#array_replace)
 - [array_replace_n](#array_replace_n)
 - [array_replace_all](#array_replace_all)
+- [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
@@ -2484,6 +2538,34 @@ array_replace_all(array, from, to)
 
 - list_replace_all
 
+### `array_reverse`
+
+Returns the array with the order of the elements reversed.
+
+```
+array_reverse(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_reverse
+
 ### `array_slice`
 
 Returns a slice of the array based on 1-indexed start and end positions.
@@ -2783,6 +2865,10 @@ _Alias of [array_replace_n](#array_replace_n)._
 ### `list_replace_all`
 
 _Alias of [array_replace_all](#array_replace_all)._
+
+### `list_reverse`
+
+_Alias of [array_reverse](#array_reverse)._
 
 ### `list_slice`
 

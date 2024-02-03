@@ -27,7 +27,10 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.70"
+# Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
+# "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
+# https://github.com/foresterre/cargo-msrv/issues/590
+rust-version = "1.72"
 
 [lib]
 name = "datafusion"
@@ -40,7 +43,7 @@ backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
-encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
+encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 parquet = ["datafusion-common/parquet", "dep:parquet"]
@@ -65,6 +68,7 @@ dashmap = { workspace = true }
 datafusion-common = { path = "../common", version = "35.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { path = "../functions", version = "35.0.0" }
 datafusion-optimizer = { path = "../optimizer", version = "35.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }

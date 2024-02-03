@@ -85,44 +85,39 @@ impl SimplifyExpressions {
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        let simplifier = ExprSimplifier::new(info);
-
         let new_inputs = plan
             .inputs()
             .iter()
             .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
-        let expr = match plan {
-            // Canonicalize step won't reorder expressions in a Join on clause.
-            // The left and right expressions in a Join on clause are not commutative,
-            // since the order of the columns must match the order of the children.
-            LogicalPlan::Join(_) => {
-                plan.expressions()
-                    .into_iter()
-                    .map(|e| {
-                        // TODO: unify with `rewrite_preserving_name`
-                        let original_name = e.name_for_alias()?;
-                        let new_e = simplifier.simplify(e)?;
-                        new_e.alias_if_changed(original_name)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
-            _ => {
-                plan.expressions()
-                    .into_iter()
-                    .map(|e| {
-                        // TODO: unify with `rewrite_preserving_name`
-                        let original_name = e.name_for_alias()?;
-                        let cano_e = simplifier.canonicalize(e)?;
-                        let new_e = simplifier.simplify(cano_e)?;
-                        new_e.alias_if_changed(original_name)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
+        let simplifier = ExprSimplifier::new(info);
+
+        // The left and right expressions in a Join on clause are not
+        // commutative, for reasons that are not entirely clear. Thus, do not
+        // reorder expressions in Join while simplifying.
+        //
+        // This is likely related to the fact that order of the columns must
+        // match the order of the children. see
+        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
+        let simplifier = if let LogicalPlan::Join(_) = plan {
+            simplifier.with_canonicalize(false)
+        } else {
+            simplifier
         };
 
-        plan.with_new_exprs(expr, &new_inputs)
+        let exprs = plan
+            .expressions()
+            .into_iter()
+            .map(|e| {
+                // TODO: unify with `rewrite_preserving_name`
+                let original_name = e.name_for_alias()?;
+                let new_e = simplifier.simplify(e)?;
+                new_e.alias_if_changed(original_name)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        plan.with_new_exprs(exprs, new_inputs)
     }
 }
 

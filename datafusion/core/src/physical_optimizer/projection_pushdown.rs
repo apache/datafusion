@@ -477,7 +477,7 @@ fn try_swapping_with_sort_preserving_merge(
     projection: &ProjectionExec,
     spm: &SortPreservingMergeExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -916,7 +916,9 @@ fn update_expr(
                     .find_map(|(index, (projected_expr, alias))| {
                         projected_expr.as_any().downcast_ref::<Column>().and_then(
                             |projected_column| {
-                                column.name().eq(projected_column.name()).then(|| {
+                                (column.name().eq(projected_column.name())
+                                    && column.index() == projected_column.index())
+                                .then(|| {
                                     state = RewriteState::RewrittenValid;
                                     Arc::new(Column::new(alias, index)) as _
                                 })
@@ -1270,6 +1272,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1336,6 +1339,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1405,6 +1409,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1434,12 +1439,12 @@ mod tests {
             )?),
         ];
         let projected_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
-            (Arc::new(Column::new("a", 0)), "a".to_owned()),
+            (Arc::new(Column::new("a", 3)), "a".to_owned()),
             (Arc::new(Column::new("b", 1)), "b_new".to_owned()),
-            (Arc::new(Column::new("c", 2)), "c".to_owned()),
-            (Arc::new(Column::new("d", 3)), "d_new".to_owned()),
-            (Arc::new(Column::new("e", 4)), "e".to_owned()),
-            (Arc::new(Column::new("f", 5)), "f_new".to_owned()),
+            (Arc::new(Column::new("c", 0)), "c".to_owned()),
+            (Arc::new(Column::new("d", 2)), "d_new".to_owned()),
+            (Arc::new(Column::new("e", 5)), "e".to_owned()),
+            (Arc::new(Column::new("f", 4)), "f_new".to_owned()),
         ];
 
         let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -1471,6 +1476,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),

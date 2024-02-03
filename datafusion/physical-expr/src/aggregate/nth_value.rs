@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
-use crate::expressions::format_state_name;
+use crate::expressions::{format_state_name, Literal};
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
@@ -117,7 +117,8 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        let n = Arc::new(Literal::new(ScalarValue::Int64(Some(self.n)))) as _;
+        vec![self.expr.clone(), n]
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
@@ -393,7 +394,9 @@ impl NthValueAccumulator {
         for index in 0..n_to_add {
             let row = get_row_at_idx(values, index)?;
             self.values.push_back(row[0].clone());
-            self.ordering_values.push_back(row[1..].to_vec());
+            // At index 1, we have n index argument.
+            // Ordering values cover starting from 2nd index to end
+            self.ordering_values.push_back(row[2..].to_vec());
         }
         Ok(())
     }
