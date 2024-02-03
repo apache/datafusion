@@ -238,6 +238,27 @@ SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <
 NULL 3 11
 NULL 3 55
 
+# equijoin_full
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# equijoin_full_and_condition_from_both
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+11 a 1 NULL NULL NULL
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 11 z 3
+NULL NULL NULL 55 w 3
+
 # left_join
 query ITT rowsort
 SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id

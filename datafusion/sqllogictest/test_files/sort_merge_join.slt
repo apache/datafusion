@@ -84,6 +84,8 @@ SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
 Alice 100 Alice 1
 Alice 100 Alice 2
 Alice 50 Alice 1
+Alice 50 NULL NULL
+Bob 1 NULL NULL
 
 query TITI rowsort
 SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a AND t2.b < t1.b
@@ -92,6 +94,7 @@ Alice 100 Alice 1
 Alice 100 Alice 2
 Alice 50 Alice 1
 Alice 50 Alice 2
+Bob 1 NULL NULL
 
 # right join without join filter
 query TITI rowsort
@@ -109,6 +112,7 @@ SELECT * FROM t1 RIGHT JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
 Alice 100 Alice 1
 Alice 100 Alice 2
 Alice 50 Alice 1
+NULL NULL Alice 2
 
 query TITI rowsort
 SELECT * FROM t1 RIGHT JOIN t2 ON t1.a = t2.a AND t1.b > t2.b
@@ -132,19 +136,132 @@ Bob 1 NULL NULL
 query TITI rowsort
 SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
 ----
+Alice 100 NULL NULL
+Alice 100 NULL NULL
 Alice 50 Alice 2
+Alice 50 NULL NULL
+Bob 1 NULL NULL
+NULL NULL Alice 1
+NULL NULL Alice 1
+NULL NULL Alice 2
 
 query TITI rowsort
 SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
 ----
 Alice 100 Alice 1
 Alice 100 Alice 2
-
-statement ok
-set datafusion.optimizer.prefer_hash_join = true;
+Alice 50 NULL NULL
+Alice 50 NULL NULL
+Bob 1 NULL NULL
+NULL NULL Alice 1
+NULL NULL Alice 2
 
 statement ok
 DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+statement ok
+CREATE TABLE IF NOT EXISTS t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
+(11, 'z', 3),
+(22, 'y', 1),
+(44, 'x', 3),
+(55, 'w', 3);
+
+# inner join with join filter
+query III rowsort
+SELECT t1_id, t1_int, t2_int FROM t1 JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int
+----
+22 2 1
+44 4 3
+
+# equijoin_multiple_condition_ordering
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name
+----
+11 a z
+22 b y
+44 d x
+
+# equijoin_right_and_condition_from_left
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22
+----
+22 b y
+44 d x
+NULL NULL w
+NULL NULL z
+
+# equijoin_left_and_condition_from_left
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44
+----
+11 a NULL
+22 b NULL
+33 c NULL
+44 d x
+
+# equijoin_left_and_condition_from_both
+query III rowsort
+SELECT t1_id, t1_int, t2_int FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int
+----
+11 1 NULL
+22 2 1
+33 3 NULL
+44 4 3
+
+# equijoin_right_and_condition_from_right
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22
+----
+22 b y
+44 d x
+NULL NULL w
+NULL NULL z
+
+# equijoin_right_and_condition_from_both
+query III rowsort
+SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+2 1 22
+4 3 44
+NULL 3 11
+NULL 3 55
+
+# equijoin_full
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# equijoin_full_and_condition_from_both
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+11 a 1 NULL NULL NULL
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 11 z 3
+NULL NULL NULL 55 w 3
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;

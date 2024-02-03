@@ -1104,32 +1104,11 @@ impl SMJStream {
                 .map(|f| new_null_array(f.data_type(), buffered_indices.len()))
                 .collect::<Vec<_>>();
 
-            let filter_columns =
-                get_filter_column(&self.filter, &streamed_columns, &buffered_columns);
-
             streamed_columns.extend(buffered_columns);
             let columns = streamed_columns;
 
-            let output_batch = RecordBatch::try_new(self.schema.clone(), columns)?;
-
-            // Apply join filter if any
-            let output_batch = if let Some(f) = &self.filter {
-                // Construct batch with only filter columns
-                let filter_batch =
-                    RecordBatch::try_new(Arc::new(f.schema().clone()), filter_columns)?;
-
-                let filter_result = f
-                    .expression()
-                    .evaluate(&filter_batch)?
-                    .into_array(filter_batch.num_rows())?;
-                let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
-
-                compute::filter_record_batch(&output_batch, mask)?
-            } else {
-                output_batch
-            };
-
-            self.output_record_batches.push(output_batch);
+            self.output_record_batches
+                .push(RecordBatch::try_new(self.schema.clone(), columns)?);
         }
         Ok(())
     }
@@ -1172,40 +1151,138 @@ impl SMJStream {
                         .collect::<Vec<_>>()
                 };
 
-            let filter_columns = if matches!(self.join_type, JoinType::Right) {
-                get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+            let streamed_columns_length = streamed_columns.len();
+            let buffered_columns_length = buffered_columns.len();
+
+            // Prepare the columns we apply join filter on later.
+            // Only for joined rows between streamed and buffered.
+            let filter_columns = if chunk.buffered_batch_idx.is_some() {
+                if matches!(self.join_type, JoinType::Right) {
+                    get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+                } else {
+                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                }
             } else {
-                get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                vec![]
             };
 
             let columns = if matches!(self.join_type, JoinType::Right) {
-                buffered_columns.extend(streamed_columns);
+                buffered_columns.extend(streamed_columns.clone());
                 buffered_columns
             } else {
                 streamed_columns.extend(buffered_columns);
                 streamed_columns
             };
 
-            let output_batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+            let output_batch =
+                RecordBatch::try_new(self.schema.clone(), columns.clone())?;
 
             // Apply join filter if any
-            let output_batch = if let Some(f) = &self.filter {
-                // Construct batch with only filter columns
-                let filter_batch =
-                    RecordBatch::try_new(Arc::new(f.schema().clone()), filter_columns)?;
+            if !filter_columns.is_empty() {
+                if let Some(f) = &self.filter {
+                    // Construct batch with only filter columns
+                    let filter_batch = RecordBatch::try_new(
+                        Arc::new(f.schema().clone()),
+                        filter_columns,
+                    )?;
 
-                let filter_result = f
-                    .expression()
-                    .evaluate(&filter_batch)?
-                    .into_array(filter_batch.num_rows())?;
-                let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+                    let filter_result = f
+                        .expression()
+                        .evaluate(&filter_batch)?
+                        .into_array(filter_batch.num_rows())?;
 
-                compute::filter_record_batch(&output_batch, mask)?
+                    // The selection mask of the filter
+                    let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                    // Push the filtered batch to the output
+                    let filtered_batch =
+                        compute::filter_record_batch(&output_batch, mask)?;
+                    self.output_record_batches.push(filtered_batch);
+
+                    // For outer joins, we need to push the null joined rows to the output.
+                    if matches!(
+                        self.join_type,
+                        JoinType::Left | JoinType::Right | JoinType::Full
+                    ) {
+                        // The reverse of the selection mask, which is for null joined rows
+                        let not_mask = compute::not(mask)?;
+                        let null_joined_batch =
+                            compute::filter_record_batch(&output_batch, &not_mask)?;
+
+                        let mut buffered_columns = self
+                            .buffered_schema
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                new_null_array(
+                                    f.data_type(),
+                                    null_joined_batch.num_rows(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        let columns = if matches!(self.join_type, JoinType::Right) {
+                            let streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(buffered_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            buffered_columns.extend(streamed_columns);
+                            buffered_columns
+                        } else {
+                            let mut streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .take(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+                            streamed_columns
+                        };
+
+                        let null_joined_streamed_batch =
+                            RecordBatch::try_new(self.schema.clone(), columns.clone())?;
+                        self.output_record_batches.push(null_joined_streamed_batch);
+
+                        // For full join, we also need to output the null joined rows from the buffered side
+                        if matches!(self.join_type, JoinType::Full) {
+                            let mut streamed_columns = self
+                                .streamed_schema
+                                .fields()
+                                .iter()
+                                .map(|f| {
+                                    new_null_array(
+                                        f.data_type(),
+                                        null_joined_batch.num_rows(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            let buffered_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+
+                            let null_joined_buffered_batch = RecordBatch::try_new(
+                                self.schema.clone(),
+                                streamed_columns,
+                            )?;
+                            self.output_record_batches.push(null_joined_buffered_batch);
+                        }
+                    }
+                } else {
+                    self.output_record_batches.push(output_batch);
+                }
             } else {
-                output_batch
-            };
-
-            self.output_record_batches.push(output_batch);
+                self.output_record_batches.push(output_batch);
+            }
         }
 
         self.streamed_batch.output_indices.clear();
@@ -1217,7 +1294,14 @@ impl SMJStream {
         let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
-        self.output_size -= record_batch.num_rows();
+        // If join filter exists, `self.output_size` is not accurate as we don't know the exact
+        // number of rows in the output record batch. If streamed row joined with buffered rows,
+        // once join filter is applied, the number of output rows may be more than 1.
+        if record_batch.num_rows() > self.output_size {
+            self.output_size = 0;
+        } else {
+            self.output_size -= record_batch.num_rows();
+        }
         self.output_record_batches.clear();
         Ok(record_batch)
     }
