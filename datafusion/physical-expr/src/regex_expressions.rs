@@ -332,9 +332,9 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::array::*;
     use datafusion_common::ScalarValue;
-    use super::*;
 
     #[test]
     fn test_case_sensitive_regexp_match() {
