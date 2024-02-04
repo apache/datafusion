@@ -17,7 +17,9 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use arrow_array::RecordBatch;
+use arrow_array::types::Utf8Type;
+use arrow_array::{ArrayRef, GenericByteArray, RecordBatch};
+use arrow_ipc::Utf8;
 use async_trait::async_trait;
 use datafusion_common::stats::Precision;
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -25,6 +27,7 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
 };
+use parquet::data_type::ByteArray;
 use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
@@ -52,7 +55,7 @@ use parquet::arrow::{
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::statistics::{Statistics as ParquetStatistics, ValueStatistics};
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, SharedBuffer};
@@ -369,6 +372,28 @@ fn summarize_min_max(
                     .unwrap_or_else(|_| min_values[i] = None);
             }
         }
+        ParquetStatistics::ByteArray(s) => {
+            if let DataType::Utf8 = fields[i].data_type() {
+                if let Some(max_value) = &mut max_values[i] {
+                    let stat_value = s.max().as_utf8().unwrap_or_default();
+                    let array: GenericByteArray<Utf8Type> = vec![Some(stat_value)].into();
+                    if max_value.update_batch(&[Arc::new(array)]).is_err()
+                        || stat_value.is_empty()
+                    {
+                        max_values[i] = None;
+                    }
+                }
+                if let Some(min_value) = &mut min_values[i] {
+                    let stat_value = s.min().as_utf8().unwrap_or_default();
+                    let array: GenericByteArray<Utf8Type> = vec![Some(stat_value)].into();
+                    if min_value.update_batch(&[Arc::new(array)]).is_err()
+                        || stat_value.is_empty()
+                    {
+                        min_values[i] = None;
+                    }
+                }
+            }
+        }
         _ => {
             max_values[i] = None;
             min_values[i] = None;
@@ -495,13 +520,16 @@ async fn fetch_statistics(
             }
         }
 
+        dbg!(&column_stats);
+
         if has_statistics {
             for (table_idx, null_cnt) in null_counts.iter_mut().enumerate() {
                 if let Some(file_idx) =
                     schema_adapter.map_column_index(table_idx, &file_schema)
                 {
                     if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt = null_cnt.add(&Precision::Exact(*null_count as usize));
+                        *null_cnt =
+                            dbg!(null_cnt.add(&Precision::Exact(*null_count as usize)));
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
