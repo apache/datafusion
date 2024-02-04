@@ -43,6 +43,8 @@ use datafusion::physical_plan::{collect, execute_stream};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 
+use datafusion::logical_expr::dml::CopyTo;
+use datafusion::sql::parser::Statement;
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -221,7 +223,7 @@ async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let mut plan = ctx.state().statement_to_plan(statement).await?;
+        let plan = create_plan(ctx, statement).await?;
 
         // For plans like `Explain` ignore `MaxRows` option and always display all rows
         let should_ignore_maxrows = matches!(
@@ -230,21 +232,6 @@ async fn exec_and_print(
                 | LogicalPlan::DescribeTable(_)
                 | LogicalPlan::Analyze(_)
         );
-
-        // Note that cmd is a mutable reference so that create_external_table function can remove all
-        // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
-        // will raise Configuration errors.
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            create_external_table(ctx, cmd).await?;
-        }
-
-        if let LogicalPlan::Copy(copy_to) = &mut plan {
-            let url = ListingTableUrl::parse(copy_to.output_url.as_str())?;
-            let store =
-                get_object_store(ctx, &mut HashMap::new(), url.scheme(), url.as_ref())
-                    .await?;
-            ctx.runtime_env().register_object_store(url.as_ref(), store);
-        }
 
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
@@ -265,6 +252,36 @@ async fn exec_and_print(
         }
     }
 
+    Ok(())
+}
+
+async fn create_plan(
+    ctx: &mut SessionContext,
+    statement: Statement,
+) -> Result<LogicalPlan, DataFusionError> {
+    let mut plan = ctx.state().statement_to_plan(statement).await?;
+
+    // Note that cmd is a mutable reference so that create_external_table function can remove all
+    // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
+    // will raise Configuration errors.
+    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        create_external_table(ctx, cmd).await?;
+    }
+
+    if let LogicalPlan::Copy(copy_to) = &mut plan {
+        register_object_store(ctx, copy_to).await?;
+    }
+    Ok(plan)
+}
+
+async fn register_object_store(
+    ctx: &SessionContext,
+    copy_to: &mut CopyTo,
+) -> Result<(), DataFusionError> {
+    let url = ListingTableUrl::parse(copy_to.output_url.as_str())?;
+    let store =
+        get_object_store(ctx, &mut HashMap::new(), url.scheme(), url.as_ref()).await?;
+    ctx.runtime_env().register_object_store(url.as_ref(), store);
     Ok(())
 }
 
@@ -322,7 +339,9 @@ mod tests {
 
     use super::*;
     use datafusion::common::plan_err;
-    use datafusion_common::{file_options::StatementOptions, FileTypeWriterOptions};
+    use datafusion_common::{
+        file_options::StatementOptions, FileType, FileTypeWriterOptions,
+    };
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -351,6 +370,43 @@ mod tests {
         ctx.runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn copy_to_external_object_store_test() -> Result<()> {
+        let locations = vec![
+            "s3://bucket/path/file.parquet",
+            "oss://bucket/path/file.parquet",
+            "gcs://bucket/path/file.parquet",
+        ];
+        let mut ctx = SessionContext::new();
+        let task_ctx = ctx.task_ctx();
+        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
+                 Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                 MsSQL, ClickHouse, BigQuery, Ansi."
+            )
+        })?;
+        for location in locations {
+            let sql = format!("copy (values (1,2)) to '{}';", location);
+            let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+            for statement in statements {
+                //Should not fail
+                let mut plan = create_plan(&mut ctx, statement).await?;
+                if let LogicalPlan::Copy(copy_to) = &mut plan {
+                    assert_eq!(copy_to.output_url, location);
+                    assert_eq!(copy_to.file_format, FileType::PARQUET);
+                    ctx.runtime_env()
+                        .object_store_registry
+                        .get_store(&Url::parse(&copy_to.output_url).unwrap())?;
+                } else {
+                    return plan_err!("LogicalPlan is not a CopyTo");
+                }
+            }
+        }
         Ok(())
     }
 
