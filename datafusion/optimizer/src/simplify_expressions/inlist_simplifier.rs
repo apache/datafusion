@@ -223,7 +223,7 @@ impl TreeNodeRewriter for InListSimplifier {
                 }
             }
         }
-                  
+
         Ok(expr)
     }
 }
