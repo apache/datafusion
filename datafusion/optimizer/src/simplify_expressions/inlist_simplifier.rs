@@ -191,35 +191,35 @@ impl TreeNodeRewriter for InListSimplifier {
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && !l1.negated && !l2.negated =>
                 {
-                    inlist_intersection(l1, l2, false)
+                    return inlist_intersection(l1, l2, false);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && l2.negated =>
                 {
-                    inlist_union(l1, l2, true)
+                    return inlist_union(l1, l2, true);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && !l1.negated && l2.negated =>
                 {
-                    inlist_except(l1, l2)
+                    return inlist_except(l1, l2);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && !l2.negated =>
                 {
-                    inlist_except(l2, l1)
+                    return inlist_except(l2, l1);
                 }
                 (Expr::InList(l1), Operator::Or, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && l2.negated =>
                 {
-                    inlist_intersection(l1, l2, true)
+                    return inlist_intersection(l1, l2, true);
                 }
                 (left, op, right) => {
                     // put the expression back together
-                    Ok(Expr::BinaryExpr(BinaryExpr {
+                    return Ok(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op,
                         right: Box::new(right),
-                    }))
+                    }));
                 }
             }
         }
