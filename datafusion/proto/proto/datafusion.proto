@@ -322,7 +322,6 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    bool single_file_output = 3;
     oneof CopyOptions {
         SQLOptions sql_options = 4;
         FileTypeWriterOptions writer_options = 5;
@@ -640,8 +639,6 @@ enum ScalarFunction {
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -672,6 +669,8 @@ enum ScalarFunction {
   ArrayResize = 130;
   EndsWith = 131;
   InStr = 132;
+  MakeDate = 133;
+  ArrayReverse = 134;
 }
 
 message ScalarFunctionNode {
@@ -1267,7 +1266,6 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
   bool overwrite = 8;
   FileTypeWriterOptions file_type_writer_options = 9;
 }

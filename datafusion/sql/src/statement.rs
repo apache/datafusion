@@ -718,11 +718,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut statement_options = StatementOptions::new(options);
         let file_format = statement_options.try_infer_file_type(&statement.target)?;
-        let single_file_output =
-            statement_options.take_bool_option("single_file_output")?;
-
-        // COPY defaults to outputting a single file if not otherwise specified
-        let single_file_output = single_file_output.unwrap_or(true);
 
         let copy_options = CopyOptions::SQLOptions(statement_options);
 
@@ -730,7 +725,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             input: Arc::new(input),
             output_url: statement.target,
             file_format,
-            single_file_output,
             copy_options,
         }))
     }

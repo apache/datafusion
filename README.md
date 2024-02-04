@@ -94,4 +94,4 @@ Optional features:
 
 ## Rust Version Compatibility
 
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+Datafusion crate is tested with the [minimum required stable Rust version](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
