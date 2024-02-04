@@ -26,7 +26,8 @@ This crate contains the main entrypoints and high level DataFusion APIs such as
 SessionContext, and DataFrame and ListingTable.
 
 For more information:
-* [DataFusion Website](https://arrow.apache.org/datafusion)
-* [DataFusion API Docs](https://docs.rs/datafusion/latest/datafusion/)
+
+- [DataFusion Website](https://arrow.apache.org/datafusion)
+- [DataFusion API Docs](https://docs.rs/datafusion/latest/datafusion/)
 
 [df]: https://arrow.apache.org/datafusion
