@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -135,8 +135,8 @@ impl DFSchema {
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        let mut qualified_names = HashSet::new();
-        let mut unqualified_names = HashSet::new();
+        let mut qualified_names = BTreeSet::new();
+        let mut unqualified_names = BTreeSet::new();
 
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
@@ -148,14 +148,8 @@ impl DFSchema {
             }
         }
 
-        // check for mix of qualified and unqualified field with same unqualified name
-        // note that we need to sort the contents of the HashSet first so that errors are
-        // deterministic
-        let mut qualified_names = qualified_names
-            .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
-        qualified_names.sort();
+        // Check for mix of qualified and unqualified fields with same unqualified name.
+        // The BTreeSet storage makes sure that errors are reported in deterministic order.
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
@@ -224,17 +218,25 @@ impl DFSchema {
         if other_schema.fields.is_empty() {
             return;
         }
+
+        let self_fields: HashSet<&DFField> = self.fields.iter().collect();
+        let self_unqualified_names: HashSet<&str> =
+            self.fields.iter().map(|x| x.name().as_str()).collect();
+
+        let mut fields_to_add = vec![];
+
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.has_column_with_qualified_name(q, field.name()),
+                Some(_) => self_fields.contains(field),
                 // for unqualified columns, check as unqualified name
-                None => self.has_column_with_unqualified_name(field.name()),
+                None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                self.fields.push(field.clone());
+                fields_to_add.push(field.clone());
             }
         }
+        self.fields.extend(fields_to_add);
         self.metadata.extend(other_schema.metadata.clone())
     }
 

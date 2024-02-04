@@ -28,8 +28,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::{create_udf, Expr, ScalarUDF, Volatility};
-use datafusion::physical_expr::functions::make_scalar_function;
+use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
@@ -74,10 +73,6 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
-            "scalar.slt" => {
-                info!("Registering scalar tables");
-                register_scalar_tables(test_ctx.session_ctx()).await;
-            }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
                 register_temp_table(test_ctx.session_ctx()).await;
@@ -169,27 +164,6 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
         )
         .await
         .unwrap();
-}
-
-pub async fn register_scalar_tables(ctx: &SessionContext) {
-    register_nan_table(ctx)
-}
-
-/// Register a table with a NaN value (different than NULL, and can
-/// not be created via SQL)
-fn register_nan_table(ctx: &SessionContext) {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
-
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(Float64Array::from(vec![
-            Some(1.0),
-            None,
-            Some(f64::NAN),
-        ]))],
-    )
-    .unwrap();
-    ctx.register_batch("test_float", data).unwrap();
 }
 
 /// Generate a partitioned CSV file and register it with an execution context
@@ -356,9 +330,16 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
 /// Create a UDF function named "example". See the `sample_udf.rs` example
 /// file for an explanation of the API.
 fn create_example_udf() -> ScalarUDF {
-    let adder = make_scalar_function(|args: &[ArrayRef]| {
-        let lhs = as_float64_array(&args[0]).expect("cast failed");
-        let rhs = as_float64_array(&args[1]).expect("cast failed");
+    let adder = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(lhs) = &args[0] else {
+            panic!("should be array")
+        };
+        let ColumnarValue::Array(rhs) = &args[1] else {
+            panic!("should be array")
+        };
+
+        let lhs = as_float64_array(lhs).expect("cast failed");
+        let rhs = as_float64_array(rhs).expect("cast failed");
         let array = lhs
             .iter()
             .zip(rhs.iter())
@@ -367,7 +348,7 @@ fn create_example_udf() -> ScalarUDF {
                 _ => None,
             })
             .collect::<Float64Array>();
-        Ok(Arc::new(array) as ArrayRef)
+        Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
     });
     create_udf(
         "example",

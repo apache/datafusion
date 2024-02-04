@@ -204,9 +204,8 @@ impl JsonSerializer {
     }
 }
 
-#[async_trait]
 impl BatchSerializer for JsonSerializer {
-    async fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+    fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let mut writer = json::LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;

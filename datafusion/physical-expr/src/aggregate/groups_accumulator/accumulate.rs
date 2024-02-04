@@ -17,14 +17,13 @@
 
 //! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
-//! [`GroupsAccumulator`]: crate::GroupsAccumulator
+//! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow_array::{Array, BooleanArray, PrimitiveArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
 
-use crate::EmitTo;
-
+use datafusion_expr::EmitTo;
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -49,7 +48,7 @@ use crate::EmitTo;
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
 ///
-/// [`GroupsAccumulator`]: crate::GroupsAccumulator
+/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
 #[derive(Debug)]
 pub struct NullState {
     /// Have we seen any non-filtered input values for `group_index`?
@@ -60,6 +59,12 @@ pub struct NullState {
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
     seen_values: BooleanBufferBuilder,
+}
+
+impl Default for NullState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NullState {

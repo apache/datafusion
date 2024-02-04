@@ -27,8 +27,9 @@ use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
 
 use crate::cast::{
-    as_boolean_array, as_generic_binary_array, as_large_list_array, as_list_array,
-    as_primitive_array, as_string_array, as_struct_array,
+    as_boolean_array, as_fixed_size_list_array, as_generic_binary_array,
+    as_large_list_array, as_list_array, as_primitive_array, as_string_array,
+    as_struct_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err};
 
@@ -267,6 +268,38 @@ where
     Ok(())
 }
 
+fn hash_fixed_list_array(
+    array: &FixedSizeListArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()> {
+    let values = array.values().clone();
+    let value_len = array.value_length();
+    let offset_size = value_len as usize / array.len();
+    let nulls = array.nulls();
+    let mut values_hashes = vec![0u64; values.len()];
+    create_hashes(&[values], random_state, &mut values_hashes)?;
+    if let Some(nulls) = nulls {
+        for i in 0..array.len() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size]
+                {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for i in 0..array.len() {
+            let hash = &mut hashes_buffer[i];
+            for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size] {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Test version of `create_hashes` that produces the same value for
 /// all hashes (to test collisions)
 ///
@@ -365,6 +398,10 @@ pub fn create_hashes<'a>(
             DataType::LargeList(_) => {
                 let array = as_large_list_array(array)?;
                 hash_list_array(array, random_state, hashes_buffer)?;
+            }
+            DataType::FixedSizeList(_,_) => {
+                let array = as_fixed_size_list_array(array)?;
+                hash_fixed_list_array(array, random_state, hashes_buffer)?;
             }
             _ => {
                 // This is internal because we should have caught this before.
@@ -538,6 +575,30 @@ mod tests {
         ];
         let list_array =
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[5]);
+        assert_eq!(hashes[1], hashes[4]);
+        assert_eq!(hashes[2], hashes[3]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_fixed_size_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            Some(vec![Some(0), Some(1), Some(2)]),
+        ];
+        let list_array =
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                data, 3,
+            )) as ArrayRef;
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let mut hashes = vec![0; list_array.len()];
         create_hashes(&[list_array], &random_state, &mut hashes).unwrap();

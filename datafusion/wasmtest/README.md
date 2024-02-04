@@ -59,10 +59,13 @@ Then open http://localhost:8080/ in a web browser and check the console to see t
 
 The following DataFusion crates are verified to work in a wasm-pack environment using the default `wasm32-unknown-unknown` target:
 
+- `datafusion` (datafusion-core) with default-features disabled to remove `bzip2-sys` from `async-compression`
 - `datafusion-common` with default-features disabled to remove the `parquet` dependency (see below)
 - `datafusion-expr`
+- `datafusion-execution`
 - `datafusion-optimizer`
 - `datafusion-physical-expr`
+- `datafusion-physical-plan`
 - `datafusion-sql`
 
 The difficulty with getting the remaining DataFusion crates compiled to WASM is that they have non-optional dependencies on the [`parquet`](https://docs.rs/crate/parquet/) crate with its default features enabled. Several of the default parquet crate features require native dependencies that are not compatible with WASM, in particular the `lz4` and `zstd` features. If we can arrange our feature flags to make it possible to depend on parquet with these features disabled, then it should be possible to compile the core `datafusion` crate to WASM as well.

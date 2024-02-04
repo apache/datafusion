@@ -61,7 +61,7 @@ impl BatchIndex {
 
 /// Iterator over batches
 #[derive(Debug, Default)]
-pub(crate) struct TestStream {
+pub struct TestStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
     /// Index into the data that has been returned so far
@@ -684,7 +684,7 @@ pub struct PanicExec {
 }
 
 impl PanicExec {
-    /// Create new [`PanickingExec`] with a give schema and number of
+    /// Create new [`PanicExec`] with a give schema and number of
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         Self {
@@ -708,7 +708,7 @@ impl DisplayAs for PanicExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PanickingExec",)
+                write!(f, "PanicExec",)
             }
         }
     }

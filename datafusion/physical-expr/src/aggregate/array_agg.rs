@@ -153,11 +153,11 @@ impl Accumulator for ArrayAggAccumulator {
         Ok(())
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
 
         let element_arrays: Vec<&dyn Array> =

@@ -25,7 +25,9 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, LargeListArray, ListArray, RecordBatchOptions};
+use arrow_array::{
+    Array, FixedSizeListArray, LargeListArray, ListArray, RecordBatchOptions,
+};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -368,6 +370,19 @@ pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
     )
 }
 
+pub fn array_into_fixed_size_list_array(
+    arr: ArrayRef,
+    list_size: usize,
+) -> FixedSizeListArray {
+    let list_size = list_size as i32;
+    FixedSizeListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        list_size,
+        arr,
+        None,
+    )
+}
+
 /// Wrap arrays into a single element `ListArray`.
 ///
 /// Example:
@@ -425,9 +440,9 @@ pub fn arrays_into_list_array(
 /// ```
 pub fn base_type(data_type: &DataType) -> DataType {
     match data_type {
-        DataType::List(field) | DataType::LargeList(field) => {
-            base_type(field.data_type())
-        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => base_type(field.data_type()),
         _ => data_type.to_owned(),
     }
 }
@@ -449,36 +464,54 @@ pub fn coerced_type_with_base_type_only(
     base_type: &DataType,
 ) -> DataType {
     match data_type {
-        DataType::List(field) => {
-            let data_type = match field.data_type() {
-                DataType::List(_) => {
-                    coerced_type_with_base_type_only(field.data_type(), base_type)
-                }
-                _ => base_type.to_owned(),
-            };
+        DataType::List(field) | DataType::FixedSizeList(field, _) => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type);
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
-                data_type,
+                field_type,
                 field.is_nullable(),
             )))
         }
         DataType::LargeList(field) => {
-            let data_type = match field.data_type() {
-                DataType::LargeList(_) => {
-                    coerced_type_with_base_type_only(field.data_type(), base_type)
-                }
-                _ => base_type.to_owned(),
-            };
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type);
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),
-                data_type,
+                field_type,
                 field.is_nullable(),
             )))
         }
 
         _ => base_type.clone(),
+    }
+}
+
+/// Recursively coerce and `FixedSizeList` elements to `List`
+pub fn coerced_fixed_size_list_to_list(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::List(field) | DataType::FixedSizeList(field, _) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::List(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        DataType::LargeList(field) => {
+            let field_type = coerced_fixed_size_list_to_list(field.data_type());
+
+            DataType::LargeList(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+
+        _ => data_type.clone(),
     }
 }
 

@@ -161,140 +161,241 @@ impl PrintFormat {
         maxrows: MaxRows,
         with_header: bool,
     ) -> Result<()> {
-        if batches.is_empty() || batches[0].num_rows() == 0 {
+        // filter out any empty batches
+        let batches: Vec<_> = batches
+            .iter()
+            .filter(|b| b.num_rows() > 0)
+            .cloned()
+            .collect();
+        if batches.is_empty() {
             return Ok(());
         }
 
         match self {
             Self::Csv | Self::Automatic => {
-                print_batches_with_sep(writer, batches, b',', with_header)
+                print_batches_with_sep(writer, &batches, b',', with_header)
             }
-            Self::Tsv => print_batches_with_sep(writer, batches, b'\t', with_header),
+            Self::Tsv => print_batches_with_sep(writer, &batches, b'\t', with_header),
             Self::Table => {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
-                format_batches_with_maxrows(writer, batches, maxrows)
+                format_batches_with_maxrows(writer, &batches, maxrows)
             }
-            Self::Json => batches_to_json!(ArrayWriter, writer, batches),
-            Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, batches),
+            Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
+            Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Read, Write};
+    use super::*;
     use std::sync::Arc;
 
-    use super::*;
-
-    use arrow::array::Int32Array;
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::error::Result;
 
-    fn run_test<F>(batches: &[RecordBatch], test_fn: F) -> Result<String>
-    where
-        F: Fn(&mut Cursor<Vec<u8>>, &[RecordBatch]) -> Result<()>,
-    {
-        let mut buffer = Cursor::new(Vec::new());
-        test_fn(&mut buffer, batches)?;
-        buffer.set_position(0);
-        let mut contents = String::new();
-        buffer.read_to_string(&mut contents)?;
-        Ok(contents)
+    #[test]
+    fn print_empty() {
+        for format in [
+            PrintFormat::Csv,
+            PrintFormat::Tsv,
+            PrintFormat::Table,
+            PrintFormat::Json,
+            PrintFormat::NdJson,
+            PrintFormat::Automatic,
+        ] {
+            // no output for empty batches, even with header set
+            PrintBatchesTest::new()
+                .with_format(format)
+                .with_batches(vec![])
+                .with_expected(&[""])
+                .run();
+        }
     }
 
     #[test]
-    fn test_print_batches_with_sep() -> Result<()> {
-        let contents = run_test(&[], |buffer, batches| {
-            print_batches_with_sep(buffer, batches, b',', true)
-        })?;
-        assert_eq!(contents, "");
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
-                Arc::new(Int32Array::from(vec![7, 8, 9])),
-            ],
-        )?;
-
-        let contents = run_test(&[batch], |buffer, batches| {
-            print_batches_with_sep(buffer, batches, b',', true)
-        })?;
-        assert_eq!(contents, "a,b,c\n1,4,7\n2,5,8\n3,6,9\n");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_print_batches_to_json_empty() -> Result<()> {
-        let contents = run_test(&[], |buffer, batches| {
-            batches_to_json!(ArrayWriter, buffer, batches)
-        })?;
-        assert_eq!(contents, "");
-
-        let contents = run_test(&[], |buffer, batches| {
-            batches_to_json!(LineDelimitedWriter, buffer, batches)
-        })?;
-        assert_eq!(contents, "");
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
-                Arc::new(Int32Array::from(vec![7, 8, 9])),
-            ],
-        )?;
-        let batches = vec![batch];
-
-        let contents = run_test(&batches, |buffer, batches| {
-            batches_to_json!(ArrayWriter, buffer, batches)
-        })?;
-        assert_eq!(contents, "[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]\n");
-
-        let contents = run_test(&batches, |buffer, batches| {
-            batches_to_json!(LineDelimitedWriter, buffer, batches)
-        })?;
-        assert_eq!(contents, "{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_format_batches_with_maxrows() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-
+    fn print_csv_no_header() {
         #[rustfmt::skip]
-        let all_rows_expected = [
+        let expected = &[
+            "1,4,7",
+            "2,5,8",
+            "3,6,9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Csv)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::No)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_csv_with_header() {
+        #[rustfmt::skip]
+        let expected = &[
+            "a,b,c",
+            "1,4,7",
+            "2,5,8",
+            "3,6,9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Csv)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Yes)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_tsv_no_header() {
+        #[rustfmt::skip]
+        let expected = &[
+            "1\t4\t7",
+            "2\t5\t8",
+            "3\t6\t9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Tsv)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::No)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_tsv_with_header() {
+        #[rustfmt::skip]
+        let expected = &[
+            "a\tb\tc",
+            "1\t4\t7",
+            "2\t5\t8",
+            "3\t6\t9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Tsv)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Yes)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_table() {
+        let expected = &[
+            "+---+---+---+",
+            "| a | b | c |",
+            "+---+---+---+",
+            "| 1 | 4 | 7 |",
+            "| 2 | 5 | 8 |",
+            "| 3 | 6 | 9 |",
+            "+---+---+---+",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Ignored)
+            .with_expected(expected)
+            .run();
+    }
+    #[test]
+    fn print_json() {
+        let expected =
+            &[r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Json)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Ignored)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_ndjson() {
+        let expected = &[
+            r#"{"a":1,"b":4,"c":7}"#,
+            r#"{"a":2,"b":5,"c":8}"#,
+            r#"{"a":3,"b":6,"c":9}"#,
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::NdJson)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Ignored)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_automatic_no_header() {
+        #[rustfmt::skip]
+            let expected = &[
+            "1,4,7",
+            "2,5,8",
+            "3,6,9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Automatic)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::No)
+            .with_expected(expected)
+            .run();
+    }
+    #[test]
+    fn print_automatic_with_header() {
+        #[rustfmt::skip]
+            let expected = &[
+            "a,b,c",
+            "1,4,7",
+            "2,5,8",
+            "3,6,9",
+        ];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Automatic)
+            .with_batches(split_batch(three_column_batch()))
+            .with_header(WithHeader::Yes)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_maxrows_unlimited() {
+        #[rustfmt::skip]
+            let expected = &[
             "+---+",
             "| a |",
             "+---+",
             "| 1 |",
             "| 2 |",
             "| 3 |",
-            "+---+\n",
-        ].join("\n");
+            "+---+",
+        ];
 
+        // should print out entire output with no truncation if unlimited or
+        // limit greater than number of batches or equal to the number of batches
+        for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
+            PrintBatchesTest::new()
+                .with_format(PrintFormat::Table)
+                .with_batches(vec![one_column_batch()])
+                .with_maxrows(max_rows)
+                .with_expected(expected)
+                .run();
+        }
+    }
+
+    #[test]
+    fn print_maxrows_limited_one_batch() {
         #[rustfmt::skip]
-        let one_row_expected = [
+            let expected = &[
             "+---+",
             "| a |",
             "+---+",
@@ -302,11 +403,21 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+\n",
-        ].join("\n");
+            "+---+",
+        ];
 
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![one_column_batch()])
+            .with_maxrows(MaxRows::Limited(1))
+            .with_expected(expected)
+            .run();
+    }
+
+    #[test]
+    fn print_maxrows_limited_multi_batched() {
         #[rustfmt::skip]
-        let multi_batches_expected = [
+            let expected = &[
             "+---+",
             "| a |",
             "+---+",
@@ -318,37 +429,190 @@ mod tests {
             "| . |",
             "| . |",
             "| . |",
-            "+---+\n",
-        ].join("\n");
+            "+---+",
+        ];
 
-        let no_limit = run_test(&[batch.clone()], |buffer, batches| {
-            format_batches_with_maxrows(buffer, batches, MaxRows::Unlimited)
-        })?;
-        assert_eq!(no_limit, all_rows_expected);
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![
+                one_column_batch(),
+                one_column_batch(),
+                one_column_batch(),
+            ])
+            .with_maxrows(MaxRows::Limited(5))
+            .with_expected(expected)
+            .run();
+    }
 
-        let maxrows_less_than_actual = run_test(&[batch.clone()], |buffer, batches| {
-            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(1))
-        })?;
-        assert_eq!(maxrows_less_than_actual, one_row_expected);
+    #[test]
+    fn test_print_batches_empty_batches() {
+        let batch = one_column_batch();
+        let empty_batch = RecordBatch::new_empty(batch.schema());
 
-        let maxrows_more_than_actual = run_test(&[batch.clone()], |buffer, batches| {
-            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
-        })?;
-        assert_eq!(maxrows_more_than_actual, all_rows_expected);
+        #[rustfmt::skip]
+            let expected =&[
+                "+---+",
+                "| a |",
+                "+---+",
+                "| 1 |",
+                "| 2 |",
+                "| 3 |",
+                "+---+",
+            ];
 
-        let maxrows_equals_actual = run_test(&[batch.clone()], |buffer, batches| {
-            format_batches_with_maxrows(buffer, batches, MaxRows::Limited(3))
-        })?;
-        assert_eq!(maxrows_equals_actual, all_rows_expected);
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![empty_batch.clone(), batch, empty_batch])
+            .with_expected(expected)
+            .run();
+    }
 
-        let multi_batches = run_test(
-            &[batch.clone(), batch.clone(), batch.clone()],
-            |buffer, batches| {
-                format_batches_with_maxrows(buffer, batches, MaxRows::Limited(5))
-            },
-        )?;
-        assert_eq!(multi_batches, multi_batches_expected);
+    #[test]
+    fn test_print_batches_empty_batches_no_header() {
+        let empty_batch = RecordBatch::new_empty(one_column_batch().schema());
 
-        Ok(())
+        // empty batches should not print a header
+        let expected = &[""];
+
+        PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![empty_batch])
+            .with_header(WithHeader::Yes)
+            .with_expected(expected)
+            .run();
+    }
+
+    #[derive(Debug)]
+    struct PrintBatchesTest {
+        format: PrintFormat,
+        batches: Vec<RecordBatch>,
+        maxrows: MaxRows,
+        with_header: WithHeader,
+        expected: Vec<&'static str>,
+    }
+
+    /// How to test with_header
+    #[derive(Debug, Clone)]
+    enum WithHeader {
+        Yes,
+        No,
+        /// output should be the same with or without header
+        Ignored,
+    }
+
+    impl PrintBatchesTest {
+        fn new() -> Self {
+            Self {
+                format: PrintFormat::Table,
+                batches: vec![],
+                maxrows: MaxRows::Unlimited,
+                with_header: WithHeader::Ignored,
+                expected: vec![],
+            }
+        }
+
+        /// set the format
+        fn with_format(mut self, format: PrintFormat) -> Self {
+            self.format = format;
+            self
+        }
+
+        /// set the batches to convert
+        fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+            self.batches = batches;
+            self
+        }
+
+        /// set maxrows
+        fn with_maxrows(mut self, maxrows: MaxRows) -> Self {
+            self.maxrows = maxrows;
+            self
+        }
+
+        /// set with_header
+        fn with_header(mut self, with_header: WithHeader) -> Self {
+            self.with_header = with_header;
+            self
+        }
+
+        /// set expected output
+        fn with_expected(mut self, expected: &[&'static str]) -> Self {
+            self.expected = expected.to_vec();
+            self
+        }
+
+        /// run the test
+        fn run(self) {
+            let actual = self.output();
+            let actual: Vec<_> = actual.trim_end().split('\n').collect();
+            let expected = self.expected;
+            assert_eq!(
+                actual, expected,
+                "\n\nactual:\n{actual:#?}\n\nexpected:\n{expected:#?}"
+            );
+        }
+
+        /// formats batches using parameters and returns the resulting output
+        fn output(&self) -> String {
+            match self.with_header {
+                WithHeader::Yes => self.output_with_header(true),
+                WithHeader::No => self.output_with_header(false),
+                WithHeader::Ignored => {
+                    let output = self.output_with_header(true);
+                    // ensure the output is the same without header
+                    let output_without_header = self.output_with_header(false);
+                    assert_eq!(
+                        output, output_without_header,
+                        "Expected output to be the same with or without header"
+                    );
+                    output
+                }
+            }
+        }
+
+        fn output_with_header(&self, with_header: bool) -> String {
+            let mut buffer: Vec<u8> = vec![];
+            self.format
+                .print_batches(&mut buffer, &self.batches, self.maxrows, with_header)
+                .unwrap();
+            String::from_utf8(buffer).unwrap()
+        }
+    }
+
+    /// Return a batch with three columns and three rows
+    fn three_column_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// return a batch with one column and three rows
+    fn one_column_batch() -> RecordBatch {
+        RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap()
+    }
+
+    /// Slice the record batch into 2 batches
+    fn split_batch(batch: RecordBatch) -> Vec<RecordBatch> {
+        assert!(batch.num_rows() > 1);
+        let split = batch.num_rows() / 2;
+        vec![
+            batch.slice(0, split),
+            batch.slice(split, batch.num_rows() - split),
+        ]
     }
 }

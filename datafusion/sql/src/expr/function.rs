@@ -17,7 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
+    Result,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::function::suggest_valid_function;
@@ -102,6 +103,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Numeric literals in window function ORDER BY are treated as constants
                 false,
             )?;
+
+            let func_deps = schema.functional_dependencies();
+            // Find whether ties are possible in the given ordering:
+            let is_ordering_strict = order_by.iter().any(|orderby_expr| {
+                if let Expr::Sort(sort_expr) = orderby_expr {
+                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
+                        let idx = schema.index_of_column(col).unwrap();
+                        return func_deps.iter().any(|dep| {
+                            dep.source_indices == vec![idx]
+                                && dep.mode == Dependency::Single
+                        });
+                    }
+                }
+                false
+            });
+
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -115,8 +132,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
+            } else if is_ordering_strict {
+                WindowFrame::new(Some(true))
             } else {
-                WindowFrame::new(!order_by.is_empty())
+                WindowFrame::new((!order_by.is_empty()).then_some(false))
             };
 
             if let Ok(fun) = self.find_window_func(&name) {

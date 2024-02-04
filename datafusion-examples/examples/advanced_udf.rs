@@ -31,7 +31,9 @@ use arrow::datatypes::Float64Type;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{internal_err, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature,
+};
 use std::sync::Arc;
 
 /// This example shows how to use the full ScalarUDFImpl API to implement a user
@@ -183,6 +185,10 @@ impl ScalarUDFImpl for PowUdf {
     /// We will also add an alias of "my_pow"
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+        Ok(Some(vec![Some(true)]))
     }
 }
 

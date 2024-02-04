@@ -386,7 +386,7 @@ fn plan_rollback_transaction_chained() {
 fn plan_copy_to() {
     let sql = "COPY test_decimal to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   TableScan: test_decimal
     "#
     .trim();
@@ -398,7 +398,7 @@ fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
     let plan = r#"
 Explain
-  CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+  CopyTo: format=csv output_url=output.csv options: ()
     TableScan: test_decimal
     "#
     .trim();
@@ -409,7 +409,7 @@ Explain
 fn plan_copy_to_query() {
     let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
     Projection: test_decimal.id, test_decimal.price
       TableScan: test_decimal
@@ -451,10 +451,6 @@ Dml: op=[Insert Into] table=[test_decimal]
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
     "Schema error: No field named nonexistent. Valid fields are id, price."
 )]
-#[case::type_mismatch(
-    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
-    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
-)]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
     "Error during planning: Column count doesn't match insert query!"
@@ -469,7 +465,7 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
-    "Error during planning: Placeholder type could not be resolved"
+    "Error during planning: Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
@@ -1398,8 +1394,43 @@ fn recursive_ctes() {
         select * from numbers;";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not supported",
+        "This feature is not implemented: Recursive CTEs are not enabled",
         err.strip_backtrace()
+    );
+}
+
+#[test]
+fn recursive_ctes_enabled() {
+    let sql = "
+        WITH RECURSIVE numbers AS (
+              select 1 as n
+            UNION ALL
+              select n + 1 FROM numbers WHERE N < 10
+        )
+        select * from numbers;";
+
+    // manually setting up test here so that we can enable recursive ctes
+    let mut context = MockContextProvider::default();
+    context.options_mut().execution.enable_recursive_ctes = true;
+
+    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
+    let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
+    let mut ast = result.unwrap();
+
+    let plan = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect("recursive cte plan creation failed");
+
+    assert_eq!(
+        format!("{plan:?}"),
+        "Projection: numbers.n\
+        \n  SubqueryAlias: numbers\
+        \n    RecursiveQuery: is_distinct=false\
+        \n      Projection: Int64(1) AS n\
+        \n        EmptyRelation\
+        \n      Projection: numbers.n + Int64(1)\
+        \n        Filter: numbers.n < Int64(10)\
+        \n          TableScan: numbers"
     );
 }
 
@@ -2696,6 +2727,12 @@ struct MockContextProvider {
     udafs: HashMap<String, Arc<AggregateUDF>>,
 }
 
+impl MockContextProvider {
+    fn options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.options
+    }
+}
+
 impl ContextProvider for MockContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
@@ -2804,6 +2841,14 @@ impl ContextProvider for MockContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(EmptyTable::new(schema)))
     }
 }
 

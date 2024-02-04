@@ -1170,33 +1170,33 @@ mod tests {
                 last_value_func,
                 &[],
                 &[],
-                Arc::new(WindowFrame {
-                    units: WindowFrameUnits::Rows,
-                    start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
-                    end_bound: WindowFrameBound::CurrentRow,
-                }),
+                Arc::new(WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                    WindowFrameBound::CurrentRow,
+                )),
             )) as _,
             // NTH_VALUE(a, -1)
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func1,
                 &[],
                 &[],
-                Arc::new(WindowFrame {
-                    units: WindowFrameUnits::Rows,
-                    start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
-                    end_bound: WindowFrameBound::CurrentRow,
-                }),
+                Arc::new(WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                    WindowFrameBound::CurrentRow,
+                )),
             )) as _,
             // NTH_VALUE(a, -2)
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func2,
                 &[],
                 &[],
-                Arc::new(WindowFrame {
-                    units: WindowFrameUnits::Rows,
-                    start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
-                    end_bound: WindowFrameBound::CurrentRow,
-                }),
+                Arc::new(WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                    WindowFrameBound::CurrentRow,
+                )),
             )) as _,
         ];
         let physical_plan = BoundedWindowAggExec::try_new(

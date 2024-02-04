@@ -60,7 +60,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
             let serializer_clone = serializer.clone();
             let handle = tokio::spawn(async move {
                 let num_rows = batch.num_rows();
-                let bytes = serializer_clone.serialize(batch, initial).await?;
+                let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
             });
             if initial {
@@ -220,7 +220,6 @@ pub(crate) async fn stateless_multipart_put(
         .runtime_env()
         .object_store(&config.object_store_url)?;
 
-    let single_file_output = config.single_file_output;
     let base_output_path = &config.table_paths[0];
     let part_cols = if !config.table_partition_cols.is_empty() {
         Some(config.table_partition_cols.clone())
@@ -234,7 +233,6 @@ pub(crate) async fn stateless_multipart_put(
         part_cols,
         base_output_path.clone(),
         file_extension,
-        single_file_output,
     );
 
     let rb_buffer_size = &context

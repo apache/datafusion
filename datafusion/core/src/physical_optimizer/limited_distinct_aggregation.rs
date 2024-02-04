@@ -305,7 +305,7 @@ mod tests {
             AggregateMode::Partial,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -313,7 +313,7 @@ mod tests {
             AggregateMode::Final,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],                /* aggr_expr */
-            vec![None],            /* filter_expr */
+            vec![],                /* filter_expr */
             Arc::new(partial_agg), /* input */
             schema.clone(),        /* input_schema */
         )?;
@@ -355,7 +355,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -396,7 +396,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -437,7 +437,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string(), "b".to_string()]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -445,7 +445,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],                 /* aggr_expr */
-            vec![None],             /* filter_expr */
+            vec![],                 /* filter_expr */
             Arc::new(group_by_agg), /* input */
             schema.clone(),         /* input_schema */
         )?;
@@ -487,7 +487,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec![]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;
@@ -549,13 +549,14 @@ mod tests {
             cast(expressions::lit(1u32), &schema, DataType::Int32)?,
             &schema,
         )?);
+        let agg = TestAggregate::new_count_star();
         let single_agg = AggregateExec::try_new(
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
-            vec![],            /* aggr_expr */
-            vec![filter_expr], /* filter_expr */
-            source,            /* input */
-            schema.clone(),    /* input_schema */
+            vec![agg.count_expr()], /* aggr_expr */
+            vec![filter_expr],      /* filter_expr */
+            source,                 /* input */
+            schema.clone(),         /* input_schema */
         )?;
         let limit_exec = LocalLimitExec::new(
             Arc::new(single_agg),
@@ -565,7 +566,7 @@ mod tests {
         // TODO(msirek): open an issue for `filter_expr` of `AggregateExec` not printing out
         let expected = [
             "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[]",
+            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
             "MemoryExec: partitions=1, partition_sizes=[1]",
         ];
         let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
@@ -588,7 +589,7 @@ mod tests {
             AggregateMode::Single,
             build_group_by(&schema.clone(), vec!["a".to_string()]),
             vec![],         /* aggr_expr */
-            vec![None],     /* filter_expr */
+            vec![],         /* filter_expr */
             source,         /* input */
             schema.clone(), /* input_schema */
         )?;

@@ -28,10 +28,11 @@ pub enum GetFieldAccessSchema {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key_dt: DataType },
-    /// List range, for example `list[i:j]`
+    /// List stride, for example `list[i:j:k]`
     ListRange {
         start_dt: DataType,
         stop_dt: DataType,
+        stride_dt: DataType,
     },
 }
 
@@ -85,13 +86,13 @@ impl GetFieldAccessSchema {
                     (other, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
                 }
             }
-            Self::ListRange{ start_dt, stop_dt } => {
-                match (data_type, start_dt, stop_dt) {
-                    (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
-                    (DataType::List(_), _, _) => plan_err!(
+            Self::ListRange { start_dt, stop_dt, stride_dt } => {
+                match (data_type, start_dt, stop_dt, stride_dt) {
+                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
+                    (DataType::List(_), _, _, _) => plan_err!(
                         "Only ints are valid as an indexed field in a list"
                     ),
-                    (other, _, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
+                    (other, _, _, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
                 }
             }
         }

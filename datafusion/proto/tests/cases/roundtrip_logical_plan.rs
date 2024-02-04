@@ -27,6 +27,7 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -34,8 +35,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
-use datafusion::physical_plan::functions::make_scalar_function;
-use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -53,9 +53,9 @@ use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
+    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -323,7 +323,6 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        single_file_output: true,
         copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
@@ -354,7 +353,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
-        single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
@@ -368,7 +366,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(FileType::PARQUET, copy_to.file_format);
-            assert!(copy_to.single_file_output);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Parquet(p) => {
@@ -395,6 +392,43 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let input = create_csv_scan(&ctx).await?;
+
+    let plan = LogicalPlan::Copy(CopyTo {
+        input: Arc::new(input),
+        output_url: "test.arrow".to_string(),
+        file_format: FileType::ARROW,
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
+            ArrowWriterOptions::new(),
+        ))),
+    });
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    match logical_round_trip {
+        LogicalPlan::Copy(copy_to) => {
+            assert_eq!("test.arrow", copy_to.output_url);
+            assert_eq!(FileType::ARROW, copy_to.file_format);
+            match &copy_to.copy_options {
+                CopyOptions::WriterOptions(y) => match y.as_ref() {
+                    FileTypeWriterOptions::Arrow(_) => {}
+                    _ => panic!(),
+                },
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -412,7 +446,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
@@ -429,7 +462,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!(FileType::CSV, copy_to.file_format);
-            assert!(copy_to.single_file_output);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::CSV(p) => {
@@ -520,6 +552,27 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_expr_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let table = ctx.table("t1").await?;
+    let schema = table.schema().clone();
+
+    // ensure expressions created with the expr api can be round tripped
+    let plan = table
+        .select(vec![
+            encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+            decode(lit("1234"), lit("hex")),
+        ])?
+        .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
@@ -1538,7 +1591,7 @@ fn roundtrip_aggregate_udf() {
     struct Dummy {}
 
     impl Accumulator for Dummy {
-        fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
             Ok(vec![])
         }
 
@@ -1553,7 +1606,7 @@ fn roundtrip_aggregate_udf() {
             Ok(())
         }
 
-        fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
             Ok(ScalarValue::Float64(None))
         }
 
@@ -1592,9 +1645,12 @@ fn roundtrip_aggregate_udf() {
 
 #[test]
 fn roundtrip_scalar_udf() {
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",
@@ -1671,7 +1727,7 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 2. with default window_frame
@@ -1682,15 +1738,15 @@ fn roundtrip_window() {
         vec![],
         vec![col("col1")],
         vec![col("col2")],
-        WindowFrame::new(true),
+        WindowFrame::new(Some(false)),
     ));
 
     // 3. with window_frame with row numbers
-    let range_number_frame = WindowFrame {
-        units: WindowFrameUnits::Range,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let range_number_frame = WindowFrame::new_bounds(
+        WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::BuiltInWindowFunction(
@@ -1703,11 +1759,11 @@ fn roundtrip_window() {
     ));
 
     // 4. test with AggregateFunction
-    let row_number_frame = WindowFrame {
-        units: WindowFrameUnits::Rows,
-        start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
-        end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
-    };
+    let row_number_frame = WindowFrame::new_bounds(
+        WindowFrameUnits::Rows,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+        WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+    );
 
     let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
@@ -1722,7 +1778,7 @@ fn roundtrip_window() {
     struct DummyAggr {}
 
     impl Accumulator for DummyAggr {
-        fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
             Ok(vec![])
         }
 
@@ -1737,7 +1793,7 @@ fn roundtrip_window() {
             Ok(())
         }
 
-        fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
             Ok(ScalarValue::Float64(None))
         }
 

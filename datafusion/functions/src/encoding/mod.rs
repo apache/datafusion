@@ -15,23 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+mod inner;
 
-/// Currently supported types by the array function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-pub static SUPPORTED_ARRAY_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
+
+// create `encode` and `decode` UDFs
+make_udf_function!(inner::EncodeFunc, ENCODE, encode);
+make_udf_function!(inner::DecodeFunc, DECODE, decode);
+
+// Export the functions out of this package, both as expr_fn as well as a list of functions
+export_functions!(
+    (encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex"),
+    (decode, input encoding, "decode the `input`, using the `encoding`. encoding can be base64 or hex")
+);
+

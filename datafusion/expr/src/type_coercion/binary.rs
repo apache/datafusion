@@ -101,6 +101,13 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 )
             })
         }
+        LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
+                )
+            })
+        }
         BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
             bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(

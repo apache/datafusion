@@ -54,13 +54,12 @@ pub async fn exec_from_commands(
     ctx: &mut SessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
-) {
+) -> Result<()> {
     for sql in commands {
-        match exec_and_print(ctx, print_options, sql).await {
-            Ok(_) => {}
-            Err(err) => println!("{err}"),
-        }
+        exec_and_print(ctx, print_options, sql).await?;
     }
+
+    Ok(())
 }
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
@@ -68,7 +67,7 @@ pub async fn exec_from_lines(
     ctx: &mut SessionContext,
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
-) {
+) -> Result<()> {
     let mut query = "".to_owned();
 
     for line in reader.lines() {
@@ -98,26 +97,28 @@ pub async fn exec_from_lines(
     // run the left over query if the last statement doesn't contain ‘;’
     // ignore if it only consists of '\n'
     if query.contains(|c| c != '\n') {
-        match exec_and_print(ctx, print_options, query).await {
-            Ok(_) => {}
-            Err(err) => println!("{err}"),
-        }
+        exec_and_print(ctx, print_options, query).await?;
     }
+
+    Ok(())
 }
 
 pub async fn exec_from_files(
     ctx: &mut SessionContext,
     files: Vec<String>,
     print_options: &PrintOptions,
-) {
+) -> Result<()> {
     let files = files
         .into_iter()
         .map(|file_path| File::open(file_path).unwrap())
         .collect::<Vec<_>>();
+
     for file in files {
         let mut reader = BufReader::new(file);
-        exec_from_lines(ctx, &mut reader, print_options).await;
+        exec_from_lines(ctx, &mut reader, print_options).await?;
     }
+
+    Ok(())
 }
 
 /// run and execute SQL statements and commands against a context with the given print options
@@ -128,6 +129,7 @@ pub async fn exec_from_repl(
     let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::new(
         &ctx.task_ctx().session_config().options().sql_parser.dialect,
+        print_options.color,
     )));
     rl.load_history(".history").ok();
 
@@ -216,6 +218,7 @@ async fn exec_and_print(
                  MsSQL, ClickHouse, BigQuery, Ansi."
         )
     })?;
+
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
         let mut plan = ctx.state().statement_to_plan(statement).await?;
@@ -346,13 +349,10 @@ mod tests {
         let session_token = "fake_session_token";
         let location = "s3://bucket/path/file.parquet";
 
-        // Missing region
+        // Missing region, use object_store defaults
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
             OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}') LOCATION '{location}'");
-        let err = create_external_table_test(location, &sql)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("Missing region"));
+        create_external_table_test(location, &sql).await?;
 
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET

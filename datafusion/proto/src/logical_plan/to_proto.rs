@@ -31,6 +31,7 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
+
 use arrow::{
     array::ArrayRef,
     datatypes::{
@@ -409,6 +410,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Median => Self::Median,
             AggregateFunction::FirstValue => Self::FirstValueAgg,
             AggregateFunction::LastValue => Self::LastValueAgg,
+            AggregateFunction::NthValue => Self::NthValueAgg,
             AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
@@ -728,6 +730,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             AggregateFunction::LastValue => {
                                 protobuf::AggregateFunction::LastValueAgg
                             }
+                            AggregateFunction::NthValue => {
+                                protobuf::AggregateFunction::NthValueAgg
+                            }
                             AggregateFunction::StringAgg => {
                                 protobuf::AggregateFunction::StringAgg
                             }
@@ -1028,14 +1033,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             },
                         ))
                     }
-                    GetFieldAccess::ListRange { start, stop } => {
-                        protobuf::get_indexed_field::Field::ListRange(Box::new(
-                            protobuf::ListRange {
-                                start: Some(Box::new(start.as_ref().try_into()?)),
-                                stop: Some(Box::new(stop.as_ref().try_into()?)),
-                            },
-                        ))
-                    }
+                    GetFieldAccess::ListRange {
+                        start,
+                        stop,
+                        stride,
+                    } => protobuf::get_indexed_field::Field::ListRange(Box::new(
+                        protobuf::ListRange {
+                            start: Some(Box::new(start.as_ref().try_into()?)),
+                            stop: Some(Box::new(stop.as_ref().try_into()?)),
+                            stride: Some(Box::new(stride.as_ref().try_into()?)),
+                        },
+                    )),
                 };
 
                 Self {
@@ -1485,12 +1493,14 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
             BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             BuiltinScalarFunction::ArrayRepeat => Self::ArrayRepeat,
+            BuiltinScalarFunction::ArrayResize => Self::ArrayResize,
             BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
             BuiltinScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
             BuiltinScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
             BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
@@ -1508,8 +1518,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
-            BuiltinScalarFunction::Decode => Self::Decode,
-            BuiltinScalarFunction::Encode => Self::Encode,
             BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
@@ -1519,7 +1527,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
             BuiltinScalarFunction::Chr => Self::Chr,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
+            BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
+            BuiltinScalarFunction::InStr => Self::InStr,
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
@@ -1542,6 +1552,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Now => Self::Now,
             BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
             BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
+            BuiltinScalarFunction::MakeDate => Self::MakeDate,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,

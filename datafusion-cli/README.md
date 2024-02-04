@@ -25,4 +25,22 @@
 
 The DataFusion CLI is a command line utility that runs SQL queries using the DataFusion engine.
 
-See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
+# Frequently Asked Questions
+
+## Where can I find more information?
+
+Answer: See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
+
+## How do I make my IDE work with `datafusion-cli`?
+
+Answer: "open" the `datafusion/datafusion-cli` project as its own top level
+project in my IDE (rather than opening `datafusion`)
+
+The reason `datafusion-cli` is not listed as part of the workspace in the main
+[`datafusion Cargo.toml`] file is that `datafusion-cli` is a binary and has a
+checked in `Cargo.lock` file to ensure reproducible builds.
+
+However, the `datafusion` and sub crates are intended for use as libraries and
+thus do not have a `Cargo.lock` file checked in.
+
+[`datafusion cargo.toml`]: https://github.com/apache/arrow-datafusion/blob/main/Cargo.toml

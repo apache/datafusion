@@ -375,7 +375,7 @@ impl FileOpener for CsvOpener {
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range),
+                RangeCalculation::Range(Some(range)) => Some(range.into()),
                 RangeCalculation::TerminateEarly => {
                     return Ok(
                         futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
@@ -1028,8 +1028,8 @@ mod tests {
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = "file://local/out";
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+        let out_dir_url = "file://local/out/";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         df.write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await?;

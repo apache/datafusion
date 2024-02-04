@@ -322,7 +322,6 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    bool single_file_output = 3;
     oneof CopyOptions {
         SQLOptions sql_options = 4;
         FileTypeWriterOptions writer_options = 5;
@@ -466,6 +465,7 @@ message ListIndex {
 message ListRange {
   LogicalExprNode start = 1;
   LogicalExprNode stop = 2;
+  LogicalExprNode stride = 3;
 }
 
 message GetIndexedField {
@@ -639,8 +639,6 @@ enum ScalarFunction {
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -668,6 +666,11 @@ enum ScalarFunction {
   FindInSet = 127;
   ArraySort = 128;
   ArrayDistinct = 129;
+  ArrayResize = 130;
+  EndsWith = 131;
+  InStr = 132;
+  MakeDate = 133;
+  ArrayReverse = 134;
 }
 
 message ScalarFunctionNode {
@@ -714,6 +717,7 @@ enum AggregateFunction {
   REGR_SYY = 33;
   REGR_SXY = 34;
   STRING_AGG = 35;
+  NTH_VALUE_AGG = 36;
 }
 
 message AggregateExprNode {
@@ -1211,6 +1215,7 @@ message FileTypeWriterOptions {
     JsonWriterOptions json_options = 1;
     ParquetWriterOptions parquet_options = 2;
     CsvWriterOptions csv_options = 3;
+    ArrowWriterOptions arrow_options = 4;
   }
 }
 
@@ -1241,6 +1246,8 @@ message CsvWriterOptions {
   string null_value = 8;
 }
 
+message ArrowWriterOptions {}
+
 message WriterProperties {
   uint64 data_page_size_limit = 1;
   uint64 dictionary_page_size_limit = 2;
@@ -1259,7 +1266,6 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
   bool overwrite = 8;
   FileTypeWriterOptions file_type_writer_options = 9;
 }
@@ -1573,8 +1579,8 @@ message PhysicalColumn {
 }
 
 message JoinOn {
-  PhysicalColumn left = 1;
-  PhysicalColumn right = 2;
+  PhysicalExprNode left = 1;
+  PhysicalExprNode right = 2;
 }
 
 message EmptyExecNode {
@@ -1766,6 +1772,7 @@ message ListIndexExpr {
 message ListRangeExpr {
   PhysicalExprNode start = 1;
   PhysicalExprNode stop = 2;
+  PhysicalExprNode stride = 3;
 }
 
 message PhysicalGetIndexedFieldExprNode {

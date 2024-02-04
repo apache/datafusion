@@ -662,12 +662,8 @@ impl TableProvider for ListingTable {
         let filters = if let Some(expr) = conjunction(filters.to_vec()) {
             // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
             let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-            let filters = create_physical_expr(
-                &expr,
-                &table_df_schema,
-                &self.table_schema,
-                state.execution_props(),
-            )?;
+            let filters =
+                create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
             Some(filters)
         } else {
             None
@@ -780,7 +776,6 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            single_file_output: false,
             overwrite,
             file_type_writer_options,
         };

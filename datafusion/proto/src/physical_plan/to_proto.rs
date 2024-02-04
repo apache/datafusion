@@ -49,9 +49,9 @@ use datafusion::physical_plan::expressions::{
     CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
     DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
     InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
-    Min, NegativeExpr, NotExpr, NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
-    Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
-    VariancePop, WindowShift,
+    Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg,
+    Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum,
+    TryCastExpr, Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -363,6 +363,10 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
         protobuf::AggregateFunction::FirstValueAgg
     } else if aggr_expr.downcast_ref::<LastValue>().is_some() {
         protobuf::AggregateFunction::LastValueAgg
+    } else if aggr_expr.downcast_ref::<StringAgg>().is_some() {
+        protobuf::AggregateFunction::StringAgg
+    } else if aggr_expr.downcast_ref::<NthValueAgg>().is_some() {
+        protobuf::AggregateFunction::NthValueAgg
     } else {
         return not_impl_err!("Aggregate function not supported: {expr:?}");
     };
@@ -558,12 +562,15 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         key: Some(Box::new(key.to_owned().try_into()?))
                     }))
                 ),
-                GetFieldAccessExpr::ListRange{start, stop} => Some(
-                    protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
-                        start: Some(Box::new(start.to_owned().try_into()?)),
-                        stop: Some(Box::new(stop.to_owned().try_into()?)),
-                    }))
-                ),
+                GetFieldAccessExpr::ListRange { start, stop, stride } => {
+                    Some(
+                        protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
+                            start: Some(Box::new(start.to_owned().try_into()?)),
+                            stop: Some(Box::new(stop.to_owned().try_into()?)),
+                            stride: Some(Box::new(stride.to_owned().try_into()?)),
+                        }))
+                    )
+                }
             };
 
             Ok(protobuf::PhysicalExprNode {
@@ -871,7 +878,6 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
             overwrite: conf.overwrite,
             file_type_writer_options: Some(file_type_writer_options.try_into()?),
         })

@@ -29,7 +29,6 @@ use crate::error::Result;
 use arrow_array::RecordBatch;
 use datafusion_common::DataFusionError;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use object_store::path::Path;
@@ -144,12 +143,11 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
 }
 
 /// A trait that defines the methods required for a RecordBatch serializer.
-#[async_trait]
 pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     /// Parameter `initial` signals whether the given batch is the first batch.
     /// This distinction is important for certain serializers (like CSV).
-    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
+    fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 }
 
 /// Returns an [`AbortableWrite`] which writes to the given object store location

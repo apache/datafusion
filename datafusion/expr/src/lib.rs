@@ -40,7 +40,6 @@ mod udf;
 mod udwf;
 
 pub mod aggregate_function;
-pub mod array_expressions;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
@@ -48,6 +47,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
+pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
 pub mod tree_node;
@@ -71,6 +71,7 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;

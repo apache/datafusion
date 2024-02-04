@@ -42,6 +42,7 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -339,21 +340,17 @@ pub fn parse_physical_expr(
             // TODO Do not create new the ExecutionProps
             let execution_props = ExecutionProps::new();
 
-            let fun_expr = functions::create_physical_fun(
+            functions::create_physical_expr(
                 &(&scalar_function).into(),
+                &args,
+                input_schema,
                 &execution_props,
-            )?;
-
-            Arc::new(ScalarFunctionExpr::new(
-                &e.name,
-                fun_expr,
-                args,
-                convert_required!(e.return_type)?,
-                None,
-            ))
+            )?
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
+            let udf = registry.udf(e.name.as_str())?;
+            let signature = udf.signature();
+            let scalar_fun = udf.fun().clone();
 
             let args = e
                 .args
@@ -367,6 +364,7 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
+                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -410,8 +408,15 @@ pub fn parse_physical_expr(
                         "stop",
                         input_schema
                     )?,
+                    stride: parse_required_physical_expr(
+                        list_range_expr.stride.as_deref(),
+                        registry,
+                        "stride",
+                        input_schema
+                    )?,
                 },
-                None =>                 return Err(proto_error(
+                None =>
+                    return Err(proto_error(
                     "Field must not be None",
                 )),
             };
@@ -793,7 +798,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })
@@ -834,6 +838,10 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
             .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
 
         match file_type {
+            protobuf::file_type_writer_options::FileType::ArrowOptions(_) => {
+                Ok(Self::Arrow(ArrowWriterOptions::new()))
+            }
+
             protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
                 let compression: CompressionTypeVariant = opts.compression().into();
                 Ok(Self::JSON(JsonWriterOptions::new(compression)))

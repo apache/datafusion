@@ -26,7 +26,8 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.70"
+# Specify MSRV here as `cargo msrv` doesn't support workspace version
+rust-version = "1.72"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
@@ -43,7 +44,7 @@ parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { path = "../core", version = "34.0.0" }
+datafusion = { path = "../core", version = "35.0.0" }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 object_store = { workspace = true }
@@ -54,4 +55,5 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 doc-comment = { workspace = true }
+strum = { version = "0.26.1", features = ["derive"] }
 tokio = "1.18"

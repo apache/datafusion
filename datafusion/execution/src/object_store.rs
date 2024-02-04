@@ -21,6 +21,7 @@
 
 use dashmap::DashMap;
 use datafusion_common::{exec_err, DataFusionError, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -169,16 +170,25 @@ impl Default for DefaultObjectStoreRegistry {
 
 impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
         object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        Self { object_stores }
+    }
+
+    /// Default without any backend registered.
+    #[cfg(target_arch = "wasm32")]
+    pub fn new() -> Self {
+        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
     }
 }
 
 ///
 /// Stores are registered based on the scheme, host and port of the provided URL
-/// with a [`LocalFileSystem::new`] automatically registered for `file://`
+/// with a [`LocalFileSystem::new`] automatically registered for `file://` (if the
+/// target arch is not `wasm32`).
 ///
 /// For example:
 ///

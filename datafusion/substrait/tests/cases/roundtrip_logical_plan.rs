@@ -712,7 +712,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
     struct Dummy {}
 
     impl Accumulator for Dummy {
-        fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+        fn state(&mut self) -> datafusion::error::Result<Vec<ScalarValue>> {
             Ok(vec![])
         }
 
@@ -727,7 +727,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
             Ok(())
         }
 
-        fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+        fn evaluate(&mut self) -> datafusion::error::Result<ScalarValue> {
             Ok(ScalarValue::Float64(None))
         }
 

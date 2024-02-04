@@ -29,8 +29,11 @@ use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Represent a list of named catalogs
-pub trait CatalogList: Sync + Send {
+/// Represent a list of named [`CatalogProvider`]s.
+///
+/// Please see the documentation on `CatalogProvider` for details of
+/// implementing a custom catalog.
+pub trait CatalogProviderList: Sync + Send {
     /// Returns the catalog list as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -50,14 +53,18 @@ pub trait CatalogList: Sync + Send {
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
 }
 
+/// See [`CatalogProviderList`]
+#[deprecated(since = "35.0.0", note = "use [`CatalogProviderList`] instead")]
+pub trait CatalogList: CatalogProviderList {}
+
 /// Simple in-memory list of catalogs
-pub struct MemoryCatalogList {
+pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
 
-impl MemoryCatalogList {
-    /// Instantiates a new `MemoryCatalogList` with an empty collection of catalogs
+impl MemoryCatalogProviderList {
+    /// Instantiates a new `MemoryCatalogProviderList` with an empty collection of catalogs
     pub fn new() -> Self {
         Self {
             catalogs: DashMap::new(),
@@ -65,13 +72,13 @@ impl MemoryCatalogList {
     }
 }
 
-impl Default for MemoryCatalogList {
+impl Default for MemoryCatalogProviderList {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CatalogList for MemoryCatalogList {
+impl CatalogProviderList for MemoryCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -94,6 +101,88 @@ impl CatalogList for MemoryCatalogList {
 }
 
 /// Represents a catalog, comprising a number of named schemas.
+///
+/// # Catalog Overview
+///
+/// To plan and execute queries, DataFusion needs a "Catalog" that provides
+/// metadata such as which schemas and tables exist, their columns and data
+/// types, and how to access the data.
+///
+/// The Catalog API consists:
+/// * [`CatalogProviderList`]: a collection of `CatalogProvider`s
+/// * [`CatalogProvider`]: a collection of `SchemaProvider`s (sometimes called a "database" in other systems)
+/// * [`SchemaProvider`]:  a collection of `TableProvider`s (often called a "schema" in other systems)
+/// * [`TableProvider]`:  individual tables
+///
+/// # Implementing Catalogs
+///
+/// To implement a catalog, you implement at least one of the [`CatalogProviderList`],
+/// [`CatalogProvider`] and [`SchemaProvider`] traits and register them
+/// appropriately the [`SessionContext`].
+///
+/// [`SessionContext`]: crate::execution::context::SessionContext
+///
+/// DataFusion comes with a simple in-memory catalog implementation,
+/// [`MemoryCatalogProvider`], that is used by default and has no persistence.
+/// DataFusion does not include more complex Catalog implementations because
+/// catalog management is a key design choice for most data systems, and thus
+/// it is unlikely that any general-purpose catalog implementation will work
+/// well across many use cases.
+///
+/// # Implementing "Remote" catalogs
+///
+/// Sometimes catalog information is stored remotely and requires a network call
+/// to retrieve. For example, the [Delta Lake] table format stores table
+/// metadata in files on S3 that must be first downloaded to discover what
+/// schemas and tables exist.
+///
+/// [Delta Lake]: https://delta.io/
+///
+/// The [`CatalogProvider`] can support this use case, but it takes some care.
+/// The planning APIs in DataFusion are not `async` and thus network IO can not
+/// be performed "lazily" / "on demand" during query planning. The rationale for
+/// this design is that using remote procedure calls for all catalog accesses
+/// required for query planning would likely result in multiple network calls
+/// per plan, resulting in very poor planning performance.
+///
+/// To implement [`CatalogProvider`] and [`SchemaProvider`] for remote catalogs,
+/// you need to provide an in memory snapshot of the required metadata. Most
+/// systems typically either already have this information cached locally or can
+/// batch access to the remote catalog to retrieve multiple schemas and tables
+/// in a single network call.
+///
+/// Note that [`SchemaProvider::table`] is an `async` function in order to
+/// simplify implementing simple [`SchemaProvider`]s. For many table formats it
+/// is easy to list all available tables but there is additional non trivial
+/// access required to read table details (e.g. statistics).
+///
+/// The pattern that DataFusion itself uses to plan SQL queries is to walk over
+/// the query to [find all schema / table references in an `async` function],
+/// performing required remote catalog in parallel, and then plans the query
+/// using that snapshot.
+///
+/// [find all schema / table references in an `async` function]: crate::execution::context::SessionState::resolve_table_references
+///
+/// # Example Catalog Implementations
+///
+/// Here are some examples of how to implement custom catalogs:
+///
+/// * [`datafusion-cli`]: [`DynamicFileCatalogProvider`] catalog provider
+/// that treats files and directories on a filesystem as tables.
+///
+/// * The [`catalog.rs`]:  a simple directory based catalog.
+///
+///  * [delta-rs]:  [`UnityCatalogProvider`] implementation that can
+///  read from Delta Lake tables
+///
+/// [`datafusion-cli`]: https://arrow.apache.org/datafusion/user-guide/cli.html
+/// [`DynamicFileCatalogProvider`]: https://github.com/apache/arrow-datafusion/blob/31b9b48b08592b7d293f46e75707aad7dadd7cbc/datafusion-cli/src/catalog.rs#L75
+/// [`catalog.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/external_dependency/catalog.rs
+/// [delta-rs]: https://github.com/delta-io/delta-rs
+/// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
+///
+/// [`TableProvider]: crate::datasource::TableProvider
+
 pub trait CatalogProvider: Sync + Send {
     /// Returns the catalog provider as [`Any`]
     /// so that it can be downcast to a specific implementation.

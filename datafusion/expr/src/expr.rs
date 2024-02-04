@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Expr module contains core type definition for `Expr`.
+//! Logical Expressions: [`Expr`]
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
@@ -33,7 +33,7 @@ use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -421,8 +421,12 @@ pub enum GetFieldAccess {
     NamedStructField { name: ScalarValue },
     /// Single list index, for example: `list[i]`
     ListIndex { key: Box<Expr> },
-    /// List range, for example `list[i:j]`
-    ListRange { start: Box<Expr>, stop: Box<Expr> },
+    /// List stride, for example `list[i:j:k]`
+    ListRange {
+        start: Box<Expr>,
+        stop: Box<Expr>,
+        stride: Box<Expr>,
+    },
 }
 
 /// Returns the field of a [`arrow::array::ListArray`] or
@@ -849,13 +853,8 @@ const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl PartialOrd for Expr {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let mut hasher = SEED.build_hasher();
-        self.hash(&mut hasher);
-        let s = hasher.finish();
-
-        let mut hasher = SEED.build_hasher();
-        other.hash(&mut hasher);
-        let o = hasher.finish();
+        let s = SEED.hash_one(self);
+        let o = SEED.hash_one(other);
 
         Some(s.cmp(&o))
     }
@@ -1209,7 +1208,7 @@ impl Expr {
     /// # use datafusion_expr::{lit, col};
     /// let expr = col("c1")
     ///    .range(lit(2), lit(4));
-    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4):Int64(1)]");
     /// ```
     pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
@@ -1217,6 +1216,7 @@ impl Expr {
             field: GetFieldAccess::ListRange {
                 start: Box::new(start),
                 stop: Box::new(stop),
+                stride: Box::new(Expr::Literal(ScalarValue::Int64(Some(1)))),
             },
         })
     }
@@ -1265,6 +1265,54 @@ impl Expr {
             }
             Ok(Transformed::Yes(expr))
         })
+    }
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered
+    pub fn short_circuits(&self) -> bool {
+        match self {
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => {
+                matches!(func_def, ScalarFunctionDefinition::BuiltIn(fun) if *fun == BuiltinScalarFunction::Coalesce)
+            }
+            Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+                matches!(op, Operator::And | Operator::Or)
+            }
+            Expr::Case { .. } => true,
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::AggregateFunction(..)
+            | Expr::Alias(..)
+            | Expr::Between(..)
+            | Expr::Cast(..)
+            | Expr::Column(..)
+            | Expr::Exists(..)
+            | Expr::GetIndexedField(..)
+            | Expr::GroupingSet(..)
+            | Expr::InList(..)
+            | Expr::InSubquery(..)
+            | Expr::IsFalse(..)
+            | Expr::IsNotFalse(..)
+            | Expr::IsNotNull(..)
+            | Expr::IsNotTrue(..)
+            | Expr::IsNotUnknown(..)
+            | Expr::IsNull(..)
+            | Expr::IsTrue(..)
+            | Expr::IsUnknown(..)
+            | Expr::Like(..)
+            | Expr::ScalarSubquery(..)
+            | Expr::ScalarVariable(_, _)
+            | Expr::SimilarTo(..)
+            | Expr::Not(..)
+            | Expr::Negative(..)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::TryCast(..)
+            | Expr::Wildcard { .. }
+            | Expr::WindowFunction(..)
+            | Expr::Literal(..)
+            | Expr::Sort(..)
+            | Expr::Placeholder(..) => false,
+        }
     }
 }
 
@@ -1482,8 +1530,12 @@ impl fmt::Display for Expr {
                     write!(f, "({expr})[{name}]")
                 }
                 GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
-                GetFieldAccess::ListRange { start, stop } => {
-                    write!(f, "({expr})[{start}:{stop}]")
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    write!(f, "({expr})[{start}:{stop}:{stride}]")
                 }
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -1684,10 +1736,15 @@ fn create_name(e: &Expr) -> Result<String> {
                     let key = create_name(key)?;
                     Ok(format!("{expr}[{key}]"))
                 }
-                GetFieldAccess::ListRange { start, stop } => {
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
                     let start = create_name(start)?;
                     let stop = create_name(stop)?;
-                    Ok(format!("{expr}[{start}:{stop}]"))
+                    let stride = create_name(stride)?;
+                    Ok(format!("{expr}[{start}:{stop}:{stride}]"))
                 }
             }
         }
@@ -1869,10 +1926,14 @@ mod test {
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        assert!(exp1 < exp2);
-        assert!(exp2 > exp1);
-        assert!(exp2 > exp3);
-        assert!(exp3 < exp2);
+        // Since comparisons are done using hash value of the expression
+        // expr < expr2 may return false, or true. There is no guaranteed result.
+        // The only guarantee is "<" operator should have the opposite result of ">=" operator
+        let greater_or_equal = exp1 >= exp2;
+        assert_eq!(exp1 < exp2, !greater_or_equal);
+
+        let greater_or_equal = exp3 >= exp2;
+        assert_eq!(exp3 < exp2, !greater_or_equal);
     }
 
     #[test]

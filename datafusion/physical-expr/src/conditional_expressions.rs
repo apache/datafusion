@@ -47,16 +47,15 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             match arg {
                 ColumnarValue::Array(ref array) => {
                     let to_apply = and(&remainder, &is_not_null(array.as_ref())?)?;
-                    current_value = zip(&to_apply, array, current_value.as_ref())?;
+                    current_value = zip(&to_apply, array, &current_value)?;
                     remainder = and(&remainder, &is_null(array)?)?;
                 }
                 ColumnarValue::Scalar(value) => {
                     if value.is_null() {
                         continue;
                     } else {
-                        let last_value = value.to_array_of_size(size)?;
-                        current_value =
-                            zip(&remainder, &last_value, current_value.as_ref())?;
+                        let last_value = value.to_scalar()?;
+                        current_value = zip(&remainder, &last_value, &current_value)?;
                         break;
                     }
                 }

@@ -206,6 +206,11 @@ impl WindowExpr for BuiltInWindowExpr {
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
             let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let is_causal = if evaluator.uses_window_frame() {
+                self.window_frame.is_causal()
+            } else {
+                evaluator.is_causal()
+            };
             for idx in state.last_calculated_index..num_rows {
                 let frame_range = if evaluator.uses_window_frame() {
                     state
@@ -227,8 +232,11 @@ impl WindowExpr for BuiltInWindowExpr {
                     evaluator.get_range(idx, num_rows)
                 }?;
 
-                // Exit if the range extends all the way:
-                if frame_range.end == num_rows && !partition_batch_state.is_end {
+                // Exit if the range is non-causal and extends all the way:
+                if frame_range.end == num_rows
+                    && !is_causal
+                    && !partition_batch_state.is_end
+                {
                     break;
                 }
                 // Update last range

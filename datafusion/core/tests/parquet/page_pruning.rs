@@ -67,8 +67,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
-    let predicate =
-        create_physical_expr(&filter, &df_schema, &schema, &execution_props).unwrap();
+    let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let parquet_exec = ParquetExec::new(
         FileScanConfig {

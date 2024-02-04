@@ -144,6 +144,26 @@ macro_rules! assert_not_contains {
     };
 }
 
+/// Returns the datafusion test data directory, which is by default rooted at `datafusion/core/tests/data`.
+///
+/// The default can be overridden by the optional environment
+/// variable `DATAFUSION_TEST_DATA`
+///
+/// panics when the directory can not be found.
+///
+/// Example:
+/// ```
+/// let testdata = datafusion_common::test_util::datafusion_test_data();
+/// let csvdata = format!("{}/window_1.csv", testdata);
+/// assert!(std::path::PathBuf::from(csvdata).exists());
+/// ```
+pub fn datafusion_test_data() -> String {
+    match get_data_dir("DATAFUSION_TEST_DATA", "../../datafusion/core/tests/data") {
+        Ok(pb) => pb.display().to_string(),
+        Err(err) => panic!("failed to get arrow data dir: {err}"),
+    }
+}
+
 /// Returns the arrow test data directory, which is by default stored
 /// in a git submodule rooted at `testing/data`.
 ///

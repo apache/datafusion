@@ -48,14 +48,15 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
 
     /// Transform the value in this [`Precision`] object, if one exists, using
     /// the given function. Preserves the exactness state.
-    pub fn map<F>(self, f: F) -> Precision<T>
+    pub fn map<U, F>(self, f: F) -> Precision<U>
     where
-        F: Fn(T) -> T,
+        F: Fn(T) -> U,
+        U: Debug + Clone + PartialEq + Eq + PartialOrd,
     {
         match self {
             Precision::Exact(val) => Precision::Exact(f(val)),
             Precision::Inexact(val) => Precision::Inexact(f(val)),
-            _ => self,
+            _ => Precision::<U>::Absent,
         }
     }
 

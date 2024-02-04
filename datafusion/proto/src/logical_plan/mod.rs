@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -858,6 +859,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
                         match &opt.file_type {
                             Some(ft) => match ft {
+                                file_type_writer_options::FileType::ArrowOptions(_) => {
+                                    CopyOptions::WriterOptions(Box::new(
+                                        FileTypeWriterOptions::Arrow(
+                                            ArrowWriterOptions::new(),
+                                        ),
+                                    ))
+                                }
                                 file_type_writer_options::FileType::CsvOptions(
                                     writer_options,
                                 ) => {
@@ -910,7 +918,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         file_format: FileType::from_str(&copy.file_type)?,
-                        single_file_output: copy.single_file_output,
                         copy_options,
                     },
                 ))
@@ -1632,7 +1639,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,
-                single_file_output,
                 file_format,
                 copy_options,
             }) => {
@@ -1659,6 +1665,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         CopyOptions::WriterOptions(opt) => {
                             match opt.as_ref() {
+                                FileTypeWriterOptions::Arrow(_) => {
+                                    let arrow_writer_options =
+                                        file_type_writer_options::FileType::ArrowOptions(
+                                            protobuf::ArrowWriterOptions {},
+                                        );
+                                    Some(copy_to_node::CopyOptions::WriterOptions(
+                                        protobuf::FileTypeWriterOptions {
+                                            file_type: Some(arrow_writer_options),
+                                        },
+                                    ))
+                                }
                                 FileTypeWriterOptions::CSV(csv_opts) => {
                                     let csv_options = &csv_opts.writer_options;
                                     let csv_writer_options = csv_writer_options_to_proto(
@@ -1704,7 +1721,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
-                            single_file_output: *single_file_output,
                             output_url: output_url.to_string(),
                             file_type: file_format.to_string(),
                             copy_options: copy_options_proto,
@@ -1714,6 +1730,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
+            )),
+            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for RecursiveQuery",
             )),
         }
     }

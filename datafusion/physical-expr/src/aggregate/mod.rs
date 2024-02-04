@@ -19,13 +19,12 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use self::groups_accumulator::GroupsAccumulator;
-use crate::expressions::OrderSensitiveArrayAgg;
+use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::datatypes::Field;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 mod hyperloglog;
 mod tdigest;
@@ -47,6 +46,7 @@ pub(crate) mod covariance;
 pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
+pub(crate) mod nth_value;
 pub(crate) mod string_agg;
 #[macro_use]
 pub(crate) mod min_max;
@@ -140,4 +140,5 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 /// However, an `ARRAY_AGG` with `ORDER BY` depends on the input ordering.
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
+        || aggr_expr.as_any().is::<NthValueAgg>()
 }

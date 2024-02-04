@@ -66,7 +66,7 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
-    expr.clone().transform_up(&|nested_expr| {
+    expr.clone().transform_down(&|nested_expr| {
         if base_exprs.contains(&nested_expr) {
             Ok(Transformed::Yes(expr_as_column_expr(&nested_expr, plan)?))
         } else {

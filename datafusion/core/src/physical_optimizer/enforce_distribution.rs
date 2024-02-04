@@ -21,9 +21,7 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
-use std::borrow::Cow;
-use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
@@ -41,11 +39,10 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{
-    with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
-};
+use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -54,11 +51,11 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, LexRequirementRef, PhysicalExpr,
-    PhysicalSortRequirement,
+    PhysicalExprRef, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
-use datafusion_physical_plan::{get_plan_string, unbounded_output};
 
 use itertools::izip;
 
@@ -199,7 +196,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
-            let plan_requirements = PlanWithKeyRequirements::new(plan);
+            let plan_requirements = PlanWithKeyRequirements::new_default(plan);
             let adjusted =
                 plan_requirements.transform_down(&adjust_input_keys_ordering)?;
             adjusted.plan
@@ -210,7 +207,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             })?
         };
 
-        let distribution_context = DistributionContext::new(adjusted);
+        let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context =
             distribution_context.transform_up(&|distribution_context| {
@@ -273,8 +270,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
-    let parent_required = requirements.required_key_ordering.clone();
-    let plan_any = requirements.plan.as_any();
+    let plan = requirements.plan.clone();
 
     if let Some(HashJoinExec {
         left,
@@ -285,67 +281,63 @@ fn adjust_input_keys_ordering(
         mode,
         null_equals_null,
         ..
-    }) = plan_any.downcast_ref::<HashJoinExec>()
+    }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
         match mode {
             PartitionMode::Partitioned => {
-                let join_constructor =
-                    |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                        HashJoinExec::try_new(
-                            left.clone(),
-                            right.clone(),
-                            new_conditions.0,
-                            filter.clone(),
-                            join_type,
-                            PartitionMode::Partitioned,
-                            *null_equals_null,
-                        )
-                        .map(|e| Arc::new(e) as _)
-                    };
-                reorder_partitioned_join_keys(
-                    requirements.plan.clone(),
-                    &parent_required,
+                let join_constructor = |new_conditions: (
+                    Vec<(PhysicalExprRef, PhysicalExprRef)>,
+                    Vec<SortOptions>,
+                )| {
+                    HashJoinExec::try_new(
+                        left.clone(),
+                        right.clone(),
+                        new_conditions.0,
+                        filter.clone(),
+                        join_type,
+                        PartitionMode::Partitioned,
+                        *null_equals_null,
+                    )
+                    .map(|e| Arc::new(e) as _)
+                };
+                return reorder_partitioned_join_keys(
+                    requirements,
                     on,
                     vec![],
                     &join_constructor,
                 )
-                .map(Transformed::Yes)
+                .map(Transformed::Yes);
             }
             PartitionMode::CollectLeft => {
-                let new_right_request = match join_type {
+                // Push down requirements to the right side
+                requirements.children[1].data = match join_type {
                     JoinType::Inner | JoinType::Right => shift_right_required(
-                        &parent_required,
+                        &requirements.data,
                         left.schema().fields().len(),
-                    ),
+                    )
+                    .unwrap_or_default(),
                     JoinType::RightSemi | JoinType::RightAnti => {
-                        Some(parent_required.clone())
+                        requirements.data.clone()
                     }
                     JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
-                    | JoinType::Full => None,
+                    | JoinType::Full => vec![],
                 };
-
-                // Push down requirements to the right side
-                requirements.children[1].required_key_ordering =
-                    new_right_request.unwrap_or(vec![]);
-                Ok(Transformed::Yes(requirements))
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                )))
+                requirements.data.clear();
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
-        plan_any.downcast_ref::<CrossJoinExec>()
+        plan.as_any().downcast_ref::<CrossJoinExec>()
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
-        requirements.children[1].required_key_ordering =
-            shift_right_required(&parent_required, left_columns_len).unwrap_or_default();
-        Ok(Transformed::Yes(requirements))
+        requirements.children[1].data =
+            shift_right_required(&requirements.data, left_columns_len)
+                .unwrap_or_default();
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -354,136 +346,123 @@ fn adjust_input_keys_ordering(
         sort_options,
         null_equals_null,
         ..
-    }) = plan_any.downcast_ref::<SortMergeJoinExec>()
+    }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
-        let join_constructor =
-            |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                SortMergeJoinExec::try_new(
-                    left.clone(),
-                    right.clone(),
-                    new_conditions.0,
-                    *join_type,
-                    new_conditions.1,
-                    *null_equals_null,
-                )
-                .map(|e| Arc::new(e) as _)
-            };
-        reorder_partitioned_join_keys(
-            requirements.plan.clone(),
-            &parent_required,
+        let join_constructor = |new_conditions: (
+            Vec<(PhysicalExprRef, PhysicalExprRef)>,
+            Vec<SortOptions>,
+        )| {
+            SortMergeJoinExec::try_new(
+                left.clone(),
+                right.clone(),
+                new_conditions.0,
+                *join_type,
+                new_conditions.1,
+                *null_equals_null,
+            )
+            .map(|e| Arc::new(e) as _)
+        };
+        return reorder_partitioned_join_keys(
+            requirements,
             on,
             sort_options.clone(),
             &join_constructor,
         )
-        .map(Transformed::Yes)
-    } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
-        if !parent_required.is_empty() {
-            match aggregate_exec.mode() {
-                AggregateMode::FinalPartitioned => reorder_aggregate_keys(
-                    requirements.plan.clone(),
-                    &parent_required,
-                    aggregate_exec,
-                )
-                .map(Transformed::Yes),
-                _ => Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                    requirements.plan,
-                ))),
+        .map(Transformed::Yes);
+    } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if !requirements.data.is_empty() {
+            if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+                return reorder_aggregate_keys(requirements, aggregate_exec)
+                    .map(Transformed::Yes);
+            } else {
+                requirements.data.clear();
             }
         } else {
             // Keep everything unchanged
-            Ok(Transformed::No(requirements))
+            return Ok(Transformed::No(requirements));
         }
-    } else if let Some(proj) = plan_any.downcast_ref::<ProjectionExec>() {
+    } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the the orginal Column
-        let new_required = map_columns_before_projection(&parent_required, expr);
-        if new_required.len() == parent_required.len() {
-            requirements.children[0].required_key_ordering = new_required;
-            Ok(Transformed::Yes(requirements))
+        let new_required = map_columns_before_projection(&requirements.data, expr);
+        if new_required.len() == requirements.data.len() {
+            requirements.children[0].data = new_required;
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-                requirements.plan,
-            )))
+            requirements.data.clear();
         }
-    } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
-        || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
-        || plan_any.downcast_ref::<WindowAggExec>().is_some()
+    } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
+        || plan
+            .as_any()
+            .downcast_ref::<CoalescePartitionsExec>()
+            .is_some()
+        || plan.as_any().downcast_ref::<WindowAggExec>().is_some()
     {
-        Ok(Transformed::Yes(PlanWithKeyRequirements::new(
-            requirements.plan,
-        )))
+        requirements.data.clear();
     } else {
         // By default, push down the parent requirements to children
-        requirements.children.iter_mut().for_each(|child| {
-            child.required_key_ordering = parent_required.clone();
-        });
-        Ok(Transformed::Yes(requirements))
+        for child in requirements.children.iter_mut() {
+            child.data = requirements.data.clone();
+        }
     }
+    Ok(Transformed::Yes(requirements))
 }
 
 fn reorder_partitioned_join_keys<F>(
-    join_plan: Arc<dyn ExecutionPlan>,
-    parent_required: &[Arc<dyn PhysicalExpr>],
-    on: &[(Column, Column)],
+    mut join_plan: PlanWithKeyRequirements,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
     sort_options: Vec<SortOptions>,
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where
-    F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Result<Arc<dyn ExecutionPlan>>,
+    F: Fn(
+        (Vec<(PhysicalExprRef, PhysicalExprRef)>, Vec<SortOptions>),
+    ) -> Result<Arc<dyn ExecutionPlan>>,
 {
+    let parent_required = &join_plan.data;
     let join_key_pairs = extract_join_keys(on);
+    let eq_properties = join_plan.plan.equivalence_properties();
+
     if let Some((
         JoinKeyPairs {
             left_keys,
             right_keys,
         },
         new_positions,
-    )) = try_reorder(
-        join_key_pairs.clone(),
-        parent_required,
-        &join_plan.equivalence_properties(),
-    ) {
+    )) = try_reorder(join_key_pairs.clone(), parent_required, &eq_properties)
+    {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
-            let mut new_sort_options: Vec<SortOptions> = vec![];
-            for idx in 0..sort_options.len() {
-                new_sort_options.push(sort_options[new_positions[idx]])
-            }
-            let mut requirement_tree = PlanWithKeyRequirements::new(join_constructor((
-                new_join_on,
-                new_sort_options,
-            ))?);
-            requirement_tree.children[0].required_key_ordering = left_keys;
-            requirement_tree.children[1].required_key_ordering = right_keys;
-            Ok(requirement_tree)
-        } else {
-            let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
-            requirement_tree.children[0].required_key_ordering = left_keys;
-            requirement_tree.children[1].required_key_ordering = right_keys;
-            Ok(requirement_tree)
+            let new_sort_options = (0..sort_options.len())
+                .map(|idx| sort_options[new_positions[idx]])
+                .collect();
+            join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
+        let mut requirements = join_plan;
+        requirements.children[0].data = left_keys;
+        requirements.children[1].data = right_keys;
+        Ok(requirements)
     } else {
-        let mut requirement_tree = PlanWithKeyRequirements::new(join_plan);
-        requirement_tree.children[0].required_key_ordering = join_key_pairs.left_keys;
-        requirement_tree.children[1].required_key_ordering = join_key_pairs.right_keys;
-        Ok(requirement_tree)
+        let mut requirements = join_plan;
+        requirements.children[0].data = join_key_pairs.left_keys;
+        requirements.children[1].data = join_key_pairs.right_keys;
+        Ok(requirements)
     }
 }
 
 fn reorder_aggregate_keys(
-    agg_plan: Arc<dyn ExecutionPlan>,
-    parent_required: &[Arc<dyn PhysicalExpr>],
+    mut agg_node: PlanWithKeyRequirements,
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
+    let parent_required = &agg_node.data;
     let output_columns = agg_exec
         .group_by()
         .expr()
         .iter()
         .enumerate()
-        .map(|(index, (_col, name))| Column::new(name, index))
+        .map(|(index, (_, name))| Column::new(name, index))
         .collect::<Vec<_>>();
 
     let output_exprs = output_columns
@@ -491,61 +470,55 @@ fn reorder_aggregate_keys(
         .map(|c| Arc::new(c.clone()) as _)
         .collect::<Vec<_>>();
 
-    if parent_required.len() != output_exprs.len()
-        || !agg_exec.group_by().null_expr().is_empty()
-        || physical_exprs_equal(&output_exprs, parent_required)
+    if parent_required.len() == output_exprs.len()
+        && agg_exec.group_by().null_expr().is_empty()
+        && !physical_exprs_equal(&output_exprs, parent_required)
     {
-        Ok(PlanWithKeyRequirements::new(agg_plan))
-    } else {
-        let new_positions = expected_expr_positions(&output_exprs, parent_required);
-        match new_positions {
-            None => Ok(PlanWithKeyRequirements::new(agg_plan)),
-            Some(positions) => {
-                let new_partial_agg = if let Some(agg_exec) =
-                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-                {
-                    if matches!(agg_exec.mode(), &AggregateMode::Partial) {
-                        let group_exprs = agg_exec.group_by().expr();
-                        let new_group_exprs = positions
-                            .into_iter()
-                            .map(|idx| group_exprs[idx].clone())
-                            .collect();
-                        let new_partial_group_by =
-                            PhysicalGroupBy::new_single(new_group_exprs);
-                        Some(Arc::new(AggregateExec::try_new(
-                            AggregateMode::Partial,
-                            new_partial_group_by,
-                            agg_exec.aggr_expr().to_vec(),
-                            agg_exec.filter_expr().to_vec(),
-                            agg_exec.input().clone(),
-                            agg_exec.input_schema.clone(),
-                        )?))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(partial_agg) = new_partial_agg {
-                    // Build new group expressions that correspond to the output of partial_agg
+        if let Some(positions) = expected_expr_positions(&output_exprs, parent_required) {
+            if let Some(agg_exec) =
+                agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+            {
+                if matches!(agg_exec.mode(), &AggregateMode::Partial) {
+                    let group_exprs = agg_exec.group_by().expr();
+                    let new_group_exprs = positions
+                        .into_iter()
+                        .map(|idx| group_exprs[idx].clone())
+                        .collect();
+                    let partial_agg = Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        PhysicalGroupBy::new_single(new_group_exprs),
+                        agg_exec.aggr_expr().to_vec(),
+                        agg_exec.filter_expr().to_vec(),
+                        agg_exec.input().clone(),
+                        agg_exec.input_schema.clone(),
+                    )?);
+                    // Build new group expressions that correspond to the output
+                    // of the "reordered" aggregator:
                     let group_exprs = partial_agg.group_expr().expr();
-                    let new_final_group = partial_agg.output_group_expr();
                     let new_group_by = PhysicalGroupBy::new_single(
-                        new_final_group
-                            .iter()
+                        partial_agg
+                            .output_group_expr()
+                            .into_iter()
                             .enumerate()
-                            .map(|(idx, expr)| (expr.clone(), group_exprs[idx].1.clone()))
+                            .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
                             .collect(),
                     );
-
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        partial_agg,
+                        partial_agg.clone(),
                         agg_exec.input_schema(),
                     )?);
+
+                    agg_node.plan = new_final_agg.clone();
+                    agg_node.data.clear();
+                    agg_node.children = vec![PlanWithKeyRequirements::new(
+                        partial_agg as _,
+                        vec![],
+                        agg_node.children.swap_remove(0).children,
+                    )];
 
                     // Need to create a new projection to change the expr ordering back
                     let agg_schema = new_final_agg.schema();
@@ -553,33 +526,26 @@ fn reorder_aggregate_keys(
                         .iter()
                         .map(|col| {
                             let name = col.name();
-                            (
-                                Arc::new(Column::new(
-                                    name,
-                                    agg_schema.index_of(name).unwrap(),
-                                )) as _,
-                                name.to_owned(),
-                            )
+                            let index = agg_schema.index_of(name)?;
+                            Ok((Arc::new(Column::new(name, index)) as _, name.to_owned()))
                         })
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>>>()?;
                     let agg_fields = agg_schema.fields();
                     for (idx, field) in
                         agg_fields.iter().enumerate().skip(output_columns.len())
                     {
                         let name = field.name();
-                        proj_exprs
-                            .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
+                        let plan = Arc::new(Column::new(name, idx)) as _;
+                        proj_exprs.push((plan, name.clone()))
                     }
-                    // TODO merge adjacent Projections if there are
-                    Ok(PlanWithKeyRequirements::new(Arc::new(
-                        ProjectionExec::try_new(proj_exprs, new_final_agg)?,
-                    )))
-                } else {
-                    Ok(PlanWithKeyRequirements::new(agg_plan))
+                    return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
+                        PlanWithKeyRequirements::new(Arc::new(p), vec![], vec![agg_node])
+                    });
                 }
             }
         }
     }
+    Ok(agg_node)
 }
 
 fn shift_right_required(
@@ -589,17 +555,11 @@ fn shift_right_required(
     let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
-            if let Some(col) = r.as_any().downcast_ref::<Column>() {
-                let idx = col.index();
-                if idx >= left_columns_len {
-                    let result = Column::new(col.name(), idx - left_columns_len);
-                    Some(Arc::new(result) as _)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            r.as_any().downcast_ref::<Column>().and_then(|col| {
+                col.index()
+                    .checked_sub(left_columns_len)
+                    .map(|index| Arc::new(Column::new(col.name(), index)) as _)
+            })
         })
         .collect::<Vec<_>>();
 
@@ -700,14 +660,15 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 let new_sort_options = (0..sort_options.len())
                     .map(|idx| sort_options[new_positions[idx]])
                     .collect();
-                return Ok(Arc::new(SortMergeJoinExec::try_new(
+                return SortMergeJoinExec::try_new(
                     left.clone(),
                     right.clone(),
                     new_join_on,
                     *join_type,
                     new_sort_options,
                     *null_equals_null,
-                )?));
+                )
+                .map(|smj| Arc::new(smj) as _);
             }
         }
     }
@@ -762,21 +723,21 @@ fn try_reorder(
         normalized_expected = expected
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
         if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
@@ -793,23 +754,19 @@ fn try_reorder(
             expected_expr_positions(&normalized_right_keys, &normalized_expected)
         });
 
-    if let Some(positions) = new_positions {
+    new_positions.map(|positions| {
         let mut new_left_keys = vec![];
         let mut new_right_keys = vec![];
         for pos in positions.iter() {
             new_left_keys.push(join_keys.left_keys[*pos].clone());
             new_right_keys.push(join_keys.right_keys[*pos].clone());
         }
-        Some((
-            JoinKeyPairs {
-                left_keys: new_left_keys,
-                right_keys: new_right_keys,
-            },
-            positions,
-        ))
-    } else {
-        None
-    }
+        let pairs = JoinKeyPairs {
+            left_keys: new_left_keys,
+            right_keys: new_right_keys,
+        };
+        (pairs, positions)
+    })
 }
 
 /// Return the expected expressions positions.
@@ -837,10 +794,10 @@ fn expected_expr_positions(
     Some(indexes)
 }
 
-fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
+fn extract_join_keys(on: &[(PhysicalExprRef, PhysicalExprRef)]) -> JoinKeyPairs {
     let (left_keys, right_keys) = on
         .iter()
-        .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+        .map(|(l, r)| (l.clone() as _, r.clone() as _))
         .unzip();
     JoinKeyPairs {
         left_keys,
@@ -851,16 +808,11 @@ fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
 fn new_join_conditions(
     new_left_keys: &[Arc<dyn PhysicalExpr>],
     new_right_keys: &[Arc<dyn PhysicalExpr>],
-) -> Vec<(Column, Column)> {
+) -> Vec<(PhysicalExprRef, PhysicalExprRef)> {
     new_left_keys
         .iter()
         .zip(new_right_keys.iter())
-        .map(|(l_key, r_key)| {
-            (
-                l_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-                r_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-            )
-        })
+        .map(|(l_key, r_key)| (l_key.clone(), r_key.clone()))
         .collect()
 }
 
@@ -894,11 +846,7 @@ fn add_roundrobin_on_top(
 
         let new_plan = Arc::new(repartition) as _;
 
-        Ok(DistributionContext {
-            plan: new_plan,
-            distribution_connection: true,
-            children_nodes: vec![input],
-        })
+        Ok(DistributionContext::new(new_plan, true, vec![input]))
     } else {
         // Partition is not helpful, we already have desired number of partitions.
         Ok(input)
@@ -922,10 +870,9 @@ fn add_roundrobin_on_top(
 /// A [`Result`] object that contains new execution plan where the desired
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
-    mut input: DistributionContext,
+    input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
-    repartition_beneficial_stats: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     if n_target == 1 {
@@ -950,19 +897,12 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        if repartition_beneficial_stats {
-            // Since hashing benefits from partitioning, add a round-robin repartition
-            // before it:
-            input = add_roundrobin_on_top(input, n_target)?;
-        }
-
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
+        let plan = Arc::new(repartition) as _;
 
-        input.children_nodes = vec![input.clone()];
-        input.distribution_connection = true;
-        input.plan = Arc::new(repartition) as _;
+        return Ok(DistributionContext::new(plan, true, vec![input]));
     }
 
     Ok(input)
@@ -999,11 +939,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
             Arc::new(CoalescePartitionsExec::new(input.plan.clone())) as _
         };
 
-        DistributionContext {
-            plan: new_plan,
-            distribution_connection: true,
-            children_nodes: vec![input],
-        }
+        DistributionContext::new(new_plan, true, vec![input])
     } else {
         input
     }
@@ -1034,10 +970,9 @@ fn remove_dist_changing_operators(
         || is_sort_preserving_merge(&distribution_context.plan)
     {
         // All of above operators have a single child. First child is only child.
-        let child = distribution_context.children_nodes.swap_remove(0);
         // Remove any distribution changing operators at the beginning:
+        distribution_context = distribution_context.children.swap_remove(0);
         // Note that they will be re-inserted later on if necessary or helpful.
-        distribution_context = child;
     }
 
     Ok(distribution_context)
@@ -1064,42 +999,35 @@ fn remove_dist_changing_operators(
 fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
-    let mut updated_children = context
-        .children_nodes
-        .iter()
+    context.children = context
+        .children
+        .into_iter()
         .map(|child| {
-            if child.distribution_connection {
-                replace_order_preserving_variants(child.clone())
+            if child.data {
+                replace_order_preserving_variants(child)
             } else {
-                Ok(child.clone())
+                Ok(child)
             }
         })
         .collect::<Result<Vec<_>>>()?;
 
     if is_sort_preserving_merge(&context.plan) {
-        let child = updated_children.swap_remove(0);
-        context.plan = Arc::new(CoalescePartitionsExec::new(child.plan.clone()));
-        context.children_nodes = vec![child];
+        let child_plan = context.children[0].plan.clone();
+        context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
     {
         if repartition.preserve_order() {
-            let child = updated_children.swap_remove(0);
             context.plan = Arc::new(RepartitionExec::try_new(
-                child.plan.clone(),
+                context.children[0].plan.clone(),
                 repartition.partitioning().clone(),
             )?);
-            context.children_nodes = vec![child];
             return Ok(context);
         }
     }
 
-    context.plan = context
-        .plan
-        .clone()
-        .with_new_children(updated_children.into_iter().map(|c| c.plan).collect())?;
-    Ok(context)
+    context.update_plan_from_children()
 }
 
 /// This utility function adds a [`SortExec`] above an operator according to the
@@ -1116,17 +1044,11 @@ fn add_sort_preserving_partitions(
         .ordering_satisfy_requirement(sort_requirement)
     {
         let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
-
-        DistributionContext {
-            plan: Arc::new(if node.plan.output_partitioning().partition_count() > 1 {
-                new_sort.with_preserve_partitioning(true)
-            } else {
-                new_sort
-            }),
-            distribution_connection: false,
-            children_nodes: vec![node],
+        let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
+        if node.plan.output_partitioning().partition_count() > 1 {
+            new_sort = new_sort.with_preserve_partitioning(true);
         }
+        DistributionContext::new(Arc::new(new_sort), false, vec![node])
     } else {
         node
     }
@@ -1140,7 +1062,7 @@ fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
-    let dist_context = dist_context.update_children()?;
+    let dist_context = update_children(dist_context)?;
 
     if dist_context.plan.children().is_empty() {
         return Ok(Transformed::No(dist_context));
@@ -1161,8 +1083,8 @@ fn ensure_distribution(
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         mut plan,
-        distribution_connection,
-        children_nodes,
+        data,
+        children,
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
@@ -1188,8 +1110,8 @@ fn ensure_distribution(
     // - Satisfy the distribution requirements of every child, if it is not
     //   already satisfied.
     // We store the updated children in `new_children`.
-    let children_nodes = izip!(
-        children_nodes.into_iter(),
+    let children = izip!(
+        children.into_iter(),
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
         plan.benefits_from_input_partitioning(),
@@ -1208,6 +1130,12 @@ fn ensure_distribution(
                 true
             };
 
+            let add_roundrobin = enable_round_robin
+                // Operator benefits from partitioning (e.g. filter):
+                && (would_benefit && repartition_beneficial_stats)
+                // Unless partitioning increases the partition count, it is not beneficial:
+                && child.plan.output_partitioning().partition_count() < target_partitions;
+
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
             if repartition_file_scans && repartition_beneficial_stats {
@@ -1218,33 +1146,26 @@ fn ensure_distribution(
                 }
             }
 
-            if enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stats)
-                // Unless partitioning doesn't increase the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions
-            {
-                // Increase parallelism by adding round-robin repartitioning
-                // on top of the operator. Note that we only do this if the
-                // partition count is not already equal to the desired partition
-                // count.
-                child = add_roundrobin_on_top(child, target_partitions)?;
-            }
-
             // Satisfy the distribution requirement if it is unmet.
             match requirement {
                 Distribution::SinglePartition => {
                     child = add_spm_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    child = add_hash_on_top(
-                        child,
-                        exprs.to_vec(),
-                        target_partitions,
-                        repartition_beneficial_stats,
-                    )?;
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                 }
-                Distribution::UnspecifiedDistribution => {}
+                Distribution::UnspecifiedDistribution => {
+                    if add_roundrobin {
+                        // Add round-robin repartitioning on top of the operator
+                        // to increase parallelism.
+                        child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                }
             };
 
             // There is an ordering requirement of the operator:
@@ -1257,7 +1178,7 @@ fn ensure_distribution(
                     .equivalence_properties()
                     .ordering_satisfy_requirement(required_input_ordering);
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
-                    && child.distribution_connection
+                    && child.data
                 {
                     child = replace_order_preserving_variants(child)?;
                     // If ordering requirements were satisfied before repartitioning,
@@ -1272,7 +1193,7 @@ fn ensure_distribution(
                     }
                 }
                 // Stop tracking distribution changing operators
-                child.distribution_connection = false;
+                child.data = false;
             } else {
                 // no ordering requirement
                 match requirement {
@@ -1294,151 +1215,78 @@ fn ensure_distribution(
     )
     .collect::<Result<Vec<_>>>()?;
 
-    let new_distribution_context = DistributionContext {
-        plan: if plan.as_any().is::<UnionExec>()
-            && can_interleave(children_nodes.iter().map(|c| c.plan.clone()))
-        {
-            // Add a special case for [`UnionExec`] since we want to "bubble up"
-            // hash-partitioned data. So instead of
-            //
-            // Agg:
-            //   Repartition (hash):
-            //     Union:
-            //       - Agg:
-            //           Repartition (hash):
-            //             Data
-            //       - Agg:
-            //           Repartition (hash):
-            //             Data
-            //
-            // we can use:
-            //
-            // Agg:
-            //   Interleave:
-            //     - Agg:
-            //         Repartition (hash):
-            //           Data
-            //     - Agg:
-            //         Repartition (hash):
-            //           Data
-            Arc::new(InterleaveExec::try_new(
-                children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?)
-        } else {
-            plan.with_new_children(
-                children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-        },
-        distribution_connection,
-        children_nodes,
+    let children_plans = children.iter().map(|c| c.plan.clone()).collect::<Vec<_>>();
+    plan = if plan.as_any().is::<UnionExec>() && can_interleave(children_plans.iter()) {
+        // Add a special case for [`UnionExec`] since we want to "bubble up"
+        // hash-partitioned data. So instead of
+        //
+        // Agg:
+        //   Repartition (hash):
+        //     Union:
+        //       - Agg:
+        //           Repartition (hash):
+        //             Data
+        //       - Agg:
+        //           Repartition (hash):
+        //             Data
+        //
+        // we can use:
+        //
+        // Agg:
+        //   Interleave:
+        //     - Agg:
+        //         Repartition (hash):
+        //           Data
+        //     - Agg:
+        //         Repartition (hash):
+        //           Data
+        Arc::new(InterleaveExec::try_new(children_plans)?)
+    } else {
+        plan.with_new_children(children_plans)?
     };
 
-    Ok(Transformed::Yes(new_distribution_context))
+    Ok(Transformed::Yes(DistributionContext::new(
+        plan, data, children,
+    )))
 }
 
-/// A struct to keep track of distribution changing operators
-/// (`RepartitionExec`, `SortPreservingMergeExec`, `CoalescePartitionsExec`),
-/// and their associated parents inside `plan`. Using this information,
-/// we can optimize distribution of the plan if/when necessary.
-#[derive(Debug, Clone)]
-struct DistributionContext {
-    plan: Arc<dyn ExecutionPlan>,
-    /// Indicates whether this plan is connected to a distribution-changing
-    /// operator.
-    distribution_connection: bool,
-    children_nodes: Vec<Self>,
-}
+/// Keeps track of distribution changing operators (like `RepartitionExec`,
+/// `SortPreservingMergeExec`, `CoalescePartitionsExec`) and their ancestors.
+/// Using this information, we can optimize distribution of the plan if/when
+/// necessary.
+type DistributionContext = PlanContext<bool>;
 
-impl DistributionContext {
-    /// Creates a tree according to the plan with empty states.
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            distribution_connection: false,
-            children_nodes: children.into_iter().map(Self::new).collect(),
-        }
+fn update_children(mut dist_context: DistributionContext) -> Result<DistributionContext> {
+    for child_context in dist_context.children.iter_mut() {
+        let child_plan_any = child_context.plan.as_any();
+        child_context.data =
+            if let Some(repartition) = child_plan_any.downcast_ref::<RepartitionExec>() {
+                !matches!(
+                    repartition.partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                )
+            } else {
+                child_plan_any.is::<SortPreservingMergeExec>()
+                    || child_plan_any.is::<CoalescePartitionsExec>()
+                    || child_context.plan.children().is_empty()
+                    || child_context.children[0].data
+                    || child_context
+                        .plan
+                        .required_input_distribution()
+                        .iter()
+                        .zip(child_context.children.iter())
+                        .any(|(required_dist, child_context)| {
+                            child_context.data
+                                && matches!(
+                                    required_dist,
+                                    Distribution::UnspecifiedDistribution
+                                )
+                        })
+            }
     }
 
-    fn update_children(mut self) -> Result<Self> {
-        for child_context in self.children_nodes.iter_mut() {
-            child_context.distribution_connection = match &child_context.plan {
-                plan if is_repartition(plan)
-                    || is_coalesce_partitions(plan)
-                    || is_sort_preserving_merge(plan) =>
-                {
-                    true
-                }
-                _ => {
-                    child_context.plan.children().is_empty()
-                        || child_context.children_nodes[0].distribution_connection
-                        || child_context
-                            .plan
-                            .required_input_distribution()
-                            .iter()
-                            .zip(child_context.children_nodes.iter())
-                            .any(|(required_dist, child_context)| {
-                                child_context.distribution_connection
-                                    && matches!(
-                                        required_dist,
-                                        Distribution::UnspecifiedDistribution
-                                    )
-                            })
-                }
-            };
-        }
-
-        let children_plans = self
-            .children_nodes
-            .iter()
-            .map(|context| context.plan.clone())
-            .collect::<Vec<_>>();
-
-        Ok(Self {
-            plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
-            distribution_connection: false,
-            children_nodes: self.children_nodes,
-        })
-    }
-}
-
-impl TreeNode for DistributionContext {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children_nodes.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children_nodes.is_empty() {
-            self.children_nodes = self
-                .children_nodes
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children_nodes.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
-    }
-}
-
-/// implement Display method for `DistributionContext` struct.
-impl fmt::Display for DistributionContext {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = get_plan_string(&self.plan);
-        write!(f, "plan: {:?}", plan_string)?;
-        write!(
-            f,
-            "distribution_connection:{}",
-            self.distribution_connection,
-        )?;
-        write!(f, "")
-    }
+    dist_context.data = false;
+    Ok(dist_context)
 }
 
 #[derive(Debug, Clone)]
@@ -1447,49 +1295,8 @@ struct JoinKeyPairs {
     right_keys: Vec<Arc<dyn PhysicalExpr>>,
 }
 
-#[derive(Debug, Clone)]
-struct PlanWithKeyRequirements {
-    plan: Arc<dyn ExecutionPlan>,
-    /// Parent required key ordering
-    required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
-    children: Vec<Self>,
-}
-
-impl PlanWithKeyRequirements {
-    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children = plan.children();
-        Self {
-            plan,
-            required_key_ordering: vec![],
-            children: children.into_iter().map(Self::new).collect(),
-        }
-    }
-}
-
-impl TreeNode for PlanWithKeyRequirements {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children.iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        if !self.children.is_empty() {
-            self.children = self
-                .children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<_>>()?;
-            self.plan = with_new_children_if_necessary(
-                self.plan,
-                self.children.iter().map(|c| c.plan.clone()).collect(),
-            )?
-            .into();
-        }
-        Ok(self)
-    }
-}
+/// Keeps track of parent required key orderings.
+type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 
 /// Since almost all of these tests explicitly use `ParquetExec` they only run with the parquet  feature flag on
 #[cfg(feature = "parquet")]
@@ -1505,6 +1312,9 @@ pub(crate) mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
+    use crate::physical_optimizer::test_utils::{
+        check_integrity, coalesce_partitions_exec, repartition_exec,
+    };
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1514,15 +1324,11 @@ pub(crate) mod tests {
     use crate::physical_plan::joins::{
         utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
     };
+    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::projection::ProjectionExec;
+    use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-
-    use crate::physical_optimizer::test_utils::{
-        coalesce_partitions_exec, repartition_exec,
-    };
-    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::sorts::sort::SortExec;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1905,10 +1711,10 @@ pub(crate) mod tests {
         target_partitions: usize,
         prefer_existing_sort: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let distribution_context = DistributionContext::new(plan);
+        let distribution_context = DistributionContext::new_default(plan);
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = target_partitions;
-        config.optimizer.enable_round_robin_repartition = false;
+        config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
         config.optimizer.prefer_existing_sort = prefer_existing_sort;
@@ -1970,6 +1776,35 @@ pub(crate) mod tests {
             // Add the ancillary output requirements operator at the start:
             let optimizer = OutputRequirements::new_add_mode();
             let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+
+            // This file has 2 rules that use tree node, apply these rules to original plan consecutively
+            // After these operations tree nodes should be in a consistent state.
+            // This code block makes sure that these rules doesn't violate tree node integrity.
+            {
+                let adjusted = if config.optimizer.top_down_join_key_reordering {
+                    // Run adjust_input_keys_ordering rule
+                    let plan_requirements =
+                        PlanWithKeyRequirements::new_default($PLAN.clone());
+                    let adjusted = plan_requirements
+                        .transform_down(&adjust_input_keys_ordering)
+                        .and_then(check_integrity)?;
+                    // TODO: End state payloads will be checked here.
+                    adjusted.plan
+                } else {
+                    // Run reorder_join_keys_to_inputs rule
+                    $PLAN.clone().transform_up(&|plan| {
+                        Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
+                    })?
+                };
+
+                // Then run ensure_distribution rule
+                DistributionContext::new_default(adjusted)
+                    .transform_up(&|distribution_context| {
+                        ensure_distribution(distribution_context, &config)
+                    })
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+            }
 
             let optimized = if $FIRST_ENFORCE_DIST {
                 // Run enforce distribution rule first:
@@ -2052,8 +1887,8 @@ pub(crate) mod tests {
 
         // Join on (a == b1)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         for join_type in join_types {
@@ -2071,8 +1906,9 @@ pub(crate) mod tests {
                 | JoinType::LeftAnti => {
                     // Join on (a == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("a", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("a", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
                     let top_join = hash_join_exec(
                         join.clone(),
@@ -2132,8 +1968,9 @@ pub(crate) mod tests {
                     // This time we use (b1 == c) for top join
                     // Join on (b1 == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("b1", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
 
                     let top_join =
@@ -2197,8 +2034,8 @@ pub(crate) mod tests {
 
         // Join on (a == b)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
         )];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
@@ -2211,8 +2048,8 @@ pub(crate) mod tests {
 
         // Join on (a1 == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a1", &projection.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &projection.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(
@@ -2242,8 +2079,8 @@ pub(crate) mod tests {
 
         // Join on (a2 == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a2", &projection.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a2", &projection.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(projection, right, &top_join_on, &JoinType::Inner);
@@ -2263,9 +2100,9 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
+
         Ok(())
     }
 
@@ -2276,8 +2113,8 @@ pub(crate) mod tests {
 
         // Join on (a == b)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
         )];
 
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
@@ -2294,8 +2131,8 @@ pub(crate) mod tests {
 
         // Join on (a == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a", &projection2.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &projection2.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(projection2, right, &top_join_on, &JoinType::Inner);
@@ -2321,6 +2158,7 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, top_join.clone(), true);
         assert_optimized!(expected, top_join, false);
+
         Ok(())
     }
 
@@ -2339,8 +2177,8 @@ pub(crate) mod tests {
 
         // Join on (a1 == a2)
         let join_on = vec![(
-            Column::new_with_schema("a1", &left.schema()).unwrap(),
-            Column::new_with_schema("a2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema()).unwrap()) as _,
         )];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
@@ -2360,6 +2198,7 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, join.clone(), true);
         assert_optimized!(expected, join, false);
+
         Ok(())
     }
 
@@ -2385,12 +2224,12 @@ pub(crate) mod tests {
         // Join on (b1 == b && a1 == a)
         let join_on = vec![
             (
-                Column::new_with_schema("b1", &left.schema()).unwrap(),
-                Column::new_with_schema("b", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a1", &left.schema()).unwrap(),
-                Column::new_with_schema("a", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a", &right.schema()).unwrap()) as _,
             ),
         ];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
@@ -2412,6 +2251,7 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, join.clone(), true);
         assert_optimized!(expected, join, false);
+
         Ok(())
     }
 
@@ -2428,16 +2268,16 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1 and c == c1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_left_join =
@@ -2456,16 +2296,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join =
@@ -2474,16 +2314,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2528,6 +2383,7 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, filter_top_join.clone(), true);
         assert_optimized!(expected, filter_top_join, false);
+
         Ok(())
     }
 
@@ -2544,16 +2400,16 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1 and c == c1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
         ];
 
@@ -2576,16 +2432,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join = ensure_distribution_helper(
@@ -2597,16 +2453,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2674,12 +2545,12 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_left_join = ensure_distribution_helper(
@@ -2701,16 +2572,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join = ensure_distribution_helper(
@@ -2722,16 +2593,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2810,8 +2696,8 @@ pub(crate) mod tests {
 
         // Join on (a == b1)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         for join_type in join_types {
@@ -2822,8 +2708,8 @@ pub(crate) mod tests {
 
             // Top join on (a == c)
             let top_join_on = vec![(
-                Column::new_with_schema("a", &join.schema()).unwrap(),
-                Column::new_with_schema("c", &schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
             )];
             let top_join = sort_merge_join_exec(
                 join.clone(),
@@ -2945,8 +2831,9 @@ pub(crate) mod tests {
                     // This time we use (b1 == c) for top join
                     // Join on (b1 == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("b1", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
                     let top_join = sort_merge_join_exec(
                         join,
@@ -3095,12 +2982,12 @@ pub(crate) mod tests {
         // Join on (b3 == b2 && a3 == a2)
         let join_on = vec![
             (
-                Column::new_with_schema("b3", &left.schema()).unwrap(),
-                Column::new_with_schema("b2", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b3", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a3", &left.schema()).unwrap(),
-                Column::new_with_schema("a2", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a3", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a2", &right.schema()).unwrap()) as _,
             ),
         ];
         let join = sort_merge_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
@@ -3151,6 +3038,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, join, false, true);
+
         Ok(())
     }
 
@@ -3170,7 +3058,8 @@ pub(crate) mod tests {
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
 
         // Merge from multiple parquet files and keep the data sorted
-        let exec = Arc::new(SortPreservingMergeExec::new(sort_key, exec));
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(sort_key, exec));
 
         // The optimizer should not add an additional SortExec as the
         // data is already sorted
@@ -3180,6 +3069,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, true);
+
         // In this case preserving ordering through order preserving operators is not desirable
         // (according to flag: PREFER_EXISTING_SORT)
         // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
@@ -3191,6 +3081,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, false);
+
         Ok(())
     }
 
@@ -3232,6 +3123,7 @@ pub(crate) mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3247,9 +3139,9 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3266,9 +3158,9 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3289,6 +3181,7 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3308,9 +3201,9 @@ pub(crate) mod tests {
             "SortExec: expr=[c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3336,6 +3229,7 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3363,9 +3257,9 @@ pub(crate) mod tests {
             // Expect no repartition to happen for local limit
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3385,6 +3279,7 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3403,7 +3298,6 @@ pub(crate) mod tests {
             "SortExec: expr=[c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
 
@@ -3438,6 +3332,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3470,6 +3365,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3495,6 +3391,7 @@ pub(crate) mod tests {
 
         assert_optimized!(expected, plan.clone(), true, true);
         assert_optimized!(expected, plan, false, true);
+
         Ok(())
     }
 
@@ -3530,9 +3427,9 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3575,6 +3472,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
+
         Ok(())
     }
 
@@ -3602,9 +3500,9 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3631,9 +3529,9 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+
         Ok(())
     }
 
@@ -3666,6 +3564,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
+
         Ok(())
     }
 
@@ -3712,6 +3611,7 @@ pub(crate) mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected_first_sort_enforcement, plan, false);
+
         Ok(())
     }
 
@@ -3733,9 +3633,9 @@ pub(crate) mod tests {
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+
         Ok(())
     }
 
@@ -3846,7 +3746,6 @@ pub(crate) mod tests {
                 )),
                 vec![("a".to_string(), "a".to_string())],
             );
-
             assert_optimized!(expected, plan, true, false, 2, true, 10);
         }
         Ok(())
@@ -3873,7 +3772,6 @@ pub(crate) mod tests {
             // Plan already has two partitions
             "CsvExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
         Ok(())
@@ -3900,9 +3798,9 @@ pub(crate) mod tests {
             // Multiple source files splitted across partitions
             "CsvExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true, false, 4, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, false, 4, true, 10);
+
         Ok(())
     }
 
@@ -3932,9 +3830,9 @@ pub(crate) mod tests {
             // Doesn't parallelize for SortExec without preserve_partitioning
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -3977,9 +3875,9 @@ pub(crate) mod tests {
             // SortExec doesn't benefit from input partitioning
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4027,9 +3925,9 @@ pub(crate) mod tests {
             "LocalLimitExec: fetch=100",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4056,9 +3954,9 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4086,9 +3984,9 @@ pub(crate) mod tests {
         let expected_csv = &[
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4120,9 +4018,9 @@ pub(crate) mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4148,9 +4046,9 @@ pub(crate) mod tests {
             "SortRequiredExec: [c@2 ASC]",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4190,8 +4088,8 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected_parquet, plan_parquet, true);
+
         Ok(())
     }
 
@@ -4229,8 +4127,8 @@ pub(crate) mod tests {
             "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
-
         assert_optimized!(expected_csv, plan_csv, true);
+
         Ok(())
     }
 
@@ -4253,7 +4151,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
 
@@ -4276,7 +4173,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // last flag sets config.optimizer.PREFER_EXISTING_SORT
         assert_optimized!(expected, physical_plan.clone(), true, true);
         assert_optimized!(expected, physical_plan, false, true);
@@ -4334,7 +4230,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
 
@@ -4394,7 +4289,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
 
@@ -4432,9 +4326,8 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        let distribution_plan =
-            EnforceDistribution::new().optimize(physical_plan, &config)?;
-        assert_plan_txt!(expected, distribution_plan);
+        let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+        assert_plan_txt!(expected, dist_plan);
 
         Ok(())
     }
@@ -4470,9 +4363,8 @@ pub(crate) mod tests {
         config.execution.target_partitions = 10;
         config.optimizer.enable_round_robin_repartition = true;
         config.optimizer.prefer_existing_sort = false;
-        let distribution_plan =
-            EnforceDistribution::new().optimize(physical_plan, &config)?;
-        assert_plan_txt!(expected, distribution_plan);
+        let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+        assert_plan_txt!(expected, dist_plan);
 
         Ok(())
     }
@@ -4493,7 +4385,6 @@ pub(crate) mod tests {
             "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // Make sure target partition number is 1. In this case hash repartition is unnecessary
         assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
@@ -4524,7 +4415,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
-
         // Make sure target partition number is larger than 2 (e.g partition number at the source).
         assert_optimized!(expected, physical_plan.clone(), true, false, 4, false, 1024);
         assert_optimized!(expected, physical_plan, false, false, 4, false, 1024);
@@ -4544,7 +4434,6 @@ pub(crate) mod tests {
 
         let expected =
             &["ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]"];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
 
@@ -4572,7 +4461,6 @@ pub(crate) mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
 

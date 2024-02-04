@@ -285,7 +285,7 @@ async fn prune_partitions(
 
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Option<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &schema, &props).ok()?;
+        let expr = create_physical_expr(filter, &df_schema, &props).ok()?;
         expr.evaluate(&batch)
             .ok()?
             .into_array(partitions.len())

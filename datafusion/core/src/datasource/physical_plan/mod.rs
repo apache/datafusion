@@ -75,7 +75,7 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use log::debug;
 use object_store::ObjectMeta;
-use object_store::{path::Path, GetOptions, ObjectStore};
+use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -91,10 +91,6 @@ pub struct FileSinkConfig {
     /// A vector of column names and their corresponding data types,
     /// representing the partitioning columns for the file
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// If true, it is assumed there is a single table_path which is a file to which all data should be written
-    /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
-    /// to which each output partition is written to its own output file.
-    pub single_file_output: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
@@ -604,10 +600,8 @@ async fn find_first_newline(
     start: usize,
     end: usize,
 ) -> Result<usize> {
-    let range = Some(Range { start, end });
-
     let options = GetOptions {
-        range,
+        range: Some(GetRange::Bounded(start..end)),
         ..Default::default()
     };
 

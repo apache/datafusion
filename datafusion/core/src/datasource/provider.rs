@@ -97,7 +97,7 @@ pub trait TableProvider: Sync + Send {
     /// expressions are `AND`ed together).
     ///
     /// DataFusion pushes filtering into the scans whenever possible
-    /// ("Projection Pushdown"), and depending on the format and the
+    /// ("Filter Pushdown"), and depending on the format and the
     /// implementation of the format, evaluating the predicate during the scan
     /// can increase performance significantly.
     ///
@@ -143,7 +143,7 @@ pub trait TableProvider: Sync + Send {
     /// possible, called "Limit Pushdown" as some sources can use this
     /// information to improve their performance. Note that if there are any
     /// Inexact filters pushed down, the LIMIT cannot be pushed down. This is
-    /// because inexact filters do not guarentee that every filtered row is
+    /// because inexact filters do not guarantee that every filtered row is
     /// removed, so applying the limit could lead to too few rows being available
     /// to return as a final result.
     async fn scan(
