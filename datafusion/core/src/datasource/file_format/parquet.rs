@@ -304,154 +304,75 @@ fn summarize_min_max(
     stat: &ParquetStatistics,
 ) {
     match stat {
-        ParquetStatistics::Boolean(s) => {
-            if let DataType::Boolean = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(BooleanArray::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(BooleanArray::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Boolean(s)
+            if DataType::Boolean == *fields[i].data_type() && s.has_min_max_set() =>
+        {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(BooleanArray::from(vec![Some(*s.max())]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(BooleanArray::from(vec![Some(*s.min())]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Int32(s) => {
-            if let DataType::Int32 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Int32Array::from_value(
-                            *s.max(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Int32Array::from_value(
-                            *s.min(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Int32(s)
+            if DataType::Int32 == *fields[i].data_type() && s.has_min_max_set() =>
+        {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Int32Array::from_value(*s.max(), 1))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Int32Array::from_value(*s.min(), 1))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Int64(s) => {
-            if let DataType::Int64 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Int64Array::from_value(
-                            *s.max(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Int64Array::from_value(
-                            *s.min(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Int64(s)
+            if DataType::Int64 == *fields[i].data_type() && s.has_min_max_set() =>
+        {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Int64Array::from_value(*s.max(), 1))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Int64Array::from_value(*s.min(), 1))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Float(s) => {
-            if let DataType::Float32 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Float32Array::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Float32Array::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Float(s)
+            if DataType::Float32 == *fields[i].data_type() && s.has_min_max_set() =>
+        {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Float32Array::from(vec![Some(*s.max())]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Float32Array::from(vec![Some(*s.min())]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Double(s) => {
-            if let DataType::Float64 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Float64Array::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Float64Array::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Double(s)
+            if DataType::Float64 == *fields[i].data_type() && s.has_min_max_set() =>
+        {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Float64Array::from(vec![Some(*s.max())]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Float64Array::from(vec![Some(*s.min())]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
         _ => {
             max_values[i] = None;
