@@ -585,7 +585,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -670,6 +670,8 @@ pub mod logical_expr_node {
         SimilarTo(::prost::alloc::boxed::Box<super::SimilarToNode>),
         #[prost(message, tag = "34")]
         Placeholder(super::PlaceholderNode),
+        #[prost(message, tag = "35")]
+        Unnest(super::Unnest),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -833,6 +835,12 @@ pub struct BinaryExprNode {
 pub struct NegativeNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Unnest {
+    #[prost(message, repeated, tag = "1")]
+    pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
