@@ -115,7 +115,7 @@ pub struct DFSchema {
     /// Fields map
     /// key - fully qualified field name
     /// value - field index in schema
-    fields_map: BTreeMap<String, usize>,
+    fields_map: BTreeMap<Arc<String>, usize>,
 }
 
 impl DFSchema {
@@ -130,23 +130,23 @@ impl DFSchema {
     }
 
     /// Generate a map from fields to provide O(1) on column lookups
-    fn get_fields_map(fields: &[DFField]) -> BTreeMap<String, usize> {
-        let mut fields_map = BTreeMap::new();
+    fn get_fields_map(fields: &[DFField]) -> BTreeMap<Arc<String>, usize> {
+        let mut fields_map: BTreeMap<Arc<String>, usize> = BTreeMap::new();
 
         for (index, f) in fields.iter().enumerate() {
             match f.qualifier() {
                 Some(OwnedTableReference::Bare { table: _ }) => {
-                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(f.qualified_name().into(), index);
                 }
                 Some(OwnedTableReference::Partial { schema: _, table }) => {
-                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(f.qualified_name().into(), index);
                     fields_map.insert(
                         DFField::make_qualified_name(
                             Some(&TableReference::Bare {
                                 table: std::borrow::Cow::Borrowed(table),
                             }),
                             f.name(),
-                        ),
+                        ).into(),
                         index,
                     );
                 }
@@ -155,7 +155,7 @@ impl DFSchema {
                     schema,
                     table,
                 }) => {
-                    fields_map.insert(f.qualified_name(), index);
+                    fields_map.insert(f.qualified_name().into(), index);
                     fields_map.insert(
                         DFField::make_qualified_name(
                             Some(&TableReference::Partial {
@@ -163,7 +163,7 @@ impl DFSchema {
                                 table: std::borrow::Cow::Borrowed(table),
                             }),
                             f.name(),
-                        ),
+                        ).into(),
                         index,
                     );
                     fields_map.insert(
@@ -172,14 +172,14 @@ impl DFSchema {
                                 table: std::borrow::Cow::Borrowed(table),
                             }),
                             f.name(),
-                        ),
+                        ).into(),
                         index,
                     );
                 }
                 None => {}
             };
 
-            fields_map.insert(f.name().to_string(), index);
+            fields_map.insert(f.name().to_string().into(), index);
         }
 
         fields_map
