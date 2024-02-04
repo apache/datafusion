@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     // See how to analyze ranges in expressions
     range_analysis_demo()?;
 
-    // See how to get the type of the expression
+    // See how to determine the data types of expressions
     expression_type_demo()?;
 
     Ok(())
@@ -263,10 +263,15 @@ pub fn physical_expr(schema: &Schema, expr: Expr) -> Result<Arc<dyn PhysicalExpr
     create_physical_expr(&expr, df_schema.as_ref(), &props)
 }
 
+/// This function shows how to use `Expr::get_type` to retrieve the DataType
+/// of an expression
 fn expression_type_demo() -> Result<()> {
     let expr = col("c");
 
-    // Using a schema where the column `foo` is of type Utf8
+    // To determine the DataType of an expression, DataFusion must know the
+    // types of the input expressions. You can provide this information using
+    // a schema. In this case we create a schema where the column `c` is of
+    // type Utf8 (a String / VARCHAR)
     let schema = DFSchema::new_with_metadata(
         vec![DFField::new_unqualified("c", DataType::Utf8, true)],
         HashMap::new(),

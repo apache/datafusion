@@ -60,35 +60,6 @@ impl ExprSchemable for Expr {
     ///
     /// # Examples
     ///
-    /// ## Get the type of a single column expression using different schemas
-    ///
-    /// ```
-    /// # use arrow::datatypes::DataType;
-    /// # use datafusion_common::{DFField, DFSchema};
-    /// # use datafusion_expr::{col, ExprSchemable};
-    /// # use std::collections::HashMap;
-    ///
-    /// fn main() {
-    ///   let expr = col("c");
-    ///
-    ///   // Using a schema where the column `c` is of type Utf8
-    ///   let schema = DFSchema::new_with_metadata(
-    ///     vec![DFField::new_unqualified("c", DataType::Utf8, true)],
-    ///     HashMap::new(),
-    ///   )
-    ///   .unwrap();
-    ///   assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
-    ///
-    ///   // Using a schema where the column `c` is of type Int32
-    ///   let schema = DFSchema::new_with_metadata(
-    ///     vec![DFField::new_unqualified("c", DataType::Int32, true)],
-    ///     HashMap::new(),
-    ///   )
-    ///   .unwrap();
-    ///   assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
-    /// }
-    /// ```
-    ///
     /// ## Get the type of an expression that adds 2 columns. Adding an Int32
     /// ## and Float32 results in Float32 type
     ///

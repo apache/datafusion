@@ -182,7 +182,7 @@ I.e. the `add_one` UDF has been inlined into the projection.
 
 ## Getting the data type of the expression
 
-The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given the schema
+The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
 
 ```rust
 use arrow_schema::DataType;
