@@ -2247,7 +2247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_sort() -> Result<()> {
+    async fn test_replace_with_partial_sort() -> Result<()> {
         let schema = create_test_schema3()?;
         let input_sort_exprs = vec![sort_expr("a", &schema)];
         let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
@@ -2270,7 +2270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_sort2() -> Result<()> {
+    async fn test_replace_with_partial_sort2() -> Result<()> {
         let schema = create_test_schema3()?;
         let input_sort_exprs = vec![sort_expr("a", &schema), sort_expr("c", &schema)];
         let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
@@ -2298,7 +2298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sort_not_replaced_for_bounded_input() -> Result<()> {
+    async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
         let schema = create_test_schema3()?;
         let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
         let parquet_input = parquet_exec_sorted(&schema, input_sort_exprs);
@@ -2321,7 +2321,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sort_not_replaced_for_unbounded_input() -> Result<()> {
+    async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()> {
         let schema = create_test_schema3()?;
         let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
         let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
