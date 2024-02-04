@@ -50,7 +50,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
+    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
     FunctionalDependencies, OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
 
@@ -2096,17 +2096,7 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                let df_schema = DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            DFField::from_qualified(
-                                table_name.clone(),
-                                schema.field(*i).clone(),
-                            )
-                        })
-                        .collect(),
-                    schema.metadata().clone(),
-                )?;
+                let df_schema = DFSchema::from_qualified_schema(table_name, table_source);
                 df_schema.with_functional_dependencies(projected_func_dependencies)
             })
             .unwrap_or_else(|| {

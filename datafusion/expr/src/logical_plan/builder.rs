@@ -47,12 +47,12 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFSchema,
+    DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -179,11 +179,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new_unqualified(
-                    name,
-                    data_type.clone().unwrap_or(DataType::Utf8),
-                    true,
-                )
+                Field::new(name, data_type.clone().unwrap_or(DataType::Utf8), true)
             })
             .collect::<Vec<_>>();
         for (i, j) in nulls {

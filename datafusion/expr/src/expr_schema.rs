@@ -28,8 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema,
-    DataFusionError, ExprSchema, Result,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError,
+    ExprSchema, Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,7 +46,10 @@ pub trait ExprSchemable {
     fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_field(&self, input_schema: &DFSchema) -> Result<DFField>;
+    fn to_field(
+        &self,
+        input_schema: &DFSchema,
+    ) -> Result<(Option<&TableReference>, &Arc<Field>)>;
 
     /// cast to a type with respect to a schema
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
@@ -306,28 +309,24 @@ impl ExprSchemable for Expr {
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
-    fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
+    fn to_field(
+        &self,
+        input_schema: &DFSchema,
+    ) -> Result<(Option<&TableReference>, &Arc<Field>)> {
         match self {
-            Expr::Column(c) => Ok(DFField::new(
-                c.relation.clone(),
-                &c.name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            Expr::Alias(Alias { relation, name, .. }) => Ok(DFField::new(
-                relation.clone(),
-                name,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
-            _ => Ok(DFField::new_unqualified(
-                &self.display_name()?,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )
-            .with_metadata(self.metadata(input_schema)?)),
+            Expr::Column(c) => {
+                let field = input_schema.field_from_column(c)?;
+                Ok((c.relation, field))
+            }
+            Expr::Alias(Alias { relation, name, .. }) => {
+                let field = input_schema.field_with_qualified_name(relation, name)?;
+                Ok((relation, field))
+            }
+            _ => {
+                let field =
+                    input_schema.field_with_unqualified_name(&self.display_name()?)?;
+                Ok((None, field))
+            }
         }
     }
 
@@ -418,7 +417,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 mod tests {
     use super::*;
     use crate::{col, lit};
-    use arrow::datatypes::{DataType, Fields};
+    use arrow::datatypes::{DataType, Fields, SchemaBuilder};
     use datafusion_common::{Column, ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
@@ -543,24 +542,29 @@ mod tests {
                 .metadata(&schema)
                 .unwrap()
         );
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("foo", DataType::Int32, true));
+        builder.finish();
+        let schema = builder.finish();
 
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("foo", DataType::Int32, true)
-                .with_metadata(meta.clone())],
-            HashMap::new(),
-        )
-        .unwrap();
+        let dfschema = DFSchema::from_unqualified_schema(schema);
+
+        // let schema = DFSchema::new_with_metadata(
+        //     vec![DFField::new_unqualified("foo", DataType::Int32, true)
+        //         .with_metadata(meta.clone())],
+        //     HashMap::new(),
+        // )
+        // .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+        assert_eq!(&meta, expr.to_field(&dfschema).unwrap().metadata());
     }
 
     #[test]
     fn test_nested_schema_nullability() {
-        let fields = DFField::new(
-            Some(TableReference::Bare {
-                table: "table_name".into(),
-            }),
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("foo", DataType::Int32, true));
+        builder.push(Field::new(
             "parent",
             DataType::Struct(Fields::from(vec![Field::new(
                 "child",
@@ -568,12 +572,32 @@ mod tests {
                 false,
             )])),
             true,
+        ));
+        let schema = builder.finish();
+
+        let dfschema = DFSchema::from_field_specific_qualified_schema(
+            vec![Some("table_name"), None],
+            schema,
         );
 
-        let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
+        // schema.push(Field::new("foo", DataType::Int32, true));
+        // let fields = DFField::new(
+        //     Some(TableReference::Bare {
+        //         table: "table_name".into(),
+        //     }),
+        //     "parent",
+        //     DataType::Struct(Fields::from(vec![Field::new(
+        //         "child",
+        //         DataType::Int64,
+        //         false,
+        //     )])),
+        //     true,
+        // );
+
+        // let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
 
         let expr = col("parent").field("child");
-        assert!(expr.nullable(&schema).unwrap());
+        assert!(expr.nullable(&dfschema).unwrap());
     }
 
     #[derive(Debug)]
