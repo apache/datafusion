@@ -407,6 +407,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#getting-the-data-type-of-the-expression">
+   Getting the data type of the expression
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#conclusion">
    Conclusion
   </a>
@@ -601,6 +606,31 @@
 </pre></div>
 </div>
 <p>I.e. the <code class="docutils literal notranslate"><span class="pre">add_one</span></code> UDF has been inlined into the projection.</p>
+</section>
+<section id="getting-the-data-type-of-the-expression">
+<h2>Getting the data type of the expression<a class="headerlink" href="#getting-the-data-type-of-the-expression" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">arrow::datatypes::DataType</span></code> of the expression can be obtained by calling the <code class="docutils literal notranslate"><span class="pre">get_type</span></code> given something that implements <code class="docutils literal notranslate"><span class="pre">Expr::Schemable</span></code>, for example a <code class="docutils literal notranslate"><span class="pre">DFschema</span></code> object:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow_schema</span>::<span class="n">DataType</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">common</span>::<span class="p">{</span><span class="n">DFField</span><span class="p">,</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">logical_expr</span>::<span class="p">{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">ExprSchemable</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">collections</span>::<span class="n">HashMap</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;c2&quot;</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DFSchema</span>::<span class="n">new_with_metadata</span><span class="p">(</span>
+<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">        </span><span class="n">DFField</span>::<span class="n">new_unqualified</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">        </span><span class="n">DFField</span>::<span class="n">new_unqualified</span><span class="p">(</span><span class="s">&quot;c2&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Float32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="n">HashMap</span>::<span class="n">new</span><span class="p">(),</span>
+<span class="p">)</span>
+<span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="fm">print!</span><span class="p">(</span><span class="s">&quot;type = {}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">get_type</span><span class="p">(</span><span class="o">&amp;</span><span class="n">schema</span><span class="p">).</span><span class="n">unwrap</span><span class="p">());</span>
+</pre></div>
+</div>
+<p>This results in the following output:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>type = Float32
+</pre></div>
+</div>
 </section>
 <section id="conclusion">
 <h2>Conclusion<a class="headerlink" href="#conclusion" title="Link to this heading">¶</a></h2>
