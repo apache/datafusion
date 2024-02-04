@@ -492,7 +492,11 @@ jobs:
           ./dev/update_config_docs.sh
           git diff --exit-code
 
-  # Verify MSRV for the crates which are directly used by other projects.
+  # Verify MSRV for the crates which are directly used by other projects:
+  # - datafusion
+  # - datafusion-substrait
+  # - datafusion-proto
+  # - datafusion-cli
   msrv:
     name: Verify MSRV (Min Supported Rust Version)
     runs-on: ubuntu-latest

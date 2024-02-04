@@ -104,7 +104,7 @@ Here are some active projects using DataFusion:
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
-- [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
+- [InfluxDB](https://github.com/influxdata/influxdb) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML

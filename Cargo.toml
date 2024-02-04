@@ -28,7 +28,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.70"
+rust-version = "1.72"
 version = "35.0.0"
 
 [workspace.dependencies]
@@ -39,6 +39,7 @@ arrow-flight = { version = "50.0.0", features = ["flight-sql-experimental"] }
 arrow-ipc = { version = "50.0.0", default-features = false, features = ["lz4"] }
 arrow-ord = { version = "50.0.0", default-features = false }
 arrow-schema = { version = "50.0.0", default-features = false }
+arrow-string = { version = "50.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.1"
 bytes = "1.4"
@@ -58,7 +59,7 @@ datafusion-sql = { path = "datafusion/sql", version = "35.0.0" }
 datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "35.0.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "35.0.0" }
 doc-comment = "0.3"
-env_logger = "0.10"
+env_logger = "0.11"
 futures = "0.3"
 half = "2.2.1"
 indexmap = "2.0.0"

@@ -56,6 +56,9 @@ pub struct ExprSimplifier<S> {
     /// Guarantees about the values of columns. This is provided by the user
     /// in [ExprSimplifier::with_guarantees()].
     guarantees: Vec<(Expr, NullableInterval)>,
+    /// Should expressions be canonicalized before simplification? Defaults to
+    /// true
+    canonicalize: bool,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
@@ -70,6 +73,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         Self {
             info,
             guarantees: vec![],
+            canonicalize: true,
         }
     }
 
@@ -137,6 +141,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
+        let expr = if self.canonicalize {
+            expr.rewrite(&mut Canonicalizer::new())?
+        } else {
+            expr
+        };
+
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
@@ -151,10 +161,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .rewrite(&mut simplifier)
     }
 
-    pub fn canonicalize(&self, expr: Expr) -> Result<Expr> {
-        let mut canonicalizer = Canonicalizer::new();
-        expr.rewrite(&mut canonicalizer)
-    }
     /// Apply type coercion to an [`Expr`] so that it can be
     /// evaluated as a [`PhysicalExpr`](datafusion_physical_expr::PhysicalExpr).
     ///
@@ -229,6 +235,60 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self.guarantees = guarantees;
         self
     }
+
+    /// Should [`Canonicalizer`] be applied before simplification?
+    ///
+    /// If true (the default), the expression will be rewritten to canonical
+    /// form before simplification. This is useful to ensure that the simplifier
+    /// can apply all possible simplifications.
+    ///
+    /// Some expressions, such as those in some Joins, can not be canonicalized
+    /// without changing their meaning. In these cases, canonicalization should
+    /// be disabled.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_optimizer::simplify_expressions::{
+    ///     ExprSimplifier, SimplifyContext};
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Int64, false),
+    ///   Field::new("b", DataType::Int64, false),
+    ///   Field::new("c", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
+    ///
+    /// // Expression: a = c AND 1 = b
+    /// let expr = col("a").eq(col("c")).and(lit(1).eq(col("b")));
+    ///
+    /// // With canonicalization, the expression is rewritten to canonical form
+    /// // (though it is no simpler in this case):
+    /// let canonical = simplifier.simplify(expr.clone()).unwrap();
+    /// // Expression has been rewritten to: (c = a AND b = 1)
+    /// assert_eq!(canonical, col("c").eq(col("a")).and(col("b").eq(lit(1))));
+    ///
+    /// // If canonicalization is disabled, the expression is not changed
+    /// let non_canonicalized = simplifier
+    ///   .with_canonicalize(false)
+    ///   .simplify(expr.clone())
+    ///   .unwrap();
+    ///
+    /// assert_eq!(non_canonicalized, expr);
+    /// ```
+    pub fn with_canonicalize(mut self, canonicalize: bool) -> Self {
+        self.canonicalize = canonicalize;
+        self
+    }
 }
 
 /// Canonicalize any BinaryExprs that are not in canonical form
@@ -236,7 +296,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 /// `<literal> <op> <col>` is rewritten to `<col> <op> <literal>`
 ///
 /// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
-/// than `col2` (`b > a` would be canonicalized to `a < b`)
+/// than `col2` (`a > b` would be canonicalized to `b < a`)
 struct Canonicalizer {}
 
 impl Canonicalizer {
@@ -2890,8 +2950,7 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        let cano = simplifier.canonicalize(expr)?;
-        simplifier.simplify(cano)
+        simplifier.simplify(expr)
     }
 
     fn simplify(expr: Expr) -> Expr {
@@ -3306,6 +3365,12 @@ mod tests {
         );
         assert_eq!(simplify(expr.clone()), lit(true));
 
+        // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
@@ -3399,6 +3464,7 @@ mod tests {
                     true,
                 )));
         // TODO: Further simplify this expression
+        // https://github.com/apache/arrow-datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }
