@@ -335,8 +335,20 @@ mod tests {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
+        // Ensure the URL is supported by the object store
         ctx.runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_http() -> Result<()> {
+
+        // Should be OK
+        let location = "http://example.com/file.parquet";
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
 
         Ok(())
     }
