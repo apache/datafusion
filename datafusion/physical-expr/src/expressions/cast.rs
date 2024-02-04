@@ -41,7 +41,7 @@ const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 #[derive(Debug, Clone)]
 pub struct CastExpr {
     /// The expression to cast
-    expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
     /// Cast options

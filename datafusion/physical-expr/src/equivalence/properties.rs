@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::{CastExpr, Column};
+use arrow_schema::SchemaRef;
+use datafusion_common::{scalar, JoinSide, JoinType};
+use indexmap::IndexSet;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -28,15 +33,11 @@ use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    PhysicalSortRequirement, ScalarFunctionExpr,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{JoinSide, JoinType};
-
-use indexmap::IndexSet;
-use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -425,7 +426,108 @@ impl EquivalenceProperties {
         }
         (!meet.is_empty()).then_some(meet)
     }
-
+    /// we substitute the ordering according to input expression type, this is a simplified version
+    /// In this case, we just substitute when the expression satisfy the following confition
+    /// I. just have one column and is a CAST expression
+    /// II. just have one parameter and is a ScalarFUnctionexpression and it is monotonic
+    /// TODO: we could precompute all the senario that is computable, for example: atan(x + 1000) should also be substituted if
+    /// x is DESC or ASC
+    pub fn substitute_ordering_component(
+        matching_exprs: Arc<Vec<&Arc<dyn PhysicalExpr>>>,
+        sort_expr: &Vec<PhysicalSortExpr>,
+    ) -> Vec<PhysicalSortExpr> {
+        sort_expr
+            .iter()
+            .filter(|sort_expr| {
+                matching_exprs
+                    .iter()
+                    .any(|matched| !matched.eq(sort_expr.clone()))
+            })
+            .map(|sort_expr| {
+                let referring_exprs: Vec<_> = matching_exprs
+                    .iter()
+                    .filter(|matched| expr_refers(&matched, &sort_expr.expr))
+                    .cloned()
+                    .collect();
+                assert!(referring_exprs.len() <= 1);
+                // does not referring to any matching component, we just skip it
+                if referring_exprs.len() == 0 {
+                    sort_expr.clone()
+                } else {
+                    // we check whether this expression is substitutable or not
+                    let r_expr = referring_exprs[0].clone();
+                    if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
+                        // we need to know whether the Cast Expr matches or not
+                        if cast_expr.expr.eq(&sort_expr.expr) {
+                            PhysicalSortExpr {
+                                expr: r_expr.clone(),
+                                options: sort_expr.options,
+                            }
+                        } else {
+                            sort_expr.clone()
+                        }
+                    } else if let Some(scalar_func_expr) =
+                        r_expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+                    {
+                        //println!("monotonicity is {:?}", scalar_func_expr.monotonicity());
+                        let mut result = sort_expr.clone();
+                        if let Some(v) = scalar_func_expr.monotonicity() {
+                            if v == &[Some(true)] {
+                                if let Some(arg) = scalar_func_expr.args().get(0) {
+                                    //println!("arg is {:?}", arg);
+                                    if arg.eq(&sort_expr.expr)
+                                        || arg.as_any().downcast_ref::<CastExpr>().map_or(
+                                            false,
+                                            |cast_expr| {
+                                                cast_expr.expr.eq(&sort_expr.expr)
+                                            },
+                                        )
+                                    {
+                                        result = PhysicalSortExpr {
+                                            expr: r_expr,
+                                            options: sort_expr.options,
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                        result
+                    } else {
+                        sort_expr.clone()
+                    }
+                }
+            })
+            .collect()
+    }
+    /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression
+    /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
+    /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
+    /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
+    /// dependency map, happen in issue 8838: https://github.com/apache/arrow-datafusion/issues/8838
+    pub fn substitute_oeq_class(
+        &mut self,
+        exprs: &Vec<(Arc<dyn PhysicalExpr>, String)>,
+        mapping: &ProjectionMapping,
+    ) {
+        let matching_exprs: Arc<Vec<_>> = Arc::new(
+            exprs
+                .iter()
+                .filter(|(expr, _)| mapping.iter().any(|(source, _)| source.eq(expr)))
+                .map(|(source, _)| source)
+                .collect(),
+        );
+        //println!("matching_expr is {:?}", matching_exprs);
+        //println!("self.ordering is {:?}", self.oeq_class);
+        let orderings = std::mem::take(&mut self.oeq_class.orderings);
+        let new_order = orderings
+            .into_iter()
+            .map(move |order| {
+                Self::substitute_ordering_component(matching_exprs.clone(), &order)
+            })
+            .collect();
+        self.oeq_class = OrderingEquivalenceClass::new(new_order);
+        //println!("######## the oeq_class si {:?}", self.oeq_class.orderings);
+    }
     /// Projects argument `expr` according to `projection_mapping`, taking
     /// equivalences into account.
     ///
