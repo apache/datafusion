@@ -58,6 +58,31 @@ impl ExprSchemable for Expr {
     ///
     /// Note: [DFSchema] implements [ExprSchema].
     ///
+    /// # Examples
+    ///
+    /// ## Get the type of an expression that adds 2 columns. Adding an Int32
+    /// ## and Float32 results in Float32 type
+    ///
+    /// ```
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use datafusion_expr::{col, ExprSchemable};
+    /// # use std::collections::HashMap;
+    ///
+    /// fn main() {
+    ///   let expr = col("c1") + col("c2");
+    ///   let schema = DFSchema::new_with_metadata(
+    ///     vec![
+    ///       DFField::new_unqualified("c1", DataType::Int32, true),
+    ///       DFField::new_unqualified("c2", DataType::Float32, true),
+    ///       ],
+    ///       HashMap::new(),
+    ///   )
+    ///   .unwrap();
+    ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// This function errors when it is not possible to compute its
