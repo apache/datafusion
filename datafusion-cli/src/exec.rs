@@ -344,10 +344,10 @@ mod tests {
 
     #[tokio::test]
     async fn create_object_store_table_http() -> Result<()> {
-
         // Should be OK
         let location = "http://example.com/file.parquet";
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        let sql =
+            format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         Ok(())
