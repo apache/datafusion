@@ -19,8 +19,14 @@
 
 # DataFusion Core
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[DataFusion][df] is an extensible query execution framework, written in Rust,
+that uses Apache Arrow as its in-memory format.
 
-This crate contains the main entrypoints and high level DataFusion APIs such as SessionContext, and DataFrame and ListingTable.
+This crate contains the main entrypoints and high level DataFusion APIs such as
+SessionContext, and DataFrame and ListingTable.
 
-[df]: https://crates.io/crates/datafusion
+For more information:
+* [DataFusion Website](https://arrow.apache.org/datafusion)
+* [DataFusion API Docs](https://docs.rs/datafusion/latest/datafusion/)
+
+[df]: https://arrow.apache.org/datafusion
