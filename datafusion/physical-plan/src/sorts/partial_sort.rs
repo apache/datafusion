@@ -15,8 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Partial Sort that deals with an arbitrary size of input.
-//! It will do in-memory sorting
+//! Partial Sort deals with cases where the input data partially
+//! satisfies the required sort order and the input dataset has
+//! segments where sorted column/columns already has the required
+//! information for lexicographic sorting. Then these segments
+//! can be sorted without loading the entire dataset.
+//!
+//! Consider the input with ordering a ASC, b ASC
+//! ```text
+//! +---+---+---+
+//! | a | b | d |
+//! +---+---+---+
+//! | 0 | 0 | 3 |
+//! | 0 | 0 | 2 |
+//! | 0 | 1 | 1 |
+//! | 0 | 2 | 0 |
+//!```
+//! and required ordering is a ASC, b ASC, d ASC.
+//! The first 3 rows(segment) can be sorted as the segment already has the required
+//! information for the sort, but the last row requires further information
+//! as the input can continue with a batch starting with a row where a and b
+//! does not change as below
+//! ```text
+//! +---+---+---+
+//! | a | b | d |
+//! +---+---+---+
+//! | 0 | 2 | 4 |
+//!```
+//! The plan concats these last segments with incoming data and continues
+//! incremental sorting of segments.
 
 use arrow::compute;
 use arrow::compute::{lexsort_to_indices, take};
@@ -50,18 +77,19 @@ pub struct PartialSortExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
+    /// Length of continuous matching columns of input that satisfy
+    /// the required ordering for the sort
     common_prefix_length: usize,
     /// Containing all metrics set created during sort
     metrics_set: ExecutionPlanMetricsSet,
-    /// Preserve partitions of input plan. If false, the input partitions
-    /// will be sorted and merged into a single output partition.
+    /// TODO: check usage
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
 }
 
 impl PartialSortExec {
-    /// Create a new partial sort execution plan that produces partitions leveraging already sorted chunks
+    /// Create a new partial sort execution plan
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             input,
@@ -73,6 +101,7 @@ impl PartialSortExec {
         }
     }
 
+    /// Size of first set of continuous common columns satisfied by input and required by the plan
     pub fn with_common_prefix_length(mut self, common_prefix_length: usize) -> Self {
         self.common_prefix_length = common_prefix_length;
         self
@@ -83,7 +112,7 @@ impl PartialSortExec {
         self.preserve_partitioning
     }
 
-    /// Specify the partitioning behavior of this sort exec
+    /// Specify the partitioning behavior of this partial sort exec
     ///
     /// If `preserve_partitioning` is true, sorts each partition
     /// individually, producing one sorted stream for each input partition.
@@ -179,7 +208,7 @@ impl ExecutionPlan for PartialSortExec {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
-            // TODO support RangePartition and OrderedDistribution
+            // TODO: support RangePartition and OrderedDistribution
             vec![Distribution::SinglePartition]
         }
     }
@@ -231,7 +260,6 @@ impl ExecutionPlan for PartialSortExec {
         Ok(Box::pin(PartialSortStream {
             input,
             expr: self.expr.clone(),
-            schema: self.schema(),
             common_prefix_length: self.common_prefix_length,
             input_batch: RecordBatch::new_empty(self.schema().clone()),
             fetch: self.fetch,
@@ -249,14 +277,14 @@ impl ExecutionPlan for PartialSortExec {
     }
 }
 
-// todo: documentation
 struct PartialSortStream {
     /// The input plan
     input: SendableRecordBatchStream,
+    /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    /// The input schema
-    schema: SchemaRef,
+    /// Length of
     common_prefix_length: usize,
+    /// Used as a buffer for part of the input not ready for sort
     input_batch: RecordBatch,
     /// Fetch top N results
     fetch: Option<usize>,
@@ -285,7 +313,7 @@ impl Stream for PartialSortStream {
 
 impl RecordBatchStream for PartialSortStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.input.schema()
     }
 }
 
@@ -294,19 +322,20 @@ impl PartialSortStream {
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        if self.is_closed && self.input_batch.num_rows() == 0 {
+        if self.is_closed {
+            assert_eq!(0, self.input_batch.num_rows());
             return Poll::Ready(None);
         }
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
                 self.input_batch = compute::concat_batches(
-                    &self.schema.clone(),
+                    &self.schema(),
                     &[self.input_batch.clone(), batch],
                 )?;
                 let slice_point =
                     self.get_slice_point(self.common_prefix_length, &self.input_batch)?;
                 if slice_point == self.input_batch.num_rows() {
-                    Ok(RecordBatch::new_empty(self.schema.clone()))
+                    Ok(RecordBatch::new_empty(self.schema()))
                 } else {
                     self.emit(slice_point)
                 }
@@ -314,7 +343,7 @@ impl PartialSortStream {
             Some(Err(e)) => Err(e),
             None => {
                 self.is_closed = true;
-                // once there is no more input sort the rest of the inserted batches in input_batch
+                // once input is consumed, sort the rest of the inserted batches in input_batch
                 self.emit(self.input_batch.num_rows())
             }
         };
@@ -340,7 +369,7 @@ impl PartialSortStream {
             .iter()
             .map(|c| take(c.as_ref(), &sorted_indices, None))
             .collect::<Result<_, _>>()?;
-        let result = RecordBatch::try_new(self.schema.clone(), sorted_columns)?;
+        let result = RecordBatch::try_new(self.schema(), sorted_columns)?;
         assert_eq!(
             original_num_rows,
             result.num_rows() + self.input_batch.num_rows()
@@ -374,7 +403,7 @@ impl PartialSortStream {
             if remaining_fetch <= batch.num_rows() {
                 self.fetch = Some(0);
                 self.is_closed = true;
-                self.input_batch = RecordBatch::new_empty(self.schema.clone());
+                self.input_batch = RecordBatch::new_empty(self.schema());
                 return Ok(batch.slice(0, remaining_fetch));
             }
             self.fetch = Some(remaining_fetch - batch.num_rows());
