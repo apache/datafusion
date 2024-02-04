@@ -410,6 +410,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#registering-remote-data-sources">
+   Registering Remote Data Sources
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#registering-s3-data-sources">
    Registering S3 Data Sources
   </a>
@@ -703,6 +708,25 @@ via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <
 <span class="p">)</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="registering-remote-data-sources">
+<h2>Registering Remote Data Sources<a class="headerlink" href="#registering-remote-data-sources" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> can read from remote locations using a variety of protocols.
+For example to read from a remote parquet file via HTTP(S) you can use the following:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">hits</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1000000</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">344</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
 </section>
