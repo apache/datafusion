@@ -180,6 +180,34 @@ Projection: Int64(1) + Int64(1) AS added_one
 
 I.e. the `add_one` UDF has been inlined into the projection.
 
+## Getting the data type of the expression
+
+The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
+
+```rust
+use arrow_schema::DataType;
+use datafusion::common::{DFField, DFSchema};
+use datafusion::logical_expr::{col, ExprSchemable};
+use std::collections::HashMap;
+
+let expr = col("c1") + col("c2");
+let schema = DFSchema::new_with_metadata(
+    vec![
+        DFField::new_unqualified("c1", DataType::Int32, true),
+        DFField::new_unqualified("c2", DataType::Float32, true),
+    ],
+    HashMap::new(),
+)
+.unwrap();
+print!("type = {}", expr.get_type(&schema).unwrap());
+```
+
+This results in the following output:
+
+```text
+type = Float32
+```
+
 ## Conclusion
 
 In this guide, we've seen how to create `Expr`s programmatically and how to rewrite them. This is useful for simplifying and optimizing `Expr`s. We've also seen how to test our rule to ensure it works properly.
