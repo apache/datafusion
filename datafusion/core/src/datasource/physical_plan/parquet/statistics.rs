@@ -20,8 +20,7 @@
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
 use crate::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use crate::arrow::datatypes::TimestampNanosecondType;
-use crate::arrow::datatypes::{ArrowTimestampType, TimeUnit};
+use crate::arrow::datatypes::TimeUnit;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::new_empty_array;
 use arrow_schema::{FieldRef, Schema};

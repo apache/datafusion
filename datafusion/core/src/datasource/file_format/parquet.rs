@@ -18,9 +18,12 @@
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow_array::types::Utf8Type;
-use arrow_array::{ArrayRef, GenericByteArray, RecordBatch};
-use arrow_ipc::Utf8;
+use arrow_array::types::{
+    ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, Utf8Type,
+};
+use arrow_array::{GenericByteArray, PrimitiveArray, RecordBatch};
+use arrow_schema::TimeUnit;
 use async_trait::async_trait;
 use datafusion_common::stats::Precision;
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -28,7 +31,6 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
 };
-use parquet::data_type::ByteArray;
 use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
@@ -43,7 +45,9 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, not_impl_err, DataFusionError, FileType,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
@@ -56,7 +60,7 @@ use parquet::arrow::{
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::{Statistics as ParquetStatistics, ValueStatistics};
+use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, SharedBuffer};
@@ -373,8 +377,9 @@ fn summarize_min_max(
                     .unwrap_or_else(|_| min_values[i] = None);
             }
         }
-        ParquetStatistics::ByteArray(s) => {
-            if let DataType::Utf8 = fields[i].data_type() {
+
+        ParquetStatistics::ByteArray(s) => match fields[i].data_type() {
+            DataType::Utf8 => {
                 if let Some(max_value) = &mut max_values[i] {
                     let stat_value = s.max().as_utf8().unwrap_or_default();
                     let array: GenericByteArray<Utf8Type> = vec![Some(stat_value)].into();
@@ -394,11 +399,132 @@ fn summarize_min_max(
                     }
                 }
             }
-        }
+            DataType::Timestamp(time_unit, time_zone) => match time_unit {
+                TimeUnit::Nanosecond => {
+                    (max_values[i].as_mut())
+                        .and_then(|max_value| {
+                            handle_timestamp_statistics::<TimestampNanosecondType>(
+                                max_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| max_values[i] = None);
+
+                    (min_values[i].as_mut())
+                        .and_then(|min_value| {
+                            handle_timestamp_statistics::<TimestampNanosecondType>(
+                                min_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| min_values[i] = None);
+                }
+                TimeUnit::Microsecond => {
+                    (max_values[i].as_mut())
+                        .and_then(|max_value| {
+                            handle_timestamp_statistics::<TimestampMicrosecondType>(
+                                max_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| max_values[i] = None);
+
+                    (min_values[i].as_mut())
+                        .and_then(|min_value| {
+                            handle_timestamp_statistics::<TimestampMicrosecondType>(
+                                min_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| min_values[i] = None);
+                }
+                TimeUnit::Millisecond => {
+                    (max_values[i].as_mut())
+                        .and_then(|max_value| {
+                            handle_timestamp_statistics::<TimestampMillisecondType>(
+                                max_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| max_values[i] = None);
+
+                    (min_values[i].as_mut())
+                        .and_then(|min_value| {
+                            handle_timestamp_statistics::<TimestampMillisecondType>(
+                                min_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| min_values[i] = None);
+                }
+                TimeUnit::Second => {
+                    (max_values[i].as_mut())
+                        .and_then(|max_value| {
+                            handle_timestamp_statistics::<TimestampSecondType>(
+                                max_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| max_values[i] = None);
+
+                    (min_values[i].as_mut())
+                        .and_then(|min_value| {
+                            handle_timestamp_statistics::<TimestampSecondType>(
+                                min_value,
+                                s.max_bytes(),
+                                time_zone,
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_else(|| min_values[i] = None);
+                }
+            },
+            _ => {
+                max_values[i] = None;
+                min_values[i] = None;
+            }
+        },
         _ => {
             max_values[i] = None;
             min_values[i] = None;
         }
+    }
+    fn handle_timestamp_statistics<T: ArrowTimestampType>(
+        accumulator: &mut dyn Accumulator,
+        time_value: &[u8],
+        time_zone: &Option<Arc<str>>,
+    ) -> Result<()> {
+        let factor = match T::UNIT {
+            TimeUnit::Second => 1_000_000_000,
+            TimeUnit::Millisecond => 1_000_000,
+            TimeUnit::Microsecond => 1_000,
+            TimeUnit::Nanosecond => 1,
+        };
+
+        let stat_value = std::str::from_utf8(time_value)
+            .map_err(|_| exec_datafusion_err!("Failed to parse timestamp statistics"))?;
+        let ts = string_to_timestamp_nanos(stat_value).map(|ts| ts / factor)?;
+
+        let array = PrimitiveArray::<T>::from_iter_values(Some(ts));
+        let array = array.with_timezone_opt(time_zone.clone());
+
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        Ok(())
     }
 }
 
