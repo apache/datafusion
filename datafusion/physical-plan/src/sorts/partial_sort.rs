@@ -236,9 +236,10 @@ impl ExecutionPlan for PartialSortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_partial_sort = PartialSortExec::new(self.expr.clone(), children[0].clone())
-            .with_fetch(self.fetch)
-            .with_preserve_partitioning(self.preserve_partitioning);
+        let new_partial_sort =
+            PartialSortExec::new(self.expr.clone(), children[0].clone())
+                .with_fetch(self.fetch)
+                .with_preserve_partitioning(self.preserve_partitioning);
 
         Ok(Arc::new(new_partial_sort))
     }
