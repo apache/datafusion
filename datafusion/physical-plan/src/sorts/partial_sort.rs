@@ -45,18 +45,16 @@
 //! The plan concats these last segments with incoming data and continues
 //! incremental sorting of segments.
 
-use arrow::compute;
-use arrow::compute::{lexsort_to_indices, take};
 use std::any::Any;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::compute;
+use arrow::compute::{lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use futures::{ready, Stream, StreamExt};
-use log::trace;
 
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::Result;
@@ -69,6 +67,9 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
+
+use futures::{ready, Stream, StreamExt};
+use log::trace;
 
 /// Partial Sort execution plan.
 #[derive(Debug, Clone)]

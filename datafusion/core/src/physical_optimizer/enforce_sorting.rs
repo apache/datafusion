@@ -63,9 +63,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
-
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::unbounded_output;
+
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
