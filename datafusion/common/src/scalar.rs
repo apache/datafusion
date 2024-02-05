@@ -1573,7 +1573,9 @@ impl ScalarValue {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
             DataType::Struct(_) => build_struct_array(scalars)?,
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => build_list_array(scalars)?,
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => build_list_array(scalars)?,
             DataType::Dictionary(key_type, value_type) => {
                 // create the values array
                 let value_scalars = scalars
