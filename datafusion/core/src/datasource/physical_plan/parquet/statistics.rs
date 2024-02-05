@@ -19,6 +19,9 @@
 
 // TODO: potentially move this to arrow-rs: https://github.com/apache/arrow-rs/issues/4328
 
+use crate::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+use crate::arrow::datatypes::TimestampNanosecondType;
+use crate::arrow::datatypes::{ArrowTimestampType, TimeUnit};
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_array::new_empty_array;
 use arrow_schema::{FieldRef, Schema};
@@ -100,6 +103,42 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
+                    }
+                    Some(DataType::Timestamp(time_unit, time_zone)) => {
+                        let ts = std::str::from_utf8(s.$bytes_func());
+                        if ts.is_err() {
+                            return None;
+                        }
+                        let ts = match string_to_timestamp_nanos(ts.unwrap()) {
+                            Ok(ts) => ts,
+                            Err(_) => {
+                                return None;
+                            }
+                        };
+                        match time_unit {
+                            TimeUnit::Nanosecond => {
+                                Some(ScalarValue::TimestampNanosecond(
+                                    Some(ts),
+                                    time_zone.clone(),
+                                ))
+                            }
+                            TimeUnit::Microsecond => {
+                                Some(ScalarValue::TimestampMicrosecond(
+                                    Some(ts / 1_000),
+                                    time_zone.clone(),
+                                ))
+                            }
+                            TimeUnit::Millisecond => {
+                                Some(ScalarValue::TimestampMillisecond(
+                                    Some(ts / 1_000_000),
+                                    time_zone.clone(),
+                                ))
+                            }
+                            TimeUnit::Second => Some(ScalarValue::TimestampSecond(
+                                Some(ts / 1_000_000_000),
+                                time_zone.clone(),
+                            )),
+                        }
                     }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())

@@ -17,6 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow_array::types::Utf8Type;
 use arrow_array::{ArrayRef, GenericByteArray, RecordBatch};
 use arrow_ipc::Utf8;
@@ -528,8 +529,7 @@ async fn fetch_statistics(
                     schema_adapter.map_column_index(table_idx, &file_schema)
                 {
                     if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt =
-                            dbg!(null_cnt.add(&Precision::Exact(*null_count as usize)));
+                        *null_cnt = null_cnt.add(&Precision::Exact(*null_count as usize));
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
