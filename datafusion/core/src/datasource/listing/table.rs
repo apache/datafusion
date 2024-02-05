@@ -18,9 +18,9 @@
 //! The table implementation.
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
-use std::ops::Deref;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
