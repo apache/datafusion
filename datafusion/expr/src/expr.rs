@@ -180,6 +180,13 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+    /// Unnest expression
+    Unnest(Unnest),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Unnest {
+    pub exprs: Vec<Expr>,
 }
 
 /// Alias expression
@@ -917,6 +924,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
+            Expr::Unnest { .. } => "Unnest",
         }
     }
 
@@ -1308,6 +1316,7 @@ impl Expr {
             | Expr::Negative(..)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::TryCast(..)
+            | Expr::Unnest(..)
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
@@ -1562,6 +1571,9 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
+            Expr::Unnest(Unnest { exprs }) => {
+                write!(f, "UNNEST({exprs:?})")
+            }
         }
     }
 }
@@ -1749,6 +1761,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
+        Expr::Unnest(Unnest { exprs }) => Ok(format!("UNNEST({exprs:?})")),
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,

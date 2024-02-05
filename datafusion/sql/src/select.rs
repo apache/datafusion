@@ -26,11 +26,10 @@ use crate::utils::{
 
 use datafusion_common::Column;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, Unnest};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
-use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
@@ -221,8 +220,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        // final projection
-        let plan = project(plan, select_exprs_post_aggr)?;
+        // try process unnest expression or do the final projection
+        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
         let plan = match select.distinct {
@@ -273,6 +272,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         Ok(plan)
+    }
+
+    // Try converting Expr::Unnest to LogicalPlan::Unnest if possible, otherwise do the final projection
+    fn try_process_unnest(
+        &self,
+        input: LogicalPlan,
+        select_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        let mut exprs_to_unnest = vec![];
+
+        for expr in select_exprs.iter() {
+            if let Expr::Unnest(Unnest { exprs }) = expr {
+                exprs_to_unnest.push(exprs[0].clone());
+            }
+        }
+
+        // Do the final projection
+        if exprs_to_unnest.is_empty() {
+            LogicalPlanBuilder::from(input)
+                .project(select_exprs)?
+                .build()
+        } else {
+            if exprs_to_unnest.len() > 1 {
+                return not_impl_err!("Only support single unnest expression for now");
+            }
+
+            let expr = exprs_to_unnest[0].clone();
+            let column = expr.display_name()?;
+
+            LogicalPlanBuilder::from(input)
+                .project(vec![expr])?
+                .unnest_column(column)?
+                .build()
+        }
     }
 
     fn plan_selection(

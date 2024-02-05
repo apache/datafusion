@@ -227,6 +227,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
+        | Expr::Unnest(_)
         | Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
             func_def: ScalarFunctionDefinition::UDF(_),
             ..

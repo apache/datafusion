@@ -20,7 +20,7 @@
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
     Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
+    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
@@ -35,7 +35,7 @@ impl TreeNode for Expr {
         op: &mut F,
     ) -> Result<TreeNodeRecursion> {
         let children = match self {
-            Expr::Alias(Alias{expr, .. })
+            Expr::Alias(Alias{expr,..})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -60,6 +60,7 @@ impl TreeNode for Expr {
                     GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
             }
+            Expr::Unnest(Unnest { exprs }) |
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
             Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
@@ -149,6 +150,7 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
+            | Expr::Unnest(_)
             | Expr::Literal(_) => Transformed::no(self),
             Expr::Alias(Alias {
                 expr,

@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::Alias;
+use crate::expr::{Alias, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
@@ -77,6 +77,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     schemas: &[&[&DFSchema]],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
+    // Normalize column inside Unnest
+    if let Expr::Unnest(Unnest { exprs }) = expr {
+        let e = normalize_col_with_schemas_and_ambiguity_check(
+            exprs[0].clone(),
+            schemas,
+            using_columns,
+        )?;
+        return Ok(Expr::Unnest(Unnest { exprs: vec![e] }));
+    }
+
     expr.transform_up(&|expr| {
         Ok({
             if let Expr::Column(c) = expr {

@@ -47,7 +47,7 @@ use datafusion_common::{FileType, Result};
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort,
+    Sort, Unnest,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -1458,6 +1458,16 @@ fn roundtrip_inlist() {
         vec![lit(2.0_f32)],
         true,
     ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest() {
+    let test_expr = Expr::Unnest(Unnest {
+        exprs: vec![lit(1), lit(2), lit(3)],
+    });
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
