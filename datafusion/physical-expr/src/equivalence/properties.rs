@@ -449,7 +449,6 @@ impl EquivalenceProperties {
                     .filter(|matched| expr_refers(&matched, &sort_expr.expr))
                     .cloned()
                     .collect();
-                assert!(referring_exprs.len() <= 1);
                 // does not referring to any matching component, we just skip it
                 if referring_exprs.len() == 0 {
                     sort_expr.clone()
