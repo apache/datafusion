@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
+use std::ops::Deref;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
@@ -548,7 +549,7 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut builder = SchemaBuilder::from(file_schema.fields());
+        let mut builder = SchemaBuilder::from(file_schema.deref().clone());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }

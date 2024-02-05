@@ -148,6 +148,10 @@ async fn schema_merge_can_preserve_metadata() {
         .read_parquet(&table_path, options.clone())
         .await
         .unwrap();
+
+    let actual = df.schema().metadata();
+    assert_eq!(actual.clone(), expected_metadata,);
+
     let actual = df.collect().await.unwrap();
 
     assert_batches_sorted_eq!(expected, &actual);
@@ -158,10 +162,15 @@ async fn schema_merge_can_preserve_metadata() {
         .await
         .unwrap();
 
-    let actual = ctx
+    let df = ctx
         .sql("SELECT * from t")
         .await
-        .unwrap()
+        .unwrap();
+
+    let actual = df.schema().metadata();
+    assert_eq!(actual.clone(), expected_metadata);
+
+    let actual = df
         .collect()
         .await
         .unwrap();
