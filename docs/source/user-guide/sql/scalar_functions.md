@@ -1267,7 +1267,7 @@ The following regular expression functions are supported:
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
 
-[PCRE-like]: https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions
+[pcre-like]: https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions
 [syntax]: https://docs.rs/regex/latest/regex/#syntax
 
 ### `regexp_like`
