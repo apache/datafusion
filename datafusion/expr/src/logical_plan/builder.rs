@@ -1106,29 +1106,31 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
-    fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
+    fn nullify_fields(
+        fields: &[(Option<OwnedTableReference>, Arc<Field>)],
+    ) -> Vec<(Option<OwnedTableReference>, Arc<Field>)> {
         fields
             .iter()
-            .map(|f| f.clone().with_nullable(true))
+            .map(|(q, f)| (q, f.clone().with_nullable(true)))
             .collect()
     }
 
-    let right_fields = right.fields();
-    let left_fields = left.fields();
+    let right_fields = right.iter();
+    let left_fields = left.iter();
 
-    let fields: Vec<DFField> = match join_type {
+    let fields: Vec<(Option<OwnedTableReference>, &Arc<Field>)> = match join_type {
         JoinType::Inner => {
             // left then right
             left_fields
-                .iter()
-                .chain(right_fields.iter())
+                // .iter()
+                .chain(right_fields)
                 .cloned()
                 .collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
             left_fields
-                .iter()
+                // .iter()
                 .chain(&nullify_fields(right_fields))
                 .cloned()
                 .collect()
@@ -1136,7 +1138,7 @@ pub fn build_join_schema(
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
             nullify_fields(left_fields)
-                .iter()
+                // .iter()
                 .chain(right_fields.iter())
                 .cloned()
                 .collect()
@@ -1144,7 +1146,7 @@ pub fn build_join_schema(
         JoinType::Full => {
             // left then right, all set to nullable in case of not matched scenario
             nullify_fields(left_fields)
-                .iter()
+                // .iter()
                 .chain(&nullify_fields(right_fields))
                 .cloned()
                 .collect()
@@ -1165,8 +1167,12 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    let schema = DFSchema::new_with_metadata(fields, metadata)?;
-    schema.with_functional_dependencies(func_dependencies)
+    let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Arc<Field>) =
+        fields.iter().unzip();
+    let schema = Schema::new_with_metadata(fields, metadata);
+    let dfschema =
+        DFSchema::from_field_specific_qualified_schema(qualifiers, schema.into())?;
+    dfschema.with_functional_dependencies(func_dependencies)
 }
 
 /// Add additional "synthetic" group by expressions based on functional
