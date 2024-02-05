@@ -22,13 +22,12 @@ use std::{
     sync::Arc,
 };
 
-use crate::protobuf::{self, physical_window_expr_node, scalar_value::Value, Schema};
+use crate::protobuf::{self, physical_window_expr_node, scalar_value::Value};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
 
-use arrow::datatypes::Field;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 

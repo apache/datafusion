@@ -16,9 +16,6 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
-use datafusion::datasource::file_format::FileFormat;
-use object_store::path::Path;
-use object_store::ObjectMeta;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -28,7 +25,7 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetSink};
+use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
