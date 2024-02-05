@@ -547,11 +547,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
-                        DataType::List(field) => match field.data_type() {
-                            DataType::List(_) => get_base_type(field.data_type()),
-                            _ => Ok(data_type.to_owned()),
-                        },
-                        _ => internal_err!("Not reachable, data_type should be List"),
+                        DataType::List(field) if matches!(field.data_type(), DataType::List(_)) => get_base_type(field.data_type()),
+                        DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
+                        DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
+                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
                     }
                 }
 

@@ -174,7 +174,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
-/// Convert Substrait Plan to DataFusion DataFrame
+/// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
     ctx: &SessionContext,
     plan: &Plan,
