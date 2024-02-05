@@ -436,6 +436,27 @@ async fn test_fn_md5() -> Result<()> {
 
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
+async fn test_fn_regexp_like() -> Result<()> {
+    let expr = regexp_like(vec![col("a"), lit("[a-z]")]);
+
+    let expected = [
+        "+-----------------------------------+",
+        "| regexp_like(test.a,Utf8(\"[a-z]\")) |",
+        "+-----------------------------------+",
+        "| true                              |",
+        "| true                              |",
+        "| true                              |",
+        "| true                              |",
+        "+-----------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
     let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
 

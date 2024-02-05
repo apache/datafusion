@@ -22436,6 +22436,7 @@ impl serde::Serialize for ScalarFunction {
             Self::InStr => "InStr",
             Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
+            Self::RegexpLike => "RegexpLike",
         };
         serializer.serialize_str(variant)
     }
@@ -22580,6 +22581,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "InStr",
             "MakeDate",
             "ArrayReverse",
+            "RegexpLike",
         ];
 
         struct GeneratedVisitor;
@@ -22753,6 +22755,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "InStr" => Ok(ScalarFunction::InStr),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
+                    "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
