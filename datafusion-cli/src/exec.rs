@@ -391,7 +391,7 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn copy_to_external_object_store_test() -> std::result::Result<()> {
+    async fn copy_to_external_object_store_test() -> Result<()> {
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",
