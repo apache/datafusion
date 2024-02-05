@@ -909,14 +909,15 @@ mod tests {
     use std::sync::Arc;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::test::{assert_optimized_plan_eq, test_table_scan};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use async_trait::async_trait;
-    use datafusion_common::{DFSchema, Result, TableReference};
+    use crate::test::{
+        assert_optimized_plan_eq, test_table_scan, test_table_scan_fields,
+    };
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, TableReference};
+    use datafusion_expr::builder::table_scan_with_filters;
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
         table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
-        TableProviderFilterPushDown, TableScan, TableSource, TableType,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1202,67 +1203,22 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    struct PushDownProvider {
-        pub filter_support: TableProviderFilterPushDown,
-    }
-
-    #[async_trait]
-    impl TableSource for PushDownProvider {
-        fn schema(&self) -> SchemaRef {
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
-            ]))
-        }
-
-        fn table_type(&self) -> TableType {
-            TableType::Base
-        }
-
-        fn supports_filter_pushdown(
-            &self,
-            _e: &Expr,
-        ) -> Result<TableProviderFilterPushDown> {
-            Ok(self.filter_support.clone())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    fn table_scan_with_pushdown_provider(
-        filter_support: TableProviderFilterPushDown,
-    ) -> Result<LogicalPlan> {
-        let test_provider = PushDownProvider { filter_support };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: None,
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        LogicalPlanBuilder::from(table_scan)
-            .filter(col("a").eq(lit(1i64)))?
-            .build()
-    }
-
     #[test]
-    fn filter_with_table_provider_exact() -> Result<()> {
-        let table_scan =
-            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
+    fn filter_with_table_optimize_projection() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+        let table_scan = table_scan_with_filters(
+            Some("test"),
+            &schema,
+            None,
+            vec![col("b").is_not_null()],
+        )?
+        .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![try_cast(col("b"), DataType::Float64)])?
+            .project(vec![col("a")])?
             .build()?;
 
-        let expected = "Projection: TRY_CAST(b AS Float64)\
-        \n  Filter: a = Int64(1)\
-        \n    TableScan: test projection=[a, b]";
+        let expected = "Projection: test.a\
+        \n  TableScan: test projection=[a, b], full_filters=[b IS NOT NULL]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
