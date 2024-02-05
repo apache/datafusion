@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Partial Sort deals with cases where the input data partially
-//! satisfies the required sort order and the input dataset has
-//! segments where sorted column/columns already has the required
-//! information for lexicographic sorting. Then these segments
-//! can be sorted without loading the entire dataset.
+//! Partial Sort deals with input data that partially
+//! satisfies the required sort order. Such an input data can be
+//! partitioned into segments where each segment already has the
+//! required information for lexicographic sorting so sorting
+//! can be done without loading the entire dataset.
 //!
-//! Consider the input with ordering a ASC, b ASC
+//! Consider a sort plan having an input with ordering `a ASC, b ASC`
+//!
 //! ```text
 //! +---+---+---+
 //! | a | b | d |
@@ -30,20 +31,25 @@
 //! | 0 | 0 | 2 |
 //! | 0 | 1 | 1 |
 //! | 0 | 2 | 0 |
+//! +---+---+---+
 //!```
-//! and required ordering is a ASC, b ASC, d ASC.
-//! The first 3 rows(segment) can be sorted as the segment already has the required
-//! information for the sort, but the last row requires further information
-//! as the input can continue with a batch starting with a row where a and b
-//! does not change as below
+//!
+//! and required ordering for the plan is `a ASC, b ASC, d ASC`.
+//! The first 3 rows(segment) can be sorted as the segment already
+//! has the required information for the sort, but the last row
+//! requires further information as the input can continue with a
+//! batch with a starting row where a and b does not change as below
+//!
 //! ```text
 //! +---+---+---+
 //! | a | b | d |
 //! +---+---+---+
 //! | 0 | 2 | 4 |
+//! +---+---+---+
 //!```
-//! The plan concats these last segments with incoming data and continues
-//! incremental sorting of segments.
+//!
+//! The plan concats incoming data with such last rows of previous input
+//! and continues partial sorting of the segments.
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -51,10 +57,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::compute;
-use arrow::compute::{lexsort_to_indices, take};
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use futures::{ready, Stream, StreamExt};
+use log::trace;
 
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::Result;
@@ -63,13 +70,11 @@ use datafusion_physical_expr::EquivalenceProperties;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
-
-use futures::{ready, Stream, StreamExt};
-use log::trace;
 
 /// Partial Sort execution plan.
 #[derive(Debug, Clone)]
@@ -83,7 +88,8 @@ pub struct PartialSortExec {
     common_prefix_length: usize,
     /// Containing all metrics set created during sort
     metrics_set: ExecutionPlanMetricsSet,
-    /// TODO: check usage
+    /// Preserve partitions of input plan. If false, the input partitions
+    /// will be sorted and merged into a single output partition.
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
@@ -203,13 +209,10 @@ impl ExecutionPlan for PartialSortExec {
         Some(&self.expr)
     }
 
-    // TODO: check usages
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]
         } else {
-            // global sort
-            // TODO: support RangePartition and OrderedDistribution
             vec![Distribution::SinglePartition]
         }
     }
@@ -233,11 +236,11 @@ impl ExecutionPlan for PartialSortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = PartialSortExec::new(self.expr.clone(), children[0].clone())
+        let new_partial_sort = PartialSortExec::new(self.expr.clone(), children[0].clone())
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
 
-        Ok(Arc::new(new_sort))
+        Ok(Arc::new(new_partial_sort))
     }
 
     fn execute(
@@ -329,16 +332,14 @@ impl PartialSortStream {
         }
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
-                self.input_batch = compute::concat_batches(
-                    &self.schema(),
-                    &[self.input_batch.clone(), batch],
-                )?;
-                let slice_point =
-                    self.get_slice_point(self.common_prefix_length, &self.input_batch)?;
-                if slice_point == self.input_batch.num_rows() {
-                    Ok(RecordBatch::new_empty(self.schema()))
-                } else {
+                self.input_batch =
+                    concat_batches(&self.schema(), [&self.input_batch, &batch])?;
+                if let Some(slice_point) =
+                    self.get_slice_point(self.common_prefix_length, &self.input_batch)?
+                {
                     self.emit(slice_point)
+                } else {
+                    Ok(RecordBatch::new_empty(self.schema()))
                 }
             }
             Some(Err(e)) => Err(e),
@@ -352,37 +353,43 @@ impl PartialSortStream {
         Poll::Ready(Some(result))
     }
 
+    /// Sort input_batch upto the slice_point and emit the sorted batch
+    ///
+    /// If fetch is specified for PartialSortStream `emit` will limit
+    /// the last RecordBatch returned and will mark the stream as closed
     fn emit(self: &mut Pin<&mut Self>, slice_point: usize) -> Result<RecordBatch> {
         let original_num_rows = self.input_batch.num_rows();
-        let sliced = self.input_batch.slice(0, slice_point);
+        let segment = self.input_batch.slice(0, slice_point);
         self.input_batch = self
             .input_batch
             .slice(slice_point, self.input_batch.num_rows() - slice_point);
-        let sort_columns = self
-            .expr
-            .clone()
-            .iter()
-            .map(|expr| expr.clone().evaluate_to_sort_column(&sliced))
-            .collect::<Result<Vec<_>>>()?;
-        let sorted_indices = lexsort_to_indices(&sort_columns, None)?;
-        let sorted_columns = sliced
-            .columns()
-            .iter()
-            .map(|c| take(c.as_ref(), &sorted_indices, None))
-            .collect::<Result<_, _>>()?;
-        let result = RecordBatch::try_new(self.schema(), sorted_columns)?;
-        assert_eq!(
-            original_num_rows,
-            result.num_rows() + self.input_batch.num_rows()
-        );
-        self.stream_limit(result)
+
+        let result = sort_batch(&segment, &self.expr, self.fetch)?;
+        if let Some(remaining_fetch) = self.fetch {
+            self.fetch = Some(remaining_fetch - result.num_rows());
+            if remaining_fetch == result.num_rows() {
+                self.input_batch = RecordBatch::new_empty(self.schema());
+                self.is_closed = true;
+            }
+        } else {
+            assert_eq!(
+                original_num_rows,
+                result.num_rows() + self.input_batch.num_rows()
+            );
+        }
+        Ok(result)
     }
 
+    /// Return the end index of the second last partition if the batch
+    /// can be partitioned based on its already sorted columns
+    ///
+    /// Return None if the batch cannot be partitioned, which means the
+    /// batch does not have the information for a safe sort
     fn get_slice_point(
         &self,
         common_prefix_len: usize,
         batch: &RecordBatch,
-    ) -> Result<usize> {
+    ) -> Result<Option<usize>> {
         let common_prefix_sort_keys = (0..common_prefix_len)
             .map(|idx| self.expr[idx].evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()?;
@@ -392,24 +399,11 @@ impl PartialSortStream {
         // we should return 200, which is the safest and furthest partition boundary
         // Please note that we shouldn't return 300 (which is number of rows in the batch),
         // because this boundary may change with new data.
-        let mut slice_point = partition_points[0].end;
-        if partition_points.len() > 2 {
-            slice_point = partition_points[partition_points.len() - 2].end;
+        if partition_points.len() >= 2 {
+            Ok(Some(partition_points[partition_points.len() - 2].end))
+        } else {
+            Ok(None)
         }
-        Ok(slice_point)
-    }
-
-    fn stream_limit(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
-        if let Some(remaining_fetch) = self.fetch {
-            if remaining_fetch <= batch.num_rows() {
-                self.fetch = Some(0);
-                self.is_closed = true;
-                self.input_batch = RecordBatch::new_empty(self.schema());
-                return Ok(batch.slice(0, remaining_fetch));
-            }
-            self.fetch = Some(remaining_fetch - batch.num_rows());
-        }
-        Ok(batch)
     }
 }
 
@@ -420,26 +414,20 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use futures::FutureExt;
+    use itertools::Itertools;
+
     use datafusion_common::assert_batches_eq;
 
+    use crate::collect;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::{collect, displayable};
 
     use super::*;
-
-    use futures::FutureExt;
-    use itertools::Itertools;
-
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-        let formatted = displayable(plan.as_ref()).indent(true).to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-    }
 
     #[tokio::test]
     async fn test_partial_sort() -> Result<()> {
@@ -479,7 +467,6 @@ mod tests {
             )
             .with_common_prefix_length(2),
         ) as Arc<dyn ExecutionPlan>;
-        print_plan(&partial_sort_exec);
 
         let result = collect(partial_sort_exec, task_ctx.clone()).await?;
 
@@ -545,7 +532,6 @@ mod tests {
             .with_common_prefix_length(2)
             .with_fetch(Some(4)),
         ) as Arc<dyn ExecutionPlan>;
-        print_plan(&partial_sort_exec);
 
         let result = collect(partial_sort_exec, task_ctx.clone()).await?;
 
@@ -715,7 +701,7 @@ mod tests {
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
-        let partial_sort_result = compute::concat_batches(&schema, &result).unwrap();
+        let partial_sort_result = concat_batches(&schema, &result).unwrap();
         let sort_result = collect(sort_exec, task_ctx.clone()).await?;
         assert_eq!(sort_result[0], partial_sort_result);
 
@@ -778,7 +764,7 @@ mod tests {
                 0,
                 "The sort should have returned all memory used back to the memory manager"
             );
-            let partial_sort_result = compute::concat_batches(&schema, &result)?;
+            let partial_sort_result = concat_batches(&schema, &result)?;
             let sort_result = collect(sort_exec, task_ctx.clone()).await?;
             assert_eq!(sort_result[0], partial_sort_result);
         }
