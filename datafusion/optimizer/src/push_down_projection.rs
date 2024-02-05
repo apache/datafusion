@@ -486,7 +486,7 @@ mod tests {
 
         let expected = "\
         Projection: Int32(1) AS a\
-        \n  TableScan: test projection=[], full_filters=[b = Int32(1)]";
+        \n  TableScan: test projection=[b], full_filters=[b = Int32(1)]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
