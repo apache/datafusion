@@ -36,7 +36,7 @@ use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, FileType};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -135,14 +135,6 @@ impl TableProviderFactory for ListingTableFactory {
 
         let mut statement_options = StatementOptions::from(&cmd.options);
 
-        // Backwards compatibility (#8547), discard deprecated options
-        statement_options.take_bool_option("single_file")?;
-        if let Some(s) = statement_options.take_str_option("insert_mode") {
-            if !s.eq_ignore_ascii_case("append_new_files") {
-                return plan_err!("Unknown or unsupported insert mode {s}. Only append_new_files supported");
-            }
-        }
-        statement_options.take_bool_option("create_local_path")?;
         statement_options.take_str_option("unbounded");
 
         let file_type = file_format.file_type();

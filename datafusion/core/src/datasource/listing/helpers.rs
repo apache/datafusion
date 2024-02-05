@@ -126,6 +126,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard { .. }
+            | Expr::Unnest { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
                 Ok(VisitRecursion::Stop)

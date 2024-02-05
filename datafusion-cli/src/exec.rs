@@ -42,6 +42,7 @@ use datafusion::physical_plan::{collect, execute_stream};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 
+use object_store::http::HttpBuilder;
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -281,6 +282,11 @@ async fn create_external_table(
             let builder = get_gcs_object_store_builder(url, cmd)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
+        "http" | "https" => Arc::new(
+            HttpBuilder::new()
+                .with_url(url.origin().ascii_serialization())
+                .build()?,
+        ) as Arc<dyn ObjectStore>,
         _ => {
             // for other types, try to get from the object_store_registry
             ctx.runtime_env()
@@ -329,8 +335,20 @@ mod tests {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
+        // Ensure the URL is supported by the object store
         ctx.runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_http() -> Result<()> {
+        // Should be OK
+        let location = "http://example.com/file.parquet";
+        let sql =
+            format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
 
         Ok(())
     }
