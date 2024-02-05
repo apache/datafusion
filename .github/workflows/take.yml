@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Assign the issue
+name: Assign the issue via a `take` comment
 on:
   issue_comment:
     types: created
