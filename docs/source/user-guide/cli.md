@@ -260,6 +260,27 @@ STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
+## Registering Remote Data Sources
+
+`datafusion-cli` can read from remote locations using a variety of protocols.
+For example to read from a remote parquet file via HTTP(S) you can use the following:
+
+```sql
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet';
+```
+
+```sql
+❯ select count(*) from hits;
++----------+
+| COUNT(*) |
++----------+
+| 1000000  |
++----------+
+1 row in set. Query took 0.344 seconds.
+```
+
 ## Registering S3 Data Sources
 
 [AWS S3](https://aws.amazon.com/s3/) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
