@@ -3156,7 +3156,7 @@ impl fmt::Display for ScalarValue {
                                 ));
                                 format!("{}:{sv}", field.name())
                             } else {
-                                let sv = ScalarValue::try_from_array(column, 0).unwrap();
+                                let sv = array_value_to_string(column, 0).unwrap();
                                 format!("{}:{sv}", field.name())
                             }
                         })
