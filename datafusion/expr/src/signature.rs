@@ -116,6 +116,12 @@ pub enum TypeSignature {
     /// Function `make_array` takes 0 or more arguments with arbitrary types, its `TypeSignature`
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
+    /// Specifies Signatures for array functions
+    ArraySignature(ArrayFunctionSignature),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
     /// The first argument should be List/LargeList, and the second argument should be non-list or list.
     /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
@@ -126,6 +132,23 @@ pub enum TypeSignature {
     /// The first argument should be non-list or list, and the second argument should be List/LargeList.
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
+    ArrayAndIndex,
+}
+
+impl std::fmt::Display for ArrayFunctionSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrayFunctionSignature::ArrayAndElement => {
+                write!(f, "array, element")
+            }
+            ArrayFunctionSignature::ElementAndArray => {
+                write!(f, "element, array")
+            }
+            ArrayFunctionSignature::ArrayAndIndex => {
+                write!(f, "array, index")
+            }
+        }
+    }
 }
 
 impl TypeSignature {
@@ -156,11 +179,8 @@ impl TypeSignature {
             TypeSignature::OneOf(sigs) => {
                 sigs.iter().flat_map(|s| s.to_string_repr()).collect()
             }
-            TypeSignature::ArrayAndElement => {
-                vec!["ArrayAndElement(List<T>, T)".to_string()]
-            }
-            TypeSignature::ElementAndArray => {
-                vec!["ElementAndArray(T, List<T>)".to_string()]
+            TypeSignature::ArraySignature(array_signature) => {
+                vec![array_signature.to_string()]
             }
         }
     }
@@ -260,6 +280,33 @@ impl Signature {
     pub fn one_of(type_signatures: Vec<TypeSignature>, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(type_signatures),
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayAppend and similar functions
+    pub fn array_and_element(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::ArrayAndElement,
+            ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayPrepend and similar functions
+    pub fn element_and_array(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::ElementAndArray,
+            ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayElement and similar functions
+    pub fn array_and_index(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::ArrayAndIndex,
+            ),
             volatility,
         }
     }

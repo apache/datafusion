@@ -48,7 +48,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
     GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort,
+    ScalarFunctionDefinition, Sort, Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -985,6 +985,18 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 });
                 Self {
                     expr_type: Some(ExprType::Negative(expr)),
+                }
+            }
+            Expr::Unnest(Unnest { exprs }) => {
+                let expr = protobuf::Unnest {
+                    exprs: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
+                        Vec<_>,
+                        Error,
+                    >>(
+                    )?,
+                };
+                Self {
+                    expr_type: Some(ExprType::Unnest(expr)),
                 }
             }
             Expr::InList(InList {

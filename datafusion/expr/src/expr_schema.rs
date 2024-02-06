@@ -19,7 +19,7 @@ use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
+    ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
@@ -58,6 +58,31 @@ impl ExprSchemable for Expr {
     ///
     /// Note: [DFSchema] implements [ExprSchema].
     ///
+    /// # Examples
+    ///
+    /// ## Get the type of an expression that adds 2 columns. Adding an Int32
+    /// ## and Float32 results in Float32 type
+    ///
+    /// ```
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use datafusion_expr::{col, ExprSchemable};
+    /// # use std::collections::HashMap;
+    ///
+    /// fn main() {
+    ///   let expr = col("c1") + col("c2");
+    ///   let schema = DFSchema::new_with_metadata(
+    ///     vec![
+    ///       DFField::new_unqualified("c1", DataType::Int32, true),
+    ///       DFField::new_unqualified("c2", DataType::Float32, true),
+    ///       ],
+    ///       HashMap::new(),
+    ///   )
+    ///   .unwrap();
+    ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// This function errors when it is not possible to compute its
@@ -82,6 +107,13 @@ impl ExprSchemable for Expr {
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Unnest(Unnest { exprs }) => {
+                let arg_data_types = exprs
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(arg_data_types[0].clone())
+            }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 let arg_data_types = args
                     .iter()
@@ -250,6 +282,7 @@ impl ExprSchemable for Expr {
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
+            | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)

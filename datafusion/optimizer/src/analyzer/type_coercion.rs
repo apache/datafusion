@@ -134,6 +134,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
+            Expr::Unnest(_) => internal_err!(
+                "Unnest should be rewritten to LogicalPlan::Unnest before type coercion"
+            ),
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
@@ -589,7 +592,6 @@ fn coerce_arguments_for_fun(
     if expressions.is_empty() {
         return Ok(vec![]);
     }
-
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
     // Cast Fixedsizelist to List for array functions

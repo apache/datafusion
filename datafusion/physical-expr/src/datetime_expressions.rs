@@ -527,21 +527,6 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let months = cast_column(&args[1], &DataType::Int32, None)?;
     let days = cast_column(&args[2], &DataType::Int32, None)?;
 
-    let value_fn = |col: &ColumnarValue, pos: usize| -> Result<i32> {
-        match col {
-            ColumnarValue::Array(a) => Ok(a.as_primitive::<Int32Type>().value(pos)),
-            ColumnarValue::Scalar(s) => match s {
-                ScalarValue::Int32(i) => match i {
-                    Some(i) => Ok(*i),
-                    None => {
-                        exec_err!("Unable to parse date from null/empty value")
-                    }
-                },
-                _ => unreachable!(),
-            },
-        }
-    };
-
     // since the epoch for the date32 datatype is the unix epoch
     // we need to subtract the unix epoch from the current date
     // note this can result in a negative value
@@ -551,31 +536,72 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let mut builder: PrimitiveBuilder<Date32Type> = PrimitiveArray::builder(array_size);
 
-    for i in 0..array_size {
-        let y = value_fn(&years, i)?;
-        let m = u32::try_from(value_fn(&months, i)?);
-        let d = u32::try_from(value_fn(&days, i)?);
-
-        let Ok(m) = m else {
-            return exec_err!(
-                "Month value '{:?}' is out of range",
-                value_fn(&months, i).unwrap()
-            );
+    let construct_date_fn = |builder: &mut PrimitiveBuilder<Date32Type>,
+                             year: i32,
+                             month: i32,
+                             day: i32,
+                             unix_days_from_ce: i32|
+     -> Result<()> {
+        let Ok(m) = u32::try_from(month) else {
+            return exec_err!("Month value '{month:?}' is out of range");
+        };
+        let Ok(d) = u32::try_from(day) else {
+            return exec_err!("Day value '{day:?}' is out of range");
         };
 
-        let Ok(d) = d else {
-            return exec_err!(
-                "Day value '{:?}' is out of range",
-                value_fn(&days, i).unwrap()
-            );
-        };
-
-        let date = NaiveDate::from_ymd_opt(y, m, d);
+        let date = NaiveDate::from_ymd_opt(year, m, d);
 
         match date {
             Some(d) => builder.append_value(d.num_days_from_ce() - unix_days_from_ce),
-            None => return exec_err!("Unable to parse date from {y}, {m}, {d}"),
+            None => return exec_err!("Unable to parse date from {year}, {month}, {day}"),
         };
+        Ok(())
+    };
+
+    let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
+        let ColumnarValue::Scalar(s) = col else {
+            return exec_err!("Expected scalar value");
+        };
+        let ScalarValue::Int32(Some(i)) = s else {
+            return exec_err!("Unable to parse date from null/empty value");
+        };
+        Ok(*i)
+    };
+
+    // For scalar only columns the operation is faster without using the PrimitiveArray
+    if is_scalar {
+        construct_date_fn(
+            &mut builder,
+            scalar_value_fn(&years)?,
+            scalar_value_fn(&months)?,
+            scalar_value_fn(&days)?,
+            unix_days_from_ce,
+        )?;
+    } else {
+        let to_primitive_array = |col: &ColumnarValue,
+                                  scalar_count: usize|
+         -> Result<PrimitiveArray<Int32Type>> {
+            match col {
+                ColumnarValue::Array(a) => Ok(a.as_primitive::<Int32Type>().to_owned()),
+                _ => {
+                    let v = scalar_value_fn(col).unwrap();
+                    Ok(PrimitiveArray::<Int32Type>::from_value(v, scalar_count))
+                }
+            }
+        };
+
+        let years = to_primitive_array(&years, array_size).unwrap();
+        let months = to_primitive_array(&months, array_size).unwrap();
+        let days = to_primitive_array(&days, array_size).unwrap();
+        for i in 0..array_size {
+            construct_date_fn(
+                &mut builder,
+                years.value(i),
+                months.value(i),
+                days.value(i),
+                unix_days_from_ce,
+            )?;
+        }
     }
 
     let arr = builder.finish();

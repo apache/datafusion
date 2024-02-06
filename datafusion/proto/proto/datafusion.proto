@@ -426,6 +426,8 @@ message LogicalExprNode {
 
     PlaceholderNode placeholder = 34;
 
+    Unnest unnest = 35;
+
   }
 }
 
@@ -529,6 +531,10 @@ message BinaryExprNode {
 
 message NegativeNode {
   LogicalExprNode expr = 1;
+}
+
+message Unnest {
+  repeated LogicalExprNode exprs = 1;
 }
 
 message InListNode {

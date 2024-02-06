@@ -18,6 +18,7 @@
 use arrow::csv::WriterBuilder;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::vec;
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
@@ -28,7 +29,8 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileScanConfig, FileSinkConfig, ParquetExec,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    FileSinkConfig, ParquetExec,
 };
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
@@ -559,6 +561,32 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Some(predicate),
         None,
     )))
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
+    let mut file_group =
+        PartitionedFile::new("/path/to/part=0/file.parquet".to_string(), 1024);
+    file_group.partition_values =
+        vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![file_group]],
+        statistics: Statistics::new_unknown(&schema),
+        file_schema: schema,
+        projection: Some(vec![0, 1]),
+        limit: None,
+        table_partition_cols: vec![Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        )],
+        output_ordering: vec![],
+    };
+
+    roundtrip_test(Arc::new(ParquetExec::new(scan_config, None, None)))
 }
 
 #[test]

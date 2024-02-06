@@ -547,11 +547,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
-                        DataType::List(field) => match field.data_type() {
-                            DataType::List(_) => get_base_type(field.data_type()),
-                            _ => Ok(data_type.to_owned()),
-                        },
-                        _ => internal_err!("Not reachable, data_type should be List"),
+                        DataType::List(field) if matches!(field.data_type(), DataType::List(_)) => get_base_type(field.data_type()),
+                        DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
+                        DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
+                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
                     }
                 }
 
@@ -599,10 +598,11 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
-                List(field) => Ok(field.data_type().clone()),
-                LargeList(field) => Ok(field.data_type().clone()),
+                List(field)
+                | LargeList(field)
+                | FixedSizeList(field, _) => Ok(field.data_type().clone()),
                 _ => plan_err!(
-                    "The {self} function can only accept list or largelist as the first argument"
+                    "The {self} function can only accept List, LargeList or FixedSizeList as the first argument"
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
@@ -922,10 +922,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySort => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayAppend => Signature {
-                type_signature: ArrayAndElement,
-                volatility: self.volatility(),
-            },
+            BuiltinScalarFunction::ArrayAppend => {
+                Signature::array_and_element(self.volatility())
+            }
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
@@ -937,12 +936,17 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayElement => {
+                Signature::array_and_index(self.volatility())
+            }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayHasAll
-            | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
+                Signature::any(2, self.volatility())
+            }
+            BuiltinScalarFunction::ArrayHas => {
+                Signature::array_and_element(self.volatility())
+            }
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
@@ -951,15 +955,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayPrepend => Signature {
-                type_signature: ElementAndArray,
-                volatility: self.volatility(),
-            },
+            BuiltinScalarFunction::ArrayPositions => {
+                Signature::array_and_element(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayPrepend => {
+                Signature::element_and_array(self.volatility())
+            }
             BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRemove => {
+                Signature::array_and_element(self.volatility())
+            }
             BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayRemoveAll => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRemoveAll => {
+                Signature::array_and_element(self.volatility())
+            }
             BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
             BuiltinScalarFunction::ArrayReplaceAll => {
@@ -1453,7 +1462,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Chr => &["chr"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::InStr => &["instr"],
+            BuiltinScalarFunction::InStr => &["instr", "position"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],

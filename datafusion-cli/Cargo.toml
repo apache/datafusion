@@ -25,7 +25,8 @@ keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.70"
+# Specify MSRV here as `cargo msrv` doesn't support workspace version
+rust-version = "1.72"
 readme = "README.md"
 
 [dependencies]
@@ -40,7 +41,7 @@ dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.9.0", features = ["aws", "gcp"] }
+object_store = { version = "0.9.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
 parquet = { version = "50.0.0", default-features = false }
 regex = "1.8"
