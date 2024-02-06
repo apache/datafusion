@@ -1312,15 +1312,11 @@ regexp_like(str, regexp[, flags])
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_match`
 
-Returns a list of [regular expression] matches in a string.
-
-[regular expression]: https://docs.rs/regex/latest/regex/#syntax
+Returns a list of [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
 
 ```
 regexp_match(str, regexp[, flags])
@@ -1357,15 +1353,11 @@ regexp_match(str, regexp[, flags])
 +---------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_replace`
 
-Replaces substrings in a string that match a [regular expression].
-
-[regular expression]: https://docs.rs/regex/latest/regex/#syntax
+Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).
 
 ```
 regexp_replace(str, regexp, replacement[, flags])
@@ -1405,9 +1397,7 @@ regexp_replace(str, regexp, replacement[, flags])
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `position`
 
@@ -1657,9 +1647,7 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs)
 
 ### `to_timestamp`
 
@@ -1704,9 +1692,7 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_millis`
 
@@ -1745,9 +1731,7 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_micros`
 
@@ -1786,9 +1770,7 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_nanos`
 
@@ -1827,9 +1809,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_seconds`
 
@@ -1868,9 +1848,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `from_unixtime`
 
