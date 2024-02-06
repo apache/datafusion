@@ -102,7 +102,7 @@ select * from x;
 The keywords `JOIN` or `INNER JOIN` define a join that only shows rows where there is a match in both tables.
 
 ```sql
-❯ select * from x inner join x y ON x.column_1 = y.column_1;
+select * from x inner join x y ON x.column_1 = y.column_1;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -116,7 +116,7 @@ The keywords `LEFT JOIN` or `LEFT OUTER JOIN` define a join that includes all ro
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.
 
 ```sql
-❯ select * from x left join x y ON x.column_1 = y.column_2;
+select * from x left join x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -130,7 +130,7 @@ The keywords `RIGHT JOIN` or `RIGHT OUTER JOIN` define a join that includes all 
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.
 
 ```sql
-❯ select * from x right join x y ON x.column_1 = y.column_2;
+select * from x right join x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -145,7 +145,7 @@ The keywords `FULL JOIN` or `FULL OUTER JOIN` define a join that is effectively 
 either side of the join where there is not a match.
 
 ```sql
-❯ select * from x full outer join x y ON x.column_1 = y.column_2;
+select * from x full outer join x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -160,7 +160,7 @@ A natural join defines an inner join based on common column names found between 
 column names are found, it behaves like a cross join.
 
 ```sql
-❯ select * from x natural join x y;
+select * from x natural join x y;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -174,7 +174,7 @@ A cross join produces a cartesian product that matches every row in the left sid
 right side of the join.
 
 ```sql
-❯ select * from x cross join x y;
+select * from x cross join x y;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+

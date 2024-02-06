@@ -198,7 +198,7 @@ You can also query directly from the remote location via HTTP(S) without
 registering the location as a table
 
 ```sql
-❯ select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet'
+select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet'
 +----------+
 | COUNT(*) |
 +----------+
@@ -285,7 +285,7 @@ LOCATION 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hit
 ```
 
 ```sql
-❯ select count(*) from hits;
+select count(*) from hits;
 +----------+
 | COUNT(*) |
 +----------+

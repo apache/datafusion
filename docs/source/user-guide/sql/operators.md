@@ -298,7 +298,7 @@ Not Regex Case-Insensitive Match
 Like Match
 
 ```sql
-❯ SELECT 'datafusion' ~~ 'dat_f%n';
+SELECT 'datafusion' ~~ 'dat_f%n';
 +---------------------------------------+
 | Utf8("datafusion") ~~ Utf8("dat_f%n") |
 +---------------------------------------+
@@ -311,7 +311,7 @@ Like Match
 Case-Insensitive Like Match
 
 ```sql
-❯ SELECT 'datafusion' ~~* 'Dat_F%n';
+SELECT 'datafusion' ~~* 'Dat_F%n';
 +----------------------------------------+
 | Utf8("datafusion") ~~* Utf8("Dat_F%n") |
 +----------------------------------------+
@@ -324,7 +324,7 @@ Case-Insensitive Like Match
 Not Like Match
 
 ```sql
-❯ SELECT 'datafusion' !~~ 'Dat_F%n';
+SELECT 'datafusion' !~~ 'Dat_F%n';
 +----------------------------------------+
 | Utf8("datafusion") !~~ Utf8("Dat_F%n") |
 +----------------------------------------+
@@ -337,7 +337,7 @@ Not Like Match
 Not Case-Insensitive Like Match
 
 ```sql
-❯ SELECT 'datafusion' !~~* 'Dat%F_n';
+SELECT 'datafusion' !~~* 'Dat%F_n';
 +-----------------------------------------+
 | Utf8("datafusion") !~~* Utf8("Dat%F_n") |
 +-----------------------------------------+

@@ -1298,13 +1298,13 @@ regexp_like(str, regexp[, flags])
 #### Example
 
 ```sql
-❯ select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
 | regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
 +--------------------------------------------------------+
 | true                                                   |
 +--------------------------------------------------------+
-❯ SELECT regexp_like('aBc', '(b|d)', 'i');
+SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 | regexp_like(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
 +--------------------------------------------------+
@@ -1339,13 +1339,13 @@ regexp_match(str, regexp[, flags])
 #### Example
 
 ```sql
-❯ select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +---------------------------------------------------------+
 | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
 +---------------------------------------------------------+
 | [Köln]                                                  |
 +---------------------------------------------------------+
-❯ SELECT regexp_match('aBc', '(b|d)', 'i');
+SELECT regexp_match('aBc', '(b|d)', 'i');
 +---------------------------------------------------+
 | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
 +---------------------------------------------------+
@@ -1383,13 +1383,13 @@ regexp_replace(str, regexp, replacement[, flags])
 #### Example
 
 ```sql
-❯ SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+
 | regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
 +------------------------------------------------------------------------+
 | fooXarYXazY                                                            |
 +------------------------------------------------------------------------+
-❯ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
+SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 | regexp_replace(Utf8("aBc"),Utf8("(b|d)"),Utf8("Ab\1a"),Utf8("i")) |
 +-------------------------------------------------------------------+
@@ -3070,8 +3070,8 @@ struct(expression1[, ..., expression_n])
 For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `c0` and `c1`:
 
-```sql
-❯ select * from t;
+```
+select * from t;
 +---+---+
 | a | b |
 +---+---+
@@ -3079,7 +3079,7 @@ a struct type of fields `c0` and `c1`:
 | 3 | 4 |
 +---+---+
 
-❯ select struct(a, b) from t;
+select struct(a, b) from t;
 +-----------------+
 | struct(t.a,t.b) |
 +-----------------+
