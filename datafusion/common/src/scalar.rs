@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
-    as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
+    as_fixed_size_binary_array, as_fixed_size_list_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
@@ -2325,21 +2325,9 @@ impl ScalarValue {
 
                 Self::Dictionary(key_type.clone(), Box::new(value))
             }
-            DataType::Struct(fields) => {
-                let struct_arr = as_struct_array(array)?;
-
-                let mut field_values: Vec<ScalarValue> = Vec::new();
-                let mut field_arrays: Vec<ArrayRef> = Vec::new();
-                for col_index in 0..struct_arr.num_columns() {
-                    let col_array = struct_arr.column(col_index);
-                    let col_scalar = ScalarValue::try_from_array(col_array, index)?;
-                    let col_array_at_index = col_scalar.to_array()?;
-                    field_values.push(col_scalar);
-                    field_arrays.push(col_array_at_index);
-                }
-                let struct_arr_at_index =
-                    StructArray::try_new(fields.to_owned(), field_arrays, None)?;
-                Self::Struct(Arc::new(struct_arr_at_index))
+            DataType::Struct(_) => {
+                let a = array.slice(index, 1);
+                Self::Struct(Arc::new(a.as_struct().to_owned()))
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
@@ -3327,7 +3315,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
+    use crate::cast::{
+        as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
+    };
 
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
@@ -4791,7 +4781,10 @@ mod tests {
         // None version
         let none_scalar = ScalarValue::try_from(array.data_type()).unwrap();
         assert!(none_scalar.is_null());
-        assert_eq!(format!("{none_scalar:?}"), String::from("Struct({A:Int32(NULL),B:Boolean(NULL),C:Utf8(NULL),D:Struct({e:Int16(NULL),f:Int64(NULL)})})"));
+        assert_eq!(
+            format!("{none_scalar:?}"),
+            String::from("Struct({A:,B:,C:,D:})")
+        );
 
         // Construct with convenience From<Vec<(&str, ScalarValue)>>
         let constructed = ScalarValue::from(vec![
