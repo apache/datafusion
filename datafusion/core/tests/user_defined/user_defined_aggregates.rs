@@ -582,10 +582,7 @@ impl FirstSelector {
 
     // Internally, keep the data types as this type
     fn state_datatypes() -> Vec<DataType> {
-        vec![
-            DataType::Float64,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]
+        vec![Self::output_datatype()]
     }
 
     /// Convert to a set of ScalarValues
