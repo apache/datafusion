@@ -722,7 +722,7 @@ concat(str[, ..., str_n])
 - **str_n**: Subsequent string column or literal string to concatenate.
 
 **Related functions**:
-[contcat_ws](#contcat_ws)
+[concat_ws](#concat_ws)
 
 ### `concat_ws`
 
