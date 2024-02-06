@@ -46,6 +46,14 @@ been able to finish it yet, you should feel free to work on it as well. In
 general it is both polite and will help avoid unnecessary duplication of work if
 you leave a note on an issue when you start working on it.
 
+If you want to work on an issue which is not already assigned to someone else
+and there are no comment indicating that someone is already working on that
+issue then you can assign the issue to yourself by submitting a single word
+comment `take`. This will assign the issue to yourself. However, if you are
+unable to make progress you should unassign the issue by using the `unassign me`
+link at the top of the issue page (and ask for help if are stuck) so that
+someone else can get involved in the work.
+
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
 helps avoid wasted effort by determining early if the feature is a good fit for
