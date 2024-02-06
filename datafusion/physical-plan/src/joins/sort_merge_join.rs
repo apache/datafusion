@@ -634,7 +634,9 @@ struct SMJStream {
     pub filter: Option<JoinFilter>,
     /// Staging output array builders
     pub output_record_batches: Vec<RecordBatch>,
-    /// Staging output size, including output batches and staging joined results
+    /// Staging output size, including output batches and staging joined results.
+    /// Increased when we put rows into buffer and decreased after we actually output batches.
+    /// Used to trigger output when sufficient rows are ready
     pub output_size: usize,
     /// Target output batch size
     pub batch_size: usize,
