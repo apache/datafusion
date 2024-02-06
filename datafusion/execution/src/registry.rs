@@ -31,7 +31,7 @@ pub trait FunctionRegistry {
     /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
 
-    /// Returns a reference to the user defined table function (udaf) named
+    /// Returns a reference to the user defined aggregate function (udaf) named
     /// `name`.
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
 

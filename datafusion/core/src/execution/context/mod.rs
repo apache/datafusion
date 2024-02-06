@@ -1970,9 +1970,7 @@ impl FunctionRegistry for SessionState {
     }
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
-        let aliases = udf.aliases();
-        for alias in aliases {
-            self.scalar_functions.insert(alias.to_string(), udf.clone());
+       udf.aliases().iter().for_each(|a| self.scalar_functions.insert(alias.to_string(), udf.clone()));
         }
 
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
