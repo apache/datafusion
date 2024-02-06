@@ -2754,6 +2754,7 @@ impl From<Option<&str>> for ScalarValue {
     }
 }
 
+/// Wrapper to create ScalarValue::Struct for convenience
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         let (fields, scalars): (SchemaBuilder, Vec<_>) = value
