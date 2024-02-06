@@ -583,7 +583,7 @@ For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
 appropriately:
 
-```SQL
+```shell
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
 ❯ show all;
@@ -603,10 +603,9 @@ DataFusion CLI v12.0.0
 
 You can change the configuration options using `SET` statement as well
 
-```SQL
+```shell
 $ datafusion-cli
 DataFusion CLI v13.0.0
-
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
 | name                            | value   |
