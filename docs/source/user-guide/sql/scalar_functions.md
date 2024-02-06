@@ -2031,6 +2031,10 @@ array_concat(array[, ..., array_n])
 - list_cat
 - list_concat
 
+### `array_contains`
+
+_Alias of [array_has](#array_has)._
+
 ### `array_has`
 
 Returns true if the array contains the element
