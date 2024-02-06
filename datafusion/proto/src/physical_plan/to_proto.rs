@@ -738,6 +738,17 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             output_orderings.push(expr_node_vec)
         }
 
+        // Fields must be added to the schema so that they can persist in the protobuf
+        // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
+        let mut fields = conf
+            .file_schema
+            .fields()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        fields.extend(conf.table_partition_cols.iter().cloned().map(Arc::new));
+        let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields.clone()));
+
         Ok(protobuf::FileScanExecConf {
             file_groups,
             statistics: Some((&conf.statistics).into()),
@@ -749,7 +760,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .iter()
                 .map(|n| *n as u32)
                 .collect(),
-            schema: Some(conf.file_schema.as_ref().try_into()?),
+            schema: Some(schema.as_ref().try_into()?),
             table_partition_cols: conf
                 .table_partition_cols
                 .iter()

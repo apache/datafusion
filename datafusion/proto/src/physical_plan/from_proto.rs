@@ -530,12 +530,24 @@ pub fn parse_protobuf_file_scan_config(
         true => ObjectStoreUrl::local_filesystem(),
     };
 
-    // extract types of partition columns
+    // Reacquire the partition column types from the schema before removing them below.
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
         .map(|col| Ok(schema.field_with_name(col)?.clone()))
         .collect::<Result<Vec<_>>>()?;
+
+    // Remove partition columns from the schema after recreating table_partition_cols
+    // because the partition columns are not in the file. They are present to allow the
+    // the partition column types to be reconstructed after serde.
+    let file_schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| !table_partition_cols.contains(field))
+            .cloned()
+            .collect::<Vec<_>>(),
+    ));
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
@@ -562,7 +574,7 @@ pub fn parse_protobuf_file_scan_config(
 
     Ok(FileScanConfig {
         object_store_url,
-        file_schema: schema,
+        file_schema,
         file_groups,
         statistics,
         projection,
