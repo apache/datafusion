@@ -188,7 +188,7 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 Where `WITH ORDER` clause specifies the sort order:
 
-```sql
+```
 WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
 ```
