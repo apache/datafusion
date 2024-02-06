@@ -737,7 +737,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
     agg: &Aggregate,
-) -> Result<Vec<(Option<OwnedTableReference>, Field)>> {
+) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -756,7 +756,7 @@ fn exprlist_to_fields_aggregate(
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
-) -> Result<Vec<DFField>> {
+) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named

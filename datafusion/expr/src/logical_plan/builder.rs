@@ -1270,34 +1270,45 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
     }
 
+    // QUESTION: Should columns be sorted before comparison? I.e. what happens if
+    // left is cols A,B and right is cols B,A?  And what about schema metadata?
     // create union schema
-    let union_schema = zip(
-        left_plan.schema().fields().iter(),
-        right_plan.schema().fields().iter(),
-    )
-    .map(|(left_field, right_field)| {
-        let nullable = left_field.is_nullable() || right_field.is_nullable();
-        let data_type =
-            comparison_coercion(left_field.data_type(), right_field.data_type())
-                .ok_or_else(|| {
-                    plan_datafusion_err!(
+    let (union_table_refs, union_fields): (
+        Vec<Option<OwnedTableReference>>,
+        Vec<Arc<Field>>,
+    ) = zip(left_plan.schema().iter(), right_plan.schema().iter())
+        .map(|(left_field, right_field)| {
+            let nullable = left_field.is_nullable() || right_field.is_nullable();
+            let data_type =
+                comparison_coercion(left_field.1.data_type(), right_field.1.data_type())
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
                 right_field.name(),
                 right_field.data_type(),
                 left_field.name(),
                 left_field.data_type()
             )
-                })?;
+                    })?;
 
-        Ok(DFField::new(
-            left_field.qualifier().cloned(),
-            left_field.name(),
-            data_type,
-            nullable,
-        ))
-    })
-    .collect::<Result<Vec<_>>>()?
-    .to_dfschema()?;
+            Ok((
+                left_field.0,
+                Arc::new(Field::new(left_field.name(), data_type, nullable)),
+            ))
+
+            // Ok(DFField::new(
+            //     left_field.qualifier().cloned(),
+            //     left_field.name(),
+            //     data_type,
+            //     nullable,
+            // ))
+        })
+        .unzip();
+    // .collect::<Result<Vec<_>>>()?;
+
+    // .to_dfschema()?;
+    let union_schema =
+        DFSchema::from_field_specific_qualified_schema(union_table_refs, union_fields);
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()

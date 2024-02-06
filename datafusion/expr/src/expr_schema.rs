@@ -29,7 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError,
-    ExprSchema, Result, TableReference,
+    ExprSchema, OwnedTableReference, Result, TableReference,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub trait ExprSchemable {
     fn to_field(
         &self,
         input_schema: &DFSchema,
-    ) -> Result<(Option<&TableReference>, &Arc<Field>)>;
+    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)>;
 
     /// cast to a type with respect to a schema
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
@@ -312,20 +312,25 @@ impl ExprSchemable for Expr {
     fn to_field(
         &self,
         input_schema: &DFSchema,
-    ) -> Result<(Option<&TableReference>, &Arc<Field>)> {
+    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
         match self {
             Expr::Column(c) => {
                 let field = input_schema.field_from_column(c)?;
-                Ok((c.relation, field))
+                Ok((c.relation, Arc::new(field.clone())))
             }
             Expr::Alias(Alias { relation, name, .. }) => {
-                let field = input_schema.field_with_qualified_name(relation, name)?;
-                Ok((relation, field))
+                if let Some(rel) = relation {
+                    let field = input_schema.field_with_qualified_name(rel, name)?;
+                    Ok((Some(rel.into()), Arc::new(field.clone())))
+                } else {
+                    let field = input_schema.field_with_unqualified_name(name)?;
+                    Ok((None, Arc::new(field.clone())))
+                }
             }
             _ => {
                 let field =
                     input_schema.field_with_unqualified_name(&self.display_name()?)?;
-                Ok((None, field))
+                Ok((None, Arc::new(field.clone())))
             }
         }
     }
