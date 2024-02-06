@@ -444,7 +444,7 @@ impl EquivalenceProperties {
             .map(|sort_expr| {
                 let referring_exprs: Vec<_> = matching_exprs
                     .iter()
-                    .filter(|matched| expr_refers(&matched, &sort_expr.expr))
+                    .filter(|matched| expr_refers(matched, &sort_expr.expr))
                     .cloned()
                     .collect();
                 // does not referring to any matching component, we just skip it
