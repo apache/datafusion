@@ -38,7 +38,7 @@ use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
 use arrow::compute::kernels::numeric::*;
-use arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
@@ -3240,9 +3240,9 @@ impl fmt::Debug for ScalarValue {
                         .iter()
                         .zip(fields.iter())
                         .map(|(column, field)| {
-                            let sv = ScalarValue::try_from_array(column, 0).unwrap();
+                            let sv = array_value_to_string(column, 0).unwrap();
                             let name = field.name();
-                            format!("{name}:{sv:?}")
+                            format!("{name}:{sv}")
                         })
                         .collect::<Vec<_>>()
                         .join(",")
