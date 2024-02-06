@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{CastExpr, Column};
+use crate::expressions::CastExpr;
 use arrow_schema::SchemaRef;
-use datafusion_common::{scalar, JoinSide, JoinType};
+use datafusion_common::{JoinSide, JoinType};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -434,14 +434,12 @@ impl EquivalenceProperties {
     /// x is DESC or ASC
     pub fn substitute_ordering_component(
         matching_exprs: Arc<Vec<&Arc<dyn PhysicalExpr>>>,
-        sort_expr: &Vec<PhysicalSortExpr>,
+        sort_expr: &[PhysicalSortExpr],
     ) -> Vec<PhysicalSortExpr> {
         sort_expr
             .iter()
             .filter(|sort_expr| {
-                matching_exprs
-                    .iter()
-                    .any(|matched| !matched.eq(sort_expr.clone()))
+                matching_exprs.iter().any(|matched| !matched.eq(*sort_expr))
             })
             .map(|sort_expr| {
                 let referring_exprs: Vec<_> = matching_exprs
@@ -450,9 +448,8 @@ impl EquivalenceProperties {
                     .cloned()
                     .collect();
                 // does not referring to any matching component, we just skip it
-                if referring_exprs.len() == 0 {
-                    sort_expr.clone()
-                } else {
+
+                if referring_exprs.len() == 1 {
                     // we check whether this expression is substitutable or not
                     let r_expr = referring_exprs[0].clone();
                     if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
@@ -472,7 +469,7 @@ impl EquivalenceProperties {
                         let mut result = sort_expr.clone();
                         if let Some(v) = scalar_func_expr.monotonicity() {
                             if v == &[Some(true)] {
-                                if let Some(arg) = scalar_func_expr.args().get(0) {
+                                if let Some(arg) = scalar_func_expr.args().first() {
                                     //println!("arg is {:?}", arg);
                                     if arg.eq(&sort_expr.expr)
                                         || arg.as_any().downcast_ref::<CastExpr>().map_or(
@@ -494,6 +491,8 @@ impl EquivalenceProperties {
                     } else {
                         sort_expr.clone()
                     }
+                } else {
+                    sort_expr.clone()
                 }
             })
             .collect()
@@ -505,7 +504,7 @@ impl EquivalenceProperties {
     /// dependency map, happen in issue 8838: https://github.com/apache/arrow-datafusion/issues/8838
     pub fn substitute_oeq_class(
         &mut self,
-        exprs: &Vec<(Arc<dyn PhysicalExpr>, String)>,
+        exprs: &[(Arc<dyn PhysicalExpr>, String)],
         mapping: &ProjectionMapping,
     ) {
         let matching_exprs: Arc<Vec<_>> = Arc::new(
@@ -665,7 +664,6 @@ impl EquivalenceProperties {
 
         // Get dependency map for existing orderings:
         let dependency_map = self.construct_dependency_map(&mapping);
-
         let orderings = mapping.iter().flat_map(|(source, target)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()

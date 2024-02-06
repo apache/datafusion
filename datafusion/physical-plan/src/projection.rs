@@ -205,8 +205,7 @@ impl ExecutionPlan for ProjectionExec {
     fn equivalence_properties(&self) -> EquivalenceProperties {
         let mut equi_properties = self.input.equivalence_properties();
         equi_properties.substitute_oeq_class(&self.expr, &self.projection_mapping);
-        let res = equi_properties.project(&self.projection_mapping, self.schema());
-        res
+        equi_properties.project(&self.projection_mapping, self.schema())
     }
 
     fn with_new_children(
