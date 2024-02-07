@@ -686,14 +686,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list)
-            | Value::FixedSizeListValue(scalar_list)
-            | Value::LargeListValue(scalar_list) => {
-                let protobuf::ScalarListValue {
+            Value::ListValue(v)
+            | Value::FixedSizeListValue(v)
+            | Value::LargeListValue(v)
+            | Value::StructValue(v) => {
+                let protobuf::ScalarNestedValue {
                     ipc_message,
                     arrow_data,
                     schema,
-                } = &scalar_list;
+                } = &v;
 
                 let schema: Schema = if let Some(schema_ref) = schema {
                     schema_ref.try_into()?
@@ -738,6 +739,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                     Value::FixedSizeListValue(_) => {
                         Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
+                    Value::StructValue(_) => {
+                        Self::Struct(arr.as_struct().to_owned().into())
                     }
                     _ => unreachable!(),
                 }
@@ -839,28 +843,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
-            Value::StructValue(v) => {
-                // all structs must have at least 1 field, so we treat
-                // an empty values list as NULL
-                let values = if v.field_values.is_empty() {
-                    None
-                } else {
-                    Some(
-                        v.field_values
-                            .iter()
-                            .map(|v| v.try_into())
-                            .collect::<Result<Vec<ScalarValue>, _>>()?,
-                    )
-                };
-
-                let fields = v
-                    .fields
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<_, _>>()?;
-
-                Self::Struct(values, fields)
-            }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
             }
