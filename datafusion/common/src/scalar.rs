@@ -1414,14 +1414,14 @@ impl ScalarValue {
                 MutableArrayData::with_capacities(arrays_ref, true, capacity);
 
             // ScalarValue::List contains a single element ListArray.
-            let mut cnt = 0;
-            for (index, is_null) in (0..arrays.len()).zip(nulls.into_iter()) {
+            let mut index = 0;
+            for is_null in nulls.into_iter() {
                 if is_null {
                     mutable.extend_nulls(1);
-                    cnt += 1;
                 } else {
                     // mutable array contains non-null elements
-                    mutable.extend(index - cnt, 0, 1);
+                    mutable.extend(index, 0, 1);
+                    index += 1;
                 }
             }
             let data = mutable.freeze();
