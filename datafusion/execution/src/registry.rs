@@ -27,13 +27,16 @@ pub trait FunctionRegistry {
     /// Set of all available udfs.
     fn udfs(&self) -> HashSet<String>;
 
-    /// Returns a reference to the udf named `name`.
+    /// Returns a reference to the user defined scalar function (udf) named
+    /// `name`.
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>>;
 
-    /// Returns a reference to the udaf named `name`.
+    /// Returns a reference to the user defined aggregate function (udaf) named
+    /// `name`.
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
 
-    /// Returns a reference to the udwf named `name`.
+    /// Returns a reference to the user defined window function (udwf) named
+    /// `name`.
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>>;
 
     /// Registers a new [`ScalarUDF`], returning any previously registered
@@ -45,7 +48,26 @@ pub trait FunctionRegistry {
         not_impl_err!("Registering ScalarUDF")
     }
 
-    // TODO add register_udaf and register_udwf
+    /// Registers a new [`AggregateUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    fn register_udaf(
+        &mut self,
+        _udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Registering AggregateUDF")
+    }
+
+    /// Registers a new [`WindowUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        not_impl_err!("Registering WindowUDF")
+    }
 }
 
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
