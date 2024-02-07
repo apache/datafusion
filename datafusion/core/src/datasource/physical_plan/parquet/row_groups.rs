@@ -354,7 +354,7 @@ mod tests {
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
-    use parquet::format::TimeUnit as parse_time_unit;
+    use parquet::format::TimeUnit as ParquetTimeUnit;
     use parquet::{
         basic::Type as PhysicalType,
         file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
@@ -1084,7 +1084,7 @@ mod tests {
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
             LogicalType::Timestamp {
-                unit: parse_time_unit::NANOS(Default::default()),
+                unit: ParquetTimeUnit::NANOS(Default::default()),
                 is_adjusted_to_u_t_c: false,
             },
         );
@@ -1169,7 +1169,7 @@ mod tests {
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
             LogicalType::Timestamp {
-                unit: parse_time_unit::MICROS(Default::default()),
+                unit: ParquetTimeUnit::MICROS(Default::default()),
                 is_adjusted_to_u_t_c: false,
             },
         );
@@ -1197,7 +1197,7 @@ mod tests {
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
             LogicalType::Timestamp {
-                unit: parse_time_unit::MILLIS(Default::default()),
+                unit: ParquetTimeUnit::MILLIS(Default::default()),
                 is_adjusted_to_u_t_c: false,
             },
         );
@@ -1225,7 +1225,7 @@ mod tests {
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
             LogicalType::Timestamp {
-                unit: parse_time_unit::MILLIS(Default::default()),
+                unit: ParquetTimeUnit::MILLIS(Default::default()),
                 is_adjusted_to_u_t_c: false,
             },
         );
