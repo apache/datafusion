@@ -346,10 +346,31 @@ AS VALUES
 
 statement ok
 CREATE TABLE array_distinct_table_1D_large
+AS SELECT
+  arrow_cast(column1, 'LargeList(Int64)') AS column1
+FROM array_distinct_table_1D
+;
+
+statement ok
+CREATE TABLE array_distinct_table_1D_fixed
+AS SELECT
+  arrow_cast(column1, 'FixedSizeList(5, Int64)') AS column1
+FROM array_distinct_table_1D
+;
+
+statement ok
+CREATE TABLE array_distinct_table_1D_UTF8_fixed
+AS SELECT
+  arrow_cast(column1, 'FixedSizeList(5, Utf8)') AS column1
+FROM array_distinct_table_1D_UTF8
+;
+
+statement ok
+CREATE TABLE array_distinct_table_2D_fixed
 AS VALUES
-  (arrow_cast(make_array(1, 1, 2, 2, 3), 'LargeList(Int64)')),
-  (arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)')),
-  (arrow_cast(make_array(3, 5, 3, 3, 3), 'LargeList(Int64)'))
+  (arrow_cast(make_array([1,2], [1,2], [3,4], [3,4], [5,6]), 'FixedSizeList(5, List(Int64))')),
+  (arrow_cast(make_array([1,2], [3,4], [5,6], [7,8], [9,10]), 'FixedSizeList(5, List(Int64))')),
+  (arrow_cast(make_array([5,6], [5,6], NULL, NULL, NULL), 'FixedSizeList(5, List(Int64))'))
 ;
 
 statement ok
@@ -2107,6 +2128,11 @@ select array_prepend(1, arrow_cast(make_array(2, 3, 4), 'LargeList(Int64)')), ar
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+query ???
+select array_prepend(1, arrow_cast([2, 3, 4], 'FixedSizeList(3, Int64)')), array_prepend(1.0, arrow_cast([2.0, 3.0, 4.0], 'FixedSizeList(3, Float64)')), array_prepend('h', arrow_cast(['e', 'l', 'l', 'o'], 'FixedSizeList(4, Utf8)'));
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
 # array_prepend scalar function #4 (element is list)
 query ???
 select array_prepend(make_array(1), make_array(make_array(2), make_array(3), make_array(4))), array_prepend(make_array(1.0), make_array([2.0], [3.0], [4.0])), array_prepend(make_array('h'), make_array(['e'], ['l'], ['l'], ['o']));
@@ -2119,6 +2145,13 @@ select array_prepend(arrow_cast(make_array(1), 'LargeList(Int64)'), arrow_cast(m
        array_prepend(arrow_cast(make_array('h'), 'LargeList(Utf8)'), arrow_cast(make_array(['e'], ['l'], ['l'], ['o']), 'LargeList(LargeList(Utf8))'));
 ----
 [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_prepend(arrow_cast([1], 'FixedSizeList(1, Int64)'), arrow_cast([[1], [2], [3]], 'FixedSizeList(3, List(Int64))')),
+       array_prepend(arrow_cast([1.0], 'FixedSizeList(1, Float64)'), arrow_cast([[2.0], [3.0], [4.0]], 'FixedSizeList(3, List(Float64))')),
+       array_prepend(arrow_cast(['h'], 'FixedSizeList(1, Utf8)'), arrow_cast([['e'], ['l'], ['l'], ['o']], 'FixedSizeList(4, List(Utf8))'));
+----
+[[1], [1], [2], [3]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
 # list_prepend scalar function #5 (function alias `array_prepend`)
 query ???
@@ -4331,12 +4364,12 @@ FROM array_ndims_table;
 
 statement ok
 CREATE TABLE fixed_array_ndims_table
-AS SELECT
-  column1,
-  arrow_cast(column2, 'FixedSizeList(3, Int64)') as column2,
-  arrow_cast(column3, 'FixedSizeList(3, List(Int64))') as column3,
-  arrow_cast(column4, 'FixedSizeList(3, List(List(List(List(Int64)))))') as column4
-FROM array_ndims_table;
+AS VALUES
+  (arrow_cast([1], 'FixedSizeList(1, Int64)'), arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)'), arrow_cast([[7]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (arrow_cast([2], 'FixedSizeList(1, Int64)'), arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)'), arrow_cast([[8]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (null, arrow_cast([6, 7, 8], 'FixedSizeList(3, Int64)'), arrow_cast([[9]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))')),
+  (arrow_cast([3], 'FixedSizeList(1, Int64)'), arrow_cast([6, 7, 8], 'FixedSizeList(3, Int64)'), arrow_cast([[9]], 'FixedSizeList(1, List(Int64))'), arrow_cast([[[[[10]]]]], 'FixedSizeList(1, List(List(List(List(Int64)))))'))
+;
 
 query IIII
 select
@@ -4358,6 +4391,19 @@ select
   array_ndims(column3),
   array_ndims(column4)
 from large_array_ndims_table;
+----
+1 1 2 5
+1 1 2 5
+NULL 1 2 5
+1 1 2 5
+
+query IIII
+select
+  array_ndims(column1),
+  array_ndims(column2),
+  array_ndims(column3),
+  array_ndims(column4)
+from fixed_array_ndims_table;
 ----
 1 1 2 5
 1 1 2 5
@@ -4864,6 +4910,30 @@ from array_distinct_table_1D_large;
 [1, 2, 3]
 [1, 2, 3, 4, 5]
 [3, 5]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_1D_fixed;
+----
+[1, 2, 3]
+[1, 2, 3, 4, 5]
+[3, 5]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_1D_UTF8_fixed;
+----
+[a, bc, def]
+[a, bc, def, defg]
+[defg]
+
+query ?
+select array_distinct(column1)
+from array_distinct_table_2D_fixed;
+----
+[[1, 2], [3, 4], [5, 6]]
+[[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
+[, [5, 6]]
 
 query ???
 select array_intersect(column1, column2),
