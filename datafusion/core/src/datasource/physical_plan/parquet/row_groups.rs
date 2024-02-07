@@ -1080,14 +1080,11 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             false,
         )]));
-        let field = PrimitiveTypeField::new("c1", PhysicalType::BYTE_ARRAY)
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
             .with_logical_type(LogicalType::Timestamp {
                 unit: parse_time_unit::NANOS(Default::default()),
                 is_adjusted_to_u_t_c: false,
-            })
-            .with_scale(2)
-            .with_precision(18)
-            .with_byte_len(32);
+            });
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), None)));
         let expr = logical2physical(&expr, &schema);
@@ -1160,6 +1157,8 @@ mod tests {
             ),
             vec![0, 1, 3]
         );
+
+        
     }
 
     fn get_row_group_meta_data(
@@ -1187,7 +1186,6 @@ mod tests {
         let schema_fields = fields
             .iter()
             .map(|field| {
-                dbg!(&field);
                 let mut builder =
                     SchemaType::primitive_type_builder(field.name, field.physical_ty);
                 // add logical type for the parquet field

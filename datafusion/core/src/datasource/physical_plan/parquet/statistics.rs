@@ -86,6 +86,25 @@ macro_rules! get_statistic {
                             *scale,
                         ))
                     }
+                    // int64 to timestamp with the time unit and time zone
+                    Some(DataType::Timestamp(time_unit, time_zone)) => match time_unit {
+                        TimeUnit::Nanosecond => Some(ScalarValue::TimestampNanosecond(
+                            Some(*s.$func() as i64),
+                            time_zone.clone(),
+                        )),
+                        TimeUnit::Microsecond => Some(ScalarValue::TimestampMicrosecond(
+                            Some(*s.$func() as i64),
+                            time_zone.clone(),
+                        )),
+                        TimeUnit::Millisecond => Some(ScalarValue::TimestampMillisecond(
+                            Some(*s.$func() as i64),
+                            time_zone.clone(),
+                        )),
+                        TimeUnit::Second => Some(ScalarValue::TimestampSecond(
+                            Some(*s.$func() as i64),
+                            time_zone.clone(),
+                        )),
+                    },
                     _ => Some(ScalarValue::Int64(Some(*s.$func()))),
                 }
             }
@@ -102,42 +121,6 @@ macro_rules! get_statistic {
                             *precision,
                             *scale,
                         ))
-                    }
-                    Some(DataType::Timestamp(time_unit, time_zone)) => {
-                        let ts = std::str::from_utf8(s.$bytes_func());
-                        if ts.is_err() {
-                            return None;
-                        }
-                        let ts = match string_to_timestamp_nanos(ts.unwrap()) {
-                            Ok(ts) => ts,
-                            Err(_) => {
-                                return None;
-                            }
-                        };
-                        match time_unit {
-                            TimeUnit::Nanosecond => {
-                                Some(ScalarValue::TimestampNanosecond(
-                                    Some(ts),
-                                    time_zone.clone(),
-                                ))
-                            }
-                            TimeUnit::Microsecond => {
-                                Some(ScalarValue::TimestampMicrosecond(
-                                    Some(ts / 1_000),
-                                    time_zone.clone(),
-                                ))
-                            }
-                            TimeUnit::Millisecond => {
-                                Some(ScalarValue::TimestampMillisecond(
-                                    Some(ts / 1_000_000),
-                                    time_zone.clone(),
-                                ))
-                            }
-                            TimeUnit::Second => Some(ScalarValue::TimestampSecond(
-                                Some(ts / 1_000_000_000),
-                                time_zone.clone(),
-                            )),
-                        }
                     }
                     _ => {
                         let s = std::str::from_utf8(s.$bytes_func())
