@@ -1075,6 +1075,8 @@ mod tests {
     fn row_group_pruning_predicate_timestamp() {
         // For the timestamp data type, parquet can use `INT64` to store the data.
         // In this case, construct four types of statistics to filtered with the timestamp predication.
+
+        // Nanoseconds
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1151,12 +1153,96 @@ mod tests {
             prune_row_groups_by_statistics(
                 &schema,
                 &schema_descr,
-                &[rgm1, rgm2, rgm3, rgm4],
+                &[rgm1.clone(), rgm2.clone(), rgm3.clone(), rgm4.clone()],
                 None,
                 Some(&pruning_predicate),
                 &metrics
             ),
             vec![0, 1, 3]
+        );
+
+        // Microseconds
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        )]));
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
+            LogicalType::Timestamp {
+                unit: parse_time_unit::MICROS(Default::default()),
+                is_adjusted_to_u_t_c: false,
+            },
+        );
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let expr = col("c1").gt(lit(ScalarValue::TimestampMicrosecond(Some(1000), None)));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        assert_eq!(
+            prune_row_groups_by_statistics(
+                &schema,
+                &schema_descr,
+                &[rgm1.clone(), rgm2.clone(), rgm3.clone(), rgm4.clone()],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![0, 1, 3]
+        );
+
+        // Milliseconds
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]));
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
+            LogicalType::Timestamp {
+                unit: parse_time_unit::MILLIS(Default::default()),
+                is_adjusted_to_u_t_c: false,
+            },
+        );
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let expr = col("c1").gt(lit(ScalarValue::TimestampMillisecond(Some(1000), None)));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        assert_eq!(
+            prune_row_groups_by_statistics(
+                &schema,
+                &schema_descr,
+                &[rgm1.clone(), rgm2.clone(), rgm3.clone(), rgm4.clone()],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![0, 1, 3]
+        );
+
+        // Seconds
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]));
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
+            LogicalType::Timestamp {
+                unit: parse_time_unit::MILLIS(Default::default()),
+                is_adjusted_to_u_t_c: false,
+            },
+        );
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let expr = col("c1").gt(lit(ScalarValue::TimestampSecond(Some(1000), None)));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        assert_eq!(
+            prune_row_groups_by_statistics(
+                &schema,
+                &schema_descr,
+                &[rgm1.clone(), rgm2.clone(), rgm3.clone(), rgm4.clone()],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![3]
         );
     }
 

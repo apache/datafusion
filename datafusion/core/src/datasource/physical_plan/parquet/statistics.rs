@@ -354,10 +354,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got TimestampNanosecond(NULL, None)"
-    )]
-    // Due to https://github.com/apache/arrow-datafusion/issues/8295
     fn roundtrip_timestamp() {
         Test {
             input: timestamp_array([
