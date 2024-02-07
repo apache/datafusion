@@ -17,14 +17,10 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow_array::types::{
-    ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, Utf8Type,
-};
+use arrow_array::types::Utf8Type;
 use arrow_array::{
-    GenericByteArray, PrimitiveArray, RecordBatch, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    GenericByteArray, RecordBatch, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow_schema::TimeUnit;
 use async_trait::async_trait;
@@ -48,9 +44,7 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, not_impl_err, DataFusionError, FileType,
-};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};

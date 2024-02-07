@@ -1080,11 +1080,12 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             false,
         )]));
-        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
-            .with_logical_type(LogicalType::Timestamp {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64).with_logical_type(
+            LogicalType::Timestamp {
                 unit: parse_time_unit::NANOS(Default::default()),
                 is_adjusted_to_u_t_c: false,
-            });
+            },
+        );
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::TimestampNanosecond(Some(1000), None)));
         let expr = logical2physical(&expr, &schema);
@@ -1157,8 +1158,6 @@ mod tests {
             ),
             vec![0, 1, 3]
         );
-
-        
     }
 
     fn get_row_group_meta_data(
