@@ -47,7 +47,7 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
@@ -1254,9 +1254,6 @@ fn add_group_by_exprs_from_dependencies(
     }
     Ok(group_expr)
 }
-pub(crate) fn validate_unique_names_with_table<'a>() {
-    unimplemented!()
-}
 /// Errors if one or more expressions have equal names.
 pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
@@ -1599,7 +1596,6 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
 
     use arrow::datatypes::{DataType, Field};
-    use arrow::ipc::Int;
     use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     #[test]
