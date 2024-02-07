@@ -890,7 +890,6 @@ impl LogicalPlanBuilder {
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        println!("left is {:?} \n right is {:?}", self.plan, right);
         Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan),
             right: Arc::new(right),
@@ -1212,7 +1211,6 @@ pub fn build_join_schema(
         join_type,
         left_fields.len(),
     );
-    // println!("func_dependencies is {:?}", func_dependencies);
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
     // let schema = DFSchema::new_with_metadata(change_redundant_column(fields), metadata)?;
@@ -1406,10 +1404,7 @@ pub fn project(
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
-    // println!(
-    //     "before validation the projection name is {:?} \n and the expression is {:?}",
-    //     plan, projected_expr
-    // );
+
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -1604,6 +1599,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
 
     use arrow::datatypes::{DataType, Field};
+    use arrow::ipc::Int;
     use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     #[test]
@@ -2109,6 +2105,27 @@ mod tests {
             .union(join)?
             .build()?;
 
+        Ok(())
+    }
+    #[test]
+    fn test_change_redundant_column() -> Result<()> {
+        let t1_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t2_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t1_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
+        let t2_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
+
+        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2];
+        let remove_redundant = change_redundant_column(field_vec);
+
+        assert_eq!(
+            remove_redundant,
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("a:0", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+                DFField::new_unqualified("b:0", DataType::Int32, false)
+            ]
+        );
         Ok(())
     }
 }

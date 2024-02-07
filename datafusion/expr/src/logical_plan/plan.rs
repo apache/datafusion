@@ -2186,10 +2186,7 @@ impl TableScan {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
-        // println!(
-        //     "projected_schema is {:?} \n and projection is {:?}",
-        //     projected_schema, projection,
-        // );
+
         Ok(Self {
             table_name,
             source: table_source,

@@ -219,7 +219,6 @@ async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        // println!("cur statement is {:?}", statement);
         let plan = create_plan(ctx, statement).await?;
 
         // For plans like `Explain` ignore `MaxRows` option and always display all rows
@@ -229,7 +228,6 @@ async fn exec_and_print(
                 | LogicalPlan::DescribeTable(_)
                 | LogicalPlan::Analyze(_)
         );
-        // println!("the final logical plan is {:?}", plan);
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
