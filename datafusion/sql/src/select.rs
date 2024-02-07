@@ -66,7 +66,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !select.sort_by.is_empty() {
             return not_impl_err!("SORT BY");
         }
-
+        // println!("select from is {:?}", select.from);
+        // println!("current planner_context is {:?}", planner_context);
         // process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -77,7 +78,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -85,7 +85,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             empty_from,
             planner_context,
         )?;
-
+        // println!(
+        //     "base plan is {:?} \n select expression is {:?} \n planner_context is {:?}",
+        //     base_plan, select_exprs, planner_context
+        // );
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
         // Place the fields of the base plan at the front so that when there are references

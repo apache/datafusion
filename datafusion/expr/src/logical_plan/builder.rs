@@ -47,7 +47,7 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
@@ -890,6 +890,7 @@ impl LogicalPlanBuilder {
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
+        println!("left is {:?} \n right is {:?}", self.plan, right);
         Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan),
             right: Arc::new(right),
@@ -1124,7 +1125,28 @@ impl LogicalPlanBuilder {
         )?))
     }
 }
-
+pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
+    let mut name_map = HashMap::new();
+    fields
+        .into_iter()
+        .map(|field| {
+            if !name_map.contains_key(field.name()) {
+                name_map.insert(field.name().to_string(), 0);
+                field
+            } else {
+                let cur_cnt = &name_map.get(field.name());
+                let name = field.name().to_string() + ":" + &cur_cnt.unwrap().to_string();
+                name_map.insert(field.name().to_string(), cur_cnt.unwrap() + 1);
+                DFField::new(
+                    field.qualifier().cloned(),
+                    &name,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )
+            }
+        })
+        .collect()
+}
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
 pub fn build_join_schema(
@@ -1184,13 +1206,16 @@ pub fn build_join_schema(
             right_fields.clone()
         }
     };
+    //println!("total fields is {:?}", fields);
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
         left_fields.len(),
     );
+    // println!("func_dependencies is {:?}", func_dependencies);
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
+    // let schema = DFSchema::new_with_metadata(change_redundant_column(fields), metadata)?;
     let schema = DFSchema::new_with_metadata(fields, metadata)?;
     schema.with_functional_dependencies(func_dependencies)
 }
@@ -1231,12 +1256,16 @@ fn add_group_by_exprs_from_dependencies(
     }
     Ok(group_expr)
 }
+pub(crate) fn validate_unique_names_with_table<'a>() {
+    unimplemented!()
+}
 /// Errors if one or more expressions have equal names.
 pub(crate) fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
     let mut unique_names = HashMap::new();
+
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
         let name = expr.display_name()?;
         match unique_names.get(&name) {
@@ -1245,6 +1274,7 @@ pub(crate) fn validate_unique_names<'a>(
                 Ok(())
             },
             Some((existing_position, existing_expr)) => {
+                //println!("node_name is {}, existing expr is {:?}", node_name, existing_expr);
                 plan_err!("{node_name} require unique expression names \
                              but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
                              at position {position} have the same name. Consider aliasing (\"AS\") one of them."
@@ -1360,6 +1390,7 @@ pub fn project(
     let mut projected_expr = vec![];
     for e in expr {
         let e = e.into();
+        //println!("cur_expression is {:?}", e);
         match e {
             Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
@@ -1375,6 +1406,10 @@ pub fn project(
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
+    // println!(
+    //     "before validation the projection name is {:?} \n and the expression is {:?}",
+    //     plan, projected_expr
+    // );
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
