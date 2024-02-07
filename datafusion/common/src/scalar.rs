@@ -1385,24 +1385,43 @@ impl ScalarValue {
                 .map(|s| s.to_array())
                 .collect::<Result<Vec<_>>>()?;
 
-            let capacity = Capacities::Array(arrays.iter().map(|arr| arr.len()).sum());
+            let capacity = Capacities::Array(
+                arrays
+                    .iter()
+                    .filter_map(|arr| {
+                        if !arr.is_null(0) {
+                            Some(arr.len())
+                        } else {
+                            None
+                        }
+                    })
+                    .sum(),
+            );
+
             // ScalarValue::List contains a single element ListArray.
             let nulls = arrays
                 .iter()
                 .map(|arr| arr.is_null(0))
                 .collect::<Vec<bool>>();
-            let arrays_data = arrays.iter().map(|arr| arr.to_data()).collect::<Vec<_>>();
+            let arrays_data = arrays
+                .iter()
+                .filter(|arr| !arr.is_null(0))
+                .map(|arr| arr.to_data())
+                .collect::<Vec<_>>();
 
             let arrays_ref = arrays_data.iter().collect::<Vec<_>>();
             let mut mutable =
                 MutableArrayData::with_capacities(arrays_ref, true, capacity);
 
             // ScalarValue::List contains a single element ListArray.
-            for (index, is_null) in (0..arrays.len()).zip(nulls.into_iter()) {
+            let mut index = 0;
+            for is_null in nulls.into_iter() {
                 if is_null {
-                    mutable.extend_nulls(1)
+                    mutable.extend_nulls(1);
                 } else {
+                    // mutable array contains non-null elements
                     mutable.extend(index, 0, 1);
+                    index += 1;
                 }
             }
             let data = mutable.freeze();
