@@ -54,7 +54,48 @@ macro_rules! fetch_string_arg {
     }};
 }
 
-/// tests a string using a regular expression returning true if at least one match. false otherwise
+/// Tests a string using a regular expression returning true if at
+/// least one match, false otherwise.
+///
+/// The full list of supported features and syntax can be found at
+/// <https://docs.rs/regex/latest/regex/#syntax>
+///
+/// Supported flags can be found at
+/// <https://docs.rs/regex/latest/regex/#grouping-and-flags>
+///
+/// # Examples
+///
+/// ```
+/// # use datafusion::prelude::*;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let ctx = SessionContext::new();
+/// let df = ctx.read_csv("tests/data/regex.csv", CsvReadOptions::new()).await?;
+///
+/// // use the regexp_like function to test col 'values',
+/// // against patterns in col 'patterns' without flags
+/// let df = df.with_column(
+///     "a",
+///     regexp_like(vec![col("values"), col("patterns")])
+/// )?;
+/// // use the regexp_like function to test col 'values',
+/// // against patterns in col 'patterns' with flags
+/// let df = df.with_column(
+///     "b",
+///     regexp_like(vec![col("values"), col("patterns"), col("flags")])
+/// )?;
+/// // literals can be used as well with dataframe calls
+/// let df = df.with_column(
+///     "c",
+///     regexp_like(vec![lit("foobarbequebaz"), lit("(bar)(beque)")])
+/// )?;
+///
+/// df.show().await?;
+///
+/// # Ok(())
+/// # }
+/// ```
 pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
@@ -85,7 +126,48 @@ pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// extract a specific group from a string column, using a regular expression
+/// Extract a specific group from a string column, using a regular expression.
+///
+/// The full list of supported features and syntax can be found at
+/// <https://docs.rs/regex/latest/regex/#syntax>
+///
+/// Supported flags can be found at
+/// <https://docs.rs/regex/latest/regex/#grouping-and-flags>
+///
+/// # Examples
+///
+/// ```
+/// # use datafusion::prelude::*;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let ctx = SessionContext::new();
+/// let df = ctx.read_csv("tests/data/regex.csv", CsvReadOptions::new()).await?;
+///
+/// // use  the regexp_match function to test col 'values',
+/// // against patterns in col 'patterns' without flags
+/// let df = df.with_column(
+///     "a",
+///     regexp_match(vec![col("values"), col("patterns")])
+/// )?;
+/// // use the regexp_match function to test col 'values',
+/// // against patterns in col 'patterns' with flags
+/// let df = df.with_column(
+///     "b",
+///     regexp_match(vec![col("values"), col("patterns"), col("flags")]),
+/// )?;
+///
+/// // literals can be used as well with dataframe calls
+/// let df = df.with_column(
+///     "c",
+///     regexp_match(vec![lit("foobarbequebaz"), lit("(bar)(beque)")]),
+/// )?;
+///
+/// df.show().await?;
+///
+/// # Ok(())
+/// # }
+/// ```
 pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
@@ -124,9 +206,46 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
         .into_owned()
 }
 
-/// Replaces substring(s) matching a POSIX regular expression.
+/// Replaces substring(s) matching a PCRE-like regular expression.
 ///
-/// example: `regexp_replace('Thomas', '.[mN]a.', 'M') = 'ThM'`
+/// The full list of supported features and syntax can be found at
+/// <https://docs.rs/regex/latest/regex/#syntax>
+///
+/// Supported flags with the addition of 'g' can be found at
+/// <https://docs.rs/regex/latest/regex/#grouping-and-flags>
+///
+/// # Examples
+///
+/// ```
+/// # use datafusion::prelude::*;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let ctx = SessionContext::new();
+/// let df = ctx.read_csv("tests/data/regex.csv", CsvReadOptions::new()).await?;
+///
+/// // use the regexp_replace function to replace substring(s) without flags
+/// let df = df.with_column(
+///     "a",
+///     regexp_replace(vec![col("values"), col("patterns"), col("replacement")])
+/// )?;
+/// // use the regexp_replace function to replace substring(s) with flags
+/// let df = df.with_column(
+///     "b",
+///     regexp_replace(vec![col("values"), col("patterns"), col("replacement"), col("flags")]),
+/// )?;
+///
+/// // literals can be used as well
+/// let df = df.with_column(
+///     "c",
+///     regexp_replace(vec![lit("foobarbequebaz"), lit("(bar)(beque)"), lit(r"\2")]),
+/// )?;
+///
+/// df.show().await?;
+///
+/// # Ok(())
+/// # }
+/// ```
 pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     // Default implementation for regexp_replace, assumes all args are arrays
     // and args is a sequence of 3 or 4 elements.

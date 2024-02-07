@@ -18,8 +18,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, LargeStringArray, StringArray, StringBuilder};
-use log::info;
+use arrow::array::BooleanArray;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -27,82 +26,23 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::assert_contains;
 
-/// This example demonstrates how to use the regexp_*
-/// functions in the DataFrame API as well as via sql.
+/// This example demonstrates how to use the regexp_* functions
+///
+/// the full list of supported features and
+/// syntax can be found at
+/// https://docs.rs/regex/latest/regex/#syntax
+///
+/// Supported flags can be found at
+/// https://docs.rs/regex/latest/regex/#grouping-and-flags
 #[tokio::main]
 async fn main() -> Result<()> {
-    // define a schema. Regex are restricted to Utf8 and largeutf8 data
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("values", DataType::Utf8, false),
-        Field::new("patterns", DataType::LargeUtf8, false),
-        Field::new("flags", DataType::Utf8, true),
-    ]));
-
-    let mut sb = StringBuilder::new();
-    sb.append_value("i");
-    sb.append_value("i");
-    sb.append_value("i");
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-    sb.append_null();
-
-    // define data for our examples
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(StringArray::from(vec![
-                "abc",
-                "ABC",
-                "aBc",
-                "AbC",
-                "aBC",
-                "4000",
-                "4010",
-                "Düsseldorf",
-                "Москва",
-                "Köln",
-                "إسرائيل",
-            ])),
-            // the full list of supported features and
-            // syntax can be found at
-            // https://docs.rs/regex/latest/regex/#syntax
-
-            // NOTE: double slashes are required to escape the slash character
-            // NOTE: when not using the r"" syntax
-            Arc::new(LargeStringArray::from(vec![
-                // simple regex examples
-                "^(a)",
-                "^(A).*",
-                "(b|d)",
-                "(B|D)",
-                "^(b|c)",
-                // word boundaries, grouping, etc
-                r"\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b",
-                r"\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b",
-                // unicode is supported
-                r"[\p{Letter}-]+",
-                r"[\p{L}-]+",
-                "[a-zA-Z]ö[a-zA-Z]{2}",
-                // unicode character classes work
-                r"^\p{Arabic}+$",
-            ])),
-            // supported flags can be found at
-            // https://docs.rs/regex/latest/regex/#grouping-and-flags
-            Arc::new(sb.finish()),
-        ],
-    )?;
-
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
     let ctx = SessionContext::new();
-
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("examples", batch)?;
-    let df = ctx.table("examples").await?;
+    ctx.register_csv(
+        "examples",
+        "datafusion/physical-expr/tests/data/regex.csv",
+        CsvReadOptions::new(),
+    )
+    .await?;
 
     //
     //
@@ -111,25 +51,6 @@ async fn main() -> Result<()> {
     //
     // regexp_like format is (regexp_replace(text, regex[, flags])
     //
-
-    // use dataframe and regexp_like function to test col 'values', against patterns in col 'patterns' without flags
-    let df = df.with_column("a", regexp_like(vec![col("values"), col("patterns")]))?;
-    // use dataframe and regexp_like function to test col 'values', against patterns in col 'patterns' with flags
-    let df = df.with_column(
-        "b",
-        regexp_like(vec![col("values"), col("patterns"), col("flags")]),
-    )?;
-
-    // you can  use literals as well with dataframe calls
-    let df = df.with_column(
-        "c",
-        regexp_like(vec![lit("foobarbequebaz"), lit("(bar)(beque)")]),
-    )?;
-
-    let df = df.select_columns(&["a", "b", "c"])?;
-
-    // print the results
-    df.show().await?;
 
     // use sql and regexp_like function to test col 'values', against patterns in col 'patterns' without flags
     let df = ctx
@@ -144,33 +65,18 @@ async fn main() -> Result<()> {
         .sql("select regexp_like(values, patterns, flags) from examples")
         .await?;
 
-    // print the results
     df.show().await?;
 
     // literals work as well
     // to match against the entire input use ^ and $ in the regex
     let df = ctx.sql("select regexp_like('John Smith', '^.*Smith$'), regexp_like('Smith Jones', '^Smith.*$')").await?;
 
-    // print the results
     df.show().await?;
 
     // look-around and back references are not supported for performance
     // reasons.
     // Note that an error may not always be returned but the result
     // if returned will always be false
-    let df = ctx.read_empty()?.with_column(
-        "a",
-        regexp_like(vec![
-            lit(r"(?<=[A-Z]\w* )Smith"),
-            lit("John Smith"),
-            lit("i"),
-        ]),
-    )?;
-    let df = df.select_columns(&["a"])?;
-
-    // print the results
-    df.show().await?;
-
     let result = ctx
         .sql(r"select regexp_like('(?<=[A-Z]\w )Smith', 'John Smith', 'i') as a")
         .await?
@@ -187,9 +93,6 @@ async fn main() -> Result<()> {
     let result = result.unwrap();
 
     assert_eq!(result.len(), 1);
-    info!("{:?}", result[0]);
-    info!("{expected:?}");
-
     assert_eq!(format!("{:?}", result[0]), format!("{expected:?}"));
 
     // invalid flags will result in an error
@@ -209,7 +112,7 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    let expected = "Regular expression did not compile: CompiledTooBig(";
+    let expected = "Regular expression did not compile: CompiledTooBig";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     //
@@ -222,23 +125,6 @@ async fn main() -> Result<()> {
 
     let df = ctx.table("examples").await?;
 
-    // use dataframe and regexp_match function to test col 'values', against patterns in col 'patterns' without flags
-    let df = df.with_column("a", regexp_match(vec![col("values"), col("patterns")]))?;
-    // use dataframe and regexp_match function to test col 'values', against patterns in col 'patterns' with flags
-    let df = df.with_column(
-        "b",
-        regexp_match(vec![col("values"), col("patterns"), col("flags")]),
-    )?;
-
-    // you can  use literals as well with dataframe calls
-    let df = df.with_column(
-        "c",
-        regexp_match(vec![lit("foobarbequebaz"), lit("(bar)(beque)")]),
-    )?;
-
-    let df = df.select_columns(&["a", "b", "c"])?;
-
-    // print the results
     df.show().await?;
 
     // use sql and regexp_match function to test col 'values', against patterns in col 'patterns' without flags
@@ -246,7 +132,6 @@ async fn main() -> Result<()> {
         .sql("select regexp_match(values, patterns) from examples")
         .await?;
 
-    // print the results
     df.show().await?;
 
     // use dataframe and regexp_match function to test col 'values', against patterns in col 'patterns' with flags
@@ -254,14 +139,12 @@ async fn main() -> Result<()> {
         .sql("select regexp_match(values, patterns, flags) from examples")
         .await?;
 
-    // print the results
     df.show().await?;
 
     // literals work as well
     // to match against the entire input use ^ and $ in the regex
     let df = ctx.sql("select regexp_match('John Smith', '^.*Smith$'), regexp_match('Smith Jones', '^Smith.*$')").await?;
 
-    // print the results
     df.show().await?;
 
     //
@@ -272,12 +155,18 @@ async fn main() -> Result<()> {
     // regexp_replace format is (regexp_replace(text, regex, replace, flags)
     //
 
+    // use regexp_replace function against tables
+    let df = ctx
+        .sql("SELECT regexp_replace(values, patterns, replacement, flags) FROM examples")
+        .await?;
+
+    df.show().await?;
+
     // global flag example
     let df = ctx
         .sql("SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g')")
         .await?;
 
-    // print the results
     df.show().await?;
 
     // without global flag
@@ -285,7 +174,6 @@ async fn main() -> Result<()> {
         .sql("SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', null)")
         .await?;
 
-    // print the results
     df.show().await?;
 
     // null regex means null result
@@ -293,7 +181,6 @@ async fn main() -> Result<()> {
         .sql("SELECT regexp_replace('foobarbaz', NULL, 'X\\1Y', 'g')")
         .await?;
 
-    // print the results
     df.show().await?;
 
     Ok(())
