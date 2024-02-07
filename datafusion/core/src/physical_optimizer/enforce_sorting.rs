@@ -228,9 +228,10 @@ fn replace_with_partial_sort(
                 PartialSortExec::new(
                     sort_plan.expr().to_vec(),
                     sort_plan.input().clone(),
+                    common_prefix_length,
                 )
-                .with_common_prefix_length(common_prefix_length)
-                .with_preserve_partitioning(sort_plan.preserve_partitioning()),
+                .with_preserve_partitioning(sort_plan.preserve_partitioning())
+                .with_fetch(sort_plan.fetch()),
             ));
         }
     }
