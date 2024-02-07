@@ -17,17 +17,18 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
-use arrow::datatypes::{DataType, Field};
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use std::collections::HashSet;
+use arrow::datatypes::{DataType, Field};
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
+
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -137,10 +138,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
         let array = &values[0];
-        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
-        for scalar in scalars {
-            self.values.extend(scalar)
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(array)?;
+        for scalars in scalar_vec {
+            self.values.extend(scalars);
         }
+
         Ok(())
     }
 
@@ -149,18 +151,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        assert_eq!(
-            states.len(),
-            1,
-            "array_agg_distinct states must contain single array"
-        );
-
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for scalars in scalar_vec {
-            self.values.extend(scalars)
-        }
-
-        Ok(())
+        self.update_batch(states)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -187,7 +178,8 @@ mod tests {
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Array, ListArray};
+    use arrow_array::Array;
+    use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
     use datafusion_common::utils::array_into_list_array;
     use datafusion_common::{internal_err, DataFusionError};

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
-    as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
+    as_fixed_size_binary_array, as_fixed_size_list_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
@@ -38,7 +38,7 @@ use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
 use arrow::compute::kernels::numeric::*;
-use arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
@@ -52,6 +52,8 @@ use arrow::{
     },
 };
 use arrow_array::cast::as_list_array;
+use arrow_array::{ArrowNativeTypeOp, Scalar};
+use arrow_buffer::{Buffer, NullBuffer};
 
 /// A dynamically typed, nullable single value, (the single-valued counter-part
 /// to arrow's [`Array`])
@@ -152,6 +154,8 @@ pub enum ScalarValue {
     List(Arc<ListArray>),
     /// The array must be a LargeListArray with length 1.
     LargeList(Arc<LargeListArray>),
+    /// Represents a single element of a [`StructArray`] as an [`ArrayRef`]
+    Struct(Arc<StructArray>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
@@ -189,8 +193,6 @@ pub enum ScalarValue {
     DurationMicrosecond(Option<i64>),
     /// Duration in nanoseconds
     DurationNanosecond(Option<i64>),
-    /// struct of nested ScalarValue
-    Struct(Option<Vec<ScalarValue>>, Fields),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
@@ -255,6 +257,8 @@ impl PartialEq for ScalarValue {
             (List(_), _) => false,
             (LargeList(v1), LargeList(v2)) => v1.eq(v2),
             (LargeList(_), _) => false,
+            (Struct(v1), Struct(v2)) => v1.eq(v2),
+            (Struct(_), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
             (Date32(_), _) => false,
             (Date64(v1), Date64(v2)) => v1.eq(v2),
@@ -289,8 +293,6 @@ impl PartialEq for ScalarValue {
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
             (IntervalMonthDayNano(_), _) => false,
-            (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
-            (Struct(_, _), _) => false,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
             (Dictionary(_, _), _) => false,
             (Null, Null) => true,
@@ -372,6 +374,10 @@ impl PartialOrd for ScalarValue {
                 partial_cmp_list(arr1.as_ref(), arr2.as_ref())
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
+            (Struct(struct_arr1), Struct(struct_arr2)) => {
+                partial_cmp_struct(struct_arr1, struct_arr2)
+            }
+            (Struct(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
             (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
@@ -412,14 +418,6 @@ impl PartialOrd for ScalarValue {
             (DurationMicrosecond(_), _) => None,
             (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.partial_cmp(v2),
             (DurationNanosecond(_), _) => None,
-            (Struct(v1, t1), Struct(v2, t2)) => {
-                if t1.eq(t2) {
-                    v1.partial_cmp(v2)
-                } else {
-                    None
-                }
-            }
-            (Struct(_, _), _) => None,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => {
                 // Don't compare if the key types don't match (it is effectively a different datatype)
                 if k1 == k2 {
@@ -470,6 +468,34 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
         }
     }
 
+    Some(Ordering::Equal)
+}
+
+fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Ordering> {
+    if s1.len() != s2.len() {
+        return None;
+    }
+
+    if s1.data_type() != s2.data_type() {
+        return None;
+    }
+
+    for col_index in 0..s1.num_columns() {
+        let arr1 = s1.column(col_index);
+        let arr2 = s2.column(col_index);
+
+        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
+        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
+
+        for j in 0..lt_res.len() {
+            if lt_res.is_valid(j) && lt_res.value(j) {
+                return Some(Ordering::Less);
+            }
+            if eq_res.is_valid(j) && !eq_res.value(j) {
+                return Some(Ordering::Greater);
+            }
+        }
+    }
     Some(Ordering::Equal)
 }
 
@@ -527,13 +553,16 @@ impl std::hash::Hash for ScalarValue {
             FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
             List(arr) => {
-                hash_list(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             LargeList(arr) => {
-                hash_list(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             FixedSizeList(arr) => {
-                hash_list(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            Struct(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
@@ -552,10 +581,6 @@ impl std::hash::Hash for ScalarValue {
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
             IntervalMonthDayNano(v) => v.hash(state),
-            Struct(v, t) => {
-                v.hash(state);
-                t.hash(state);
-            }
             Dictionary(k, v) => {
                 k.hash(state);
                 v.hash(state);
@@ -566,7 +591,7 @@ impl std::hash::Hash for ScalarValue {
     }
 }
 
-fn hash_list<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
+fn hash_nested_array<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
     let arrays = vec![arr.to_owned()];
     let hashes_buffer = &mut vec![0; arr.len()];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
@@ -962,6 +987,7 @@ impl ScalarValue {
             ScalarValue::List(arr) => arr.data_type().to_owned(),
             ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
             ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
+            ScalarValue::Struct(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
@@ -985,7 +1011,6 @@ impl ScalarValue {
             ScalarValue::DurationNanosecond(_) => {
                 DataType::Duration(TimeUnit::Nanosecond)
             }
-            ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
@@ -1167,6 +1192,7 @@ impl ScalarValue {
             ScalarValue::List(arr) => arr.len() == arr.null_count(),
             ScalarValue::LargeList(arr) => arr.len() == arr.null_count(),
             ScalarValue::FixedSizeList(arr) => arr.len() == arr.null_count(),
+            ScalarValue::Struct(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
             ScalarValue::Time32Second(v) => v.is_none(),
@@ -1184,7 +1210,6 @@ impl ScalarValue {
             ScalarValue::DurationMillisecond(v) => v.is_none(),
             ScalarValue::DurationMicrosecond(v) => v.is_none(),
             ScalarValue::DurationNanosecond(v) => v.is_none(),
-            ScalarValue::Struct(v, _) => v.is_none(),
             ScalarValue::Dictionary(_, v) => v.is_null(),
         }
     }
@@ -1377,6 +1402,70 @@ impl ScalarValue {
             }};
         }
 
+        fn build_struct_array(
+            scalars: impl IntoIterator<Item = ScalarValue>,
+        ) -> Result<ArrayRef> {
+            let arrays = scalars
+                .into_iter()
+                .map(|s| s.to_array())
+                .collect::<Result<Vec<_>>>()?;
+
+            let first_struct = arrays[0].as_struct_opt();
+            if first_struct.is_none() {
+                return _internal_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. \
+                        Expected ScalarValue::Struct, got {:?}",
+                    arrays[0].clone()
+                );
+            }
+
+            let mut valid = BooleanBufferBuilder::new(arrays.len());
+
+            let first_struct = first_struct.unwrap();
+            valid.append(first_struct.is_valid(0));
+
+            let mut column_values: Vec<Vec<ScalarValue>> =
+                vec![Vec::with_capacity(arrays.len()); first_struct.num_columns()];
+
+            for (i, v) in first_struct.columns().iter().enumerate() {
+                // ScalarValue::Struct contains a single element in each column.
+                let sv = ScalarValue::try_from_array(v, 0)?;
+                column_values[i].push(sv);
+            }
+
+            for arr in arrays.iter().skip(1) {
+                if let Some(struct_array) = arr.as_struct_opt() {
+                    valid.append(struct_array.is_valid(0));
+
+                    for (i, v) in struct_array.columns().iter().enumerate() {
+                        // ScalarValue::Struct contains a single element in each column.
+                        let sv = ScalarValue::try_from_array(v, 0)?;
+                        column_values[i].push(sv);
+                    }
+                } else {
+                    return _internal_err!(
+                        "Inconsistent types in ScalarValue::iter_to_array. \
+                            Expected ScalarValue::Struct, got {arr:?}"
+                    );
+                }
+            }
+
+            let column_fields = first_struct.fields().to_vec();
+
+            let mut data = vec![];
+            for (field, values) in
+                column_fields.into_iter().zip(column_values.into_iter())
+            {
+                let field = field.to_owned();
+                let array = ScalarValue::iter_to_array(values.into_iter())?;
+                data.push((field, array));
+            }
+
+            let bool_buffer = valid.finish();
+            let buffer: Buffer = bool_buffer.values().into();
+            Ok(Arc::new(StructArray::from((data, buffer))))
+        }
+
         fn build_list_array(
             scalars: impl IntoIterator<Item = ScalarValue>,
         ) -> Result<ArrayRef> {
@@ -1385,24 +1474,43 @@ impl ScalarValue {
                 .map(|s| s.to_array())
                 .collect::<Result<Vec<_>>>()?;
 
-            let capacity = Capacities::Array(arrays.iter().map(|arr| arr.len()).sum());
+            let capacity = Capacities::Array(
+                arrays
+                    .iter()
+                    .filter_map(|arr| {
+                        if !arr.is_null(0) {
+                            Some(arr.len())
+                        } else {
+                            None
+                        }
+                    })
+                    .sum(),
+            );
+
             // ScalarValue::List contains a single element ListArray.
             let nulls = arrays
                 .iter()
                 .map(|arr| arr.is_null(0))
                 .collect::<Vec<bool>>();
-            let arrays_data = arrays.iter().map(|arr| arr.to_data()).collect::<Vec<_>>();
+            let arrays_data = arrays
+                .iter()
+                .filter(|arr| !arr.is_null(0))
+                .map(|arr| arr.to_data())
+                .collect::<Vec<_>>();
 
             let arrays_ref = arrays_data.iter().collect::<Vec<_>>();
             let mut mutable =
                 MutableArrayData::with_capacities(arrays_ref, true, capacity);
 
             // ScalarValue::List contains a single element ListArray.
-            for (index, is_null) in (0..arrays.len()).zip(nulls.into_iter()) {
+            let mut index = 0;
+            for is_null in nulls.into_iter() {
                 if is_null {
-                    mutable.extend_nulls(1)
+                    mutable.extend_nulls(1);
                 } else {
+                    // mutable array contains non-null elements
                     mutable.extend(index, 0, 1);
+                    index += 1;
                 }
             }
             let data = mutable.freeze();
@@ -1483,56 +1591,10 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
+            DataType::Struct(_) => build_struct_array(scalars)?,
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _) => build_list_array(scalars)?,
-            DataType::Struct(fields) => {
-                // Initialize a Vector to store the ScalarValues for each column
-                let mut columns: Vec<Vec<ScalarValue>> =
-                    (0..fields.len()).map(|_| Vec::new()).collect();
-
-                // null mask
-                let mut null_mask_builder = BooleanBuilder::new();
-
-                // Iterate over scalars to populate the column scalars for each row
-                for scalar in scalars {
-                    if let ScalarValue::Struct(values, fields) = scalar {
-                        match values {
-                            Some(values) => {
-                                // Push value for each field
-                                for (column, value) in columns.iter_mut().zip(values) {
-                                    column.push(value.clone());
-                                }
-                                null_mask_builder.append_value(false);
-                            }
-                            None => {
-                                // Push NULL of the appropriate type for each field
-                                for (column, field) in
-                                    columns.iter_mut().zip(fields.as_ref())
-                                {
-                                    column
-                                        .push(ScalarValue::try_from(field.data_type())?);
-                                }
-                                null_mask_builder.append_value(true);
-                            }
-                        };
-                    } else {
-                        return _internal_err!("Expected Struct but found: {scalar}");
-                    };
-                }
-
-                // Call iter_to_array recursively to convert the scalars for each column into Arrow arrays
-                let field_values = fields
-                    .iter()
-                    .zip(columns)
-                    .map(|(field, column)| {
-                        Ok((field.clone(), Self::iter_to_array(column)?))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let array = StructArray::from(field_values);
-                arrow::compute::nullif(&array, &null_mask_builder.finish())?
-            }
             DataType::Dictionary(key_type, value_type) => {
                 // create the values array
                 let value_scalars = scalars
@@ -1941,6 +2003,9 @@ impl ScalarValue {
             ScalarValue::FixedSizeList(arr) => {
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
+            ScalarValue::Struct(arr) => {
+                Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
+            }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)
             }
@@ -2032,23 +2097,6 @@ impl ScalarValue {
                 e,
                 size
             ),
-            ScalarValue::Struct(values, fields) => match values {
-                Some(values) => {
-                    let field_values = fields
-                        .iter()
-                        .zip(values.iter())
-                        .map(|(field, value)| {
-                            Ok((field.clone(), value.to_array_of_size(size)?))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    Arc::new(StructArray::from(field_values))
-                }
-                None => {
-                    let dt = self.data_type();
-                    new_null_array(&dt, size)
-                }
-            },
             ScalarValue::Dictionary(key_type, v) => {
                 // values array is one element long (the value)
                 match key_type.as_ref() {
@@ -2205,7 +2253,7 @@ impl ScalarValue {
                 typed_cast!(array, index, LargeStringArray, LargeUtf8)?
             }
             DataType::List(_) => {
-                let list_array = as_list_array(array);
+                let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
                 let arr = Arc::new(array_into_list_array(nested_array));
@@ -2296,15 +2344,9 @@ impl ScalarValue {
 
                 Self::Dictionary(key_type.clone(), Box::new(value))
             }
-            DataType::Struct(fields) => {
-                let array = as_struct_array(array)?;
-                let mut field_values: Vec<ScalarValue> = Vec::new();
-                for col_index in 0..array.num_columns() {
-                    let col_array = array.column(col_index);
-                    let col_scalar = ScalarValue::try_from_array(col_array, index)?;
-                    field_values.push(col_scalar);
-                }
-                Self::Struct(Some(field_values), fields.clone())
+            DataType::Struct(_) => {
+                let a = array.slice(index, 1);
+                Self::Struct(Arc::new(a.as_struct().to_owned()))
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
@@ -2515,6 +2557,9 @@ impl ScalarValue {
             ScalarValue::FixedSizeList(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
+            ScalarValue::Struct(arr) => {
+                Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
+            }
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
             }
@@ -2565,9 +2610,6 @@ impl ScalarValue {
             }
             ScalarValue::DurationNanosecond(val) => {
                 eq_array_primitive!(array, index, DurationNanosecondArray, val)?
-            }
-            ScalarValue::Struct(_, _) => {
-                return _not_impl_err!("Struct is not supported yet")
             }
             ScalarValue::Dictionary(key_type, v) => {
                 let (values_array, values_index) = match key_type.as_ref() {
@@ -2645,20 +2687,7 @@ impl ScalarValue {
                 ScalarValue::List(arr) => arr.get_array_memory_size(),
                 ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
-                ScalarValue::Struct(vals, fields) => {
-                    vals.as_ref()
-                        .map(|vals| {
-                            vals.iter()
-                                .map(|sv| sv.size() - std::mem::size_of_val(sv))
-                                .sum::<usize>()
-                                + (std::mem::size_of::<ScalarValue>() * vals.capacity())
-                        })
-                        .unwrap_or_default()
-                        // `fields` is boxed, so it is NOT already included in `self`
-                        + std::mem::size_of_val(fields)
-                        + (std::mem::size_of::<Field>() * fields.len())
-                        + fields.iter().map(|field| field.size() - std::mem::size_of_val(field)).sum::<usize>()
-                }
+                ScalarValue::Struct(arr) => arr.get_array_memory_size(),
                 ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
                     dt.size() + sv.size()
@@ -2744,6 +2773,26 @@ impl From<Option<&str>> for ScalarValue {
     }
 }
 
+/// Wrapper to create ScalarValue::Struct for convenience
+impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
+    fn from(value: Vec<(&str, ScalarValue)>) -> Self {
+        let (fields, scalars): (SchemaBuilder, Vec<_>) = value
+            .into_iter()
+            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
+            .unzip();
+
+        let arrays = scalars
+            .into_iter()
+            .map(|scalar| scalar.to_array().unwrap())
+            .collect::<Vec<ArrayRef>>();
+
+        let fields = fields.finish().fields;
+        let struct_array = StructArray::try_new(fields, arrays, None).unwrap();
+
+        Self::Struct(Arc::new(struct_array))
+    }
+}
+
 impl FromStr for ScalarValue {
     type Err = Infallible;
 
@@ -2758,14 +2807,24 @@ impl From<String> for ScalarValue {
     }
 }
 
-impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
-    fn from(value: Vec<(&str, ScalarValue)>) -> Self {
-        let (fields, scalars): (SchemaBuilder, Vec<_>) = value
-            .into_iter()
-            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
-            .unzip();
+// TODO: Remove this after changing to Scalar<T>
+// Wrapper for ScalarValue::Struct that checks the length of the arrays, without nulls
+impl From<(Fields, Vec<ArrayRef>)> for ScalarValue {
+    fn from((fields, arrays): (Fields, Vec<ArrayRef>)) -> Self {
+        Self::from((fields, arrays, None))
+    }
+}
 
-        Self::Struct(Some(scalars), fields.finish().fields)
+// TODO: Remove this after changing to Scalar<T>
+// Wrapper for ScalarValue::Struct that checks the length of the arrays
+impl From<(Fields, Vec<ArrayRef>, Option<NullBuffer>)> for ScalarValue {
+    fn from(
+        (fields, arrays, nulls): (Fields, Vec<ArrayRef>, Option<NullBuffer>),
+    ) -> Self {
+        for arr in arrays.iter() {
+            assert_eq!(arr.len(), 1);
+        }
+        Self::Struct(Arc::new(StructArray::new(fields, arrays, nulls)))
     }
 }
 
@@ -2941,7 +3000,6 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(None)
             }
-
             DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
             DataType::Duration(TimeUnit::Millisecond) => {
                 ScalarValue::DurationMillisecond(None)
@@ -2952,7 +3010,6 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 ScalarValue::DurationNanosecond(None)
             }
-
             DataType::Dictionary(index_type, value_type) => ScalarValue::Dictionary(
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
@@ -2998,7 +3055,12 @@ impl TryFrom<&DataType> for ScalarValue {
                 .to_owned()
                 .into(),
             ),
-            DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
+            DataType::Struct(fields) => ScalarValue::Struct(
+                new_null_array(&DataType::Struct(fields.to_owned()), 1)
+                    .as_struct()
+                    .to_owned()
+                    .into(),
+            ),
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
@@ -3078,18 +3140,38 @@ impl fmt::Display for ScalarValue {
             ScalarValue::DurationMillisecond(e) => format_option!(f, e)?,
             ScalarValue::DurationMicrosecond(e) => format_option!(f, e)?,
             ScalarValue::DurationNanosecond(e) => format_option!(f, e)?,
-            ScalarValue::Struct(e, fields) => match e {
-                Some(l) => write!(
+            ScalarValue::Struct(struct_arr) => {
+                // ScalarValue Struct should always have a single element
+                assert_eq!(struct_arr.len(), 1);
+
+                let columns = struct_arr.columns();
+                let fields = struct_arr.fields();
+                let nulls = struct_arr.nulls();
+
+                write!(
                     f,
                     "{{{}}}",
-                    l.iter()
+                    columns
+                        .iter()
                         .zip(fields.iter())
-                        .map(|(value, field)| format!("{}:{}", field.name(), value))
+                        .enumerate()
+                        .map(|(index, (column, field))| {
+                            if nulls.is_some_and(|b| b.is_null(index)) {
+                                format!("{}:NULL", field.name())
+                            } else if let DataType::Struct(_) = field.data_type() {
+                                let sv = ScalarValue::Struct(Arc::new(
+                                    column.as_struct().to_owned(),
+                                ));
+                                format!("{}:{sv}", field.name())
+                            } else {
+                                let sv = array_value_to_string(column, 0).unwrap();
+                                format!("{}:{sv}", field.name())
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(",")
-                )?,
-                None => write!(f, "NULL")?,
-            },
+                )?
+            }
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
         };
@@ -3152,6 +3234,28 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
+            ScalarValue::Struct(struct_arr) => {
+                // ScalarValue Struct should always have a single element
+                assert_eq!(struct_arr.len(), 1);
+
+                let columns = struct_arr.columns();
+                let fields = struct_arr.fields();
+
+                write!(
+                    f,
+                    "Struct({{{}}})",
+                    columns
+                        .iter()
+                        .zip(fields.iter())
+                        .map(|(column, field)| {
+                            let sv = array_value_to_string(column, 0).unwrap();
+                            let name = field.name();
+                            format!("{name}:{sv}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),
             ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{self}\")"),
@@ -3182,21 +3286,6 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::DurationNanosecond(_) => {
                 write!(f, "DurationNanosecond(\"{self}\")")
-            }
-            ScalarValue::Struct(e, fields) => {
-                // Use Debug representation of field values
-                match e {
-                    Some(l) => write!(
-                        f,
-                        "Struct({{{}}})",
-                        l.iter()
-                            .zip(fields.iter())
-                            .map(|(value, field)| format!("{}:{:?}", field.name(), value))
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    ),
-                    None => write!(f, "Struct(NULL)"),
-                }
             }
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
             ScalarValue::Null => write!(f, "NULL"),
@@ -3246,18 +3335,100 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
+    use crate::cast::{
+        as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
+    };
 
     use arrow::buffer::OffsetBuffer;
-    use arrow::compute::{concat, is_null, kernels};
+    use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
-
+    use arrow_buffer::Buffer;
     use chrono::NaiveDate;
     use rand::Rng;
 
     #[test]
-    fn test_to_array_of_size_for_list() {
+    fn test_scalar_value_from_for_struct() {
+        let boolean = Arc::new(BooleanArray::from(vec![false]));
+        let int = Arc::new(Int32Array::from(vec![42]));
+
+        let expected = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        let arrays = vec![boolean as ArrayRef, int as ArrayRef];
+        let fields = Fields::from(vec![
+            Field::new("b", DataType::Boolean, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let sv = ScalarValue::from((fields, arrays));
+        let struct_arr = sv.to_array().unwrap();
+        let actual = as_struct_array(&struct_arr).unwrap();
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn test_scalar_value_from_for_struct_should_panic() {
+        let fields = Fields::from(vec![
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("i32", DataType::Int32, false),
+        ]);
+
+        let arrays = vec![
+            Arc::new(BooleanArray::from(vec![false, true, false, false])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
+        ];
+
+        let _ = ScalarValue::from((fields, arrays));
+    }
+
+    #[test]
+    fn test_to_array_of_size_for_nested() {
+        // Struct
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+        let sv = ScalarValue::Struct(Arc::new(struct_array));
+        let actual_arr = sv.to_array_of_size(2).unwrap();
+
+        let boolean = Arc::new(BooleanArray::from(vec![
+            false, false, true, true, false, false, true, true,
+        ]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31, 42, 28, 19, 31]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+        ]);
+
+        let actual = as_struct_array(&actual_arr).unwrap();
+        assert_eq!(actual, &struct_array);
+
+        // List
         let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
             Some(1),
             None,
@@ -3268,7 +3439,7 @@ mod tests {
         let actual_arr = sv
             .to_array_of_size(2)
             .expect("Failed to convert to array of size");
-        let actual_list_arr = as_list_array(&actual_arr);
+        let actual_list_arr = actual_arr.as_list::<i32>();
 
         let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), None, Some(2)]),
@@ -3359,6 +3530,94 @@ mod tests {
     }
 
     #[test]
+    fn test_iter_to_array_struct() {
+        let s1 = StructArray::from(vec![
+            (
+                Arc::new(Field::new("A", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("B", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+            ),
+        ]);
+
+        let s2 = StructArray::from(vec![
+            (
+                Arc::new(Field::new("A", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("B", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+            ),
+        ]);
+
+        let scalars = vec![
+            ScalarValue::Struct(Arc::new(s1)),
+            ScalarValue::Struct(Arc::new(s2)),
+        ];
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+
+        let expected = StructArray::from(vec![
+            (
+                Arc::new(Field::new("A", DataType::Boolean, false)),
+                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("B", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![42, 42])) as ArrayRef,
+            ),
+        ]);
+        assert_eq!(array.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_iter_to_array_struct_with_nulls() {
+        // non-null
+        let s1 = StructArray::from((
+            vec![
+                (
+                    Arc::new(Field::new("A", DataType::Int32, false)),
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("B", DataType::Int64, false)),
+                    Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+                ),
+            ],
+            // Present the null mask, 1 is non-null, 0 is null
+            Buffer::from(&[1]),
+        ));
+
+        // null
+        let s2 = StructArray::from((
+            vec![
+                (
+                    Arc::new(Field::new("A", DataType::Int32, false)),
+                    Arc::new(Int32Array::from(vec![3])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("B", DataType::Int64, false)),
+                    Arc::new(Int64Array::from(vec![4])) as ArrayRef,
+                ),
+            ],
+            Buffer::from(&[0]),
+        ));
+
+        let scalars = vec![
+            ScalarValue::Struct(Arc::new(s1)),
+            ScalarValue::Struct(Arc::new(s2)),
+        ];
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let struct_array = array.as_struct();
+        assert!(struct_array.is_valid(0));
+        assert!(struct_array.is_null(1));
+    }
+
+    #[test]
     fn iter_to_array_primitive_test() {
         // List[[1,2,3]], List[null], List[[4,5]]
         let scalars = build_list::<i32>(vec![
@@ -3406,7 +3665,7 @@ mod tests {
         ];
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let result = as_list_array(&array);
+        let result = array.as_list::<i32>();
 
         // build expected array
         let string_builder = StringBuilder::with_capacity(5, 25);
@@ -4473,40 +4732,34 @@ mod tests {
             false,
         ));
 
-        let scalar = ScalarValue::Struct(
-            Some(vec![
-                ScalarValue::Int32(Some(23)),
-                ScalarValue::Boolean(Some(false)),
-                ScalarValue::from("Hello"),
-                ScalarValue::from(vec![
-                    ("e", ScalarValue::from(2i16)),
-                    ("f", ScalarValue::from(3i64)),
-                ]),
-            ]),
-            vec![
+        let struct_array = StructArray::from(vec![
+            (
+                field_e.clone(),
+                Arc::new(Int16Array::from(vec![2])) as ArrayRef,
+            ),
+            (
+                field_f.clone(),
+                Arc::new(Int64Array::from(vec![3])) as ArrayRef,
+            ),
+        ]);
+
+        let struct_array = StructArray::from(vec![
+            (
                 field_a.clone(),
+                Arc::new(Int32Array::from(vec![23])) as ArrayRef,
+            ),
+            (
                 field_b.clone(),
+                Arc::new(BooleanArray::from(vec![false])) as ArrayRef,
+            ),
+            (
                 field_c.clone(),
-                field_d.clone(),
-            ]
-            .into(),
-        );
+                Arc::new(StringArray::from(vec!["Hello"])) as ArrayRef,
+            ),
+            (field_d.clone(), Arc::new(struct_array) as ArrayRef),
+        ]);
+        let scalar = ScalarValue::Struct(Arc::new(struct_array));
 
-        // Check Display
-        assert_eq!(
-            format!("{scalar}"),
-            String::from("{A:23,B:false,C:Hello,D:{e:2,f:3}}")
-        );
-
-        // Check Debug
-        assert_eq!(
-            format!("{scalar:?}"),
-            String::from(
-                r#"Struct({A:Int32(23),B:Boolean(false),C:Utf8("Hello"),D:Struct({e:Int16(2),f:Int64(3)})})"#
-            )
-        );
-
-        // Convert to length-2 array
         let array = scalar
             .to_array_of_size(2)
             .expect("Failed to convert to array of size");
@@ -4548,7 +4801,10 @@ mod tests {
         // None version
         let none_scalar = ScalarValue::try_from(array.data_type()).unwrap();
         assert!(none_scalar.is_null());
-        assert_eq!(format!("{none_scalar:?}"), String::from("Struct(NULL)"));
+        assert_eq!(
+            format!("{none_scalar:?}"),
+            String::from("Struct({A:,B:,C:,D:})")
+        );
 
         // Construct with convenience From<Vec<(&str, ScalarValue)>>
         let constructed = ScalarValue::from(vec![
@@ -4608,26 +4864,26 @@ mod tests {
 
         let expected = Arc::new(StructArray::from(vec![
             (
-                field_a,
+                field_a.clone(),
                 Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
             ),
             (
-                field_b,
+                field_b.clone(),
                 Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
             ),
             (
-                field_c,
+                field_c.clone(),
                 Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
             ),
             (
-                field_d,
+                field_d.clone(),
                 Arc::new(StructArray::from(vec![
                     (
-                        field_e,
+                        field_e.clone(),
                         Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
                     ),
                     (
-                        field_f,
+                        field_f.clone(),
                         Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
@@ -4687,6 +4943,7 @@ mod tests {
         // iter_to_array for struct scalars
         let array =
             ScalarValue::iter_to_array(vec![s0.clone(), s1.clone(), s2.clone()]).unwrap();
+
         let array = as_struct_array(&array).unwrap();
         let expected = StructArray::from(vec![
             (
@@ -4718,7 +4975,7 @@ mod tests {
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
-        let array = as_list_array(&array);
+        let array = array.as_list::<i32>();
 
         // Construct expected array with array builders
         let field_a_builder = StringBuilder::with_capacity(4, 1024);
@@ -4732,6 +4989,7 @@ mod tests {
                 Box::new(field_primitive_list_builder),
             ],
         );
+
         let mut list_builder = ListBuilder::new(element_builder);
 
         list_builder
@@ -4865,7 +5123,7 @@ mod tests {
             ScalarValue::List(Arc::new(arr3)),
         ])
         .unwrap();
-        let array = as_list_array(&array);
+        let array = array.as_list::<i32>();
 
         // Construct expected array with array builders
         let inner_builder = Int32Array::builder(6);
@@ -5334,43 +5592,71 @@ mod tests {
             Field::new("a", DataType::UInt64, true),
             Field::new("b", DataType::Struct(fields_b.clone()), true),
         ]);
+
+        let struct_value = vec![
+            (
+                fields[0].clone(),
+                Arc::new(UInt64Array::from(vec![Some(1)])) as ArrayRef,
+            ),
+            (
+                fields[1].clone(),
+                Arc::new(StructArray::from(vec![
+                    (
+                        fields_b[0].clone(),
+                        Arc::new(UInt64Array::from(vec![Some(2)])) as ArrayRef,
+                    ),
+                    (
+                        fields_b[1].clone(),
+                        Arc::new(UInt64Array::from(vec![Some(3)])) as ArrayRef,
+                    ),
+                ])) as ArrayRef,
+            ),
+        ];
+
+        let struct_value_with_nulls = vec![
+            (
+                fields[0].clone(),
+                Arc::new(UInt64Array::from(vec![Some(1)])) as ArrayRef,
+            ),
+            (
+                fields[1].clone(),
+                Arc::new(StructArray::from((
+                    vec![
+                        (
+                            fields_b[0].clone(),
+                            Arc::new(UInt64Array::from(vec![Some(2)])) as ArrayRef,
+                        ),
+                        (
+                            fields_b[1].clone(),
+                            Arc::new(UInt64Array::from(vec![Some(3)])) as ArrayRef,
+                        ),
+                    ],
+                    Buffer::from(&[0]),
+                ))) as ArrayRef,
+            ),
+        ];
+
         let scalars = vec![
-            ScalarValue::Struct(None, fields.clone()),
-            ScalarValue::Struct(
-                Some(vec![
-                    ScalarValue::UInt64(None),
-                    ScalarValue::Struct(None, fields_b.clone()),
-                ]),
-                fields.clone(),
-            ),
-            ScalarValue::Struct(
-                Some(vec![
-                    ScalarValue::UInt64(None),
-                    ScalarValue::Struct(
-                        Some(vec![ScalarValue::UInt64(None), ScalarValue::UInt64(None)]),
-                        fields_b.clone(),
-                    ),
-                ]),
-                fields.clone(),
-            ),
-            ScalarValue::Struct(
-                Some(vec![
-                    ScalarValue::UInt64(Some(1)),
-                    ScalarValue::Struct(
-                        Some(vec![
-                            ScalarValue::UInt64(Some(2)),
-                            ScalarValue::UInt64(Some(3)),
-                        ]),
-                        fields_b,
-                    ),
-                ]),
-                fields,
-            ),
+            // all null
+            ScalarValue::Struct(Arc::new(StructArray::from((
+                struct_value.clone(),
+                Buffer::from(&[0]),
+            )))),
+            // field 1 valid, field 2 null
+            ScalarValue::Struct(Arc::new(StructArray::from((
+                struct_value_with_nulls.clone(),
+                Buffer::from(&[1]),
+            )))),
+            // all valid
+            ScalarValue::Struct(Arc::new(StructArray::from((
+                struct_value.clone(),
+                Buffer::from(&[1]),
+            )))),
         ];
 
         let check_array = |array| {
             let is_null = is_null(&array).unwrap();
-            assert_eq!(is_null, BooleanArray::from(vec![true, false, false, false]));
+            assert_eq!(is_null, BooleanArray::from(vec![true, false, false]));
 
             let formatted = pretty_format_columns("col", &[array]).unwrap().to_string();
             let formatted = formatted.split('\n').collect::<Vec<_>>();
@@ -5379,8 +5665,7 @@ mod tests {
                 "| col                       |",
                 "+---------------------------+",
                 "|                           |",
-                "| {a: , b: }                |",
-                "| {a: , b: {ba: , bb: }}    |",
+                "| {a: 1, b: }               |",
                 "| {a: 1, b: {ba: 2, bb: 3}} |",
                 "+---------------------------+",
             ];
@@ -5401,7 +5686,7 @@ mod tests {
             .collect::<Result<Vec<_>>>()
             .expect("Failed to convert to array");
         let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-        let array = concat(&arrays).unwrap();
+        let array = arrow::compute::concat(&arrays).unwrap();
         check_array(array);
     }
 

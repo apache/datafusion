@@ -77,7 +77,6 @@ AS
   FROM arrays
 ;
 
-#TODO: create FixedSizeList with NULL column
 statement ok
 CREATE TABLE fixed_size_arrays
 AS VALUES
@@ -85,9 +84,9 @@ AS VALUES
   (arrow_cast(make_array(make_array(3, 4),make_array(5, 6)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(NULL, 5.5, 6.6), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('i', 'p', NULL, 'u', 'm'), 'FixedSizeList(5, Utf8)')),
   (arrow_cast(make_array(make_array(5, 6),make_array(7, 8)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(7.7, 8.8, 9.9), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('d', NULL, 'l', 'o', 'r'), 'FixedSizeList(5, Utf8)')),
   (arrow_cast(make_array(make_array(7, NULL),make_array(9, 10)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(10.1, NULL, 12.2), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('s', 'i', 't', 'a', 'b'), 'FixedSizeList(5, Utf8)')),
-  (arrow_cast(make_array(make_array(7, NULL),make_array(9, 10)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(13.3, 14.4, 15.5), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('a', 'm', 'e', 't', 'x'), 'FixedSizeList(5, Utf8)')),
-  (arrow_cast(make_array(make_array(11, 12),make_array(13, 14)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(13.3, 14.4, 15.5), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(',','a','b','c','d'), 'FixedSizeList(5, Utf8)')),
-  (arrow_cast(make_array(make_array(15, 16),make_array(NULL, 18)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(16.6, 17.7, 18.8), 'FixedSizeList(3, Float64)'), arrow_cast(make_array(',','a','b','c','d'), 'FixedSizeList(5, Utf8)'))
+  (NULL, arrow_cast(make_array(13.3, 14.4, 15.5), 'FixedSizeList(3, Float64)'), arrow_cast(make_array('a', 'm', 'e', 't', 'x'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(11, 12),make_array(13, 14)), 'FixedSizeList(2, List(Int64))'), NULL, arrow_cast(make_array(',','a','b','c','d'), 'FixedSizeList(5, Utf8)')),
+  (arrow_cast(make_array(make_array(15, 16),make_array(NULL, 18)), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array(16.6, 17.7, 18.8), 'FixedSizeList(3, Float64)'), NULL)
 ;
 
 statement ok
@@ -4706,7 +4705,6 @@ from fixed_size_arrays;
 false false false true
 true false true false
 true false false true
-false true false false
 false true false false
 false false false false
 false false false false
