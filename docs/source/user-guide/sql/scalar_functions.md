@@ -722,7 +722,7 @@ concat(str[, ..., str_n])
 - **str_n**: Subsequent string column or literal string to concatenate.
 
 **Related functions**:
-[concat_ws](#concat_ws)
+[contcat_ws](#contcat_ws)
 
 ### `concat_ws`
 
@@ -1893,10 +1893,10 @@ from_unixtime(expression)
 - [array_sort](#array_sort)
 - [array_cat](#array_cat)
 - [array_concat](#array_concat)
+- [array_contains](#array_contains)
 - [array_dims](#array_dims)
 - [array_element](#array_element)
 - [array_extract](#array_extract)
-- [array_has](#array_has)
 - [array_indexof](#array_indexof)
 - [array_join](#array_join)
 - [array_length](#array_length)
