@@ -1980,3 +1980,19 @@ query I
 select 100000 where position('legend' in 'league of legend') = 11;
 ----
 100000
+
+# test null
+query ?
+select position(null in null)
+----
+NULL
+
+
+query I
+select position('' in '')
+----
+1
+
+
+query error DataFusion error: Error during planning: The "instr" function can only accept strings, but got Int64\.
+select position(1 in 1)
