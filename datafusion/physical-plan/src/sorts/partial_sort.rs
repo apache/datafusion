@@ -559,11 +559,18 @@ mod tests {
     #[tokio::test]
     async fn test_partial_sort2() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let source = test::build_table_scan_i32(
-            ("a", &vec![0, 0, 0, 0, 1, 1, 1, 1]),
-            ("b", &vec![1, 1, 3, 3, 4, 4, 2, 2]),
-            ("c", &vec![7, 6, 5, 4, 3, 2, 1, 0]),
-        );
+        let source_tables = vec![
+            test::build_table_scan_i32(
+                ("a", &vec![0, 0, 0, 0, 1, 1, 1, 1]),
+                ("b", &vec![1, 1, 3, 3, 4, 4, 2, 2]),
+                ("c", &vec![7, 6, 5, 4, 3, 2, 1, 0]),
+            ),
+            test::build_table_scan_i32(
+                ("a", &vec![0, 0, 0, 0, 1, 1, 1, 1]),
+                ("b", &vec![1, 1, 3, 3, 2, 2, 4, 4]),
+                ("c", &vec![7, 6, 5, 4, 1, 0, 3, 2]),
+            ),
+        ];
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -573,49 +580,51 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
+        for (common_prefix_length, source) in
+            [(1, &source_tables[0]), (2, &source_tables[1])]
+        {
+            let partial_sort_exec = Arc::new(PartialSortExec::new(
+                vec![
+                    PhysicalSortExpr {
+                        expr: col("a", &schema)?,
+                        options: option_asc,
+                    },
+                    PhysicalSortExpr {
+                        expr: col("b", &schema)?,
+                        options: option_asc,
+                    },
+                    PhysicalSortExpr {
+                        expr: col("c", &schema)?,
+                        options: option_asc,
+                    },
+                ],
+                source.clone(),
+                common_prefix_length,
+            ));
 
-        let partial_sort_exec = Arc::new(PartialSortExec::new(
-            vec![
-                PhysicalSortExpr {
-                    expr: col("a", &schema)?,
-                    options: option_asc,
-                },
-                PhysicalSortExpr {
-                    expr: col("b", &schema)?,
-                    options: option_asc,
-                },
-                PhysicalSortExpr {
-                    expr: col("c", &schema)?,
-                    options: option_asc,
-                },
-            ],
-            source,
-            1,
-        ));
-
-        let result = collect(partial_sort_exec, task_ctx.clone()).await?;
-        assert_eq!(2, result.len());
-        assert_eq!(
-            task_ctx.runtime_env().memory_pool.reserved(),
-            0,
-            "The sort should have returned all memory used back to the memory manager"
-        );
-        let expected = [
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "| 0 | 1 | 6 |",
-            "| 0 | 1 | 7 |",
-            "| 0 | 3 | 4 |",
-            "| 0 | 3 | 5 |",
-            "| 1 | 2 | 0 |",
-            "| 1 | 2 | 1 |",
-            "| 1 | 4 | 2 |",
-            "| 1 | 4 | 3 |",
-            "+---+---+---+",
-        ];
-        assert_batches_eq!(expected, &result);
-
+            let result = collect(partial_sort_exec, task_ctx.clone()).await?;
+            assert_eq!(2, result.len());
+            assert_eq!(
+                task_ctx.runtime_env().memory_pool.reserved(),
+                0,
+                "The sort should have returned all memory used back to the memory manager"
+            );
+            let expected = [
+                "+---+---+---+",
+                "| a | b | c |",
+                "+---+---+---+",
+                "| 0 | 1 | 6 |",
+                "| 0 | 1 | 7 |",
+                "| 0 | 3 | 4 |",
+                "| 0 | 3 | 5 |",
+                "| 1 | 2 | 0 |",
+                "| 1 | 2 | 1 |",
+                "| 1 | 4 | 2 |",
+                "| 1 | 4 | 3 |",
+                "+---+---+---+",
+            ];
+            assert_batches_eq!(expected, &result);
+        }
         Ok(())
     }
 
