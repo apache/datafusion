@@ -293,8 +293,14 @@ pub trait TreeNodeRewriter: Sized {
 pub enum TreeNodeRecursion {
     /// Continue recursion with the next node.
     Continue,
-    /// Skip the current subtree.
+
+    /// Do not recurse into children.
+    /// Has effect only if returned from top-down transform closures or
+    /// [`TreeNodeVisitor::pre_visit`] or [`TreeNodeRewriter::f_down`].
+    /// If returned from bottom-up transform closures or [`TreeNodeVisitor::post_visit`] or
+    /// [`TreeNodeRewriter::f_up`] then works as [`TreeNodeRecursion::Continue`].
     Skip,
+
     /// Stop recursion.
     Stop,
 }
