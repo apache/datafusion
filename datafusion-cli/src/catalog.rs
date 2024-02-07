@@ -202,7 +202,6 @@ mod tests {
 
     #[tokio::test]
     async fn query_http_location_test() -> Result<()> {
-
         // Perhaps this could be changed to use an existing file but
         // that will require a permanently availalble web resource
         let domain = "example.com";
@@ -225,7 +224,7 @@ mod tests {
             .unwrap();
         let none = schema.table(&location).await;
 
-        // That's a non-existing location so expecting None here. 
+        // That's a non-existing location so expecting None here
         assert!(none.is_none());
 
         // It should still create an object store for the location
