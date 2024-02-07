@@ -130,6 +130,7 @@ async fn run_join_test(
                 left,
                 right,
                 on_columns.clone(),
+                None,
                 join_type,
                 vec![SortOptions::default(), SortOptions::default()],
                 false,

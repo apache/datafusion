@@ -736,6 +736,7 @@ fn try_swapping_with_sort_merge_join(
         Arc::new(new_left),
         Arc::new(new_right),
         new_on,
+        sm_join.filter.clone(),
         sm_join.join_type,
         sm_join.sort_options.clone(),
         sm_join.null_equals_null,
