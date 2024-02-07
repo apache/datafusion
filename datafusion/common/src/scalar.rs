@@ -1388,10 +1388,16 @@ impl ScalarValue {
             let capacity = Capacities::Array(
                 arrays
                     .iter()
-                    .filter(|arr| !arr.is_null(0))
-                    .map(|arr| arr.len())
+                    .filter_map(|arr| {
+                        if !arr.is_null(0) {
+                            Some(arr.len())
+                        } else {
+                            None
+                        }
+                    })
                     .sum(),
             );
+
             // ScalarValue::List contains a single element ListArray.
             let nulls = arrays
                 .iter()
