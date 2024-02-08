@@ -3863,9 +3863,9 @@ select cardinality(column1), cardinality(column2), cardinality(column3) from fix
 4 3 5
 4 3 5
 4 3 5
-4 3 3
-NULL 3 4
-4 NULL 1
+4 3 5
+NULL 3 5
+4 NULL 5
 4 3 NULL
 
 ## array_remove (aliases: `list_remove`)
