@@ -185,8 +185,9 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let schema =
-            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+        let inner = Arc::new(Schema::new_with_metadata(fields, HashMap::new()));
+        let dfschema = DFSchema::from_unqualified_schema(&inner);
+        let schema = DFSchemaRef::new(dfschema?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -329,10 +330,10 @@ impl LogicalPlanBuilder {
 
     /// Select the given column indices
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
-        let fields = self.plan.schema().fields();
+        let fields = self.plan.schema().columns();
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| Expr::Column(fields[x].qualified_column()))
+            .map(|x| Expr::Column(fields[x]))
             .collect();
         self.project(exprs)
     }
@@ -519,9 +520,9 @@ impl LogicalPlanBuilder {
 
         // remove pushed down sort columns
         let new_expr = schema
-            .fields()
+            .columns()
             .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
+            .map(|f| Expr::Column(f.clone()))
             .collect();
 
         let is_distinct = false;
