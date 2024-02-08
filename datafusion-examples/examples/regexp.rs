@@ -16,15 +16,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::array::BooleanArray;
-
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::assert_contains;
+use datafusion_common::{assert_batches_eq, assert_contains};
 
 /// This example demonstrates how to use the regexp_* functions
 ///
@@ -49,29 +43,83 @@ async fn main() -> Result<()> {
     //regexp_like examples
     //
     //
-    // regexp_like format is (regexp_replace(text, regex[, flags])
+    // regexp_like format is (regexp_like(text, regex[, flags])
     //
 
     // use sql and regexp_like function to test col 'values', against patterns in col 'patterns' without flags
-    let df = ctx
+    let result = ctx
         .sql("select regexp_like(values, patterns) from examples")
+        .await?
+        .collect()
         .await?;
 
-    // print the results
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+------------------------------------------------+",
+            "| regexp_like(examples.values,examples.patterns) |",
+            "+------------------------------------------------+",
+            "| true                                           |",
+            "| true                                           |",
+            "| false                                          |",
+            "| false                                          |",
+            "| false                                          |",
+            "| false                                          |",
+            "| true                                           |",
+            "| true                                           |",
+            "| true                                           |",
+            "| true                                           |",
+            "| true                                           |",
+            "+------------------------------------------------+",
+        ],
+        &result
+    );
 
-    // use dataframe and regexp_like function to test col 'values', against patterns in col 'patterns' with flags
-    let df = ctx
+    // use sql and regexp_like function to test col 'values', against patterns in col 'patterns' with flags
+    let result = ctx
         .sql("select regexp_like(values, patterns, flags) from examples")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+---------------------------------------------------------------+",
+            "| regexp_like(examples.values,examples.patterns,examples.flags) |",
+            "+---------------------------------------------------------------+",
+            "| true                                                          |",
+            "| true                                                          |",
+            "| true                                                          |",
+            "| false                                                         |",
+            "| false                                                         |",
+            "| false                                                         |",
+            "| true                                                          |",
+            "| true                                                          |",
+            "| true                                                          |",
+            "| true                                                          |",
+            "| true                                                          |",
+            "+---------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     // literals work as well
     // to match against the entire input use ^ and $ in the regex
-    let df = ctx.sql("select regexp_like('John Smith', '^.*Smith$'), regexp_like('Smith Jones', '^Smith.*$')").await?;
+    let result = ctx
+        .sql("select regexp_like('John Smith', '^.*Smith$'), regexp_like('Smith Jones', '^Smith.*$')")
+        .await?
+        .collect()
+        .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+    "+---------------------------------------------------+----------------------------------------------------+",
+    "| regexp_like(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_like(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
+    "+---------------------------------------------------+----------------------------------------------------+",
+    "| true                                              | true                                               |",
+    "+---------------------------------------------------+----------------------------------------------------+",
+        ],
+        &result
+    );
 
     // look-around and back references are not supported for performance
     // reasons.
@@ -83,17 +131,20 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    let expected = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)])),
-        vec![Arc::new(BooleanArray::from(vec![false]))],
-    )
-    .unwrap();
-
     assert!(result.is_ok());
     let result = result.unwrap();
-
     assert_eq!(result.len(), 1);
-    assert_eq!(format!("{:?}", result[0]), format!("{expected:?}"));
+
+    assert_batches_eq!(
+        &[
+            "+-------+",
+            "| a     |",
+            "+-------+",
+            "| false |",
+            "+-------+",
+        ],
+        &result
+    );
 
     // invalid flags will result in an error
     let result = ctx
@@ -120,68 +171,175 @@ async fn main() -> Result<()> {
     //regexp_match examples
     //
     //
-    // regexp_match format is (regexp_replace(text, regex[, flags])
+    // regexp_match format is (regexp_match(text, regex[, flags])
     //
 
-    let df = ctx.table("examples").await?;
-
-    df.show().await?;
+    let _ = ctx.table("examples").await?;
 
     // use sql and regexp_match function to test col 'values', against patterns in col 'patterns' without flags
-    let df = ctx
+    let result = ctx
         .sql("select regexp_match(values, patterns) from examples")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+-------------------------------------------------+",
+            "| regexp_match(examples.values,examples.patterns) |",
+            "+-------------------------------------------------+",
+            "| [a]                                             |",
+            "| [A]                                             |",
+            "|                                                 |",
+            "|                                                 |",
+            "|                                                 |",
+            "|                                                 |",
+            "| [010]                                           |",
+            "| [Düsseldorf]                                    |",
+            "| [Москва]                                        |",
+            "| [Köln]                                          |",
+            "| [اليوم]                                         |",
+            "+-------------------------------------------------+",
+        ],
+        &result
+    );
 
     // use dataframe and regexp_match function to test col 'values', against patterns in col 'patterns' with flags
-    let df = ctx
+    let result = ctx
         .sql("select regexp_match(values, patterns, flags) from examples")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+----------------------------------------------------------------+",
+            "| regexp_match(examples.values,examples.patterns,examples.flags) |",
+            "+----------------------------------------------------------------+",
+            "| [a]                                                            |",
+            "| [A]                                                            |",
+            "| [B]                                                            |",
+            "|                                                                |",
+            "|                                                                |",
+            "|                                                                |",
+            "| [010]                                                          |",
+            "| [Düsseldorf]                                                   |",
+            "| [Москва]                                                       |",
+            "| [Köln]                                                         |",
+            "| [اليوم]                                                        |",
+            "+----------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     // literals work as well
     // to match against the entire input use ^ and $ in the regex
-    let df = ctx.sql("select regexp_match('John Smith', '^.*Smith$'), regexp_match('Smith Jones', '^Smith.*$')").await?;
+    let result = ctx
+        .sql("select regexp_match('John Smith', '^.*Smith$'), regexp_match('Smith Jones', '^Smith.*$')")
+        .await?
+        .collect()
+        .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+    "+----------------------------------------------------+-----------------------------------------------------+",
+    "| regexp_match(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_match(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
+    "+----------------------------------------------------+-----------------------------------------------------+",
+    "| [John Smith]                                       | [Smith Jones]                                       |",
+    "+----------------------------------------------------+-----------------------------------------------------+",
+        ],
+        &result
+    );
 
     //
     //
     //regexp_replace examples
     //
     //
-    // regexp_replace format is (regexp_replace(text, regex, replace, flags)
+    // regexp_replace format is (regexp_replace(text, regex, replace[, flags])
     //
 
     // use regexp_replace function against tables
-    let df = ctx
-        .sql("SELECT regexp_replace(values, patterns, replacement, flags) FROM examples")
+    let result = ctx
+        .sql("SELECT regexp_replace(values, patterns, replacement, concat('g', flags)) FROM examples")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+    "+---------------------------------------------------------------------------------------------------------+",
+    "| regexp_replace(examples.values,examples.patterns,examples.replacement,concat(Utf8(\"g\"),examples.flags)) |",
+    "+---------------------------------------------------------------------------------------------------------+",
+    "| bbabbbc                                                                                                 |",
+    "| B                                                                                                       |",
+    "| aec                                                                                                     |",
+    "| AbC                                                                                                     |",
+    "| aBC                                                                                                     |",
+    "| 4000                                                                                                    |",
+    "| xyz                                                                                                     |",
+    "| München                                                                                                 |",
+    "| Moscow                                                                                                  |",
+    "| Koln                                                                                                    |",
+    "| Today                                                                                                   |",
+    "+---------------------------------------------------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     // global flag example
-    let df = ctx
+    let result = ctx
         .sql("SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g')")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+    "+------------------------------------------------------------------------+",
+    "| regexp_replace(Utf8(\"foobarbaz\"),Utf8(\"b(..)\"),Utf8(\"X\\1Y\"),Utf8(\"g\")) |",
+    "+------------------------------------------------------------------------+",
+    "| fooXarYXazY                                                            |",
+    "+------------------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     // without global flag
-    let df = ctx
-        .sql("SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', null)")
+    let result = ctx
+        .sql("SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y')")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+--------------------------------------------------------------+",
+            "| regexp_replace(Utf8(\"foobarbaz\"),Utf8(\"b(..)\"),Utf8(\"X\\1Y\")) |",
+            "+--------------------------------------------------------------+",
+            "| fooXarYbaz                                                   |",
+            "+--------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     // null regex means null result
-    let df = ctx
+    let result = ctx
         .sql("SELECT regexp_replace('foobarbaz', NULL, 'X\\1Y', 'g')")
+        .await?
+        .collect()
         .await?;
 
-    df.show().await?;
+    assert_batches_eq!(
+        &[
+            "+---------------------------------------------------------------+",
+            "| regexp_replace(Utf8(\"foobarbaz\"),NULL,Utf8(\"X\\1Y\"),Utf8(\"g\")) |",
+            "+---------------------------------------------------------------+",
+            "|                                                               |",
+            "+---------------------------------------------------------------+",
+        ],
+        &result
+    );
 
     Ok(())
 }
