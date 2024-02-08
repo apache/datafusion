@@ -34,6 +34,8 @@ pub enum CompressionTypeVariant {
     ZSTD,
     /// Uncompressed file
     UNCOMPRESSED,
+    /// A Block Gzip-ed file
+    BGZIP,
 }
 
 impl FromStr for CompressionTypeVariant {
@@ -43,6 +45,7 @@ impl FromStr for CompressionTypeVariant {
         let s = s.to_uppercase();
         match s.as_str() {
             "GZIP" | "GZ" => Ok(Self::GZIP),
+            "BGZIP" | "BGZ" => Ok(Self::BGZIP),
             "BZIP2" | "BZ2" => Ok(Self::BZIP2),
             "XZ" => Ok(Self::XZ),
             "ZST" | "ZSTD" => Ok(Self::ZSTD),
@@ -61,6 +64,7 @@ impl ToString for CompressionTypeVariant {
             Self::BZIP2 => "BZIP2",
             Self::XZ => "XZ",
             Self::ZSTD => "ZSTD",
+            Self::BGZIP => "BGZIP",
             Self::UNCOMPRESSED => "",
         }
         .to_string()
