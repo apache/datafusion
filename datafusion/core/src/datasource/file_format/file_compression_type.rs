@@ -123,7 +123,11 @@ impl FileCompressionType {
                 .map_err(DataFusionError::from)
                 .boxed(),
             #[cfg(feature = "compression")]
-            BGZIP => return Err(DataFusionError::NotImplemented("BGZIP is not supported".to_owned())),
+            BGZIP => {
+                return Err(DataFusionError::NotImplemented(
+                    "BGZIP is not supported".to_owned(),
+                ))
+            }
             #[cfg(feature = "compression")]
             BZIP2 => ReaderStream::new(AsyncBzEncoder::new(StreamReader::new(s)))
                 .map_err(DataFusionError::from)
@@ -156,7 +160,11 @@ impl FileCompressionType {
             #[cfg(feature = "compression")]
             GZIP => Box::new(GzipEncoder::new(w)),
             #[cfg(feature = "compression")]
-            BGZIP => return Err(DataFusionError::NotImplemented("BGZIP is not supported".to_owned())),
+            BGZIP => {
+                return Err(DataFusionError::NotImplemented(
+                    "BGZIP is not supported".to_owned(),
+                ))
+            }
             #[cfg(feature = "compression")]
             BZIP2 => Box::new(BzEncoder::new(w)),
             #[cfg(feature = "compression")]
@@ -164,7 +172,7 @@ impl FileCompressionType {
             #[cfg(feature = "compression")]
             ZSTD => Box::new(ZstdEncoder::new(w)),
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ | ZSTD => {
+            GZIP | BZIP2 | XZ | ZSTD | BGZIP => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
@@ -188,7 +196,9 @@ impl FileCompressionType {
                 let mut decoder = AsyncGzDecoder::new(StreamReader::new(s));
                 decoder.multiple_members(true);
 
-                ReaderStream::new(decoder).map_err(DataFusionError::from).boxed()
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
             }
             #[cfg(feature = "compression")]
             BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
@@ -203,7 +213,7 @@ impl FileCompressionType {
                 .map_err(DataFusionError::from)
                 .boxed(),
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ | ZSTD => {
+            GZIP | BZIP2 | XZ | ZSTD | BGZIP => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
