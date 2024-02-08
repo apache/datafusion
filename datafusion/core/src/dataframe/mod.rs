@@ -109,27 +109,50 @@ impl Default for DataFrameWriteOptions {
     }
 }
 
-/// DataFrame represents a logical set of rows with the same named columns.
-/// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
-/// [Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
+/// Represents a logical set of rows with the same named columns.
 ///
-/// DataFrames are typically created by the `read_csv` and `read_parquet` methods on the
-/// [SessionContext](../execution/context/struct.SessionContext.html) and can then be modified
-/// by calling the transformation methods, such as `filter`, `select`, `aggregate`, and `limit`
-/// to build up a query definition.
+/// Similar to a [Pandas DataFrame] or [Spark DataFrame], a DataFusion DataFrame
+/// represents a 2 dimensional table of rows and columns.
 ///
-/// The query can be executed by calling the `collect` method.
+/// The typical workflow using DataFrames looks like
 ///
+/// 1. Create a DataFrame via methods on [SessionContext], such as [`read_csv`]
+/// and [`read_parquet`].
+///
+/// 2. Build a desired calculation by calling methods such as [`filter`],
+/// [`select`], [`aggregate`], and [`limit`]
+///
+/// 3. Execute into [`RecordBatch`]es by calling [`collect`]
+///
+/// DataFrames are "lazy" in the sense that most methods do not actually compute
+/// anything, they just build up a plan. Calling [`collect`]  executes the plan
+/// using the norma DataFusion planning and execution process.
+///
+/// [Pandas DataFrame]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
+/// [Spark DataFrame]: https://spark.apache.org/docs/latest/sql-programming-guide.html
+/// [`read_csv`]: SessionContext::read_csv
+/// [`read_parquet`]: SessionContext::read_parquet
+/// [`filter`]: DataFrame::filter
+/// [`select`]: DataFrame::select
+/// [`aggregate`]: DataFrame::aggregate
+/// [`limit`]: DataFrame::limit
+/// [`collect`]: DataFrame::collect
+///
+/// # Example
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
+/// // Read the data from a csv file
 /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+/// // create a new dataframe that computes the equivalent of
+/// // `SELECT a, MIN(b) FROM df WHERE a <= b GROUP BY a LIMIT 100;`
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
+/// // Perform the actual computation
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -739,9 +762,13 @@ impl DataFrame {
         Ok(len)
     }
 
-    /// Convert the logical plan represented by this DataFrame into a physical plan and
-    /// execute it, collecting all resulting batches into memory
-    /// Executes this DataFrame and collects all results into a vector of RecordBatch.
+    /// Execute this DataFrame and buffer all resulting `RecordBatch`es  into memory.
+    ///
+    /// Prior to calling `collect`, modifying a DataFrame simply updates a plan
+    /// (no actual computation is performed). `collect` triggers the computation.
+    ///
+    /// See [`Self::execute_stream`] to execute a DataFrame without buffering.
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -801,6 +828,8 @@ impl DataFrame {
     }
 
     /// Executes this DataFrame and returns a stream over a single partition
+    ///
+    /// See [Self::collect] to buffer the `RecordBatch`es in memory.
     ///
     /// # Example
     /// ```
@@ -1025,6 +1054,7 @@ impl DataFrame {
     }
 
     /// Write this DataFrame to the referenced table by name.
+    ///
     /// This method uses on the same underlying implementation
     /// as the SQL Insert Into statement. Unlike most other DataFrame methods,
     /// this method executes eagerly. Data is written to the table using an
@@ -1050,7 +1080,27 @@ impl DataFrame {
         DataFrame::new(self.session_state, plan).collect().await
     }
 
-    /// Write a `DataFrame` to a CSV file.
+    /// Execute the `DataFrame` and write the results to a CSV file.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion::dataframe::DataFrameWriteOptions;
+    /// let ctx = SessionContext::new();
+    /// // Sort the data by column "b" and write it to a new location
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
+    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///   .write_csv(
+    ///     "output.csv",
+    ///     DataFrameWriteOptions::new(),
+    ///     None, // can also specify CSV writing options here
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn write_csv(
         self,
         path: &str,
