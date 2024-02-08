@@ -128,7 +128,7 @@ impl Default for DataFrameWriteOptions {
 /// required for execution.
 ///
 /// DataFrames are "lazy" in the sense that most methods do not actually compute
-/// anything, they just build up a plan. Calling [`collect`]  executes the plan
+/// anything, they just build up a plan. Calling [`collect`] executes the plan
 /// using the same DataFusion planning and execution process used to execute SQL
 /// and other queries.
 ///
@@ -619,7 +619,7 @@ impl DataFrame {
 
     /// Sort the DataFrame by the specified sorting expressions.
     ///
-    /// Note that Any expression can be turned into
+    /// Note that any expression can be turned into
     /// a sort expression by calling its [sort](Expr::sort) method.
     ///
     /// # Example
@@ -768,7 +768,7 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Return the total number of rows in this  `DataFrame`.
+    /// Return the total number of rows in this `DataFrame`.
     ///
     /// Note that this method will actually run a plan to calculate the count,
     /// which may be slow for large or complicated DataFrames.
@@ -1042,7 +1042,7 @@ impl DataFrame {
 
     /// Return a `FunctionRegistry` used to plan udf's calls
     ///
-    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
