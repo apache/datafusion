@@ -3416,6 +3416,7 @@ pub enum CompressionTypeVariant {
     Xz = 2,
     Zstd = 3,
     Uncompressed = 4,
+    Bgzip = 5,
 }
 impl CompressionTypeVariant {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3429,6 +3430,7 @@ impl CompressionTypeVariant {
             CompressionTypeVariant::Xz => "XZ",
             CompressionTypeVariant::Zstd => "ZSTD",
             CompressionTypeVariant::Uncompressed => "UNCOMPRESSED",
+            CompressionTypeVariant::Bgzip => "BGZIP",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3439,6 +3441,7 @@ impl CompressionTypeVariant {
             "XZ" => Some(Self::Xz),
             "ZSTD" => Some(Self::Zstd),
             "UNCOMPRESSED" => Some(Self::Uncompressed),
+            "BGZIP" => Some(Self::Bgzip),
             _ => None,
         }
     }

@@ -3509,6 +3509,7 @@ impl serde::Serialize for CompressionTypeVariant {
             Self::Xz => "XZ",
             Self::Zstd => "ZSTD",
             Self::Uncompressed => "UNCOMPRESSED",
+            Self::Bgzip => "BGZIP",
         };
         serializer.serialize_str(variant)
     }
@@ -3525,6 +3526,7 @@ impl<'de> serde::Deserialize<'de> for CompressionTypeVariant {
             "XZ",
             "ZSTD",
             "UNCOMPRESSED",
+            "BGZIP",
         ];
 
         struct GeneratedVisitor;
@@ -3570,6 +3572,7 @@ impl<'de> serde::Deserialize<'de> for CompressionTypeVariant {
                     "XZ" => Ok(CompressionTypeVariant::Xz),
                     "ZSTD" => Ok(CompressionTypeVariant::Zstd),
                     "UNCOMPRESSED" => Ok(CompressionTypeVariant::Uncompressed),
+                    "BGZIP" => Ok(CompressionTypeVariant::Bgzip),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

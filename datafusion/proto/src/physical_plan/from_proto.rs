@@ -820,6 +820,7 @@ impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
     fn from(value: protobuf::CompressionTypeVariant) -> Self {
         match value {
             protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
+            protobuf::CompressionTypeVariant::Bgzip => Self::BGZIP,
             protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
             protobuf::CompressionTypeVariant::Xz => Self::XZ,
             protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
@@ -835,6 +836,7 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
             CompressionTypeVariant::BZIP2 => Self::Bzip2,
             CompressionTypeVariant::XZ => Self::Xz,
             CompressionTypeVariant::ZSTD => Self::Zstd,
+            CompressionTypeVariant::BGZIP => Self::Bgzip,
             CompressionTypeVariant::UNCOMPRESSED => Self::Uncompressed,
         }
     }

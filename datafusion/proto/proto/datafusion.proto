@@ -1202,6 +1202,7 @@ enum CompressionTypeVariant {
   XZ = 2;
   ZSTD = 3;
   UNCOMPRESSED = 4;
+  BGZIP = 5;
 }
 
 message PartitionColumn {
