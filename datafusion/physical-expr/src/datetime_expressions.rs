@@ -22,6 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::compute::cast;
+use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow::{
     array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
@@ -41,7 +42,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
-use arrow_array::GenericStringArray;
+use arrow_array::{GenericStringArray, StringArray};
 use chrono::prelude::*;
 use chrono::LocalResult::Single;
 use chrono::{Duration, LocalResult, Months, NaiveDate};
@@ -500,6 +501,62 @@ pub fn make_current_time(
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
+}
+
+pub fn to_char(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 {
+        return exec_err!("to_char function requires 2 arguments, got {}", args.len());
+    }
+
+    let is_scalar = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        })
+        .is_none();
+
+    let format = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = &args[1] {
+        v.as_str()
+    } else {
+        return exec_err!("Format for `to_char` must be non-null scalar Utf8");
+    };
+
+    let format_options = match &args[0].data_type() {
+        DataType::Date32 => FormatOptions::new().with_date_format(Some(format)),
+        DataType::Date64 => FormatOptions::new().with_datetime_format(Some(format)),
+        DataType::Time32(_) => FormatOptions::new().with_time_format(Some(format)),
+        DataType::Interval(_) => FormatOptions::new(),
+        DataType::Timestamp(_, _) => FormatOptions::new()
+            .with_timestamp_format(Some(format))
+            .with_timestamp_tz_format(Some(format)),
+        DataType::Duration(_) => FormatOptions::new().with_duration_format(
+            if "pretty".eq_ignore_ascii_case(format) {
+                DurationFormat::Pretty
+            } else {
+                DurationFormat::ISO8601
+            },
+        ),
+        _ => {
+            return exec_err!("date_format only supports date and timestamp data types");
+        }
+    };
+    let args = ColumnarValue::values_to_arrays(args)?;
+    let formatter = ArrayFormatter::try_new(args[0].as_ref(), &format_options)?;
+    let formatted = (0..args[0].len())
+        .map(|i| formatter.value(i).to_string())
+        .collect::<Vec<_>>();
+
+    if is_scalar {
+        // If input is scalar, keeps output as scalar
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            formatted.first().unwrap().to_string(),
+        ))))
+    } else {
+        Ok(ColumnarValue::Array(
+            Arc::new(StringArray::from(formatted)) as ArrayRef
+        ))
+    }
 }
 
 /// make_date(year, month, day) SQL function implementation
@@ -2818,6 +2875,171 @@ mod tests {
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
+        );
+    }
+
+    #[test]
+    fn test_to_char() {
+        //
+        // scalar date32 test
+        //
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::Date32(Some(18506))), // // 2020-09-01
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!("2020::09::01".to_string(), date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // scalar date64 test
+        //
+
+        let date = "2020-01-02T01:01:01"
+            .parse::<NaiveDateTime>()
+            .expect("date time should parse successfully");
+
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::Date64(Some(date.timestamp_millis()))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!("2020::01::02".to_string(), date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // scalar timestamp seconds test
+        //
+
+        let date = "2020-01-02T13:45:12".parse::<NaiveDateTime>().unwrap();
+
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+                Some(date.timestamp()),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y::%m::%d %S::%M::%H".to_string(),
+            ))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!("2020::01::02 12::45::13".to_string(), date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // scalar timestamp millis test
+        //
+
+        let date = "2020-01-02T13:45:12".parse::<NaiveDateTime>().unwrap();
+
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(date.timestamp_millis()),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y::%m::%d %S::%M::%H".to_string(),
+            ))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!("2020::01::02 12::45::13".to_string(), date.unwrap());
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // scalar timestamp micros test
+        //
+
+        let date = "2020-01-02T13:45:12"
+            .parse::<NaiveDateTime>()
+            .unwrap()
+            .with_nanosecond(23456)
+            .unwrap();
+
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                Some(date.timestamp_micros()),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y::%m::%d %S::%M::%H %f".to_string(),
+            ))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!(
+                "2020::01::02 12::45::13 000023000".to_string(),
+                date.unwrap()
+            );
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // scalar timestamp nanos test
+        //
+
+        let date = "2020-01-02T13:45:12"
+            .parse::<NaiveDateTime>()
+            .unwrap()
+            .with_nanosecond(23456)
+            .unwrap();
+
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(date.timestamp_nanos_opt().unwrap()),
+                None,
+            )),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "%Y::%m::%d %S::%M::%H %f".to_string(),
+            ))),
+        ])
+        .expect("that to_char parsed values without error");
+
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = res {
+            assert_eq!(
+                "2020::01::02 12::45::13 000023456".to_string(),
+                date.unwrap()
+            );
+        } else {
+            panic!("Expected a scalar value")
+        }
+
+        //
+        // Fallible test cases
+        //
+
+        // invalid number of arguments
+        let res = to_char(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Execution error: to_char function requires 2 arguments, got 1"
+        );
+
+        // invalid type
+        let res = to_char(&[
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().strip_backtrace(),
+            "Execution error: Format for `to_char` must be non-null scalar Utf8"
         );
     }
 }
