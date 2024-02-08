@@ -149,7 +149,7 @@ pub enum ArrayFunctionSignature {
 impl ArrayFunctionSignature {
     /// Arguments to ArrayFunctionSignature
     /// `current_types` - The data types of the arguments
-    /// `coercion` - Whether null type coercion is allowed
+    /// `allow_null_coercion` - Whether null type coercion is allowed
     /// Returns the valid types for the function signature
     pub fn get_type_signature(
         &self,
