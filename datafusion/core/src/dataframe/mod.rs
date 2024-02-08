@@ -124,9 +124,13 @@ impl Default for DataFrameWriteOptions {
 ///
 /// 3. Execute into [`RecordBatch`]es by calling [`collect`]
 ///
+/// A `DataFrame` is a wrapper around a [`LogicalPlan`] and the [`SessonState`]
+/// required for execution.
+///
 /// DataFrames are "lazy" in the sense that most methods do not actually compute
 /// anything, they just build up a plan. Calling [`collect`]  executes the plan
-/// using the norma DataFusion planning and execution process.
+/// using the same DataFusion planning and execution process used to execute SQL
+/// and other queries.
 ///
 /// [Pandas DataFrame]: https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html
 /// [Spark DataFrame]: https://spark.apache.org/docs/latest/sql-programming-guide.html
@@ -164,7 +168,11 @@ pub struct DataFrame {
 }
 
 impl DataFrame {
-    /// Create a new Table based on an existing logical plan
+    /// Create a new `DataFrame ` based on an existing `LogicalPlan`
+    ///
+    /// This is a low-level method and is not typically used by end users. See
+    /// [`SessionContext::read_csv`] and other methods for creating a
+    /// `DataFrame` from an existing datasource.
     pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
             session_state,
@@ -172,7 +180,7 @@ impl DataFrame {
         }
     }
 
-    /// Create a physical plan
+    /// Consume the DataFrame and produce a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
@@ -786,7 +794,7 @@ impl DataFrame {
         collect(plan, task_ctx).await
     }
 
-    /// Print results.
+    /// Execute the DataFrame and print the results to the console.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1080,7 +1088,7 @@ impl DataFrame {
         DataFrame::new(self.session_state, plan).collect().await
     }
 
-    /// Execute the `DataFrame` and write the results to a CSV file.
+    /// Execute the `DataFrame` and write the results to CSV file(s).
     ///
     /// # Example
     /// ```
@@ -1131,7 +1139,26 @@ impl DataFrame {
         DataFrame::new(self.session_state, plan).collect().await
     }
 
-    /// Executes a query and writes the results to a partitioned JSON file.
+    /// Execute the `DataFrame` and write the results to JSON file(s).
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion::dataframe::DataFrameWriteOptions;
+    /// let ctx = SessionContext::new();
+    /// // Sort the data by column "b" and write it to a new location
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
+    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///   .write_json(
+    ///     "output.json",
+    ///     DataFrameWriteOptions::new(),
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn write_json(
         self,
         path: &str,
@@ -1157,6 +1184,7 @@ impl DataFrame {
 
     /// Add an additional column to the DataFrame.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -1209,6 +1237,7 @@ impl DataFrame {
     /// Alternatively setting Datafusion param `datafusion.sql_parser.enable_ident_normalization` to `false` will enable  
     /// case sensitive rename without need to wrap column name into special symbols
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
