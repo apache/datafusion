@@ -124,7 +124,7 @@ impl Default for DataFrameWriteOptions {
 ///
 /// 3. Execute into [`RecordBatch`]es by calling [`collect`]
 ///
-/// A `DataFrame` is a wrapper around a [`LogicalPlan`] and the [`SessonState`]
+/// A `DataFrame` is a wrapper around a [`LogicalPlan`] and the [`SessionState`]
 /// required for execution.
 ///
 /// DataFrames are "lazy" in the sense that most methods do not actually compute
@@ -623,6 +623,7 @@ impl DataFrame {
     /// a sort expression by calling its [sort](Expr::sort) method.
     ///
     /// # Example
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -632,7 +633,8 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![
     ///   col("a").sort(true, true),   // a ASC, nulls first
-    ///   col("b").sort(false, false), // b DESC, nulls last    /// ])?;
+    ///   col("b").sort(false, false), // b DESC, nulls last
+    ///  ])?;
     /// # Ok(())
     /// # }
     /// ```
