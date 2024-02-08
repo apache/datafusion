@@ -211,8 +211,12 @@ impl DataFrame {
         self.select(expr)
     }
 
-    /// Create a projection based on arbitrary expressions.
+    /// Project arbitrary expressions (like SQL SELECT expressions) into a new
+    /// `DataFrame`.
     ///
+    /// The output `DataFrame` has one column for each element in `expr_list`.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -238,11 +242,12 @@ impl DataFrame {
 
     /// Expand each list element of a column to multiple rows.
     ///
-    /// Seee also:
+    /// See also:
     ///
     /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
     /// 2. [`Self::unnest_column_with_options`]
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -274,8 +279,13 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Filter a DataFrame to only include rows that match the specified filter expression.
+    /// Return a DataFrame with only rows for which `predicate` evaluates to
+    /// `true`.
     ///
+    /// Rows for which `predicate` evaluates to `false` or `null`
+    /// are filtered out.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -294,8 +304,10 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Perform an aggregate query with optional grouping expressions.
+    /// Return a new `DataFrame` that aggregates the rows of the current
+    /// `DataFrame`, first optionally grouping by the given expressions.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -323,7 +335,8 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Apply one or more window functions ([`Expr::WindowFunction`]) to extend the schema
+    /// Return a new DataFrame that adds the result of evaluating one or more
+    /// window functions ([`Expr::WindowFunction`]) to the existing columns
     pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .window(window_exprs)?
@@ -331,11 +344,13 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Limit the number of rows returned from this DataFrame.
+    /// Returns a new `DataFrame` with a limited number of rows.
     ///
+    /// # Arguments
     /// `skip` - Number of rows to skip before fetch any row
+    /// `fetch` - Maximum number of rows to return, after skipping `skip` rows.
     ///
-    /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows.
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -354,9 +369,11 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.The
-    /// two [`DataFrame`]s must have exactly the same schema
+    /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.
     ///
+    /// The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -376,9 +393,12 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Calculate the distinct union of two [`DataFrame`]s.  The
-    /// two [`DataFrame`]s must have exactly the same schema
+    /// Calculate the distinct union of two [`DataFrame`]s.
     ///
+    /// The two [`DataFrame`]s must have exactly the same schema. Any duplicate
+    /// rows are discarded.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -400,8 +420,9 @@ impl DataFrame {
         ))
     }
 
-    /// Filter out duplicate rows
+    /// Return a new `DataFrame` with all duplicated rows removed.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -420,9 +441,12 @@ impl DataFrame {
         ))
     }
 
-    /// Summary statistics for a DataFrame. Only summarizes numeric datatypes at the moment and
-    /// returns nulls for non numeric datatypes. Try in keep output similar to pandas
+    /// Return a new `DataFrame` that has statistics for a DataFrame.
     ///
+    /// Only summarizes numeric datatypes at the moment and returns nulls for
+    /// non numeric datatypes. The output format is modeled after pandas
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -593,9 +617,12 @@ impl DataFrame {
         ))
     }
 
-    /// Sort the DataFrame by the specified sorting expressions. Any expression can be turned into
-    /// a sort expression by calling its [sort](../logical_plan/enum.Expr.html#method.sort) method.
+    /// Sort the DataFrame by the specified sorting expressions.
     ///
+    /// Note that Any expression can be turned into
+    /// a sort expression by calling its [sort](Expr::sort) method.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -603,7 +630,9 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.sort(vec![col("a").sort(true, true), col("b").sort(false, false)])?;
+    /// let df = df.sort(vec![
+    ///   col("a").sort(true, true),   // a ASC, nulls first
+    ///   col("b").sort(false, false), // b DESC, nulls last    /// ])?;
     /// # Ok(())
     /// # }
     /// ```
@@ -673,7 +702,6 @@ impl DataFrame {
     /// identifying and optimizing equality predicates.
     ///
     /// # Example
-    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -719,6 +747,7 @@ impl DataFrame {
 
     /// Repartition a DataFrame based on a logical partitioning scheme.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -737,9 +766,12 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Run a count aggregate on the DataFrame and execute the DataFrame to collect this
-    /// count and return it as a usize, to find the total number of rows after executing
-    /// the DataFrame.
+    /// Return the total number of rows in this  `DataFrame`.
+    ///
+    /// Note that this method will actually run a plan to calculate the count,
+    /// which may be slow for large or complicated DataFrames.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -770,13 +802,14 @@ impl DataFrame {
         Ok(len)
     }
 
-    /// Execute this DataFrame and buffer all resulting `RecordBatch`es  into memory.
+    /// Execute this `DataFrame` and buffer all resulting `RecordBatch`es  into memory.
     ///
     /// Prior to calling `collect`, modifying a DataFrame simply updates a plan
     /// (no actual computation is performed). `collect` triggers the computation.
     ///
     /// See [`Self::execute_stream`] to execute a DataFrame without buffering.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -794,8 +827,9 @@ impl DataFrame {
         collect(plan, task_ctx).await
     }
 
-    /// Execute the DataFrame and print the results to the console.
+    /// Execute the `DataFrame` and print the results to the console.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -812,8 +846,10 @@ impl DataFrame {
         Ok(pretty::print_batches(&results)?)
     }
 
-    /// Print results and limit rows.
+    /// Execute the `DataFrame` and print only the first `num` rows of the
+    /// result to the console.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -830,7 +866,7 @@ impl DataFrame {
         Ok(pretty::print_batches(&results)?)
     }
 
-    /// Get a new TaskContext to run in this session
+    /// Return a new [`TaskContext`] which would be used to execute this DataFrame
     pub fn task_ctx(&self) -> TaskContext {
         TaskContext::from(&self.session_state)
     }
@@ -865,6 +901,7 @@ impl DataFrame {
     /// Executes this DataFrame and collects all results into a vector of vector of RecordBatch
     /// maintaining the input partitioning.
     ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -908,9 +945,12 @@ impl DataFrame {
         execute_stream_partitioned(plan, task_ctx)
     }
 
-    /// Returns the schema describing the output of this DataFrame in terms of columns returned,
-    /// where each column has a name, data type, and nullability attribute.
-
+    /// Returns the `DFSchema` describing the output of this DataFrame.
+    ///
+    /// The output `DFSchema` contains information on the name, data type, and
+    /// nullability for each column.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -926,7 +966,8 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the unoptimized logical plan
+    /// Return a reference to the unoptimized [`LogicalPlan`] that comprises
+    /// this DataFrame. See [`Self::into_unoptimized_plan`] for more details.
     pub fn logical_plan(&self) -> &LogicalPlan {
         &self.plan
     }
@@ -936,20 +977,21 @@ impl DataFrame {
         (self.session_state, self.plan)
     }
 
-    /// Return the logical plan represented by this DataFrame without running the optimizers
+    /// Return the [`LogicalPlan`] represented by this DataFrame without running
+    /// any optimizers
     ///
-    /// Note: This method should not be used outside testing, as it loses the snapshot
-    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
-    /// operations may take place against a different state
+    /// Note: This method should not be used outside testing, as it loses the
+    /// snapshot of the [`SessionState`] attached to this [`DataFrame`] and
+    /// consequently subsequent operations may take place against a different
+    /// state (e.g. a different value of `now()`)
     pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }
 
-    /// Return the optimized logical plan represented by this DataFrame.
+    /// Return the optimized [`LogicalPlan`] represented by this DataFrame.
     ///
-    /// Note: This method should not be used outside testing, as it loses the snapshot
-    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
-    /// operations may take place against a different state
+    /// Note: This method should not be used outside testing -- see
+    /// [`Self::into_optimized_plan`] for more details.
     pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         self.session_state.optimize(&self.plan)
@@ -997,6 +1039,7 @@ impl DataFrame {
     }
 
     /// Return a `FunctionRegistry` used to plan udf's calls
+    ///
     ///
     /// ```
     /// # use datafusion::prelude::*;
