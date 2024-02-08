@@ -133,6 +133,12 @@ pub fn partitioned_file_groups(
                 Box::new(GzEncoder::new(file, GzCompression::default()))
             }
             #[cfg(feature = "compression")]
+            FileCompressionType::BGZIP => {
+                return Err(DataFusionError::NotImplemented(
+                    "BGZIP is not supported".to_string(),
+                ))
+            }
+            #[cfg(feature = "compression")]
             FileCompressionType::XZ => Box::new(XzEncoder::new(file, 9)),
             #[cfg(feature = "compression")]
             FileCompressionType::ZSTD => {
@@ -147,6 +153,7 @@ pub fn partitioned_file_groups(
             }
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
+            | FileCompressionType::BGZIP
             | FileCompressionType::BZIP2
             | FileCompressionType::XZ
             | FileCompressionType::ZSTD => {
