@@ -26,7 +26,27 @@ use super::{
 };
 
 impl DataFrame {
-    /// Write a `DataFrame` to a Parquet file.
+    /// Execute the `DataFrame` and write the results to Parquet file(s).
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion::dataframe::DataFrameWriteOptions;
+    /// let ctx = SessionContext::new();
+    /// // Sort the data by column "b" and write it to a new location
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
+    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///   .write_parquet(
+    ///     "output.parquet",
+    ///     DataFrameWriteOptions::new(),
+    ///     None, // can also specify parquet writing options here
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn write_parquet(
         self,
         path: &str,

@@ -511,7 +511,9 @@ pub async fn collect(
     common::collect(stream).await
 }
 
-/// Execute the [ExecutionPlan] and return a single stream of results.
+/// Execute the [ExecutionPlan] and return a single stream of `RecordBatch`es.
+///
+/// See [collect] to buffer the `RecordBatch`es in memory.
 ///
 /// # Aborting Execution
 ///
