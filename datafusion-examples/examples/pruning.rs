@@ -48,7 +48,7 @@ async fn main() {
     //  File 1: x has values between `4` and `6`
     //          y has the value 10
     //
-    //  File 1: x has values between `4` and `6`
+    //  File 2: x has values between `4` and `6`
     //          y has the value of `7`
     //
     //  File 3: x has the value 1
