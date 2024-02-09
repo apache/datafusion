@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, ExprSchema, Result};
+use datafusion_common::{ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -155,13 +155,24 @@ impl ScalarUDF {
 
     /// The datatype this function returns given the input argument input types.
     /// This function is used when the input arguments are [`Expr`]s.
+    /// 
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
-    pub fn return_type_from_exprs(
+    pub fn return_type_from_exprs<S: ExprSchema>(
         &self,
         args: &[Expr],
-        schema: &dyn ExprSchema,
+        schema: &S,
     ) -> Result<DataType> {
-        self.inner.return_type_from_exprs(args, schema)
+        // If the implementation provides a return_type_from_exprs, use it
+        if let Some(return_type) = self.inner.return_type_from_exprs(args, schema) {
+            return_type
+        // Otherwise, use the return_type function
+        } else {
+            let arg_types = args
+                .iter()
+                .map(|arg| arg.get_type(schema))
+                .collect::<Result<Vec<_>>>()?;
+            self.return_type(&arg_types)
+        }
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -267,14 +278,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         &self,
         arg_exprs: &[Expr],
         schema: &dyn ExprSchema,
-    ) -> Result<DataType> {
-        // provide default implementation that calls `self.return_type()`
+    ) -> Option<Result<DataType>> {
+        // The default implementation returns None
         // so that people don't have to implement `return_type_from_exprs` if they dont want to
-        let arg_types = arg_exprs
-            .iter()
-            .map(|e| e.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        self.return_type(&arg_types)
+        None
     }
 
     /// Invoke the function on `args`, returning the appropriate result

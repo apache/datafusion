@@ -15,20 +15,48 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
-use arrow_schema::{Field, Schema};
-use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
+use datafusion::{
+    arrow::{
+        array::{Float32Array, Float64Array},
+        datatypes::DataType,
+        record_batch::RecordBatch,
+    },
+    logical_expr::Volatility,
+};
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{
-    internal_err, DataFusionError, ExprSchema, ScalarValue, ToDFSchema
-};
+use datafusion_common::{ExprSchema, ScalarValue};
 use datafusion_expr::{
-    expr::ScalarFunction, ColumnarValue, ExprSchemable, ScalarUDF, ScalarUDFImpl,
-    Signature,
+    ColumnarValue, ExprSchemable, ScalarFunctionImplementation, ScalarUDF, ScalarUDFImpl, Signature
 };
+use std::{any::Any, sync::Arc};
+
+// create local execution context with an in-memory table
+fn create_context() -> Result<SessionContext> {
+    use datafusion::arrow::datatypes::{Field, Schema};
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float32, false),
+        Field::new("b", DataType::Float64, false),
+    ]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1, 6.1])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])),
+        ],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    Ok(ctx)
+}
 
 #[derive(Debug)]
 struct UDFWithExprReturn {
@@ -49,13 +77,13 @@ impl ScalarUDFImpl for UDFWithExprReturn {
         self
     }
     fn name(&self) -> &str {
-        "udf_with_expr_return"
+        "my_cast"
     }
     fn signature(&self) -> &Signature {
         &self.signature
     }
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        Ok(DataType::Boolean)
     }
     // An example of how to use the exprs to determine the return type
     // If the third argument is '0', return the type of the first argument
@@ -64,7 +92,7 @@ impl ScalarUDFImpl for UDFWithExprReturn {
         &self,
         arg_exprs: &[Expr],
         schema: &dyn ExprSchema,
-    ) -> Result<DataType> {
+    ) -> Option<Result<DataType>> {
         if arg_exprs.len() != 3 {
             return internal_err!("The size of the args must be 3.");
         }
@@ -74,97 +102,44 @@ impl ScalarUDFImpl for UDFWithExprReturn {
             }
             _ => unreachable!(),
         };
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        Some(arg_exprs.get(take_idx).unwrap().get_type(schema))
     }
     // The actual implementation would add one to the argument
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        unimplemented!()
+        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))))
     }
 }
 
-#[derive(Debug)]
-struct UDFDefault {
-    signature: Signature,
-}
 
-impl UDFDefault {
-    fn new() -> Self {
-        Self {
-            signature: Signature::any(3, Volatility::Immutable),
-        }
-    }
-}
-
-// Implement the ScalarUDFImpl trait for UDFDefault
-// This is the same as UDFWithExprReturn, except without return_type_from_exprs
-impl ScalarUDFImpl for UDFDefault {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "udf_default"
-    }
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Boolean)
-    }
-    // The actual implementation would add one to the argument
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        unimplemented!()
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create a new ScalarUDF from the implementation
     let udf_with_expr_return = ScalarUDF::from(UDFWithExprReturn::new());
 
-    // Call 'return_type' to get the return type of the function
-    let ret = udf_with_expr_return.return_type(&[DataType::Int32])?;
-    assert_eq!(ret, DataType::Int32);
+    let ctx = create_context()?;
 
-    let schema = Schema::new(vec![
-        Field::new("a", DataType::Float32, false),
-        Field::new("b", DataType::Float64, false),
-    ])
-    .to_dfschema()?;
+    ctx.register_udf(udf_with_expr_return);
 
-    // Set the third argument to 0 to return the type of the first argument
-    let expr0 = udf_with_expr_return.call(vec![col("a"), col("b"), lit(0_i64)]);
-    let args = match expr0 {
-        Expr::ScalarFunction(ScalarFunction { func_def: _, args }) => args,
-        _ => panic!("Expected ScalarFunction"),
-    };
-    let ret = udf_with_expr_return.return_type_from_exprs(&args, &schema)?;
-    // The return type should be the same as the first argument
-    assert_eq!(ret, DataType::Float32);
+    // SELECT take(a, b, 0) AS take0, take(a, b, 1) AS take1 FROM t;
+    let df = ctx.table("t").await?;
+    let take = df.registry().udf("my_cast")?;
+    let expr0 = take
+        .call(vec![col("a"), lit("i32")])
+        .alias("take0");
+    let expr1 = take
+        .call(vec![col("a"), lit("i64")])
+        .alias("take1");
 
-    // Set the third argument to 1 to return the type of the second argument
-    let expr1 = udf_with_expr_return.call(vec![col("a"), col("b"), lit(1_i64)]);
-    let args1 = match expr1 {
-        Expr::ScalarFunction(ScalarFunction { func_def: _, args }) => args,
-        _ => panic!("Expected ScalarFunction"),
-    };
-    let ret = udf_with_expr_return.return_type_from_exprs(&args1, &schema)?;
-    // The return type should be the same as the second argument
-    assert_eq!(ret, DataType::Float64);
+    let df = df.select(vec![expr0, expr1])?;
+    let schema = df.schema();
 
-    // Create a new ScalarUDF from the implementation
-    let udf_default = ScalarUDF::from(UDFDefault::new());
-    // Call 'return_type' to get the return type of the function
-    let ret = udf_default.return_type(&[DataType::Int32])?;
-    assert_eq!(ret, DataType::Boolean);
+    // Check output schema
+    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
+    assert_eq!(schema.field(1).data_type(), &DataType::Int64);
 
-    // Set the third argument to 0 to return the type of the first argument
-    let expr2 = udf_default.call(vec![col("a"), col("b"), lit(0_i64)]);
-    let args = match expr2 {
-        Expr::ScalarFunction(ScalarFunction { func_def: _, args }) => args,
-        _ => panic!("Expected ScalarFunction"),
-    };
-    let ret = udf_default.return_type_from_exprs(&args, &schema)?;
-    assert_eq!(ret, DataType::Boolean);
+    df.show().await?;
+    
 
     Ok(())
 }
