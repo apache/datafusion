@@ -136,6 +136,8 @@ pub trait PruningStatistics {
 /// possibly evaluate to `true` given information about a column provided by
 /// [`PruningStatistics`].
 ///
+/// # Introduction
+///
 /// `PruningPredicate` analyzes filter expressions using statistics such as
 /// min/max values and null counts, attempting to prove a "container" (e.g.
 /// Parquet Row Group) can be skipped without reading the actual data,
@@ -162,6 +164,12 @@ pub trait PruningStatistics {
 /// (not just Parquet metadata).
 ///
 /// # Example
+///
+/// See the [`pruning.rs` example in the `datafusion-examples`] for a complete
+/// example of how to use `PruningPredicate` to prune files based on min/max
+/// values.
+///
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:
