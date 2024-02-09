@@ -548,7 +548,7 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut builder = SchemaBuilder::from(file_schema.fields());
+        let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
@@ -776,7 +776,6 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            single_file_output: false,
             overwrite,
             file_type_writer_options,
         };

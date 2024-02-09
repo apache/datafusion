@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::TIMEZONE_WILDCARD;
+use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::list_ndims;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
+};
 
 use super::binary::comparison_coercion;
 
@@ -48,7 +50,6 @@ pub fn data_types(
             );
         }
     }
-
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
@@ -104,12 +105,11 @@ fn get_valid_types(
         let elem_base_type = datafusion_common::utils::base_type(elem_type);
         let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
 
-        if new_base_type.is_none() {
-            return internal_err!(
+        let new_base_type = new_base_type.ok_or_else(|| {
+            internal_datafusion_err!(
                 "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
-            );
-        }
-        let new_base_type = new_base_type.unwrap();
+            )
+        })?;
 
         let array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             array_type,
@@ -117,13 +117,32 @@ fn get_valid_types(
         );
 
         match array_type {
-            DataType::List(ref field) | DataType::LargeList(ref field) => {
+            DataType::List(ref field)
+            | DataType::LargeList(ref field)
+            | DataType::FixedSizeList(ref field, _) => {
                 let elem_type = field.data_type();
                 if is_append {
-                    Ok(vec![vec![array_type.clone(), elem_type.to_owned()]])
+                    Ok(vec![vec![array_type.clone(), elem_type.clone()]])
                 } else {
                     Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
                 }
+            }
+            _ => Ok(vec![vec![]]),
+        }
+    }
+    fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
+        if current_types.len() != 2 {
+            return Ok(vec![vec![]]);
+        }
+
+        let array_type = &current_types[0];
+
+        match array_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => {
+                let array_type = coerced_fixed_size_list_to_list(array_type);
+                Ok(vec![vec![array_type, DataType::Int64]])
             }
             _ => Ok(vec![vec![]]),
         }
@@ -160,12 +179,19 @@ fn get_valid_types(
         }
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArrayAndElement => {
-            return array_append_or_prepend_valid_types(current_types, true)
-        }
-        TypeSignature::ElementAndArray => {
-            return array_append_or_prepend_valid_types(current_types, false)
-        }
+        TypeSignature::ArraySignature(ref function_signature) => match function_signature
+        {
+            ArrayFunctionSignature::ArrayAndElement => {
+                return array_append_or_prepend_valid_types(current_types, true)
+            }
+            ArrayFunctionSignature::ArrayAndIndex => {
+                return array_and_index(current_types)
+            }
+            ArrayFunctionSignature::ElementAndArray => {
+                return array_append_or_prepend_valid_types(current_types, false)
+            }
+        },
+
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return plan_err!(
@@ -310,6 +336,8 @@ fn coerced_from<'a>(
         // Any type can be coerced into strings
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
+
+        List(_) if matches!(type_from, FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.

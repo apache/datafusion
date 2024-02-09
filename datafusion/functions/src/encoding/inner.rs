@@ -32,12 +32,122 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
+
+#[derive(Debug)]
+pub(super) struct EncodeFunc {
+    signature: Signature,
+}
+
+impl EncodeFunc {
+    pub fn new() -> Self {
+        use DataType::*;
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                Volatility::Immutable,
+            )
+        }
+    }
+}
+
+impl ScalarUDFImpl for EncodeFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "encode"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Utf8,
+            LargeUtf8 => LargeUtf8,
+            Binary => Utf8,
+            LargeBinary => LargeUtf8,
+            Null => Null,
+            _ => {
+                return plan_err!("The encode function can only accept utf8 or binary.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        encode(args)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct DecodeFunc {
+    signature: Signature,
+}
+
+impl DecodeFunc {
+    pub fn new() -> Self {
+        use DataType::*;
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                Volatility::Immutable,
+            )
+        }
+    }
+}
+impl ScalarUDFImpl for DecodeFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "decode"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Binary,
+            LargeUtf8 => LargeBinary,
+            Binary => Binary,
+            LargeBinary => LargeBinary,
+            Null => Null,
+            _ => {
+                return plan_err!("The decode function can only accept utf8 or binary.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        decode(args)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum Encoding {
     Base64,
     Hex,
 }
-
 fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarValue> {
     match value {
         ColumnarValue::Array(a) => match a.data_type() {
@@ -293,7 +403,7 @@ impl FromStr for Encoding {
 /// Encodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
-pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return internal_err!(
             "{:?} args were supplied but encode takes exactly two arguments",
@@ -319,7 +429,7 @@ pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Decodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
-pub fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return internal_err!(
             "{:?} args were supplied but decode takes exactly two arguments",

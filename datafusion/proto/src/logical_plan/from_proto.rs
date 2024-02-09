@@ -44,7 +44,7 @@ use datafusion_common::{
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
+use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_distinct,
@@ -55,22 +55,26 @@ use datafusion_expr::{
     array_resize, array_slice, array_sort, array_to_string, array_union, arrow_typeof,
     ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
-    encode, ends_with, exp,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
     instr, isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
-    radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
-    round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
-    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetFieldAccess, GetIndexedField, GroupingSet,
+    radians, random, regexp_like, regexp_match, regexp_replace, repeat, replace, reverse,
+    right, round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh,
+    split_part, sqrt, starts_with, string_to_array, strpos, struct_fun, substr,
+    substr_index, substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_reverse,
+    expr::{Alias, Placeholder},
 };
 
 #[derive(Debug)]
@@ -501,6 +505,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            ScalarFunction::ArrayReverse => Self::ArrayReverse,
             ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
@@ -519,8 +524,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Digest => Self::Digest,
-            ScalarFunction::Encode => Self::Encode,
-            ScalarFunction::Decode => Self::Decode,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -535,6 +538,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
+            ScalarFunction::RegexpLike => Self::RegexpLike,
+            ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
@@ -555,9 +560,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
+            ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
-            ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
@@ -682,14 +687,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list)
-            | Value::FixedSizeListValue(scalar_list)
-            | Value::LargeListValue(scalar_list) => {
-                let protobuf::ScalarListValue {
+            Value::ListValue(v)
+            | Value::FixedSizeListValue(v)
+            | Value::LargeListValue(v)
+            | Value::StructValue(v) => {
+                let protobuf::ScalarNestedValue {
                     ipc_message,
                     arrow_data,
                     schema,
-                } = &scalar_list;
+                } = &v;
 
                 let schema: Schema = if let Some(schema_ref) = schema {
                     schema_ref.try_into()?
@@ -734,6 +740,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                     Value::FixedSizeListValue(_) => {
                         Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
+                    Value::StructValue(_) => {
+                        Self::Struct(arr.as_struct().to_owned().into())
                     }
                     _ => unreachable!(),
                 }
@@ -835,28 +844,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
-            Value::StructValue(v) => {
-                // all structs must have at least 1 field, so we treat
-                // an empty values list as NULL
-                let values = if v.field_values.is_empty() {
-                    None
-                } else {
-                    Some(
-                        v.field_values
-                            .iter()
-                            .map(|v| v.try_into())
-                            .collect::<Result<Vec<ScalarValue>, _>>()?,
-                    )
-                };
-
-                let fields = v
-                    .fields
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<_, _>>()?;
-
-                Self::Struct(values, fields)
-            }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
             }
@@ -1336,6 +1323,14 @@ pub fn parse_expr(
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr")?,
         ))),
+        ExprType::Unnest(unnest) => {
+            let exprs = unnest
+                .exprs
+                .iter()
+                .map(|e| parse_expr(e, registry))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Expr::Unnest(Unnest { exprs }))
+        }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
@@ -1459,6 +1454,9 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArrayReverse => {
+                    Ok(array_reverse(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArraySlice => Ok(array_slice(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1568,14 +1566,6 @@ pub fn parse_expr(
                 ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Encode => Ok(encode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
-                ScalarFunction::Decode => Ok(decode(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::NullIf => Ok(nullif(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1649,13 +1639,19 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::RegexpReplace => Ok(regexp_replace(
+                ScalarFunction::RegexpLike => Ok(regexp_like(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::RegexpMatch => Ok(regexp_match(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::RegexpReplace => Ok(regexp_replace(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
@@ -1704,6 +1700,16 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
+                ScalarFunction::MakeDate => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::MakeDate,
+                        args,
+                    )))
+                }
                 ScalarFunction::ToTimestamp => {
                     let args: Vec<_> = args
                         .iter()

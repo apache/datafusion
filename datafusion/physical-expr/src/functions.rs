@@ -81,27 +81,8 @@ pub fn create_physical_expr(
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
+        fun.signature().type_signature.supports_zero_argument(),
     )))
-}
-
-#[cfg(feature = "encoding_expressions")]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {{
-        use crate::encoding_expressions;
-        encoding_expressions::$FUNC
-    }};
-}
-
-#[cfg(not(feature = "encoding_expressions"))]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {
-        |_: &[ColumnarValue]| -> Result<ColumnarValue> {
-            internal_err!(
-                "function {} requires compilation with feature flag: encoding_expressions.",
-                $NAME
-            )
-        }
-    };
 }
 
 #[cfg(feature = "crypto_expressions")]
@@ -192,49 +173,9 @@ pub(crate) enum Hint {
     AcceptsSingular,
 }
 
-/// A helper function used to infer the length of arguments of Scalar functions and convert
-/// [`ColumnarValue`]s to [`ArrayRef`]s with the inferred length. Note that this function
-/// only works for functions that accept either that all arguments are scalars or all arguments
-/// are arrays with same length. Otherwise, it will return an error.
+#[deprecated(since = "36.0.0", note = "Use ColumarValue::values_to_arrays instead")]
 pub fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>> {
-    if args.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let len = args
-        .iter()
-        .fold(Option::<usize>::None, |acc, arg| match arg {
-            ColumnarValue::Scalar(_) if acc.is_none() => Some(1),
-            ColumnarValue::Scalar(_) => {
-                if let Some(1) = acc {
-                    acc
-                } else {
-                    None
-                }
-            }
-            ColumnarValue::Array(a) => {
-                if let Some(l) = acc {
-                    if l == a.len() {
-                        acc
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(a.len())
-                }
-            }
-        });
-
-    let inferred_length = len.ok_or(DataFusionError::Internal(
-        "Arguments has mixed length".to_string(),
-    ))?;
-
-    let args = args
-        .iter()
-        .map(|arg| arg.clone().into_array(inferred_length))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(args)
+    ColumnarValue::values_to_arrays(args)
 }
 
 /// Decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
@@ -464,6 +405,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
         }),
+        BuiltinScalarFunction::ArrayReverse => Arc::new(|args| {
+            make_scalar_function_inner(array_expressions::array_reverse)(args)
+        }),
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
@@ -574,6 +518,7 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(datetime_expressions::to_timestamp_invoke)
         }
@@ -650,12 +595,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
-        BuiltinScalarFunction::Decode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(decode, "decode"),
-        ),
-        BuiltinScalarFunction::Encode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(encode, "encode"),
-        ),
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
@@ -668,6 +607,27 @@ pub fn create_physical_fun(
                 )),
                 _ => unreachable!(),
             },
+        }),
+        BuiltinScalarFunction::RegexpLike => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                let func = invoke_on_array_if_regex_expressions_feature_flag!(
+                    regexp_like,
+                    i32,
+                    "regexp_like"
+                );
+                make_scalar_function_inner(func)(args)
+            }
+            DataType::LargeUtf8 => {
+                let func = invoke_on_array_if_regex_expressions_feature_flag!(
+                    regexp_like,
+                    i64,
+                    "regexp_like"
+                );
+                make_scalar_function_inner(func)(args)
+            }
+            other => {
+                internal_err!("Unsupported data type {other:?} for function regexp_like")
+            }
         }),
         BuiltinScalarFunction::RegexpMatch => {
             Arc::new(|args| match args[0].data_type() {
@@ -1072,7 +1032,7 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::cast::{as_boolean_array, as_uint64_array};
     use datafusion_common::{exec_err, plan_err};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
@@ -3167,6 +3127,74 @@ mod tests {
         for fun in funs.iter() {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "regex_expressions")]
+    fn test_regexp_like() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let execution_props = ExecutionProps::new();
+
+        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
+        let pattern = lit(r".*-(\d*)");
+        let columns: Vec<ArrayRef> = vec![col_value];
+        let expr = create_physical_expr_with_type_coercion(
+            &BuiltinScalarFunction::RegexpLike,
+            &[col("a", &schema)?, pattern],
+            &schema,
+            &execution_props,
+        )?;
+
+        // type is correct
+        assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
+
+        // evaluate works
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        let result = as_boolean_array(&result)?;
+
+        // value is correct
+        assert!(result.value(0));
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "regex_expressions")]
+    fn test_regexp_like_all_literals() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let execution_props = ExecutionProps::new();
+
+        let col_value = lit("aaa-555");
+        let pattern = lit(r".*-(\d*)");
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let expr = create_physical_expr_with_type_coercion(
+            &BuiltinScalarFunction::RegexpLike,
+            &[col_value, pattern],
+            &schema,
+            &execution_props,
+        )?;
+
+        // type is correct
+        assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
+
+        // evaluate works
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        let result = as_boolean_array(&result)?;
+
+        // value is correct
+        assert!(result.value(0));
+
         Ok(())
     }
 

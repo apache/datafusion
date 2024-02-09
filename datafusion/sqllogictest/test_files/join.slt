@@ -238,6 +238,27 @@ SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <
 NULL 3 11
 NULL 3 55
 
+# equijoin_full
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# equijoin_full_and_condition_from_both
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+11 a 1 NULL NULL NULL
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 11 z 3
+NULL NULL NULL 55 w 3
+
 # left_join
 query ITT rowsort
 SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id
@@ -602,20 +623,21 @@ CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
 statement ok
 CREATE TABLE t2(a text, b int) AS VALUES ('Alice', 2), ('Alice', 1);
 
-# the current query results are incorrect, becuase the query was incorrectly rewritten as:
-# SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
-# the difference is ORDER BY clause rewrite from t2.b to t1.b, it is incorrect.
-# after https://github.com/apache/arrow-datafusion/issues/8374 fixed, the correct result should be:
-# Alice 50
-# Alice 100
-# Alice 50
-# Alice 100
+# test 'ORDER BY' joined result with same column name
 query TI
-SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
 ----
 Alice 50
 Alice 50
 Alice 100
+Alice 100
+
+query TI
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50
+Alice 100
+Alice 50
 Alice 100
 
 query TITI
@@ -663,3 +685,25 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# sort by company name and then by lead name
+statement ok
+CREATE TABLE companies(name VARCHAR, employees INT) AS VALUES ('Jeyork', 150),('Shalk', 350),('ShuttlP', 75)
+
+statement ok
+CREATE TABLE leads(name VARCHAR, company VARCHAR) AS VALUES ('Alex F', 'Jeyork'),('John B', 'Shalk'),('Samanta J', 'ShuttlP'),('Trevor R', 'Jeyork'),('Alice B', 'ShuttlP')
+
+query TT
+SELECT l.* FROM leads l LEFT JOIN companies c ON c."name" = l."company" ORDER BY c."name", l."name"
+----
+Alex F Jeyork
+Trevor R Jeyork
+John B Shalk
+Alice B ShuttlP
+Samanta J ShuttlP
+
+statement ok
+DROP TABLE companies
+
+statement ok
+DROP TABLE leads

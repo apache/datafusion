@@ -19,10 +19,8 @@
 
 use std::ops::Not;
 
+use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
 use super::utils::*;
-use super::{
-    inlist_simplifier::InListSimplifier, or_in_list_simplifier::OrInListSimplifier,
-};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
@@ -44,10 +42,7 @@ use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
     ScalarFunctionDefinition, Volatility,
 };
-use datafusion_expr::{
-    expr::{InList, InSubquery, ScalarFunction},
-    interval_arithmetic::NullableInterval,
-};
+use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// This structure handles API for expression simplification
@@ -56,6 +51,9 @@ pub struct ExprSimplifier<S> {
     /// Guarantees about the values of columns. This is provided by the user
     /// in [ExprSimplifier::with_guarantees()].
     guarantees: Vec<(Expr, NullableInterval)>,
+    /// Should expressions be canonicalized before simplification? Defaults to
+    /// true
+    canonicalize: bool,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
@@ -70,6 +68,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         Self {
             info,
             guarantees: vec![],
+            canonicalize: true,
         }
     }
 
@@ -133,9 +132,15 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
-        let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
+
+        let expr = if self.canonicalize {
+            expr.rewrite(&mut Canonicalizer::new())?
+        } else {
+            expr
+        };
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -143,18 +148,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
-            .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut inlist_simplifier)?
+            .rewrite(&mut shorten_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
     }
 
-    pub fn canonicalize(&self, expr: Expr) -> Result<Expr> {
-        let mut canonicalizer = Canonicalizer::new();
-        expr.rewrite(&mut canonicalizer)
-    }
     /// Apply type coercion to an [`Expr`] so that it can be
     /// evaluated as a [`PhysicalExpr`](datafusion_physical_expr::PhysicalExpr).
     ///
@@ -229,6 +230,60 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self.guarantees = guarantees;
         self
     }
+
+    /// Should [`Canonicalizer`] be applied before simplification?
+    ///
+    /// If true (the default), the expression will be rewritten to canonical
+    /// form before simplification. This is useful to ensure that the simplifier
+    /// can apply all possible simplifications.
+    ///
+    /// Some expressions, such as those in some Joins, can not be canonicalized
+    /// without changing their meaning. In these cases, canonicalization should
+    /// be disabled.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_optimizer::simplify_expressions::{
+    ///     ExprSimplifier, SimplifyContext};
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("a", DataType::Int64, false),
+    ///   Field::new("b", DataType::Int64, false),
+    ///   Field::new("c", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
+    ///
+    /// // Expression: a = c AND 1 = b
+    /// let expr = col("a").eq(col("c")).and(lit(1).eq(col("b")));
+    ///
+    /// // With canonicalization, the expression is rewritten to canonical form
+    /// // (though it is no simpler in this case):
+    /// let canonical = simplifier.simplify(expr.clone()).unwrap();
+    /// // Expression has been rewritten to: (c = a AND b = 1)
+    /// assert_eq!(canonical, col("c").eq(col("a")).and(col("b").eq(lit(1))));
+    ///
+    /// // If canonicalization is disabled, the expression is not changed
+    /// let non_canonicalized = simplifier
+    ///   .with_canonicalize(false)
+    ///   .simplify(expr.clone())
+    ///   .unwrap();
+    ///
+    /// assert_eq!(non_canonicalized, expr);
+    /// ```
+    pub fn with_canonicalize(mut self, canonicalize: bool) -> Self {
+        self.canonicalize = canonicalize;
+        self
+    }
 }
 
 /// Canonicalize any BinaryExprs that are not in canonical form
@@ -236,7 +291,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 /// `<literal> <op> <col>` is rewritten to `<col> <op> <literal>`
 ///
 /// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
-/// than `col2` (`b > a` would be canonicalized to `a < b`)
+/// than `col2` (`a > b` would be canonicalized to `b < a`)
 struct Canonicalizer {}
 
 impl Canonicalizer {
@@ -423,6 +478,7 @@ impl<'a> ConstEvaluator<'a> {
                 ScalarFunctionDefinition::Name(_) => false,
             },
             Expr::Literal(_)
+            | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
@@ -548,91 +604,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     None => lit_bool_null(),
                 }
             }
-            // expr IN () --> false
-            // expr NOT IN () --> true
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
-                lit(negated)
-            }
-
-            // null in (x, y, z) --> null
-            // null not in (x, y, z) --> null
-            Expr::InList(InList {
-                expr,
-                list: _,
-                negated: _,
-            }) if is_null(&expr) => lit_bool_null(),
-
-            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            Expr::InList(InList {
-                expr,
-                mut list,
-                negated,
-            }) if list.len() == 1
-                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
-            {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
-                    unreachable!()
-                };
-                Expr::InSubquery(InSubquery::new(expr, subquery, negated))
-            }
-
-            // if expr is a single column reference:
-            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) if !list.is_empty()
-                && (
-                    // For lists with only 1 value we allow more complex expressions to be simplified
-                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
-                    // for more than one we avoid repeating this potentially expensive
-                    // expressions
-                    list.len() == 1
-                        || list.len() <= THRESHOLD_INLINE_INLIST
-                            && expr.try_into_col().is_ok()
-                ) =>
-            {
-                let first_val = list[0].clone();
-                if negated {
-                    list.into_iter().skip(1).fold(
-                        (*expr.clone()).not_eq(first_val),
-                        |acc, y| {
-                            // Note that `A and B and C and D` is a left-deep tree structure
-                            // as such we want to maintain this structure as much as possible
-                            // to avoid reordering the expression during each optimization
-                            // pass.
-                            //
-                            // Left-deep tree structure for `A and B and C and D`:
-                            // ```
-                            //        &
-                            //       / \
-                            //      &   D
-                            //     / \
-                            //    &   C
-                            //   / \
-                            //  A   B
-                            // ```
-                            //
-                            // The code below maintain the left-deep tree structure.
-                            acc.and((*expr.clone()).not_eq(y))
-                        },
-                    )
-                } else {
-                    list.into_iter().skip(1).fold(
-                        (*expr.clone()).eq(first_val),
-                        |acc, y| {
-                            // Same reasoning as above
-                            acc.or((*expr.clone()).eq(y))
-                        },
-                    )
-                }
-            }
-            //
             // Rules for NotEq
             //
 
@@ -1376,7 +1347,6 @@ mod tests {
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_physical_expr::functions::columnar_values_to_array;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1490,7 +1460,7 @@ mod tests {
         let return_type = Arc::new(DataType::Int32);
 
         let fun = Arc::new(|args: &[ColumnarValue]| {
-            let args = columnar_values_to_array(args)?;
+            let args = ColumnarValue::values_to_arrays(args)?;
 
             let arg0 = as_int32_array(&args[0])?;
             let arg1 = as_int32_array(&args[1])?;
@@ -2889,8 +2859,7 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        let cano = simplifier.canonicalize(expr)?;
-        simplifier.simplify(cano)
+        simplifier.simplify(expr)
     }
 
     fn simplify(expr: Expr) -> Expr {
@@ -3305,6 +3274,12 @@ mod tests {
         );
         assert_eq!(simplify(expr.clone()), lit(true));
 
+        // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
+        );
+        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
@@ -3398,6 +3373,7 @@ mod tests {
                     true,
                 )));
         // TODO: Further simplify this expression
+        // https://github.com/apache/arrow-datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
     }

@@ -1,0 +1,97 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+############################
+# Unnest Expressions Tests #
+############################
+
+statement ok
+CREATE TABLE unnest_table
+AS VALUES
+    ([1,2,3], [7], 1),
+    ([4,5], [8,9,10], 2),
+    ([6], [11,12], 3),
+    ([12], [null, 42, null], null)
+;
+
+## Basic unnest expression
+query I
+select unnest([1,2,3]);
+----
+1
+2
+3
+
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and structs and null
+select unnest(null);
+
+## Unnest empty array
+query ?
+select unnest([]);
+----
+
+## Unnest column non-null
+query I
+select unnest(column1) from unnest_table;
+----
+1
+2
+3
+4
+5
+6
+12
+
+## Unnest column with null
+query I
+select unnest(column2) from unnest_table;
+----
+7
+8
+9
+10
+11
+12
+NULL
+42
+NULL
+
+## Unnest column with scalars
+# TODO: This should be an error, but unnest is able to process scalar values now.
+query I
+select unnest(column3) from unnest_table;
+----
+1
+2
+3
+NULL
+
+## Unnest multiple columns
+query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
+select unnest(column1), unnest(column2) from unnest_table;
+
+## Unnest scalar
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and structs and null
+select unnest(1);
+
+
+## Unnest empty expression
+query error DataFusion error: Execution error: unnest\(\) requires at least one argument
+select unnest();
+
+statement ok
+drop table unnest_table;

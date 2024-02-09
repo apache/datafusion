@@ -259,7 +259,7 @@ pub fn create_physical_expr(
         }
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let mut physical_args = args
+            let physical_args = args
                 .iter()
                 .map(|e| create_physical_expr(e, input_dfschema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
@@ -272,17 +272,11 @@ pub fn create_physical_expr(
                         execution_props,
                     )
                 }
-                ScalarFunctionDefinition::UDF(fun) => {
-                    // udfs with zero params expect null array as input
-                    if args.is_empty() {
-                        physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
-                    }
-                    udf::create_physical_expr(
-                        fun.clone().as_ref(),
-                        &physical_args,
-                        input_schema,
-                    )
-                }
+                ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
+                    fun.clone().as_ref(),
+                    &physical_args,
+                    input_schema,
+                ),
                 ScalarFunctionDefinition::Name(_) => {
                     internal_err!("Function `Expr` with name should be resolved.")
                 }

@@ -124,6 +124,11 @@ fn physical_name(e: &Expr) -> Result<String> {
 
 fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
+        Expr::Unnest(_) => {
+            internal_err!(
+                "Expr::Unnest should have been converted to LogicalPlan::Unnest"
+            )
+        }
         Expr::Column(c) => {
             if is_first_expr {
                 Ok(c.name.clone())
@@ -562,7 +567,6 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    single_file_output,
                     copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -588,7 +592,6 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
-                        single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
                     };
@@ -1036,15 +1039,21 @@ impl DefaultPhysicalPlanner {
                     let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
                     let right_df_schema = right.schema();
+                    let execution_props = session_state.execution_props();
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
-                            let l = l.try_into_col()?;
-                            let r = r.try_into_col()?;
-                            Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
-                            ))
+                            let l = create_physical_expr(
+                                l,
+                                left_df_schema,
+                                execution_props
+                            )?;
+                            let r = create_physical_expr(
+                                r,
+                                right_df_schema,
+                                execution_props
+                            )?;
+                            Ok((l, r))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 
@@ -1105,6 +1114,7 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
+
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1120,20 +1130,17 @@ impl DefaultPhysicalPlanner {
                     {
                         // Use SortMergeJoin if hash join is not preferred
                         // Sort-Merge join support currently is experimental
-                        if join_filter.is_some() {
-                            // TODO SortMergeJoinExec need to support join filter
-                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
-                        } else {
-                            let join_on_len = join_on.len();
-                            Ok(Arc::new(SortMergeJoinExec::try_new(
-                                physical_left,
-                                physical_right,
-                                join_on,
-                                *join_type,
-                                vec![SortOptions::default(); join_on_len],
-                                null_equals_null,
-                            )?))
-                        }
+
+                        let join_on_len = join_on.len();
+                        Ok(Arc::new(SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::default(); join_on_len],
+                            null_equals_null,
+                        )?))
                     } else if session_state.config().target_partitions() > 1
                         && session_state.config().repartition_joins()
                         && prefer_hash_join {
@@ -1976,7 +1983,6 @@ mod tests {
     use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
@@ -2301,10 +2307,11 @@ mod tests {
 
     /// Return a `null` literal representing a struct type like: `{ a: bool }`
     fn struct_literal() -> Expr {
-        let struct_literal = ScalarValue::Struct(
-            None,
+        let struct_literal = ScalarValue::try_from(DataType::Struct(
             vec![Field::new("foo", DataType::Boolean, false)].into(),
-        );
+        ))
+        .unwrap();
+
         lit(struct_literal)
     }
 

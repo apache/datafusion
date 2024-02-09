@@ -23,11 +23,12 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{Column, Literal};
+use crate::expressions::Literal;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow_schema::SchemaRef;
@@ -1099,7 +1100,7 @@ pub fn join_equivalence_properties(
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> EquivalenceProperties {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);

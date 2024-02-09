@@ -24,15 +24,15 @@ use std::sync::Arc;
 
 use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
-use crate::expressions::format_state_name;
+use crate::expressions::{format_state_name, Literal};
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 
 use arrow_array::cast::AsArray;
-use arrow_array::ArrayRef;
+use arrow_array::{new_empty_array, ArrayRef, StructArray};
 use arrow_schema::{DataType, Field, Fields};
-use datafusion_common::utils::get_row_at_idx;
+use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -117,7 +117,8 @@ impl AggregateExpr for NthValueAgg {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        let n = Arc::new(Literal::new(ScalarValue::Int64(Some(self.n)))) as _;
+        vec![self.expr.clone(), n]
     }
 
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
@@ -270,7 +271,14 @@ impl Accumulator for NthValueAccumulator {
             let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
                 // Extract value from struct to ordering_rows for each group/partition
                 partition_ordering_rows.into_iter().map(|ordering_row| {
-                    if let ScalarValue::Struct(Some(ordering_columns_per_row), _) = ordering_row {
+                    if let ScalarValue::Struct(s) = ordering_row {
+                        let mut ordering_columns_per_row = vec![];
+
+                        for column in s.columns() {
+                            let sv = ScalarValue::try_from_array(column, 0)?;
+                            ordering_columns_per_row.push(sv);
+                        }
+
                         Ok(ordering_columns_per_row)
                     } else {
                         exec_err!(
@@ -305,7 +313,7 @@ impl Accumulator for NthValueAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.evaluate_values()];
         if !self.ordering_req.is_empty() {
-            result.push(self.evaluate_orderings());
+            result.push(self.evaluate_orderings()?);
         }
         Ok(result)
     }
@@ -354,21 +362,35 @@ impl Accumulator for NthValueAccumulator {
 }
 
 impl NthValueAccumulator {
-    fn evaluate_orderings(&self) -> ScalarValue {
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
-        let struct_field = Fields::from(fields);
+        let struct_field = Fields::from(fields.clone());
 
-        let orderings = self
-            .ordering_values
-            .iter()
-            .map(|ordering| {
-                ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
-            })
-            .collect::<Vec<_>>();
-        let struct_type = DataType::Struct(struct_field);
+        let mut column_wise_ordering_values = vec![];
+        let num_columns = fields.len();
+        for i in 0..num_columns {
+            let column_values = self
+                .ordering_values
+                .iter()
+                .map(|x| x[i].clone())
+                .collect::<Vec<_>>();
+            let array = if column_values.is_empty() {
+                new_empty_array(fields[i].data_type())
+            } else {
+                ScalarValue::iter_to_array(column_values.into_iter())?
+            };
+            column_wise_ordering_values.push(array);
+        }
 
-        // Wrap in List, so we have the same data structure ListArray(StructArray..) for group by cases
-        ScalarValue::List(ScalarValue::new_list(&orderings, &struct_type))
+        let ordering_array = StructArray::try_new(
+            struct_field.clone(),
+            column_wise_ordering_values,
+            None,
+        )?;
+
+        Ok(ScalarValue::List(Arc::new(array_into_list_array(
+            Arc::new(ordering_array),
+        ))))
     }
 
     fn evaluate_values(&self) -> ScalarValue {
@@ -393,7 +415,9 @@ impl NthValueAccumulator {
         for index in 0..n_to_add {
             let row = get_row_at_idx(values, index)?;
             self.values.push_back(row[0].clone());
-            self.ordering_values.push_back(row[1..].to_vec());
+            // At index 1, we have n index argument.
+            // Ordering values cover starting from 2nd index to end
+            self.ordering_values.push_back(row[2..].to_vec());
         }
         Ok(())
     }

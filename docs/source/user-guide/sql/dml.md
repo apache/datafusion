@@ -49,7 +49,7 @@ Copy the contents of `source_table` to one or more Parquet formatted
 files in the `dir_name` directory:
 
 ```sql
-> COPY source_table TO 'dir_name' (FORMAT parquet, SINGLE_FILE_OUTPUT false);
+> COPY source_table TO 'dir_name' (FORMAT parquet);
 +-------+
 | count |
 +-------+

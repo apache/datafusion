@@ -2246,38 +2246,41 @@ fn generic_list_cardinality<O: OffsetSizeTrait>(
 }
 
 // Create new offsets that are euqiavlent to `flatten` the array.
-fn get_offsets_for_flatten(
-    offsets: OffsetBuffer<i32>,
-    indexes: OffsetBuffer<i32>,
-) -> OffsetBuffer<i32> {
+fn get_offsets_for_flatten<O: OffsetSizeTrait>(
+    offsets: OffsetBuffer<O>,
+    indexes: OffsetBuffer<O>,
+) -> OffsetBuffer<O> {
     let buffer = offsets.into_inner();
-    let offsets: Vec<i32> = indexes.iter().map(|i| buffer[*i as usize]).collect();
+    let offsets: Vec<O> = indexes
+        .iter()
+        .map(|i| buffer[i.to_usize().unwrap()])
+        .collect();
     OffsetBuffer::new(offsets.into())
 }
 
-fn flatten_internal(
-    array: &dyn Array,
-    indexes: Option<OffsetBuffer<i32>>,
-) -> Result<ListArray> {
-    let list_arr = as_list_array(array)?;
+fn flatten_internal<O: OffsetSizeTrait>(
+    list_arr: GenericListArray<O>,
+    indexes: Option<OffsetBuffer<O>>,
+) -> Result<GenericListArray<O>> {
     let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
     match data_type {
         // Recursively get the base offsets for flattened array
-        DataType::List(_) => {
+        DataType::List(_) | DataType::LargeList(_) => {
+            let sub_list = as_generic_list_array::<O>(&values)?;
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                flatten_internal(&values, Some(offsets))
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
             } else {
-                flatten_internal(&values, Some(offsets))
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
             }
         }
         // Reach the base level, create a new list array
         _ => {
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                let list_arr = ListArray::new(field, offsets, values, None);
+                let list_arr = GenericListArray::<O>::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
                 Ok(list_arr.clone())
@@ -2292,8 +2295,25 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("flatten expects one argument");
     }
 
-    let flattened_array = flatten_internal(&args[0], None)?;
-    Ok(Arc::new(flattened_array) as ArrayRef)
+    let array_type = args[0].data_type();
+    match array_type {
+        DataType::List(_) => {
+            let list_arr = as_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i32>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::LargeList(_) => {
+            let list_arr = as_large_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i64>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::Null => Ok(args[0].clone()),
+        _ => {
+            exec_err!("flatten does not support type '{array_type:?}'")
+        }
+    }
+
+    // Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
 /// Dispatch array length computation based on the offset type.
@@ -2763,6 +2783,75 @@ where
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
         None,
+    )?))
+}
+
+/// array_reverse SQL function
+pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() != 1 {
+        return exec_err!("array_reverse needs one argument");
+    }
+
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
+            general_array_reverse::<i32>(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_array_reverse::<i64>(array, field)
+        }
+        DataType::Null => Ok(arg[0].clone()),
+        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+    }
+}
+
+fn general_array_reverse<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    field: &FieldRef,
+) -> Result<ArrayRef>
+where
+    O: TryFrom<i64>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut nulls = vec![];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let mut index = end - O::one();
+        let mut cnt = 0;
+
+        while index >= start {
+            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            index = index - O::one();
+            cnt += 1;
+        }
+        offsets.push(offsets[row_index] + O::usize_as(cnt));
+    }
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field.clone(),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(nulls.into()),
     )?))
 }
 

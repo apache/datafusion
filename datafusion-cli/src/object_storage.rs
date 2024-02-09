@@ -17,20 +17,18 @@
 
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::CreateExternalTable,
-};
+use datafusion::error::{DataFusionError, Result};
 use object_store::aws::AwsCredential;
 use object_store::{
     aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, CredentialProvider,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
 pub async fn get_s3_object_store_builder(
     url: &Url,
-    cmd: &mut CreateExternalTable,
+    options: &mut HashMap<String, String>,
 ) -> Result<AmazonS3Builder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
@@ -38,15 +36,15 @@ pub async fn get_s3_object_store_builder(
     if let (Some(access_key_id), Some(secret_access_key)) = (
         // These options are datafusion-cli specific and must be removed before passing through to datafusion.
         // Otherwise, a Configuration error will be raised.
-        cmd.options.remove("access_key_id"),
-        cmd.options.remove("secret_access_key"),
+        options.remove("access_key_id"),
+        options.remove("secret_access_key"),
     ) {
         println!("removing secret access key!");
         builder = builder
             .with_access_key_id(access_key_id)
             .with_secret_access_key(secret_access_key);
 
-        if let Some(session_token) = cmd.options.remove("session_token") {
+        if let Some(session_token) = options.remove("session_token") {
             builder = builder.with_token(session_token);
         }
     } else {
@@ -69,7 +67,7 @@ pub async fn get_s3_object_store_builder(
         builder = builder.with_credentials(credentials);
     }
 
-    if let Some(region) = cmd.options.remove("region") {
+    if let Some(region) = options.remove("region") {
         builder = builder.with_region(region);
     }
 
@@ -102,7 +100,7 @@ impl CredentialProvider for S3CredentialProvider {
 
 pub fn get_oss_object_store_builder(
     url: &Url,
-    cmd: &mut CreateExternalTable,
+    cmd: &mut HashMap<String, String>,
 ) -> Result<AmazonS3Builder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env()
@@ -111,16 +109,15 @@ pub fn get_oss_object_store_builder(
         // oss don't care about the "region" field
         .with_region("do_not_care");
 
-    if let (Some(access_key_id), Some(secret_access_key)) = (
-        cmd.options.remove("access_key_id"),
-        cmd.options.remove("secret_access_key"),
-    ) {
+    if let (Some(access_key_id), Some(secret_access_key)) =
+        (cmd.remove("access_key_id"), cmd.remove("secret_access_key"))
+    {
         builder = builder
             .with_access_key_id(access_key_id)
             .with_secret_access_key(secret_access_key);
     }
 
-    if let Some(endpoint) = cmd.options.remove("endpoint") {
+    if let Some(endpoint) = cmd.remove("endpoint") {
         builder = builder.with_endpoint(endpoint);
     }
 
@@ -129,21 +126,20 @@ pub fn get_oss_object_store_builder(
 
 pub fn get_gcs_object_store_builder(
     url: &Url,
-    cmd: &mut CreateExternalTable,
+    cmd: &mut HashMap<String, String>,
 ) -> Result<GoogleCloudStorageBuilder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
 
-    if let Some(service_account_path) = cmd.options.remove("service_account_path") {
+    if let Some(service_account_path) = cmd.remove("service_account_path") {
         builder = builder.with_service_account_path(service_account_path);
     }
 
-    if let Some(service_account_key) = cmd.options.remove("service_account_key") {
+    if let Some(service_account_key) = cmd.remove("service_account_key") {
         builder = builder.with_service_account_key(service_account_key);
     }
 
-    if let Some(application_credentials_path) =
-        cmd.options.remove("application_credentials_path")
+    if let Some(application_credentials_path) = cmd.remove("application_credentials_path")
     {
         builder = builder.with_application_credentials(application_credentials_path);
     }
@@ -186,7 +182,8 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            let builder = get_s3_object_store_builder(table_url.as_ref(), cmd).await?;
+            let builder =
+                get_s3_object_store_builder(table_url.as_ref(), &mut cmd.options).await?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -218,7 +215,8 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            let builder = get_oss_object_store_builder(table_url.as_ref(), cmd)?;
+            let builder =
+                get_oss_object_store_builder(table_url.as_ref(), &mut cmd.options)?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -250,7 +248,8 @@ mod tests {
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            let builder = get_gcs_object_store_builder(table_url.as_ref(), cmd)?;
+            let builder =
+                get_gcs_object_store_builder(table_url.as_ref(), &mut cmd.options)?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (GoogleConfigKey::ServiceAccount, service_account_path),

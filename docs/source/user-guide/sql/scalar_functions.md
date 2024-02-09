@@ -641,6 +641,7 @@ nullif(expression1, expression2)
 - [levenshtein](#levenshtein)
 - [substr_index](#substr_index)
 - [find_in_set](#find_in_set)
+- [position](#position)
 
 ### `ascii`
 
@@ -1258,18 +1259,71 @@ decode(expression, format)
 
 ## Regular Expression Functions
 
-Apache DataFusion uses the POSIX regular expression syntax and
-supports the following regular expression functions:
+Apache DataFusion uses a [PCRE-like] regular expression [syntax]
+(minus support for several features including look-around and backreferences).
+The following regular expression functions are supported:
 
+- [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
 
-### `regexp_match`
+[pcre-like]: https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions
+[syntax]: https://docs.rs/regex/latest/regex/#syntax
 
-Returns a list of regular expression matches in a string.
+### `regexp_like`
+
+Returns true if a [regular expression] has at least one match in a string,
+false otherwise.
+
+[regular expression]: https://docs.rs/regex/latest/regex/#syntax
 
 ```
-regexp_match(str, regexp)
+regexp_like(str, regexp[, flags])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **regexp**: Regular expression to test against the string expression.
+  Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the
+  regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+❯ select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
++--------------------------------------------------------+
+| regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
++--------------------------------------------------------+
+| true                                                   |
++--------------------------------------------------------+
+❯ SELECT regexp_like('aBc', '(b|d)', 'i');
++--------------------------------------------------+
+| regexp_like(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
++--------------------------------------------------+
+| true                                             |
++--------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+
+### `regexp_match`
+
+Returns a list of [regular expression] matches in a string.
+
+[regular expression]: https://docs.rs/regex/latest/regex/#syntax
+
+```
+regexp_match(str, regexp[, flags])
 ```
 
 #### Arguments
@@ -1278,13 +1332,43 @@ regexp_match(str, regexp)
   Can be a constant, column, or function, and any combination of string operators.
 - **regexp**: Regular expression to match against.
   Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the
+  regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+❯ select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
++---------------------------------------------------------+
+| regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
++---------------------------------------------------------+
+| [Köln]                                                  |
++---------------------------------------------------------+
+❯ SELECT regexp_match('aBc', '(b|d)', 'i');
++---------------------------------------------------+
+| regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
++---------------------------------------------------+
+| [B]                                               |
++---------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
 
 ### `regexp_replace`
 
-Replaces substrings in a string that match a regular expression.
+Replaces substrings in a string that match a [regular expression].
+
+[regular expression]: https://docs.rs/regex/latest/regex/#syntax
 
 ```
-regexp_replace(str, regexp, replacement, flags)
+regexp_replace(str, regexp, replacement[, flags])
 ```
 
 #### Arguments
@@ -1295,10 +1379,48 @@ regexp_replace(str, regexp, replacement, flags)
   Can be a constant, column, or function.
 - **replacement**: Replacement string expression.
   Can be a constant, column, or function, and any combination of string operators.
-- **flags**: Regular expression flags that control the behavior of the
-  regular expression. The following flags are supported.
-  - **g**: (global) Search globally and don't return after the first match.
-  - **i**: (insensitive) Ignore case when matching.
+- **flags**: Optional regular expression flags that control the behavior of the
+  regular expression. The following flags are supported:
+  - **g**: (global) Search globally and don't return after the first match
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+❯ SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
++------------------------------------------------------------------------+
+| regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
++------------------------------------------------------------------------+
+| fooXarYXazY                                                            |
++------------------------------------------------------------------------+
+❯ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
++-------------------------------------------------------------------+
+| regexp_replace(Utf8("aBc"),Utf8("(b|d)"),Utf8("Ab\1a"),Utf8("i")) |
++-------------------------------------------------------------------+
+| aAbBac                                                            |
++-------------------------------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+
+### `position`
+
+Returns the position of substr in orig_str
+
+```
+position(substr in origstr)
+```
+
+#### Arguments
+
+- **substr**: he pattern string.
+- **origstr**: The model string.
 
 ## Time and Date Functions
 
@@ -1312,6 +1434,7 @@ regexp_replace(str, regexp, replacement, flags)
 - [datepart](#datepart)
 - [extract](#extract)
 - [today](#today)
+- [make_date](#make_date)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1499,6 +1622,44 @@ extract(field FROM source)
 
 - **source**: Source time expression to operate on.
   Can be a constant, column, or function.
+
+### `make_date`
+
+Make a date from year/month/day component parts.
+
+```
+make_date(year, month, day)
+```
+
+#### Arguments
+
+- **year**: Year to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **month**: Month to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+- **day**: Day to use when making the date.
+  Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```
+❯ select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+❯ select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
 
 ### `to_timestamp`
 
@@ -1754,6 +1915,7 @@ from_unixtime(expression)
 - [array_replace](#array_replace)
 - [array_replace_n](#array_replace_n)
 - [array_replace_all](#array_replace_all)
+- [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
@@ -1765,11 +1927,16 @@ from_unixtime(expression)
 - [list_dims](#list_dims)
 - [list_element](#list_element)
 - [list_extract](#list_extract)
+- [list_has](#list_has)
+- [list_has_all](#list_has_all)
+- [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
 - [list_prepend](#list_prepend)
+- [list_pop_back](#list_pop_back)
+- [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_push_back](#list_push_back)
@@ -1901,6 +2068,10 @@ array_has(array, element)
 - **element**: Scalar or Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has
+
 ### `array_has_all`
 
 Returns true if all elements of sub-array exist in array
@@ -1916,6 +2087,10 @@ array_has_all(array, sub-array)
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
+#### Aliases
+
+- list_has_all
+
 ### `array_has_any`
 
 Returns true if any elements exist in both arrays
@@ -1930,6 +2105,10 @@ array_has_any(array, sub-array)
   Can be a constant, column, or function, and any combination of array operators.
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
+#### Aliases
+
+- list_has_any
 
 ### `array_dims`
 
@@ -1989,8 +2168,6 @@ array_element(array, index)
 - array_extract
 - list_element
 - list_extract
-
-### `array_empty`
 
 ### `array_extract`
 
@@ -2150,6 +2327,10 @@ array_pop_front(array)
 +-------------------------------+
 ```
 
+#### Aliases
+
+- list_pop_front
+
 ### `array_pop_back`
 
 Returns the array without the last element.
@@ -2173,6 +2354,10 @@ array_pop_back(array)
 | [1, 2]                        |
 +-------------------------------+
 ```
+
+#### Aliases
+
+- list_pop_back
 
 ### `array_position`
 
@@ -2277,6 +2462,10 @@ array_repeat(element, count)
 | [[1, 2], [1, 2]]                   |
 +------------------------------------+
 ```
+
+#### Aliases
+
+- list_repeat
 
 ### `array_remove`
 
@@ -2457,13 +2646,51 @@ array_replace_all(array, from, to)
 
 - list_replace_all
 
+### `array_reverse`
+
+Returns the array with the order of the elements reversed.
+
+```
+array_reverse(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_reverse
+
 ### `array_slice`
 
-Returns a slice of the array.
+Returns a slice of the array based on 1-indexed start and end positions.
 
 ```
 array_slice(array, begin, end)
 ```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **begin**: Index of the first element.
+  If negative, it counts backward from the end of the array.
+- **end**: Index of the last element.
+  If negative, it counts backward from the end of the array.
+- **stride**: Stride of the array slice. The default is 1.
 
 #### Example
 
@@ -2663,6 +2890,18 @@ _Alias of [array_element](#array_element)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_has`
+
+_Alias of [array_has](#array_has)._
+
+### `list_has_all`
+
+_Alias of [array_has_all](#array_has_all)._
+
+### `list_has_any`
+
+_Alias of [array_has_any](#array_has_any)._
+
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
@@ -2682,6 +2921,14 @@ _Alias of [array_ndims](#array_ndims)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_pop_back`
+
+_Alias of [array_pop_back](#array_pop_back)._
+
+### `list_pop_front`
+
+_Alias of [array_pop_front](#array_pop_front)._
 
 ### `list_position`
 
@@ -2726,6 +2973,10 @@ _Alias of [array_replace_n](#array_replace_n)._
 ### `list_replace_all`
 
 _Alias of [array_replace_all](#array_replace_all)._
+
+### `list_reverse`
+
+_Alias of [array_reverse](#array_reverse)._
 
 ### `list_slice`
 

@@ -380,3 +380,15 @@ Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64
 physical_plan
 ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
 --PlaceholderRowExec
+
+# Explain Struct
+
+query TT
+explain select struct(1, 2.3, 'abc');
+----
+logical_plan
+Projection: Struct({c0:1,c1:2.3,c2:abc}) AS struct(Int64(1),Float64(2.3),Utf8("abc"))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[{c0:1,c1:2.3,c2:abc} as struct(Int64(1),Float64(2.3),Utf8("abc"))]
+--PlaceholderRowExec

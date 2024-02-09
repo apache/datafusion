@@ -21,6 +21,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::array::{BooleanArray, Int32Array};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -35,7 +36,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
-use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
@@ -47,22 +48,22 @@ use datafusion_common::{FileType, Result};
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort,
+    Sort, Unnest,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
-    ColumnarValue, Expr, LogicalPlan, Operator, PartitionEvaluator, Signature, TryCast,
-    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
+    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
+use datafusion_proto::logical_plan::from_proto;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::logical_plan::{from_proto, to_proto};
 use datafusion_proto::protobuf;
 
 #[cfg(feature = "json")]
@@ -323,7 +324,6 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        single_file_output: true,
         copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
@@ -354,7 +354,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
-        single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
@@ -368,7 +367,6 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(FileType::PARQUET, copy_to.file_format);
-            assert!(copy_to.single_file_output);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Parquet(p) => {
@@ -404,7 +402,6 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         file_format: FileType::ARROW,
-        single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
             ArrowWriterOptions::new(),
         ))),
@@ -418,7 +415,6 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
             assert_eq!(FileType::ARROW, copy_to.file_format);
-            assert!(copy_to.single_file_output);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Arrow(_) => {}
@@ -451,7 +447,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        single_file_output: true,
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
@@ -468,7 +463,6 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!(FileType::CSV, copy_to.file_format);
-            assert!(copy_to.single_file_output);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::CSV(p) => {
@@ -559,6 +553,27 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_expr_api() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let table = ctx.table("t1").await?;
+    let schema = table.schema().clone();
+
+    // ensure expressions created with the expr api can be round tripped
+    let plan = table
+        .select(vec![
+            encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+            decode(lit("1234"), lit("hex")),
+        ])?
+        .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
@@ -729,32 +744,6 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         internal_err!("unsupported plan type")
-    }
-}
-
-#[test]
-fn scalar_values_error_serialization() {
-    let should_fail_on_seralize: Vec<ScalarValue> = vec![
-        // Should fail due to empty values
-        ScalarValue::Struct(
-            Some(vec![]),
-            vec![Field::new("item", DataType::Int16, true)].into(),
-        ),
-    ];
-
-    for test_case in should_fail_on_seralize.into_iter() {
-        let proto: Result<protobuf::ScalarValue, to_proto::Error> =
-            (&test_case).try_into();
-
-        // Validation is also done on read, so if serialization passed
-        // also try to convert back to ScalarValue
-        if let Ok(proto) = proto {
-            let res: Result<ScalarValue, _> = (&proto).try_into();
-            assert!(
-                res.is_err(),
-                "The value {test_case:?} unexpectedly serialized without error:{res:?}"
-            );
-        }
     }
 }
 
@@ -941,23 +930,22 @@ fn round_trip_scalar_values() {
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
         ScalarValue::LargeBinary(None),
-        ScalarValue::Struct(
-            Some(vec![
-                ScalarValue::Int32(Some(23)),
-                ScalarValue::Boolean(Some(false)),
-            ]),
-            Fields::from(vec![
+        ScalarValue::from((
+            vec![
                 Field::new("a", DataType::Int32, true),
                 Field::new("b", DataType::Boolean, false),
-            ]),
-        ),
-        ScalarValue::Struct(
-            None,
-            Fields::from(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("a", DataType::Boolean, false),
-            ]),
-        ),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(23)])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+            ],
+        )),
+        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+        ])))
+        .unwrap(),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
@@ -1444,6 +1432,16 @@ fn roundtrip_inlist() {
         vec![lit(2.0_f32)],
         true,
     ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest() {
+    let test_expr = Expr::Unnest(Unnest {
+        exprs: vec![lit(1), lit(2), lit(3)],
+    });
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);

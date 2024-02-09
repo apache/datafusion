@@ -236,7 +236,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
-    /// by the `children`, oi order
+    /// by the `children`, in order
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -511,7 +511,9 @@ pub async fn collect(
     common::collect(stream).await
 }
 
-/// Execute the [ExecutionPlan] and return a single stream of results.
+/// Execute the [ExecutionPlan] and return a single stream of `RecordBatch`es.
+///
+/// See [collect] to buffer the `RecordBatch`es in memory.
 ///
 /// # Aborting Execution
 ///

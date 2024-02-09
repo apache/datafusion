@@ -48,7 +48,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Cast, GetFieldAccess,
     GetIndexedField, GroupingSet, InList, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, Sort,
+    ScalarFunctionDefinition, Sort, Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -987,6 +987,18 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Negative(expr)),
                 }
             }
+            Expr::Unnest(Unnest { exprs }) => {
+                let expr = protobuf::Unnest {
+                    exprs: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
+                        Vec<_>,
+                        Error,
+                    >>(
+                    )?,
+                };
+                Self {
+                    expr_type: Some(ExprType::Unnest(expr)),
+                }
+            }
             Expr::InList(InList {
                 expr,
                 list,
@@ -1166,17 +1178,17 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
-            // Arrow IPC messages as a single column RecordBatch
             ScalarValue::List(arr) => {
-                encode_scalar_list_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::LargeList(arr) => {
-                // Wrap in a "field_name" column
-                encode_scalar_list_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::FixedSizeList(arr) => {
-                encode_scalar_list_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::Struct(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
@@ -1388,34 +1400,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 };
                 Ok(protobuf::ScalarValue { value: Some(value) })
             }
-
-            ScalarValue::Struct(values, fields) => {
-                // encode null as empty field values list
-                let field_values = if let Some(values) = values {
-                    if values.is_empty() {
-                        return Err(Error::InvalidScalarValue(val.clone()));
-                    }
-                    values
-                        .iter()
-                        .map(|v| v.try_into())
-                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
-                } else {
-                    vec![]
-                };
-
-                let fields = fields
-                    .iter()
-                    .map(|f| f.as_ref().try_into())
-                    .collect::<Result<Vec<protobuf::Field>, _>>()?;
-
-                Ok(protobuf::ScalarValue {
-                    value: Some(Value::StructValue(protobuf::StructValue {
-                        field_values,
-                        fields,
-                    })),
-                })
-            }
-
             ScalarValue::Dictionary(index_type, val) => {
                 let value: protobuf::ScalarValue = val.as_ref().try_into()?;
                 Ok(protobuf::ScalarValue {
@@ -1500,6 +1484,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
             BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
@@ -1517,8 +1502,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
-            BuiltinScalarFunction::Decode => Self::Decode,
-            BuiltinScalarFunction::Encode => Self::Encode,
             BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
@@ -1535,6 +1518,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
             BuiltinScalarFunction::Uuid => Self::Uuid,
+            BuiltinScalarFunction::RegexpLike => Self::RegexpLike,
+            BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
@@ -1553,8 +1538,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Now => Self::Now,
             BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
             BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
+            BuiltinScalarFunction::MakeDate => Self::MakeDate,
             BuiltinScalarFunction::Translate => Self::Translate,
-            BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
@@ -1697,7 +1682,9 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-fn encode_scalar_list_value(
+// ScalarValue::List / FixedSizeList / LargeList / Struct are serialized using
+// Arrow IPC messages as a single column RecordBatch
+fn encode_scalar_nested_value(
     arr: ArrayRef,
     val: &ScalarValue,
 ) -> Result<protobuf::ScalarValue, Error> {
@@ -1717,7 +1704,7 @@ fn encode_scalar_list_value(
 
     let schema: protobuf::Schema = batch.schema().try_into()?;
 
-    let scalar_list_value = protobuf::ScalarListValue {
+    let scalar_list_value = protobuf::ScalarNestedValue {
         ipc_message: encoded_message.ipc_message,
         arrow_data: encoded_message.arrow_data,
         schema: Some(schema),
@@ -1734,6 +1721,11 @@ fn encode_scalar_list_value(
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
             value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::Struct(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::StructValue(
                 scalar_list_value,
             )),
         }),

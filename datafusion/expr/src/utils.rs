@@ -270,7 +270,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::ScalarVariable(_, _)
+            Expr::Unnest(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
@@ -722,7 +723,7 @@ pub fn from_plan(
     expr: &[Expr],
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
-    plan.with_new_exprs(expr.to_vec(), inputs)
+    plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
 }
 
 /// Find all columns referenced from an aggregate query

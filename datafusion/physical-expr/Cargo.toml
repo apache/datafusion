@@ -49,6 +49,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-string = { workspace = true }
 base64 = { version = "0.21", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
@@ -73,9 +74,23 @@ uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.5"
+datafusion = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
+tokio = { version = "1.28", features = ["rt-multi-thread"] }
 
 [[bench]]
 harness = false
 name = "in_list"
+
+[[bench]]
+harness = false
+name = "make_date"
+
+[[bench]]
+harness = false
+name = "to_timestamp"
+
+[[bench]]
+harness = false
+name = "regexp"

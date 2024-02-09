@@ -44,10 +44,11 @@ use crate::physical_plan::{Distribution, ExecutionPlan};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::JoinSide;
+use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -476,7 +477,7 @@ fn try_swapping_with_sort_preserving_merge(
     projection: &ProjectionExec,
     spm: &SortPreservingMergeExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -735,6 +736,7 @@ fn try_swapping_with_sort_merge_join(
         Arc::new(new_left),
         Arc::new(new_right),
         new_on,
+        sm_join.filter.clone(),
         sm_join.join_type,
         sm_join.sort_options.clone(),
         sm_join.null_equals_null,
@@ -915,7 +917,9 @@ fn update_expr(
                     .find_map(|(index, (projected_expr, alias))| {
                         projected_expr.as_any().downcast_ref::<Column>().and_then(
                             |projected_column| {
-                                column.name().eq(projected_column.name()).then(|| {
+                                (column.name().eq(projected_column.name())
+                                    && column.index() == projected_column.index())
+                                .then(|| {
                                     state = RewriteState::RewrittenValid;
                                     Arc::new(Column::new(alias, index)) as _
                                 })
@@ -1000,8 +1004,8 @@ fn join_table_borders(
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
-    hash_join_on: &[(Column, Column)],
-) -> Option<Vec<(Column, Column)>> {
+    hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
     // TODO: Clippy wants the "map" call removed, but doing so generates
     //       a compilation error. Remove the clippy directive once this
     //       issue is fixed.
@@ -1024,17 +1028,41 @@ fn update_join_on(
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
 fn new_columns_for_join_on(
-    hash_join_on: &[&Column],
+    hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
-) -> Option<Vec<Column>> {
+) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
         .filter_map(|on| {
-            projection_exprs
-                .iter()
-                .enumerate()
-                .find(|(_, (proj_column, _))| on.name() == proj_column.name())
-                .map(|(index, (_, alias))| Column::new(alias, index))
+            // Rewrite all columns in `on`
+            (*on)
+                .clone()
+                .transform(&|expr| {
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        // Find the column in the projection expressions
+                        let new_column = projection_exprs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (proj_column, _))| {
+                                column.name() == proj_column.name()
+                            })
+                            .map(|(index, (_, alias))| Column::new(alias, index));
+                        if let Some(new_column) = new_column {
+                            Ok(Transformed::Yes(Arc::new(new_column)))
+                        } else {
+                            // If the column is not found in the projection expressions,
+                            // it means that the column is not projected. In this case,
+                            // we cannot push the projection down.
+                            Err(DataFusionError::Internal(format!(
+                                "Column {:?} not found in projection expressions",
+                                column
+                            )))
+                        }
+                    } else {
+                        Ok(Transformed::No(expr))
+                    }
+                })
+                .ok()
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
@@ -1245,6 +1273,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1311,6 +1340,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1380,6 +1410,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1409,12 +1440,12 @@ mod tests {
             )?),
         ];
         let projected_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
-            (Arc::new(Column::new("a", 0)), "a".to_owned()),
+            (Arc::new(Column::new("a", 3)), "a".to_owned()),
             (Arc::new(Column::new("b", 1)), "b_new".to_owned()),
-            (Arc::new(Column::new("c", 2)), "c".to_owned()),
-            (Arc::new(Column::new("d", 3)), "d_new".to_owned()),
-            (Arc::new(Column::new("e", 4)), "e".to_owned()),
-            (Arc::new(Column::new("f", 5)), "f_new".to_owned()),
+            (Arc::new(Column::new("c", 0)), "c".to_owned()),
+            (Arc::new(Column::new("d", 2)), "d_new".to_owned()),
+            (Arc::new(Column::new("e", 5)), "e".to_owned()),
+            (Arc::new(Column::new("f", 4)), "f_new".to_owned()),
         ];
 
         let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -1446,6 +1477,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),
@@ -2018,7 +2050,7 @@ mod tests {
         let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
             left_csv,
             right_csv,
-            vec![(Column::new("b", 1), Column::new("c", 2))],
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
             // b_left-(1+a_right)<=a_right+c_left
             Some(JoinFilter::new(
                 Arc::new(BinaryExpr::new(

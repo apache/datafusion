@@ -322,7 +322,6 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    bool single_file_output = 3;
     oneof CopyOptions {
         SQLOptions sql_options = 4;
         FileTypeWriterOptions writer_options = 5;
@@ -427,6 +426,8 @@ message LogicalExprNode {
 
     PlaceholderNode placeholder = 34;
 
+    Unnest unnest = 35;
+
   }
 }
 
@@ -530,6 +531,10 @@ message BinaryExprNode {
 
 message NegativeNode {
   LogicalExprNode expr = 1;
+}
+
+message Unnest {
+  repeated LogicalExprNode exprs = 1;
 }
 
 message InListNode {
@@ -640,8 +645,6 @@ enum ScalarFunction {
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -672,6 +675,9 @@ enum ScalarFunction {
   ArrayResize = 130;
   EndsWith = 131;
   InStr = 132;
+  MakeDate = 133;
+  ArrayReverse = 134;
+  RegexpLike = 135;
 }
 
 message ScalarFunctionNode {
@@ -939,7 +945,8 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-message ScalarListValue {
+// Used for List/FixedSizeList/LargeList/Struct
+message ScalarNestedValue {
   bytes ipc_message = 1;
   bytes arrow_data = 2;
   Schema schema = 3;
@@ -980,14 +987,6 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
-message StructValue {
-  // Note that a null struct value must have one or more fields, so we
-  // encode a null StructValue as one witth an empty field_values
-  // list.
-  repeated ScalarValue field_values = 2;
-  repeated Field fields = 3;
-}
-
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1018,9 +1017,10 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
-    ScalarListValue large_list_value = 16;
-    ScalarListValue list_value = 17;
-    ScalarListValue fixed_size_list_value = 18;
+    ScalarNestedValue large_list_value = 16;
+    ScalarNestedValue list_value = 17;
+    ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue struct_value = 32;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1040,7 +1040,6 @@ message ScalarValue{
     bytes large_binary_value = 29;
     ScalarTime64Value time64_value = 30;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
-    StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
   }
 }
@@ -1267,7 +1266,6 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
   bool overwrite = 8;
   FileTypeWriterOptions file_type_writer_options = 9;
 }
@@ -1581,8 +1579,8 @@ message PhysicalColumn {
 }
 
 message JoinOn {
-  PhysicalColumn left = 1;
-  PhysicalColumn right = 2;
+  PhysicalExprNode left = 1;
+  PhysicalExprNode right = 2;
 }
 
 message EmptyExecNode {

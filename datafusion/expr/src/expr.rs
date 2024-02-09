@@ -33,7 +33,7 @@ use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -180,6 +180,13 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+    /// Unnest expression
+    Unnest(Unnest),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Unnest {
+    pub exprs: Vec<Expr>,
 }
 
 /// Alias expression
@@ -853,13 +860,8 @@ const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
 impl PartialOrd for Expr {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let mut hasher = SEED.build_hasher();
-        self.hash(&mut hasher);
-        let s = hasher.finish();
-
-        let mut hasher = SEED.build_hasher();
-        other.hash(&mut hasher);
-        let o = hasher.finish();
+        let s = SEED.hash_one(self);
+        let o = SEED.hash_one(other);
 
         Some(s.cmp(&o))
     }
@@ -922,6 +924,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
+            Expr::Unnest { .. } => "Unnest",
         }
     }
 
@@ -1312,6 +1315,7 @@ impl Expr {
             | Expr::Negative(..)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::TryCast(..)
+            | Expr::Unnest(..)
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
@@ -1566,6 +1570,9 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
+            Expr::Unnest(Unnest { exprs }) => {
+                write!(f, "UNNEST({exprs:?})")
+            }
         }
     }
 }
@@ -1753,6 +1760,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
+        Expr::Unnest(Unnest { exprs }) => Ok(format!("UNNEST({exprs:?})")),
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
