@@ -390,8 +390,8 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#example">
-   Example
+  <a class="reference internal nav-link" href="#examples">
+   Examples
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -614,11 +614,11 @@ OPTIONS:
 </section>
 <section id="querying-data-from-the-files-directly">
 <h2>Querying data from the files directly<a class="headerlink" href="#querying-data-from-the-files-directly" title="Link to this heading">¶</a></h2>
-<p>Files can be queried directly by enclosing the file or
-directory name in single <code class="docutils literal notranslate"><span class="pre">'</span></code> quotes as shown in the example.</p>
+<p>Files can be queried directly by enclosing the file, directory name
+or a remote location in single <code class="docutils literal notranslate"><span class="pre">'</span></code> quotes as shown in the examples.</p>
 </section>
-<section id="example">
-<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
+<section id="examples">
+<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h2>
 <p>Create a CSV file to query.</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;a,b&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>data.csv
 $<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;1,2&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>data.csv
@@ -651,6 +651,17 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
 <span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">|</span>
 +---+---+
 <span class="m">2</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
+</pre></div>
+</div>
+<p>You can also query directly from the remote location via HTTP(S) without
+registering the location as a table</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1000000</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">595</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
 </section>
