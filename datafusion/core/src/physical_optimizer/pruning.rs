@@ -313,7 +313,7 @@ pub trait PruningStatistics {
 /// The PruningPredicate works in two passes
 ///
 /// **First pass**:  For each `LiteralGuarantee` calls
-/// [`PruningStatistics::contains`] and rules out containers where the
+/// [`PruningStatistics::contained`] and rules out containers where the
 /// LiteralGuarantees are not satisfied
 ///
 /// **Second Pass**: Evaluates the rewritten expression using the
