@@ -172,9 +172,14 @@ impl FileCompressionType {
     ) -> Result<BoxStream<'static, Result<Bytes>>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
-            GZIP => ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            GZIP => {
+                let mut decoder = AsyncGzDecoder::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(feature = "compression")]
             BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
                 .map_err(DataFusionError::from)
