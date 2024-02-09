@@ -1211,7 +1211,8 @@ impl SMJStream {
                         // we need to join them (left or right) with null rows for outer joins.
                         let not_mask = if mask.null_count() > 0 {
                             // If the mask contains nulls, we need to use `prep_null_mask_filter` to
-                            // handle the nulls in the mask as false.
+                            // handle the nulls in the mask as false to produce rows where the mask
+                            // was null itself.
                             compute::not(&compute::prep_null_mask_filter(mask))?
                         } else {
                             compute::not(mask)?
