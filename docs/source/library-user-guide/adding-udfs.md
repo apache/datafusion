@@ -34,7 +34,15 @@ First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about th
 
 ## Adding a Scalar UDF
 
-A Scalar UDF is a function that takes a row of data and returns a single value. In the example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:
+A Scalar UDF is a function that takes a row of data and returns a single value. In order for good performance
+such functions are "vectorized" in DataFusion, meaning they get one or more Arrow Arrays as input and produce
+an Arrow Array with the same number of rows as output.
+
+To create a Scalar UDF, you
+1.  Implement the `ScalarUDFImpl` trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results. 
+2. Create a `ScalarUDF` and register it with `SessionContext::register_udf` so it can be invoked by name.
+
+In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:
 
 For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number of arguments.
 
