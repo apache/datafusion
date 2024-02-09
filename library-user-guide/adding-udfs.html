@@ -666,12 +666,12 @@ There is a lower level API with more functionality but is more complex, that is 
 </div>
 <p>At this point, you can use the <code class="docutils literal notranslate"><span class="pre">smooth_it</span></code> function in your query:</p>
 <p>For example, if we have a <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/cars.csv"><code class="docutils literal notranslate"><span class="pre">cars.csv</span></code></a> whose contents like</p>
-<div class="highlight-csv notranslate"><div class="highlight"><pre><span></span>car,speed,time
-red,20.0,1996-04-12T12:05:03.000000000
-red,20.3,1996-04-12T12:05:04.000000000
-green,10.0,1996-04-12T12:05:03.000000000
-green,10.3,1996-04-12T12:05:04.000000000
-...
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">car</span><span class="p">,</span><span class="n">speed</span><span class="p">,</span><span class="n">time</span>
+<span class="n">red</span><span class="p">,</span><span class="mf">20.0</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">03.000000000</span>
+<span class="n">red</span><span class="p">,</span><span class="mf">20.3</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">04.000000000</span>
+<span class="n">green</span><span class="p">,</span><span class="mf">10.0</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">03.000000000</span>
+<span class="n">green</span><span class="p">,</span><span class="mf">10.3</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">04.000000000</span>
+<span class="o">...</span>
 </pre></div>
 </div>
 <p>Then, we can query like below:</p>
@@ -697,24 +697,24 @@ green,10.3,1996-04-12T12:05:04.000000000
 </pre></div>
 </div>
 <p>the output will be like:</p>
-<div class="highlight-csv notranslate"><div class="highlight"><pre><span></span>+-------+-------+--------------------+---------------------+
-| car   | speed | smooth_speed       | time                |
-+-------+-------+--------------------+---------------------+
-| green | 10.0  | 10.0               | 1996-04-12T12:05:03 |
-| green | 10.3  | 10.15              | 1996-04-12T12:05:04 |
-| green | 10.4  | 10.233333333333334 | 1996-04-12T12:05:05 |
-| green | 10.5  | 10.3               | 1996-04-12T12:05:06 |
-| green | 11.0  | 10.440000000000001 | 1996-04-12T12:05:07 |
-| green | 12.0  | 10.700000000000001 | 1996-04-12T12:05:08 |
-| green | 14.0  | 11.171428571428573 | 1996-04-12T12:05:09 |
-| green | 15.0  | 11.65              | 1996-04-12T12:05:10 |
-| green | 15.1  | 12.033333333333333 | 1996-04-12T12:05:11 |
-| green | 15.2  | 12.35              | 1996-04-12T12:05:12 |
-| green | 8.0   | 11.954545454545455 | 1996-04-12T12:05:13 |
-| green | 2.0   | 11.125             | 1996-04-12T12:05:14 |
-| red   | 20.0  | 20.0               | 1996-04-12T12:05:03 |
-| red   | 20.3  | 20.15              | 1996-04-12T12:05:04 |
-...
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">+-------+-------+--------------------+---------------------+</span>
+<span class="o">|</span> <span class="n">car</span>   <span class="o">|</span> <span class="n">speed</span> <span class="o">|</span> <span class="n">smooth_speed</span>       <span class="o">|</span> <span class="n">time</span>                <span class="o">|</span>
+<span class="o">+-------+-------+--------------------+---------------------+</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">10.0</span>  <span class="o">|</span> <span class="mf">10.0</span>               <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">03</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">10.3</span>  <span class="o">|</span> <span class="mf">10.15</span>              <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">04</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">10.4</span>  <span class="o">|</span> <span class="mf">10.233333333333334</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">05</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">10.5</span>  <span class="o">|</span> <span class="mf">10.3</span>               <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">06</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">11.0</span>  <span class="o">|</span> <span class="mf">10.440000000000001</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">07</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">12.0</span>  <span class="o">|</span> <span class="mf">10.700000000000001</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">08</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">14.0</span>  <span class="o">|</span> <span class="mf">11.171428571428573</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">09</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">15.0</span>  <span class="o">|</span> <span class="mf">11.65</span>              <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">10</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">15.1</span>  <span class="o">|</span> <span class="mf">12.033333333333333</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">11</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">15.2</span>  <span class="o">|</span> <span class="mf">12.35</span>              <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">12</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">8.0</span>   <span class="o">|</span> <span class="mf">11.954545454545455</span> <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">13</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">green</span> <span class="o">|</span> <span class="mf">2.0</span>   <span class="o">|</span> <span class="mf">11.125</span>             <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">14</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">red</span>   <span class="o">|</span> <span class="mf">20.0</span>  <span class="o">|</span> <span class="mf">20.0</span>               <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">03</span> <span class="o">|</span>
+<span class="o">|</span> <span class="n">red</span>   <span class="o">|</span> <span class="mf">20.3</span>  <span class="o">|</span> <span class="mf">20.15</span>              <span class="o">|</span> <span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mi">04</span> <span class="o">|</span>
+<span class="o">...</span>
 </pre></div>
 </div>
 </section>

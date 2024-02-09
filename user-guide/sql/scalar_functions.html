@@ -2055,6 +2055,15 @@
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#array-contains">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       array_contains
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#array-has">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -4126,7 +4135,7 @@ Can be a constant, column, or function, and any combination of string operators.
 <li><p><strong>str_n</strong>: Subsequent string column or literal string to concatenate.</p></li>
 </ul>
 <p><strong>Related functions</strong>:
-<a class="reference internal" href="#contcat_ws"><span class="xref myst">contcat_ws</span></a></p>
+<a class="reference internal" href="#concat-ws">concat_ws</a></p>
 </section>
 </section>
 <section id="concat-ws">
@@ -4718,13 +4727,13 @@ regular expression. The following flags are supported:</p>
 </section>
 <section id="example">
 <h4>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;Köln&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;[a-zA-Z]ö[a-zA-Z]{2}&#39;</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;Köln&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;[a-zA-Z]ö[a-zA-Z]{2}&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Köln&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;[a-zA-Z]ö[a-zA-Z]{2}&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                                   </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
-<span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;aBc&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;(b|d)&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;i&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
@@ -4762,13 +4771,13 @@ regular expression. The following flags are supported:</p>
 </section>
 <section id="id75">
 <h4>Example<a class="headerlink" href="#id75" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="s1">&#39;Köln&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;[a-zA-Z]ö[a-zA-Z]{2}&#39;</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="s1">&#39;Köln&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;[a-zA-Z]ö[a-zA-Z]{2}&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Köln&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;[a-zA-Z]ö[a-zA-Z]{2}&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="n">Köln</span><span class="p">]</span><span class="w">                                                  </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
-<span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_match</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;aBc&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;(b|d)&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;i&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------+</span>
@@ -4809,13 +4818,13 @@ regular expression. The following flags are supported:</p>
 </section>
 <section id="id77">
 <h4>Example<a class="headerlink" href="#id77" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;foobarbaz&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;b(..)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;X\\1Y&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;g&#39;</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;foobarbaz&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;b(..)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;X\\1Y&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;g&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">------------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foobarbaz&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;b(..)&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;X\1Y&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;g&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">------------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">fooXarYXazY</span><span class="w">                                                            </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">------------------------------------------------------------------------+</span>
-<span class="err">❯</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Ab\\1a&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Ab\\1a&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">regexp_replace</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;aBc&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;(b|d)&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Ab\1a&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;i&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
@@ -5082,7 +5091,7 @@ Can be a constant, column or function, and any combination of arithmetic operato
 +-----------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs">here</a></p>
 </section>
 </section>
 <section id="to-timestamp">
@@ -5124,7 +5133,7 @@ an error will be returned.</p></li>
 +--------------------------------------------------------------------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
 </section>
 </section>
 <section id="to-timestamp-millis">
@@ -5163,7 +5172,7 @@ an error will be returned.</p></li>
 +---------------------------------------------------------------------------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
 </section>
 </section>
 <section id="to-timestamp-micros">
@@ -5202,7 +5211,7 @@ an error will be returned.</p></li>
 +---------------------------------------------------------------------------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
 </section>
 </section>
 <section id="to-timestamp-nanos">
@@ -5241,7 +5250,7 @@ an error will be returned.</p></li>
 +---------------------------------------------------------------------------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
 </section>
 </section>
 <section id="to-timestamp-seconds">
@@ -5280,7 +5289,7 @@ an error will be returned.</p></li>
 +----------------------------------------------------------------------------------------------------------------+
 </pre></div>
 </div>
-<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs">here</a></p>
 </section>
 </section>
 <section id="from-unixtime">
@@ -5307,7 +5316,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#array-sort">array_sort</a></p></li>
 <li><p><a class="reference internal" href="#array-cat">array_cat</a></p></li>
 <li><p><a class="reference internal" href="#array-concat">array_concat</a></p></li>
-<li><p><a class="reference internal" href="#array_contains"><span class="xref myst">array_contains</span></a></p></li>
+<li><p><a class="reference internal" href="#array-contains">array_contains</a></p></li>
 <li><p><a class="reference internal" href="#array-dims">array_dims</a></p></li>
 <li><p><a class="reference internal" href="#array-element">array_element</a></p></li>
 <li><p><a class="reference internal" href="#array-extract">array_extract</a></p></li>
@@ -5475,6 +5484,10 @@ Can be a constant, column, or function, and any combination of array operators.<
 <li><p>list_concat</p></li>
 </ul>
 </section>
+</section>
+<section id="array-contains">
+<h3><code class="docutils literal notranslate"><span class="pre">array_contains</span></code><a class="headerlink" href="#array-contains" title="Link to this heading">¶</a></h3>
+<p><em>Alias of <a class="reference internal" href="#array-has">array_has</a>.</em></p>
 </section>
 <section id="array-has">
 <h3><code class="docutils literal notranslate"><span class="pre">array_has</span></code><a class="headerlink" href="#array-has" title="Link to this heading">¶</a></h3>
@@ -6588,21 +6601,21 @@ For example: <code class="docutils literal notranslate"><span class="pre">c0</sp
 </div>
 <p>For example, this query converts two columns <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> to a single column with
 a struct type of fields <code class="docutils literal notranslate"><span class="pre">c0</span></code> and <code class="docutils literal notranslate"><span class="pre">c1</span></code>:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">---+---+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---+---+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---+---+</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">select</span> <span class="o">*</span> <span class="kn">from</span> <span class="nn">t</span><span class="p">;</span>
+<span class="o">+---+---+</span>
+<span class="o">|</span> <span class="n">a</span> <span class="o">|</span> <span class="n">b</span> <span class="o">|</span>
+<span class="o">+---+---+</span>
+<span class="o">|</span> <span class="mi">1</span> <span class="o">|</span> <span class="mi">2</span> <span class="o">|</span>
+<span class="o">|</span> <span class="mi">3</span> <span class="o">|</span> <span class="mi">4</span> <span class="o">|</span>
+<span class="o">+---+---+</span>
 
-<span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">-----------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="p">,</span><span class="n">t</span><span class="p">.</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w">  </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w">  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------+</span>
+<span class="n">select</span> <span class="n">struct</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">t</span><span class="p">;</span>
+<span class="o">+-----------------+</span>
+<span class="o">|</span> <span class="n">struct</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">a</span><span class="p">,</span><span class="n">t</span><span class="o">.</span><span class="n">b</span><span class="p">)</span> <span class="o">|</span>
+<span class="o">+-----------------+</span>
+<span class="o">|</span> <span class="p">{</span><span class="n">c0</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">c1</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>  <span class="o">|</span>
+<span class="o">|</span> <span class="p">{</span><span class="n">c0</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span> <span class="n">c1</span><span class="p">:</span> <span class="mi">4</span><span class="p">}</span>  <span class="o">|</span>
+<span class="o">+-----------------+</span>
 </pre></div>
 </div>
 <section id="id190">

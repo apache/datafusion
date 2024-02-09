@@ -652,15 +652,15 @@ worth noting that using the settings in the <code class="docutils literal notran
 </pre></div>
 </div>
 <p>Then, in <code class="docutils literal notranslate"><span class="pre">main.rs.</span></code> update the memory allocator with the below after your imports:</p>
-<div class="highlight-rust,ignore notranslate"><div class="highlight"><pre><span></span>use datafusion::prelude::*;
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
 
-#[global_allocator]
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+<span class="cp">#[global_allocator]</span>
+<span class="k">static</span><span class="w"> </span><span class="n">ALLOC</span>: <span class="nc">snmalloc_rs</span>::<span class="n">SnMalloc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">snmalloc_rs</span>::<span class="n">SnMalloc</span><span class="p">;</span>
 
-#[tokio::main]
-async fn main() -&gt; datafusion::error::Result&lt;()&gt; {
-  Ok(())
-}
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nc">datafusion</span>::<span class="n">error</span>::<span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>Finally, in order to build with the <code class="docutils literal notranslate"><span class="pre">simd</span></code> optimization <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">nightly</span></code> is required.</p>

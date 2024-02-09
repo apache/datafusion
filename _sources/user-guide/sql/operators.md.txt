@@ -21,11 +21,13 @@
 
 ## Numerical Operators
 
-- [+ (plus)](#id1)
-- [- (minus)](#id2)
-- [\* (multiply)](#id3)
-- [/ (divide)](#id4)
-- [% (modulo)](#id5)
+- [+ (plus)](#op_plus)
+- [- (minus)](#op_minus)
+- [\* (multiply)](#op_multiply)
+- [/ (divide)](#op_divide)
+- [% (modulo)](#op_modulo)
+
+(op_plus)=
 
 ### `+`
 
@@ -40,6 +42,8 @@ Addition
 +---------------------+
 ```
 
+(op_minus)=
+
 ### `-`
 
 Subtraction
@@ -52,6 +56,8 @@ Subtraction
 | 1                   |
 +---------------------+
 ```
+
+(op_multiply)=
 
 ### `*`
 
@@ -66,6 +72,8 @@ Multiplication
 +---------------------+
 ```
 
+(op_divide)=
+
 ### `/`
 
 Division (integer division truncates toward zero)
@@ -78,6 +86,8 @@ Division (integer division truncates toward zero)
 | 2                   |
 +---------------------+
 ```
+
+(op_modulo)=
 
 ### `%`
 
@@ -94,18 +104,20 @@ Modulo (remainder)
 
 ## Comparison Operators
 
-- [= (equal)](#id6)
-- [!= (not equal)](#id7)
-- [< (less than)](#id8)
-- [<= (less than or equal to)](#id9)
-- [> (greater than)](#id10)
-- [>= (greater than or equal to)](#id11)
+- [= (equal)](#op_eq)
+- [!= (not equal)](#op_neq)
+- [< (less than)](#op_lt)
+- [<= (less than or equal to)](#op_le)
+- [> (greater than)](#op_gt)
+- [>= (greater than or equal to)](#op_ge)
 - [IS DISTINCT FROM](#is-distinct-from)
 - [IS NOT DISTINCT FROM](#is-not-distinct-from)
-- [~ (regex match)](#id12)
-- [~\* (regex case-insensitive match)](#id13)
-- [!~ (not regex match)](#id14)
-- [!~\* (not regex case-insensitive match)](#id15)
+- [~ (regex match)](#op_re_match)
+- [~\* (regex case-insensitive match)](#op_re_match_i)
+- [!~ (not regex match)](#op_re_not_match)
+- [!~\* (not regex case-insensitive match)](#op_re_not_match_i)
+
+(op_eq)=
 
 ### `=`
 
@@ -120,6 +132,8 @@ Equal
 +---------------------+
 ```
 
+(op_neq)=
+
 ### `!=`
 
 Not Equal
@@ -132,6 +146,8 @@ Not Equal
 | true                 |
 +----------------------+
 ```
+
+(op_lt)=
 
 ### `<`
 
@@ -146,6 +162,8 @@ Less Than
 +---------------------+
 ```
 
+(op_le)=
+
 ### `<=`
 
 Less Than or Equal To
@@ -159,6 +177,8 @@ Less Than or Equal To
 +----------------------+
 ```
 
+(op_gt)=
+
 ### `>`
 
 Greater Than
@@ -171,6 +191,8 @@ Greater Than
 | true                |
 +---------------------+
 ```
+
+(op_ge)=
 
 ### `>=`
 
@@ -211,6 +233,8 @@ The negation of `IS DISTINCT FROM`
 +--------------------------------+
 ```
 
+(op_re_match)=
+
 ### `~`
 
 Regex Match
@@ -223,6 +247,8 @@ Regex Match
 | true                                            |
 +-------------------------------------------------+
 ```
+
+(op_re_match_i)=
 
 ### `~*`
 
@@ -237,6 +263,8 @@ Regex Case-Insensitive Match
 +--------------------------------------------------+
 ```
 
+(op_re_not_match)=
+
 ### `!~`
 
 Not Regex Match
@@ -249,6 +277,8 @@ Not Regex Match
 | true                                             |
 +--------------------------------------------------+
 ```
+
+(op_re_not_match_i)=
 
 ### `!~*`
 
@@ -268,7 +298,7 @@ Not Regex Case-Insensitive Match
 Like Match
 
 ```sql
-❯ SELECT 'datafusion' ~~ 'dat_f%n';
+SELECT 'datafusion' ~~ 'dat_f%n';
 +---------------------------------------+
 | Utf8("datafusion") ~~ Utf8("dat_f%n") |
 +---------------------------------------+
@@ -281,7 +311,7 @@ Like Match
 Case-Insensitive Like Match
 
 ```sql
-❯ SELECT 'datafusion' ~~* 'Dat_F%n';
+SELECT 'datafusion' ~~* 'Dat_F%n';
 +----------------------------------------+
 | Utf8("datafusion") ~~* Utf8("Dat_F%n") |
 +----------------------------------------+
@@ -294,7 +324,7 @@ Case-Insensitive Like Match
 Not Like Match
 
 ```sql
-❯ SELECT 'datafusion' !~~ 'Dat_F%n';
+SELECT 'datafusion' !~~ 'Dat_F%n';
 +----------------------------------------+
 | Utf8("datafusion") !~~ Utf8("Dat_F%n") |
 +----------------------------------------+
@@ -307,7 +337,7 @@ Not Like Match
 Not Case-Insensitive Like Match
 
 ```sql
-❯ SELECT 'datafusion' !~~* 'Dat%F_n';
+SELECT 'datafusion' !~~* 'Dat%F_n';
 +-----------------------------------------+
 | Utf8("datafusion") !~~* Utf8("Dat%F_n") |
 +-----------------------------------------+
@@ -348,11 +378,13 @@ Logical Or
 
 ## Bitwise Operators
 
-- [& (bitwise and)](#id16)
-- [| (bitwise or)](#id17)
-- [# (bitwise xor)](#id18)
-- [>> (bitwise shift right)](#id19)
-- [<< (bitwise shift left)](#id20)
+- [& (bitwise and)](#op_bit_and)
+- [| (bitwise or)](#op_bit_or)
+- [# (bitwise xor)](#op_bit_xor)
+- [>> (bitwise shift right)](#op_shift_r)
+- [<< (bitwise shift left)](#op_shift_l)
+
+(op_bit_and)=
 
 ### `&`
 
@@ -367,6 +399,8 @@ Bitwise And
 +---------------------+
 ```
 
+(op_bit_or)=
+
 ### `|`
 
 Bitwise Or
@@ -379,6 +413,8 @@ Bitwise Or
 | 7                   |
 +---------------------+
 ```
+
+(op_bit_xor)=
 
 ### `#`
 
@@ -393,6 +429,8 @@ Bitwise Xor (interchangeable with `^`)
 +---------------------+
 ```
 
+(op_shift_r)=
+
 ### `>>`
 
 Bitwise Shift Right
@@ -405,6 +443,8 @@ Bitwise Shift Right
 | 0                    |
 +----------------------+
 ```
+
+(op_shift_l)=
 
 ### `<<`
 
@@ -421,9 +461,11 @@ Bitwise Shift Left
 
 ## Other Operators
 
-- [|| (string concatenation)](#id21)
-- [@> (array contains)](#id22)
-- [<@ (array is contained by)](#id23)
+- [|| (string concatenation)](#op_str_cat)
+- [@> (array contains)](#op_arr_contains)
+- [<@ (array is contained by)](#op_arr_contained_by)
+
+(op_str_cat)=
 
 ### `||`
 
@@ -438,6 +480,8 @@ String Concatenation
 +----------------------------------------+
 ```
 
+(op_arr_contains)=
+
 ### `@>`
 
 Array Contains
@@ -450,6 +494,8 @@ Array Contains
 | true                                                                    |
 +-------------------------------------------------------------------------+
 ```
+
+(op_arr_contained_by)=
 
 ### `<@`
 

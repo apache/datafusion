@@ -639,17 +639,17 @@
 <section id="syntax">
 <h2>Syntax<a class="headerlink" href="#syntax" title="Link to this heading">¶</a></h2>
 <p>The syntax for the OVER-clause is</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">function</span><span class="p">([</span><span class="n">expr</span><span class="p">])</span>
-<span class="w">  </span><span class="n">OVER</span><span class="p">(</span>
-<span class="w">    </span><span class="p">[</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expr</span><span class="p">[,</span><span class="w"> </span><span class="err">…</span><span class="p">]]</span>
-<span class="w">    </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="k">ASC</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">DESC</span><span class="w"> </span><span class="p">][,</span><span class="w"> </span><span class="err">…</span><span class="p">]]</span>
-<span class="w">    </span><span class="p">[</span><span class="w"> </span><span class="n">frame_clause</span><span class="w"> </span><span class="p">]</span>
-<span class="w">    </span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>function([expr])
+  OVER(
+    [PARTITION BY expr[, …]]
+    [ORDER BY expr [ ASC | DESC ][, …]]
+    [ frame_clause ]
+    )
 </pre></div>
 </div>
 <p>where <strong>frame_clause</strong> is one of:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">GROUPS</span><span class="w"> </span><span class="err">}</span><span class="w"> </span><span class="n">frame_start</span>
-<span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">GROUPS</span><span class="w"> </span><span class="err">}</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">frame_start</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">frame_end</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>  <span class="p">{</span> <span class="n">RANGE</span> <span class="o">|</span> <span class="n">ROWS</span> <span class="o">|</span> <span class="n">GROUPS</span> <span class="p">}</span> <span class="n">frame_start</span>
+  <span class="p">{</span> <span class="n">RANGE</span> <span class="o">|</span> <span class="n">ROWS</span> <span class="o">|</span> <span class="n">GROUPS</span> <span class="p">}</span> <span class="n">BETWEEN</span> <span class="n">frame_start</span> <span class="n">AND</span> <span class="n">frame_end</span>
 </pre></div>
 </div>
 <p>and <strong>frame_start</strong> and <strong>frame_end</strong> can be one of</p>
