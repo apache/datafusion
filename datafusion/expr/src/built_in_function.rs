@@ -822,7 +822,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => {
                 utf8_to_str_type(&input_expr_types[0], "upper")
             }
-            BuiltinScalarFunction::RegexpLike => Ok(match input_expr_types[0] {
+            BuiltinScalarFunction::RegexpLike => Ok(match &input_expr_types[0] {
                 LargeUtf8 | Utf8 => Boolean,
                 Null => Null,
                 other => {
@@ -831,7 +831,7 @@ impl BuiltinScalarFunction {
                     );
                 }
             }),
-            BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
+            BuiltinScalarFunction::RegexpMatch => Ok(match &input_expr_types[0] {
                 LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
