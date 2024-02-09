@@ -148,10 +148,10 @@ OPTIONS:
 
 ## Querying data from the files directly
 
-Files can be queried directly by enclosing the file or
-directory name in single `'` quotes as shown in the example.
+Files can be queried directly by enclosing the file, directory name
+or a remote location in single `'` quotes as shown in the examples.
 
-## Example
+## Examples
 
 Create a CSV file to query.
 
@@ -192,6 +192,19 @@ DataFusion CLI v16.0.0
 | 1 | 2 |
 +---+---+
 2 rows in set. Query took 0.007 seconds.
+```
+
+You can also query directly from the remote location via HTTP(S) without
+registering the location as a table
+
+```sql
+❯ select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet'
++----------+
+| COUNT(*) |
++----------+
+| 1000000  |
++----------+
+1 row in set. Query took 0.595 seconds.
 ```
 
 ## Creating External Tables
