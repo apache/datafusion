@@ -1402,57 +1402,6 @@ impl ScalarValue {
             }};
         }
 
-        fn build_fixed_size_list_array(
-            scalars: impl IntoIterator<Item = ScalarValue>,
-        ) -> Result<ArrayRef> {
-            let arrays = scalars
-                .into_iter()
-                .map(|s| s.to_array())
-                .collect::<Result<Vec<_>>>()?;
-
-            let capacity = Capacities::Array(
-                arrays
-                    .iter()
-                    .filter_map(|arr| {
-                        if !arr.is_null(0) {
-                            Some(arr.len())
-                        } else {
-                            None
-                        }
-                    })
-                    .sum(),
-            );
-
-            // ScalarValue::List contains a single element ListArray.
-            let nulls = arrays
-                .iter()
-                .map(|arr| arr.is_null(0))
-                .collect::<Vec<bool>>();
-            let arrays_data = arrays
-                .iter()
-                .filter(|arr| !arr.is_null(0))
-                .map(|arr| arr.to_data())
-                .collect::<Vec<_>>();
-
-            let arrays_ref = arrays_data.iter().collect::<Vec<_>>();
-            let mut mutable =
-                MutableArrayData::with_capacities(arrays_ref, true, capacity);
-
-            // ScalarValue::List contains a single element ListArray.
-            let mut index = 0;
-            for is_null in nulls.into_iter() {
-                if is_null {
-                    mutable.extend_nulls(1);
-                } else {
-                    // mutable array contains non-null elements
-                    mutable.extend(index, 0, 1);
-                    index += 1;
-                }
-            }
-            let data = mutable.freeze();
-            Ok(arrow_array::make_array(data))
-        }
-
         let array: ArrayRef = match &data_type {
             DataType::Decimal128(precision, scale) => {
                 let decimal_array =
@@ -1528,10 +1477,26 @@ impl ScalarValue {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
             DataType::FixedSizeList(_, _) => {
-                // build_fixed_size_list_array is able to concat nulls with length 1,
-                // while arrow::compute::concat must ensure the length of nulls should be the same as the length of non-nulls
-                // build_fixed_size_list_array's behavior is similar to FixedSizeListArray::from_iter_primitive<T>
-                build_fixed_size_list_array(scalars)?
+                // arrow::compute::concat does not allow inconsistent types including the size of FixedSizeList.
+                // The length of nulls here we got is 1, so we need to resize the length of nulls to
+                // the length of non-nulls.
+                let mut arrays =
+                    scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
+                let first_non_null_data_type = arrays
+                    .iter()
+                    .find(|sv| !sv.is_null(0))
+                    .map(|sv| sv.data_type().to_owned());
+                if let Some(DataType::FixedSizeList(f, l)) = first_non_null_data_type {
+                    for array in arrays.iter_mut() {
+                        if array.is_null(0) {
+                            *array =
+                                Arc::new(FixedSizeListArray::new_null(f.clone(), l, 1));
+                        }
+                    }
+                }
+                let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+                arrow::compute::concat(arrays.as_slice())
+                    .map_err(|e| arrow_datafusion_err!(e))?
             }
             DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -3475,7 +3440,7 @@ mod tests {
 
     #[test]
     fn test_iter_to_array_fixed_size_list() {
-        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
         let f1 = Arc::new(FixedSizeListArray::new(
             field.clone(),
             3,
