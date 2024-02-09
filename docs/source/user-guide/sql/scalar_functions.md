@@ -1435,6 +1435,7 @@ position(substr in origstr)
 - [extract](#extract)
 - [today](#today)
 - [make_date](#make_date)
+- [to_char](#to_char)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1660,6 +1661,37 @@ make_date(year, month, day)
 Additional examples can be found [here]
 
 [here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
+
+### `to_char`
+
+Returns a string representation of a date, timestamp or duration based
+on a [Chrono format]. Unlike the PostgreSQL equivalent of this function
+numerical formatting is not supported.
+
+```
+to_char(expression, format)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function that results in a date, timestamp or duration.
+- **format**: A [Chrono format] string to use to convert the expression.
+
+#### Example
+
+```
+❯ select to_char('2023-03-01' as Date, '%d-%m-%Y');
+
+```
+
+Additional examples can be found [here]
+
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_char.rs
+
+#### Aliases
+
+- date_format
 
 ### `to_timestamp`
 

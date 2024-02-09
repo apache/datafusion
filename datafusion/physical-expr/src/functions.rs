@@ -519,6 +519,7 @@ pub fn create_physical_fun(
             ))
         }
         BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
+        BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(datetime_expressions::to_timestamp_invoke)
         }

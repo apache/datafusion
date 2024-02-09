@@ -317,6 +317,8 @@ pub enum BuiltinScalarFunction {
     SubstrIndex,
     /// find_in_set
     FindInSet,
+    /// to_char
+    ToChar,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -482,6 +484,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::ToHex => Volatility::Immutable,
+            BuiltinScalarFunction::ToChar => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
@@ -803,6 +806,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
+            BuiltinScalarFunction::ToChar => Ok(Utf8),
             BuiltinScalarFunction::ToTimestamp
             | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
@@ -1064,6 +1068,37 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Repeat
             | BuiltinScalarFunction::Right => Signature::one_of(
                 vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToChar => Signature::one_of(
+                vec![
+                    Exact(vec![Date32, Utf8]),
+                    Exact(vec![Date64, Utf8]),
+                    Exact(vec![Timestamp(Second, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Duration(Second), Utf8]),
+                    Exact(vec![Duration(Millisecond), Utf8]),
+                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Duration(Nanosecond), Utf8]),
+                ],
                 self.volatility(),
             ),
             BuiltinScalarFunction::ToTimestamp
@@ -1524,6 +1559,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateBin => &["date_bin"],
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
+            BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
             BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
             BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
             BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
