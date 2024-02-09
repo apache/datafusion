@@ -247,7 +247,9 @@ pub trait PruningStatistics {
 /// * Rows that evaluate to `NULL` are **NOT** returned (also “filtered out”) – *this property appears many times in the discussion below*
 ///
 /// # `PruningPredicate` Implementation
-/// Armed with the information in Here is how the PruningPredicate logic works today
+///
+/// Armed with the information in the Background section, we can now understand
+/// how the `PruningPredicate` logic works today
 ///
 /// ## Interface
 ///
@@ -350,6 +352,18 @@ pub trait PruningStatistics {
 /// predicate *might* evaluate to `true`, and the only way to find out is to do
 /// more analysis, for example by actually reading the data and evaluating the
 /// predicate row by row.
+///
+/// # Related Work
+///
+/// [`PruningPredicate`] implements the type of min/max pruning described in
+/// Section `3.3.3` of the [`Snowflake SIGMOD Paper`]. It is described by
+/// various research such as [small materialized aggregates], [zone maps], and
+/// [data skipping].
+///
+/// [`Snowflake SIGMOD Paper`]: https://dl.acm.org/doi/10.1145/2882903.2903741
+/// [small materialized aggregates]: https://www.vldb.org/conf/1998/p476.pdf
+/// [zone maps]: https://dl.acm.org/doi/10.1007/978-3-642-03730-6_10
+///[data skipping]: https://dl.acm.org/doi/10.1145/2588555.2610515
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated
@@ -387,6 +401,9 @@ impl PruningPredicate {
     /// For example, the filter expression `(column / 2) = 4` becomes
     /// the pruning predicate
     /// `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
+    ///
+    /// See the struct level documentation on [`PruningPredicate`] for more
+    /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // build predicate expression once
         let mut required_columns = RequiredColumns::new();
