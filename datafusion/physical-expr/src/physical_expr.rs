@@ -34,8 +34,65 @@ use datafusion_expr::ColumnarValue;
 
 use itertools::izip;
 
-/// Expression that can be evaluated against a RecordBatch
+/// `PhysicalExpr` evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
+/// AS int)`.
+///
+/// `PhysicalExpr` are the physical counterpart to [`Expr`] used in logical
+/// planning, and can be evaluated directly on a [`RecordBatch`]. They are
+/// normally created from `Expr` by a [`PhysicalPlanner`] and can be created
+/// directly using [`create_physical_expr`].
+///
 /// A Physical expression knows its type, nullability and how to evaluate itself.
+///
+/// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
+/// [`create_physical_expr`]: crate::create_physical_expr
+/// [`Expr`]: datafusion_expr::Expr
+///
+/// # Example: Create `PhysicalExpr` from `Expr`
+/// ```
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use datafusion_common::DFSchema;
+/// # use datafusion_expr::{Expr, col, lit};
+/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_physical_expr::execution_props::ExecutionProps;
+/// // For a logical expression `a = 1`, we can create a physical expression
+/// let expr = col("a").eq(lit(1));
+/// // To create a PhysicalExpr we need 1. a schema
+/// let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+/// let df_schema = DFSchema::try_from(schema).unwrap();
+/// // 2. ExecutionProps
+/// let props = ExecutionProps::new();
+/// // We can now create a PhysicalExpr:
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+/// ```
+///
+/// # Example: Executing a PhysicalExpr to obtain [`ColumnarValue`]
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{cast::AsArray, BooleanArray, Int32Array, RecordBatch};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use datafusion_common::{assert_batches_eq, DFSchema};
+/// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
+/// # use datafusion_physical_expr::create_physical_expr;
+/// # use datafusion_physical_expr::execution_props::ExecutionProps;
+/// # let expr = col("a").eq(lit(1));
+/// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+/// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();
+/// # let props = ExecutionProps::new();
+/// // Given a PhysicalExpr, for `a = 1` we can evaluate it against a RecordBatch like this:
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+/// // Input of [1,2,3]
+/// let input_batch = RecordBatch::try_from_iter(vec![
+///   ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as _)
+/// ]).unwrap();
+/// // The result is a ColumnarValue (either an Array or a Scalar)
+/// let result = physical_expr.evaluate(&input_batch).unwrap();
+/// // In this case, a BooleanArray with the result of the comparison
+/// let ColumnarValue::Array(arr) = result else {
+///  panic!("Expected an array")
+/// };
+/// assert_eq!(arr.as_boolean(), &BooleanArray::from(vec![true, false, false]));
+/// ```
 pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
