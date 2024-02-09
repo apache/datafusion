@@ -29,7 +29,7 @@ Write related options can be specified in the following ways:
 - `CREATE EXTERNAL TABLE` options
 - `COPY` option tuples
 
-For a list of supported session level config defaults see [Configuration Settings](configs). These defaults apply to all write operations but have the lowest level of precedence.
+For a list of supported session level config defaults see [Configuration Settings](../configs). These defaults apply to all write operations but have the lowest level of precedence.
 
 If inserting to an external table, table specific write options can be specified when the table is created using the `OPTIONS` clause:
 
