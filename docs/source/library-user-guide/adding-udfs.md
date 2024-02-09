@@ -39,8 +39,9 @@ such functions are "vectorized" in DataFusion, meaning they get one or more Arro
 an Arrow Array with the same number of rows as output.
 
 To create a Scalar UDF, you
-1.  Implement the `ScalarUDFImpl` trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results. 
-2. Create a `ScalarUDF` and register it with `SessionContext::register_udf` so it can be invoked by name.
+
+1.  Implement the `ScalarUDFImpl` trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results.
+2.  Create a `ScalarUDF` and register it with `SessionContext::register_udf` so it can be invoked by name.
 
 In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:
 
@@ -92,8 +93,12 @@ impl ScalarUDFImpl for AddOne {
         .collect::<Int64Array>();
         Ok(Arc::new(new_array))
     }
- }
+}
+```
 
+We now need to register the function with DataFusion so that it can be used in the context of a query.
+
+```rust
 // Create a new ScalarUDF from the implementation
 let add_one = ScalarUDF::from(AddOne::new());
 
