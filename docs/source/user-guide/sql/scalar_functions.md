@@ -1676,7 +1676,7 @@ to_char(expression, format)
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function that results in a 
-- date, time, timestamp or duration.
+  date, time, timestamp or duration.
 - **format**: A [Chrono format] string to use to convert the expression.
 
 #### Example
