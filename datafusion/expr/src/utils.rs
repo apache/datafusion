@@ -337,14 +337,18 @@ fn get_excluded_columns(
     }
 
     let mut result = vec![];
+    let columns = schema.columns();
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let field = if let Some(qualifier) = qualifier {
-            schema.field_with_qualified_name(qualifier, col_name)?
+        let field_idx = if let Some(qualifier) = qualifier {
+            schema.index_of_column_by_name(Some(qualifier), col_name)?
         } else {
-            schema.field_with_unqualified_name(col_name)?
+            schema.index_of_column_by_name(None, col_name)?
         };
-        result.push(field.qualified_column())
+        if let Some(field_idx) = field_idx {
+            let field = columns[field_idx];
+            result.push(field)
+        }
     }
     Ok(result)
 }
@@ -356,18 +360,17 @@ fn get_exprs_except_skipped(
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema
-            .fields()
+            .field_names()
             .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
+            .map(|f| Expr::Column(f.into()))
             .collect::<Vec<Expr>>()
     } else {
         schema
-            .fields()
+            .columns()
             .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
+            .filter_map(|c| {
+                if !columns_to_skip.contains(c) {
+                    Some(Expr::Column(c.name.into()))
                 } else {
                     None
                 }
