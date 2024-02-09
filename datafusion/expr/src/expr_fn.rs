@@ -900,7 +900,7 @@ scalar_expr!(
     ToChar,
     to_char,
     datetime format,
-    "converts a date, timestamp or duration to a string based on the provided format"
+    "converts a date, time, timestamp or duration to a string based on the provided format"
 );
 nary_scalar_expr!(
     ToTimestamp,

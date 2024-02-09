@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 /// This example demonstrates how to use the to_char function via sql
 ///
-/// This function accepts date, timestamp and duration values
+/// This function accepts date, time, timestamp and duration values
 /// in the first argument and string values for the second
 #[tokio::main]
 async fn main() -> Result<()> {

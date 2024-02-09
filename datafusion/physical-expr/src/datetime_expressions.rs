@@ -503,7 +503,7 @@ pub fn make_current_time(
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
 }
 
-/// Returns a string representation of a date, timestamp or duration based
+/// Returns a string representation of a date, time, timestamp or duration based
 /// on a Chrono pattern.
 ///
 /// The syntax for the patterns can be found at
@@ -607,7 +607,7 @@ fn _build_format_options<'a>(
         DataType::Date32 => FormatOptions::new().with_date_format(Some(format)),
         DataType::Date64 => FormatOptions::new().with_datetime_format(Some(format)),
         DataType::Time32(_) => FormatOptions::new().with_time_format(Some(format)),
-        DataType::Interval(_) => FormatOptions::new(),
+        DataType::Time64(_) => FormatOptions::new().with_time_format(Some(format)),
         DataType::Timestamp(_, _) => FormatOptions::new()
             .with_timestamp_format(Some(format))
             .with_timestamp_tz_format(Some(format)),
@@ -620,7 +620,7 @@ fn _build_format_options<'a>(
         ),
         other => {
             return Err(exec_err!(
-                "to_char only supports date, timestamp and duration data types, received {other:?}"
+                "to_char only supports date, time, timestamp and duration data types, received {other:?}"
             ));
         }
     };
@@ -1745,7 +1745,8 @@ mod tests {
     };
     use arrow_array::types::Int64Type;
     use arrow_array::{
-        Date32Array, Date64Array, Int32Array, TimestampMicrosecondArray,
+        Date32Array, Date64Array, Int32Array, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         UInt32Array,
     };
@@ -3006,323 +3007,212 @@ mod tests {
             .with_nanosecond(56789)
             .unwrap();
 
-        //
-        // scalar date32 test
-        //
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::Date32(Some(18506))), // // 2020-09-01
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!("2020::09::01".to_string(), date.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // scalar date64 test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::Date64(Some(date.timestamp_millis()))),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!("2020::01::02".to_string(), date.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // scalar timestamp seconds test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                Some(date.timestamp()),
-                None,
-            )),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "%Y::%m::%d %S::%M::%H".to_string(),
-            ))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!("2020::01::02 05::04::03".to_string(), date.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // scalar timestamp millis test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                Some(date.timestamp_millis()),
-                None,
-            )),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "%Y::%m::%d %S::%M::%H".to_string(),
-            ))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!("2020::01::02 05::04::03".to_string(), date.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // scalar timestamp micros test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                Some(date.timestamp_micros()),
-                None,
-            )),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "%Y::%m::%d %S::%M::%H %f".to_string(),
-            ))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!(
+        let scalar_data = vec![
+            (
+                ScalarValue::Date32(Some(18506)),
+                ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
+                "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
+                "2020::01::02".to_string(),
+            ),
+            (
+                ScalarValue::Time32Second(Some(31851)),
+                ScalarValue::Utf8(Some("%H-%M-%S".to_string())),
+                "08-50-51".to_string(),
+            ),
+            (
+                ScalarValue::Time32Millisecond(Some(18506000)),
+                ScalarValue::Utf8(Some("%H-%M-%S".to_string())),
+                "05-08-26".to_string(),
+            ),
+            (
+                ScalarValue::Time64Microsecond(Some(12344567000)),
+                ScalarValue::Utf8(Some("%H-%M-%S %f".to_string())),
+                "03-25-44 567000000".to_string(),
+            ),
+            (
+                ScalarValue::Time64Nanosecond(Some(12344567890000)),
+                ScalarValue::Utf8(Some("%H-%M-%S %f".to_string())),
+                "03-25-44 567890000".to_string(),
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
+                "2020::01::02 05::04::03".to_string(),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
+                "2020::01::02 05::04::03".to_string(),
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012000".to_string(),
-                date.unwrap()
-            );
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // scalar timestamp nanos test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                Some(date.timestamp_nanos_opt().unwrap()),
-                None,
-            )),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "%Y::%m::%d %S::%M::%H %f".to_string(),
-            ))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert_eq!(
+            ),
+            (
+                ScalarValue::TimestampNanosecond(
+                    Some(date.timestamp_nanos_opt().unwrap()),
+                    None,
+                ),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012345".to_string(),
-                date.unwrap()
-            );
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        //
-        // array date32, scalar format test
-        //
-
-        let result = to_char(&[
-            // 2020-09-01, 2020-09-02
-            ColumnarValue::Array(
-                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef
             ),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
-        ])
-        .expect("that to_char parsed values without error");
+        ];
 
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec!["2020::09::01", "2020::09::02"]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
+        for (value, format, expected) in scalar_data {
+            let result =
+                to_char(&[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)])
+                    .expect("that to_char parsed values without error");
+
+            if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
+                assert_eq!(expected, date.unwrap());
+            } else {
+                panic!("Expected a scalar value")
+            }
         }
 
-        //
-        // array date32, array format test
-        //
-        let result = to_char(&[
-            // 2020-09-01, 2020-09-02
-            ColumnarValue::Array(
-                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef
+        let array_scalar_data = vec![
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
+                StringArray::from(vec!["2020::09::01", "2020::09::02"]),
             ),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d",
-                "%d::%m::%Y",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
+            (
+                Arc::new(Date64Array::from(vec![
+                    date.timestamp_millis(),
+                    date2.timestamp_millis(),
+                ])) as ArrayRef,
+                ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
+                StringArray::from(vec!["2020::01::02", "2026::07::08"]),
+            ),
+        ];
 
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec!["2020::09::01", "02::09::2020"]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
+        let array_array_data = vec![
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
+                StringArray::from(vec!["2020::09::01", "02::09::2020"]),
+            ),
+            (
+                Arc::new(Date64Array::from(vec![
+                    date.timestamp_millis(),
+                    date2.timestamp_millis(),
+                ])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
+                StringArray::from(vec!["2020::01::02", "08::07::2026"]),
+            ),
+            (
+                Arc::new(Time32MillisecondArray::from(vec![1850600, 1860700]))
+                    as ArrayRef,
+                StringArray::from(vec!["%H:%M:%S", "%H::%M::%S"]),
+                StringArray::from(vec!["00:30:50", "00::31::00"]),
+            ),
+            (
+                Arc::new(Time32SecondArray::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%H:%M:%S", "%H::%M::%S"]),
+                StringArray::from(vec!["05:08:26", "05::08::27"]),
+            ),
+            (
+                Arc::new(Time64MicrosecondArray::from(vec![12344567000, 22244567000]))
+                    as ArrayRef,
+                StringArray::from(vec!["%H:%M:%S", "%H::%M::%S"]),
+                StringArray::from(vec!["03:25:44", "06::10::44"]),
+            ),
+            (
+                Arc::new(Time64NanosecondArray::from(vec![
+                    1234456789000,
+                    2224456789000,
+                ])) as ArrayRef,
+                StringArray::from(vec!["%H:%M:%S", "%H::%M::%S"]),
+                StringArray::from(vec!["00:20:34", "00::37::04"]),
+            ),
+            (
+                Arc::new(TimestampSecondArray::from(vec![
+                    date.timestamp(),
+                    date2.timestamp(),
+                ])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H", "%d::%m::%Y %S-%M-%H"]),
+                StringArray::from(vec![
+                    "2020::01::02 05::04::03",
+                    "08::07::2026 11-10-09",
+                ]),
+            ),
+            (
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    date.timestamp_millis(),
+                    date2.timestamp_millis(),
+                ])) as ArrayRef,
+                StringArray::from(vec![
+                    "%Y::%m::%d %S::%M::%H %f",
+                    "%d::%m::%Y %S-%M-%H %f",
+                ]),
+                StringArray::from(vec![
+                    "2020::01::02 05::04::03 000000000",
+                    "08::07::2026 11-10-09 000000000",
+                ]),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    date.timestamp_micros(),
+                    date2.timestamp_micros(),
+                ])) as ArrayRef,
+                StringArray::from(vec![
+                    "%Y::%m::%d %S::%M::%H %f",
+                    "%d::%m::%Y %S-%M-%H %f",
+                ]),
+                StringArray::from(vec![
+                    "2020::01::02 05::04::03 000012000",
+                    "08::07::2026 11-10-09 000056000",
+                ]),
+            ),
+            (
+                Arc::new(TimestampNanosecondArray::from(vec![
+                    date.timestamp_nanos_opt().unwrap(),
+                    date2.timestamp_nanos_opt().unwrap(),
+                ])) as ArrayRef,
+                StringArray::from(vec![
+                    "%Y::%m::%d %S::%M::%H %f",
+                    "%d::%m::%Y %S-%M-%H %f",
+                ]),
+                StringArray::from(vec![
+                    "2020::01::02 05::04::03 000012345",
+                    "08::07::2026 11-10-09 000056789",
+                ]),
+            ),
+        ];
+
+        for (value, format, expected) in array_scalar_data {
+            let result = to_char(&[
+                ColumnarValue::Array(value as ArrayRef),
+                ColumnarValue::Scalar(format),
+            ])
+            .expect("that to_char parsed values without error");
+
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(result.len(), 2);
+                assert_eq!(&expected as &dyn Array, result.as_ref());
+            } else {
+                panic!("Expected an array value")
+            }
         }
 
-        //
-        // array date64, scalar format test
-        //
+        for (value, format, expected) in array_array_data {
+            let result = to_char(&[
+                ColumnarValue::Array(value),
+                ColumnarValue::Array(Arc::new(format) as ArrayRef),
+            ])
+            .expect("that to_char parsed values without error");
 
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(Date64Array::from(vec![
-                date.timestamp_millis(),
-                date2.timestamp_millis(),
-            ])) as ArrayRef),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y::%m::%d".to_string()))),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec!["2020::01::02", "2026::07::08"]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
-        }
-
-        //
-        // array date64, array format test
-        //
-
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(Date64Array::from(vec![
-                date.timestamp_millis(),
-                date2.timestamp_millis(),
-            ])) as ArrayRef),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d",
-                "%d::%m::%Y",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec!["2020::01::02", "08::07::2026"]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
-        }
-
-        //
-        // array timestamp seconds test
-        //
-
-        let timestamp_second_array =
-            TimestampSecondArray::from(vec![date.timestamp(), date2.timestamp()]);
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(timestamp_second_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d %S::%M::%H",
-                "%d::%m::%Y %S-%M-%H",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec![
-                "2020::01::02 05::04::03",
-                "08::07::2026 11-10-09",
-            ]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
-        }
-
-        //
-        // array timestamp millis test
-        //
-        let timestamp_millis_array = TimestampMillisecondArray::from(vec![
-            date.timestamp_millis(),
-            date2.timestamp_millis(),
-        ]);
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(timestamp_millis_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d %S::%M::%H %f",
-                "%d::%m::%Y %S-%M-%H %f",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec![
-                "2020::01::02 05::04::03 000000000",
-                "08::07::2026 11-10-09 000000000",
-            ]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
-        }
-
-        //
-        // array timestamp micro test
-        //
-
-        let timestamp_micro_array = TimestampMicrosecondArray::from(vec![
-            date.timestamp_micros(),
-            date2.timestamp_micros(),
-        ]);
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(timestamp_micro_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d %S::%M::%H %f",
-                "%d::%m::%Y %S-%M-%H %f",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec![
-                "2020::01::02 05::04::03 000012000",
-                "08::07::2026 11-10-09 000056000",
-            ]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
-        }
-
-        //
-        // array timestamp nanos test
-        //
-
-        let timestamp_nanos_array = TimestampNanosecondArray::from(vec![
-            date.timestamp_nanos_opt().unwrap(),
-            date2.timestamp_nanos_opt().unwrap(),
-        ]);
-        let result = to_char(&[
-            ColumnarValue::Array(Arc::new(timestamp_nanos_array) as ArrayRef),
-            ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                "%Y::%m::%d %S::%M::%H %f",
-                "%d::%m::%Y %S-%M-%H %f",
-            ])) as ArrayRef),
-        ])
-        .expect("that to_char parsed values without error");
-
-        if let ColumnarValue::Array(result) = result {
-            assert_eq!(result.len(), 2);
-            let expected = StringArray::from(vec![
-                "2020::01::02 05::04::03 000012345",
-                "08::07::2026 11-10-09 000056789",
-            ]);
-            assert_eq!(&expected as &dyn Array, result.as_ref());
-        } else {
-            panic!("Expected an array value")
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(result.len(), 2);
+                assert_eq!(&expected as &dyn Array, result.as_ref());
+            } else {
+                panic!("Expected an array value")
+            }
         }
 
         //

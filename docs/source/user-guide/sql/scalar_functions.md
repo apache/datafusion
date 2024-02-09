@@ -1664,7 +1664,7 @@ Additional examples can be found [here]
 
 ### `to_char`
 
-Returns a string representation of a date, timestamp or duration based
+Returns a string representation of a date, time, timestamp or duration based
 on a [Chrono format]. Unlike the PostgreSQL equivalent of this function
 numerical formatting is not supported.
 
@@ -1675,14 +1675,19 @@ to_char(expression, format)
 #### Arguments
 
 - **expression**: Expression to operate on.
-  Can be a constant, column, or function that results in a date, timestamp or duration.
+  Can be a constant, column, or function that results in a 
+- date, time, timestamp or duration.
 - **format**: A [Chrono format] string to use to convert the expression.
 
 #### Example
 
 ```
-❯ select to_char('2023-03-01' as Date, '%d-%m-%Y');
-
+❯ ❯ select to_char('2023-03-01'::date, '%d-%m-%Y');
++----------------------------------------------+
+| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
++----------------------------------------------+
+| 01-03-2023                                   |
++----------------------------------------------+
 ```
 
 Additional examples can be found [here]

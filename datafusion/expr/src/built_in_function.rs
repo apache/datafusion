@@ -1074,6 +1074,10 @@ impl BuiltinScalarFunction {
                 vec![
                     Exact(vec![Date32, Utf8]),
                     Exact(vec![Date64, Utf8]),
+                    Exact(vec![Time32(Millisecond), Utf8]),
+                    Exact(vec![Time32(Second), Utf8]),
+                    Exact(vec![Time64(Microsecond), Utf8]),
+                    Exact(vec![Time64(Nanosecond), Utf8]),
                     Exact(vec![Timestamp(Second, None), Utf8]),
                     Exact(vec![
                         Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
