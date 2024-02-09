@@ -1265,8 +1265,7 @@ impl SMJStream {
                             // Handle not mask for buffered side further.
                             // For buffered side, we want to output the rows that are not null joined with
                             // the streamed side. i.e. the rows that are not null in the `buffered_indices`.
-                            let not_mask = if buffered_indices.null_count() > 0 {
-                                let nulls = buffered_indices.nulls().unwrap();
+                            let not_mask = if let Some(nulls) = buffered_indices.nulls() {
                                 let mask = not_mask.values() & nulls.inner();
                                 BooleanArray::new(mask, None)
                             } else {
