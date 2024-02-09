@@ -22436,6 +22436,7 @@ impl serde::Serialize for ScalarFunction {
             Self::InStr => "InStr",
             Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
+            Self::RegexpLike => "RegexpLike",
         };
         serializer.serialize_str(variant)
     }
@@ -22580,6 +22581,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "InStr",
             "MakeDate",
             "ArrayReverse",
+            "RegexpLike",
         ];
 
         struct GeneratedVisitor;
@@ -22753,6 +22755,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "InStr" => Ok(ScalarFunction::InStr),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
+                    "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -22870,7 +22873,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunctionNode {
         deserializer.deserialize_struct("datafusion.ScalarFunctionNode", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for ScalarListValue {
+impl serde::Serialize for ScalarNestedValue {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -22887,7 +22890,7 @@ impl serde::Serialize for ScalarListValue {
         if self.schema.is_some() {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarListValue", len)?;
+        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarNestedValue", len)?;
         if !self.ipc_message.is_empty() {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("ipcMessage", pbjson::private::base64::encode(&self.ipc_message).as_str())?;
@@ -22902,7 +22905,7 @@ impl serde::Serialize for ScalarListValue {
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for ScalarListValue {
+impl<'de> serde::Deserialize<'de> for ScalarNestedValue {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -22954,13 +22957,13 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ScalarListValue;
+            type Value = ScalarNestedValue;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ScalarListValue")
+                formatter.write_str("struct datafusion.ScalarNestedValue")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ScalarListValue, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ScalarNestedValue, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
@@ -22993,14 +22996,14 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                         }
                     }
                 }
-                Ok(ScalarListValue {
+                Ok(ScalarNestedValue {
                     ipc_message: ipc_message__.unwrap_or_default(),
                     arrow_data: arrow_data__.unwrap_or_default(),
                     schema: schema__,
                 })
             }
         }
-        deserializer.deserialize_struct("datafusion.ScalarListValue", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("datafusion.ScalarNestedValue", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarTime32Value {
@@ -23561,6 +23564,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::FixedSizeListValue(v) => {
                     struct_ser.serialize_field("fixedSizeListValue", v)?;
                 }
+                scalar_value::Value::StructValue(v) => {
+                    struct_ser.serialize_field("structValue", v)?;
+                }
                 scalar_value::Value::Decimal128Value(v) => {
                     struct_ser.serialize_field("decimal128Value", v)?;
                 }
@@ -23613,9 +23619,6 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::IntervalMonthDayNano(v) => {
                     struct_ser.serialize_field("intervalMonthDayNano", v)?;
-                }
-                scalar_value::Value::StructValue(v) => {
-                    struct_ser.serialize_field("structValue", v)?;
                 }
                 scalar_value::Value::FixedSizeBinaryValue(v) => {
                     struct_ser.serialize_field("fixedSizeBinaryValue", v)?;
@@ -23670,6 +23673,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "listValue",
             "fixed_size_list_value",
             "fixedSizeListValue",
+            "struct_value",
+            "structValue",
             "decimal128_value",
             "decimal128Value",
             "decimal256_value",
@@ -23700,8 +23705,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "time64Value",
             "interval_month_day_nano",
             "intervalMonthDayNano",
-            "struct_value",
-            "structValue",
             "fixed_size_binary_value",
             "fixedSizeBinaryValue",
         ];
@@ -23727,6 +23730,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             LargeListValue,
             ListValue,
             FixedSizeListValue,
+            StructValue,
             Decimal128Value,
             Decimal256Value,
             Date64Value,
@@ -23742,7 +23746,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             LargeBinaryValue,
             Time64Value,
             IntervalMonthDayNano,
-            StructValue,
             FixedSizeBinaryValue,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -23784,6 +23787,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "largeListValue" | "large_list_value" => Ok(GeneratedField::LargeListValue),
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "fixedSizeListValue" | "fixed_size_list_value" => Ok(GeneratedField::FixedSizeListValue),
+                            "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
                             "decimal128Value" | "decimal128_value" => Ok(GeneratedField::Decimal128Value),
                             "decimal256Value" | "decimal256_value" => Ok(GeneratedField::Decimal256Value),
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
@@ -23799,7 +23803,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "largeBinaryValue" | "large_binary_value" => Ok(GeneratedField::LargeBinaryValue),
                             "time64Value" | "time64_value" => Ok(GeneratedField::Time64Value),
                             "intervalMonthDayNano" | "interval_month_day_nano" => Ok(GeneratedField::IntervalMonthDayNano),
-                            "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
                             "fixedSizeBinaryValue" | "fixed_size_binary_value" => Ok(GeneratedField::FixedSizeBinaryValue),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -23942,6 +23945,13 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::FixedSizeListValue)
 ;
                         }
+                        GeneratedField::StructValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("structValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::StructValue)
+;
+                        }
                         GeneratedField::Decimal128Value => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("decimal128Value"));
@@ -24036,13 +24046,6 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("intervalMonthDayNano"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::IntervalMonthDayNano)
-;
-                        }
-                        GeneratedField::StructValue => {
-                            if value__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("structValue"));
-                            }
-                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::StructValue)
 ;
                         }
                         GeneratedField::FixedSizeBinaryValue => {
@@ -25533,115 +25536,6 @@ impl<'de> serde::Deserialize<'de> for Struct {
             }
         }
         deserializer.deserialize_struct("datafusion.Struct", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for StructValue {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if !self.field_values.is_empty() {
-            len += 1;
-        }
-        if !self.fields.is_empty() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.StructValue", len)?;
-        if !self.field_values.is_empty() {
-            struct_ser.serialize_field("fieldValues", &self.field_values)?;
-        }
-        if !self.fields.is_empty() {
-            struct_ser.serialize_field("fields", &self.fields)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for StructValue {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "field_values",
-            "fieldValues",
-            "fields",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            FieldValues,
-            Fields,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "fieldValues" | "field_values" => Ok(GeneratedField::FieldValues),
-                            "fields" => Ok(GeneratedField::Fields),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = StructValue;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.StructValue")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<StructValue, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut field_values__ = None;
-                let mut fields__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::FieldValues => {
-                            if field_values__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fieldValues"));
-                            }
-                            field_values__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::Fields => {
-                            if fields__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("fields"));
-                            }
-                            fields__ = Some(map_.next_value()?);
-                        }
-                    }
-                }
-                Ok(StructValue {
-                    field_values: field_values__.unwrap_or_default(),
-                    fields: fields__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.StructValue", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SubqueryAliasNode {

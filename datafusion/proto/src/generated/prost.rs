@@ -1149,9 +1149,10 @@ pub struct Union {
     #[prost(int32, repeated, tag = "3")]
     pub type_ids: ::prost::alloc::vec::Vec<i32>,
 }
+/// Used for List/FixedSizeList/LargeList/Struct
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ScalarListValue {
+pub struct ScalarNestedValue {
     #[prost(bytes = "vec", tag = "1")]
     pub ipc_message: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
@@ -1236,17 +1237,6 @@ pub struct IntervalMonthDayNanoValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct StructValue {
-    /// Note that a null struct value must have one or more fields, so we
-    /// encode a null StructValue as one witth an empty field_values
-    /// list.
-    #[prost(message, repeated, tag = "2")]
-    pub field_values: ::prost::alloc::vec::Vec<ScalarValue>,
-    #[prost(message, repeated, tag = "3")]
-    pub fields: ::prost::alloc::vec::Vec<Field>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarFixedSizeBinary {
     #[prost(bytes = "vec", tag = "1")]
     pub values: ::prost::alloc::vec::Vec<u8>,
@@ -1258,7 +1248,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1303,11 +1293,13 @@ pub mod scalar_value {
         #[prost(message, tag = "15")]
         Time32Value(super::ScalarTime32Value),
         #[prost(message, tag = "16")]
-        LargeListValue(super::ScalarListValue),
+        LargeListValue(super::ScalarNestedValue),
         #[prost(message, tag = "17")]
-        ListValue(super::ScalarListValue),
+        ListValue(super::ScalarNestedValue),
         #[prost(message, tag = "18")]
-        FixedSizeListValue(super::ScalarListValue),
+        FixedSizeListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "32")]
+        StructValue(super::ScalarNestedValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
         #[prost(message, tag = "39")]
@@ -1338,8 +1330,6 @@ pub mod scalar_value {
         Time64Value(super::ScalarTime64Value),
         #[prost(message, tag = "31")]
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
-        #[prost(message, tag = "32")]
-        StructValue(super::StructValue),
         #[prost(message, tag = "34")]
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
     }
@@ -2774,6 +2764,7 @@ pub enum ScalarFunction {
     InStr = 132,
     MakeDate = 133,
     ArrayReverse = 134,
+    RegexpLike = 135,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2915,6 +2906,7 @@ impl ScalarFunction {
             ScalarFunction::InStr => "InStr",
             ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
+            ScalarFunction::RegexpLike => "RegexpLike",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3053,6 +3045,7 @@ impl ScalarFunction {
             "InStr" => Some(Self::InStr),
             "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
+            "RegexpLike" => Some(Self::RegexpLike),
             _ => None,
         }
     }

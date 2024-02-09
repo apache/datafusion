@@ -175,6 +175,7 @@ pub fn sort_merge_join_exec(
             left,
             right,
             join_on.clone(),
+            None,
             *join_type,
             vec![SortOptions::default(); join_on.len()],
             false,

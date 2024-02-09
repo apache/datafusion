@@ -1114,6 +1114,7 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
+
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1129,20 +1130,17 @@ impl DefaultPhysicalPlanner {
                     {
                         // Use SortMergeJoin if hash join is not preferred
                         // Sort-Merge join support currently is experimental
-                        if join_filter.is_some() {
-                            // TODO SortMergeJoinExec need to support join filter
-                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
-                        } else {
-                            let join_on_len = join_on.len();
-                            Ok(Arc::new(SortMergeJoinExec::try_new(
-                                physical_left,
-                                physical_right,
-                                join_on,
-                                *join_type,
-                                vec![SortOptions::default(); join_on_len],
-                                null_equals_null,
-                            )?))
-                        }
+
+                        let join_on_len = join_on.len();
+                        Ok(Arc::new(SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::default(); join_on_len],
+                            null_equals_null,
+                        )?))
                     } else if session_state.config().target_partitions() > 1
                         && session_state.config().repartition_joins()
                         && prefer_hash_join {
@@ -1985,7 +1983,6 @@ mod tests {
     use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
@@ -2310,10 +2307,11 @@ mod tests {
 
     /// Return a `null` literal representing a struct type like: `{ a: bool }`
     fn struct_literal() -> Expr {
-        let struct_literal = ScalarValue::Struct(
-            None,
+        let struct_literal = ScalarValue::try_from(DataType::Struct(
             vec![Field::new("foo", DataType::Boolean, false)].into(),
-        );
+        ))
+        .unwrap();
+
         lit(struct_literal)
     }
 

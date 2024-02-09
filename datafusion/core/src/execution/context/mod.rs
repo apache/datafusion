@@ -164,7 +164,7 @@ where
 ///
 /// [`SessionContext`] provides the following functionality:
 ///
-/// * Create a DataFrame from a CSV or Parquet data source.
+/// * Create a [`DataFrame`] from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
@@ -172,7 +172,7 @@ where
 /// # Example: DataFrame API
 ///
 /// The following example demonstrates how to use the context to execute a query against a CSV
-/// data source using the DataFrame API:
+/// data source using the [`DataFrame`] API:
 ///
 /// ```
 /// use datafusion::prelude::*;
@@ -823,15 +823,7 @@ impl SessionContext {
     /// Any functions registered with the udf name or its aliases will be overwritten with this new function
     pub fn register_udf(&self, f: ScalarUDF) {
         let mut state = self.state.write();
-        let aliases = f.aliases();
-        for alias in aliases {
-            state
-                .scalar_functions
-                .insert(alias.to_string(), Arc::new(f.clone()));
-        }
-        state
-            .scalar_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        state.register_udf(Arc::new(f)).ok();
     }
 
     /// Registers an aggregate UDF within this context.
@@ -842,10 +834,7 @@ impl SessionContext {
     /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
     /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&self, f: AggregateUDF) {
-        self.state
-            .write()
-            .aggregate_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        self.state.write().register_udaf(Arc::new(f)).ok();
     }
 
     /// Registers a window UDF within this context.
@@ -856,10 +845,7 @@ impl SessionContext {
     /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
-        self.state
-            .write()
-            .window_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        self.state.write().register_udwf(Arc::new(f)).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -1984,7 +1970,21 @@ impl FunctionRegistry for SessionState {
     }
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        udf.aliases().iter().for_each(|alias| {
+            self.scalar_functions.insert(alias.clone(), udf.clone());
+        });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
+    }
+
+    fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
 }
 

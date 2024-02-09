@@ -21,6 +21,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
+use arrow::array::{BooleanArray, Int32Array};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -61,8 +62,8 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
+use datafusion_proto::logical_plan::from_proto;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::logical_plan::{from_proto, to_proto};
 use datafusion_proto::protobuf;
 
 #[cfg(feature = "json")]
@@ -747,32 +748,6 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 }
 
 #[test]
-fn scalar_values_error_serialization() {
-    let should_fail_on_seralize: Vec<ScalarValue> = vec![
-        // Should fail due to empty values
-        ScalarValue::Struct(
-            Some(vec![]),
-            vec![Field::new("item", DataType::Int16, true)].into(),
-        ),
-    ];
-
-    for test_case in should_fail_on_seralize.into_iter() {
-        let proto: Result<protobuf::ScalarValue, to_proto::Error> =
-            (&test_case).try_into();
-
-        // Validation is also done on read, so if serialization passed
-        // also try to convert back to ScalarValue
-        if let Ok(proto) = proto {
-            let res: Result<ScalarValue, _> = (&proto).try_into();
-            assert!(
-                res.is_err(),
-                "The value {test_case:?} unexpectedly serialized without error:{res:?}"
-            );
-        }
-    }
-}
-
-#[test]
 fn round_trip_scalar_values() {
     let should_pass: Vec<ScalarValue> = vec![
         ScalarValue::Boolean(None),
@@ -955,23 +930,22 @@ fn round_trip_scalar_values() {
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
         ScalarValue::LargeBinary(None),
-        ScalarValue::Struct(
-            Some(vec![
-                ScalarValue::Int32(Some(23)),
-                ScalarValue::Boolean(Some(false)),
-            ]),
-            Fields::from(vec![
+        ScalarValue::from((
+            vec![
                 Field::new("a", DataType::Int32, true),
                 Field::new("b", DataType::Boolean, false),
-            ]),
-        ),
-        ScalarValue::Struct(
-            None,
-            Fields::from(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("a", DataType::Boolean, false),
-            ]),
-        ),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(23)])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+            ],
+        )),
+        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+        ])))
+        .unwrap(),
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),

@@ -677,6 +677,7 @@ enum ScalarFunction {
   InStr = 132;
   MakeDate = 133;
   ArrayReverse = 134;
+  RegexpLike = 135;
 }
 
 message ScalarFunctionNode {
@@ -944,7 +945,8 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-message ScalarListValue {
+// Used for List/FixedSizeList/LargeList/Struct
+message ScalarNestedValue {
   bytes ipc_message = 1;
   bytes arrow_data = 2;
   Schema schema = 3;
@@ -985,14 +987,6 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
-message StructValue {
-  // Note that a null struct value must have one or more fields, so we
-  // encode a null StructValue as one witth an empty field_values
-  // list.
-  repeated ScalarValue field_values = 2;
-  repeated Field fields = 3;
-}
-
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1023,9 +1017,10 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
-    ScalarListValue large_list_value = 16;
-    ScalarListValue list_value = 17;
-    ScalarListValue fixed_size_list_value = 18;
+    ScalarNestedValue large_list_value = 16;
+    ScalarNestedValue list_value = 17;
+    ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue struct_value = 32;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1045,7 +1040,6 @@ message ScalarValue{
     bytes large_binary_value = 29;
     ScalarTime64Value time64_value = 30;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
-    StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
   }
 }

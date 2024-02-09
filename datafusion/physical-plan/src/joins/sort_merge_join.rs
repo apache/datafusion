@@ -33,7 +33,7 @@ use std::task::{Context, Poll};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinFilter, JoinOn,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
@@ -42,6 +42,7 @@ use crate::{
 };
 
 use arrow::array::*;
+use arrow::compute;
 use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
@@ -68,6 +69,8 @@ pub struct SortMergeJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
     pub on: JoinOn,
+    /// Filters which are applied while finding matching rows
+    pub filter: Option<JoinFilter>,
     /// How the join is performed
     pub join_type: JoinType,
     /// The schema once the join is applied
@@ -95,6 +98,7 @@ impl SortMergeJoinExec {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
+        filter: Option<JoinFilter>,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
         null_equals_null: bool,
@@ -150,6 +154,7 @@ impl SortMergeJoinExec {
             left,
             right,
             on,
+            filter,
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -210,6 +215,11 @@ impl SortMergeJoinExec {
 
 impl DisplayAs for SortMergeJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        let display_filter = self.filter.as_ref().map_or_else(
+            || "".to_string(),
+            |f| format!(", filter={}", f.expression()),
+        );
+
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let on = self
@@ -220,8 +230,8 @@ impl DisplayAs for SortMergeJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]",
-                    self.join_type, on
+                    "SortMergeJoin: join_type={:?}, on=[{}]{}",
+                    self.join_type, on, display_filter
                 )
             }
         }
@@ -300,6 +310,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 left.clone(),
                 right.clone(),
                 self.on.clone(),
+                self.filter.clone(),
                 self.join_type,
                 self.sort_options.clone(),
                 self.null_equals_null,
@@ -349,6 +360,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             buffered,
             on_streamed,
             on_buffered,
+            self.filter.clone(),
             self.join_type,
             batch_size,
             SortMergeJoinMetrics::new(partition, &self.metrics),
@@ -456,8 +468,9 @@ enum BufferedState {
     Exhausted,
 }
 
+/// Represents a chunk of joined data from streamed and buffered side
 struct StreamedJoinedChunk {
-    /// Index of batch buffered_data
+    /// Index of batch in buffered_data
     buffered_batch_idx: Option<usize>,
     /// Array builder for streamed indices
     streamed_indices: UInt64Builder,
@@ -466,13 +479,17 @@ struct StreamedJoinedChunk {
 }
 
 struct StreamedBatch {
+    /// The streamed record batch
     pub batch: RecordBatch,
+    /// The index of row in the streamed batch to compare with buffered batches
     pub idx: usize,
+    /// The join key arrays of streamed batch which are used to compare with buffered batches
+    /// and to produce output. They are produced by evaluating `on` expressions.
     pub join_arrays: Vec<ArrayRef>,
 
-    // Chunks of indices from buffered side (may be nulls) joined to streamed
+    /// Chunks of indices from buffered side (may be nulls) joined to streamed
     pub output_indices: Vec<StreamedJoinedChunk>,
-    // Index of currently scanned batch from buffered data
+    /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
 }
 
@@ -505,6 +522,8 @@ impl StreamedBatch {
         buffered_batch_idx: Option<usize>,
         buffered_idx: Option<usize>,
     ) {
+        // If no current chunk exists or current chunk is not for current buffered batch,
+        // create a new chunk
         if self.output_indices.is_empty() || self.buffered_batch_idx != buffered_batch_idx
         {
             self.output_indices.push(StreamedJoinedChunk {
@@ -516,6 +535,7 @@ impl StreamedBatch {
         };
         let current_chunk = self.output_indices.last_mut().unwrap();
 
+        // Append index of streamed batch and index of buffered batch into current chunk
         current_chunk.streamed_indices.append_value(self.idx as u64);
         if let Some(idx) = buffered_idx {
             current_chunk.buffered_indices.append_value(idx as u64);
@@ -610,9 +630,13 @@ struct SMJStream {
     pub on_streamed: Vec<PhysicalExprRef>,
     /// Join key columns of buffered
     pub on_buffered: Vec<PhysicalExprRef>,
+    /// optional join filter
+    pub filter: Option<JoinFilter>,
     /// Staging output array builders
     pub output_record_batches: Vec<RecordBatch>,
-    /// Staging output size, including output batches and staging joined results
+    /// Staging output size, including output batches and staging joined results.
+    /// Increased when we put rows into buffer and decreased after we actually output batches.
+    /// Used to trigger output when sufficient rows are ready
     pub output_size: usize,
     /// Target output batch size
     pub batch_size: usize,
@@ -736,6 +760,7 @@ impl SMJStream {
         buffered: SendableRecordBatchStream,
         on_streamed: Vec<Arc<dyn PhysicalExpr>>,
         on_buffered: Vec<Arc<dyn PhysicalExpr>>,
+        filter: Option<JoinFilter>,
         join_type: JoinType,
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
@@ -761,6 +786,7 @@ impl SMJStream {
             current_ordering: Ordering::Equal,
             on_streamed,
             on_buffered,
+            filter,
             output_record_batches: vec![],
             output_size: 0,
             batch_size,
@@ -943,7 +969,9 @@ impl SMJStream {
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
     fn join_partial(&mut self) -> Result<()> {
+        // Whether to join streamed rows
         let mut join_streamed = false;
+        // Whether to join buffered rows
         let mut join_buffered = false;
 
         // determine whether we need to join streamed/buffered rows
@@ -991,11 +1019,13 @@ impl SMJStream {
             {
                 let scanning_idx = self.buffered_data.scanning_idx();
                 if join_streamed {
+                    // Join streamed row and buffered row
                     self.streamed_batch.append_output_pair(
                         Some(self.buffered_data.scanning_batch_idx),
                         Some(scanning_idx),
                     );
                 } else {
+                    // Join nulls and buffered row
                     self.buffered_data
                         .scanning_batch_mut()
                         .null_joined
@@ -1059,6 +1089,7 @@ impl SMJStream {
             }
             buffered_batch.null_joined.clear();
 
+            // Take buffered (right) columns
             let buffered_columns = buffered_batch
                 .batch
                 .columns()
@@ -1067,6 +1098,7 @@ impl SMJStream {
                 .collect::<Result<Vec<_>, ArrowError>>()
                 .map_err(Into::<DataFusionError>::into)?;
 
+            // Create null streamed (left) columns
             let mut streamed_columns = self
                 .streamed_schema
                 .fields()
@@ -1121,16 +1153,141 @@ impl SMJStream {
                         .collect::<Vec<_>>()
                 };
 
+            let streamed_columns_length = streamed_columns.len();
+            let buffered_columns_length = buffered_columns.len();
+
+            // Prepare the columns we apply join filter on later.
+            // Only for joined rows between streamed and buffered.
+            let filter_columns = if chunk.buffered_batch_idx.is_some() {
+                if matches!(self.join_type, JoinType::Right) {
+                    get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+                } else {
+                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                }
+            } else {
+                // This chunk is for null joined rows (outer join), we don't need to apply join filter.
+                vec![]
+            };
+
             let columns = if matches!(self.join_type, JoinType::Right) {
-                buffered_columns.extend(streamed_columns);
+                buffered_columns.extend(streamed_columns.clone());
                 buffered_columns
             } else {
                 streamed_columns.extend(buffered_columns);
                 streamed_columns
             };
 
-            self.output_record_batches
-                .push(RecordBatch::try_new(self.schema.clone(), columns)?);
+            let output_batch =
+                RecordBatch::try_new(self.schema.clone(), columns.clone())?;
+
+            // Apply join filter if any
+            if !filter_columns.is_empty() {
+                if let Some(f) = &self.filter {
+                    // Construct batch with only filter columns
+                    let filter_batch = RecordBatch::try_new(
+                        Arc::new(f.schema().clone()),
+                        filter_columns,
+                    )?;
+
+                    let filter_result = f
+                        .expression()
+                        .evaluate(&filter_batch)?
+                        .into_array(filter_batch.num_rows())?;
+
+                    // The selection mask of the filter
+                    let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                    // Push the filtered batch to the output
+                    let filtered_batch =
+                        compute::filter_record_batch(&output_batch, mask)?;
+                    self.output_record_batches.push(filtered_batch);
+
+                    // For outer joins, we need to push the null joined rows to the output.
+                    if matches!(
+                        self.join_type,
+                        JoinType::Left | JoinType::Right | JoinType::Full
+                    ) {
+                        // The reverse of the selection mask. For the rows not pass join filter above,
+                        // we need to join them (left or right) with null rows for outer joins.
+                        let not_mask = compute::not(mask)?;
+                        let null_joined_batch =
+                            compute::filter_record_batch(&output_batch, &not_mask)?;
+
+                        let mut buffered_columns = self
+                            .buffered_schema
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                new_null_array(
+                                    f.data_type(),
+                                    null_joined_batch.num_rows(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        let columns = if matches!(self.join_type, JoinType::Right) {
+                            let streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(buffered_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            buffered_columns.extend(streamed_columns);
+                            buffered_columns
+                        } else {
+                            // Left join or full outer join
+                            let mut streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .take(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+                            streamed_columns
+                        };
+
+                        let null_joined_streamed_batch =
+                            RecordBatch::try_new(self.schema.clone(), columns.clone())?;
+                        self.output_record_batches.push(null_joined_streamed_batch);
+
+                        // For full join, we also need to output the null joined rows from the buffered side
+                        if matches!(self.join_type, JoinType::Full) {
+                            let mut streamed_columns = self
+                                .streamed_schema
+                                .fields()
+                                .iter()
+                                .map(|f| {
+                                    new_null_array(
+                                        f.data_type(),
+                                        null_joined_batch.num_rows(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            let buffered_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+
+                            let null_joined_buffered_batch = RecordBatch::try_new(
+                                self.schema.clone(),
+                                streamed_columns,
+                            )?;
+                            self.output_record_batches.push(null_joined_buffered_batch);
+                        }
+                    }
+                } else {
+                    self.output_record_batches.push(output_batch);
+                }
+            } else {
+                self.output_record_batches.push(output_batch);
+            }
         }
 
         self.streamed_batch.output_indices.clear();
@@ -1142,10 +1299,47 @@ impl SMJStream {
         let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
-        self.output_size -= record_batch.num_rows();
+        // If join filter exists, `self.output_size` is not accurate as we don't know the exact
+        // number of rows in the output record batch. If streamed row joined with buffered rows,
+        // once join filter is applied, the number of output rows may be more than 1.
+        if record_batch.num_rows() > self.output_size {
+            self.output_size = 0;
+        } else {
+            self.output_size -= record_batch.num_rows();
+        }
         self.output_record_batches.clear();
         Ok(record_batch)
     }
+}
+
+/// Gets the arrays which join filters are applied on.
+fn get_filter_column(
+    join_filter: &Option<JoinFilter>,
+    streamed_columns: &[ArrayRef],
+    buffered_columns: &[ArrayRef],
+) -> Vec<ArrayRef> {
+    let mut filter_columns = vec![];
+
+    if let Some(f) = join_filter {
+        let left_columns = f
+            .column_indices()
+            .iter()
+            .filter(|col_index| col_index.side == JoinSide::Left)
+            .map(|i| streamed_columns[i.index].clone())
+            .collect::<Vec<_>>();
+
+        let right_columns = f
+            .column_indices()
+            .iter()
+            .filter(|col_index| col_index.side == JoinSide::Right)
+            .map(|i| buffered_columns[i.index].clone())
+            .collect::<Vec<_>>();
+
+        filter_columns.extend(left_columns);
+        filter_columns.extend(right_columns);
+    }
+
+    filter_columns
 }
 
 /// Buffered data contains all buffered batches with one unique join key
@@ -1498,7 +1692,7 @@ mod tests {
         join_type: JoinType,
     ) -> Result<SortMergeJoinExec> {
         let sort_options = vec![SortOptions::default(); on.len()];
-        SortMergeJoinExec::try_new(left, right, on, join_type, sort_options, false)
+        SortMergeJoinExec::try_new(left, right, on, None, join_type, sort_options, false)
     }
 
     fn join_with_options(
@@ -1513,6 +1707,7 @@ mod tests {
             left,
             right,
             on,
+            None,
             join_type,
             sort_options,
             null_equals_null,

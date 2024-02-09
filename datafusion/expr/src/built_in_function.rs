@@ -241,6 +241,10 @@ pub enum BuiltinScalarFunction {
     OctetLength,
     /// random
     Random,
+    /// regexp_like
+    RegexpLike,
+    /// regexp_match
+    RegexpMatch,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -303,8 +307,6 @@ pub enum BuiltinScalarFunction {
     Upper,
     /// uuid
     Uuid,
-    /// regexp_match
-    RegexpMatch,
     /// arrow_typeof
     ArrowTypeof,
     /// overlay
@@ -460,6 +462,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpLike => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -487,7 +491,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
@@ -547,11 +550,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
-                        DataType::List(field) => match field.data_type() {
-                            DataType::List(_) => get_base_type(field.data_type()),
-                            _ => Ok(data_type.to_owned()),
-                        },
-                        _ => internal_err!("Not reachable, data_type should be List"),
+                        DataType::List(field) if matches!(field.data_type(), DataType::List(_)) => get_base_type(field.data_type()),
+                        DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
+                        DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
+                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
                     }
                 }
 
@@ -820,13 +822,22 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => {
                 utf8_to_str_type(&input_expr_types[0], "upper")
             }
+            BuiltinScalarFunction::RegexpLike => Ok(match input_expr_types[0] {
+                LargeUtf8 | Utf8 => Boolean,
+                Null => Null,
+                _ => {
+                    return plan_err!(
+                        "The regexp_like function can only accept strings."
+                    );
+                }
+            }),
             BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
                 LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
                 _ => {
                     return plan_err!(
-                        "The regexp_extract function can only accept strings."
+                        "The regexp_match function can only accept strings."
                     );
                 }
             }),
@@ -1231,6 +1242,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
+            BuiltinScalarFunction::RegexpLike => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::RegexpReplace => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Utf8]),
@@ -1242,15 +1271,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::NullIf => {
                 Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), self.volatility())
             }
-            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
@@ -1492,6 +1512,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // regex functions
+            BuiltinScalarFunction::RegexpLike => &["regexp_like"],
             BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
             BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
