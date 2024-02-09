@@ -2244,6 +2244,175 @@ SELECT a, b, LAST_VALUE(c) as last_c
 1 2 74
 1 3 99
 
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d;
+----
+logical_plan
+Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST
+--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+PartialSortExec: expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST], common_prefix_length=[2]
+--StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d
+LIMIT 50;
+----
+logical_plan
+Limit: skip=0, fetch=50
+--Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
+----TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+GlobalLimitExec: skip=0, fetch=50
+--PartialSortExec: TopK(fetch=50), expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST], common_prefix_length=[2]
+----StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
+
+query TT
+EXPLAIN SELECT *
+FROM multiple_ordered_table
+ORDER BY a, b, d;
+----
+logical_plan
+Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST
+--TableScan: multiple_ordered_table projection=[a0, a, b, c, d]
+physical_plan
+SortExec: expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]], has_header=true
+
+query TT
+EXPLAIN SELECT a, b, ARRAY_AGG(d ORDER BY d)
+FROM annotated_data_infinite2
+GROUP BY a, b;
+----
+logical_plan
+Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[ARRAY_AGG(annotated_data_infinite2.d) ORDER BY [annotated_data_infinite2.d ASC NULLS LAST]]]
+--TableScan: annotated_data_infinite2 projection=[a, b, d]
+physical_plan
+AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[ARRAY_AGG(annotated_data_infinite2.d)], ordering_mode=Sorted
+--PartialSortExec: expr=[a@0 ASC NULLS LAST,b@1 ASC NULLS LAST,d@2 ASC NULLS LAST], common_prefix_length=[2]
+----StreamingTableExec: partition_sizes=1, projection=[a, b, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+
+# as can be seen in the result below d is indeed ordered.
+query II?
+SELECT a, b, ARRAY_AGG(d ORDER BY d)
+FROM annotated_data_infinite2
+GROUP BY a, b;
+----
+0 0 [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4]
+0 1 [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4]
+1 2 [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4]
+1 3 [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4]
+
+query III
+SELECT a, b, d
+FROM annotated_data_infinite2
+ORDER BY a, b, d;
+----
+0 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 2
+0 0 2
+0 0 2
+0 0 2
+0 0 2
+0 0 2
+0 0 3
+0 0 3
+0 0 3
+0 0 4
+0 0 4
+0 0 4
+0 0 4
+0 1 0
+0 1 0
+0 1 0
+0 1 0
+0 1 0
+0 1 0
+0 1 1
+0 1 1
+0 1 1
+0 1 1
+0 1 1
+0 1 1
+0 1 1
+0 1 2
+0 1 2
+0 1 2
+0 1 2
+0 1 3
+0 1 3
+0 1 3
+0 1 3
+0 1 3
+0 1 4
+0 1 4
+0 1 4
+1 2 0
+1 2 0
+1 2 0
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 2
+1 2 2
+1 2 2
+1 2 2
+1 2 3
+1 2 3
+1 2 4
+1 2 4
+1 2 4
+1 2 4
+1 2 4
+1 2 4
+1 3 0
+1 3 0
+1 3 0
+1 3 0
+1 3 0
+1 3 1
+1 3 1
+1 3 1
+1 3 1
+1 3 1
+1 3 2
+1 3 2
+1 3 2
+1 3 2
+1 3 2
+1 3 2
+1 3 2
+1 3 3
+1 3 3
+1 3 4
+1 3 4
+1 3 4
+1 3 4
+1 3 4
+1 3 4
+
 statement ok
 drop table annotated_data_infinite2;
 
