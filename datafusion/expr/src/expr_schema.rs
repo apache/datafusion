@@ -136,7 +136,7 @@ impl ExprSchemable for Expr {
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
-                        fun.return_type_from_exprs(args, schema)
+                        Ok(fun.return_type_from_exprs(args, schema)?)
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")
