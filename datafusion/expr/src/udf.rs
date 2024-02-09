@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -159,7 +159,7 @@ impl ScalarUDF {
     pub fn return_type_from_exprs(
         &self,
         args: &[Expr],
-        schema: &DFSchema,
+        schema: &dyn ExprSchema,
     ) -> Result<DataType> {
         self.inner.return_type_from_exprs(args, schema)
     }
@@ -266,7 +266,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn return_type_from_exprs(
         &self,
         arg_exprs: &[Expr],
-        schema: &DFSchema,
+        schema: &dyn ExprSchema,
     ) -> Result<DataType> {
         // provide default implementation that calls `self.return_type()`
         // so that people don't have to implement `return_type_from_exprs` if they dont want to

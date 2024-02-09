@@ -23,7 +23,7 @@ use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{
-    internal_err, DFSchema, DataFusionError, ScalarValue, ToDFSchema,
+    internal_err, DataFusionError, ExprSchema, ScalarValue, ToDFSchema
 };
 use datafusion_expr::{
     expr::ScalarFunction, ColumnarValue, ExprSchemable, ScalarUDF, ScalarUDFImpl,
@@ -63,7 +63,7 @@ impl ScalarUDFImpl for UDFWithExprReturn {
     fn return_type_from_exprs(
         &self,
         arg_exprs: &[Expr],
-        schema: &DFSchema,
+        schema: &dyn ExprSchema,
     ) -> Result<DataType> {
         if arg_exprs.len() != 3 {
             return internal_err!("The size of the args must be 3.");
