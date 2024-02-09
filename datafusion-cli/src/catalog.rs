@@ -24,9 +24,12 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use object_store::http::HttpBuilder;
+use object_store::ObjectStore;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::sync::{Arc, Weak};
+use url::Url;
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -151,10 +154,35 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
         let state = self.state.upgrade()?.read().clone();
-        let config = ListingTableConfig::new(ListingTableUrl::parse(name).ok()?)
+        let table_url = ListingTableUrl::parse(name).ok()?;
+
+        // Assure the `http` store for this url is registered if this
+        // is an `http(s)` listing
+        // TODO: support for other types, e.g. `s3`, may need to be added
+        match table_url.scheme() {
+            "http" | "https" => {
+                let url: &Url = table_url.as_ref();
+                match state.runtime_env().object_store_registry.get_store(url) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let store = Arc::new(
+                            HttpBuilder::new()
+                                .with_url(url.origin().ascii_serialization())
+                                .build()
+                                .ok()?,
+                        ) as Arc<dyn ObjectStore>;
+                        state.runtime_env().register_object_store(url, store);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let config = ListingTableConfig::new(table_url)
             .infer(&state)
             .await
             .ok()?;
+
         Some(Arc::new(ListingTable::try_new(config).ok()?))
     }
 
@@ -164,5 +192,52 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::prelude::SessionContext;
+
+    #[tokio::test]
+    async fn query_http_location_test() -> Result<()> {
+        // Perhaps this could be changed to use an existing file but
+        // that will require a permanently availalble web resource
+        let domain = "example.com";
+        let location = format!("http://{domain}/file.parquet");
+
+        let mut ctx = SessionContext::new();
+        ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+            ctx.state().catalog_list(),
+            ctx.state_weak_ref(),
+        )));
+
+        let provider =
+            &DynamicFileCatalog::new(ctx.state().catalog_list(), ctx.state_weak_ref())
+                as &dyn CatalogProviderList;
+        let catalog = provider
+            .catalog(provider.catalog_names().first().unwrap())
+            .unwrap();
+        let schema = catalog
+            .schema(catalog.schema_names().first().unwrap())
+            .unwrap();
+        let none = schema.table(&location).await;
+
+        // That's a non-existing location so expecting None here
+        assert!(none.is_none());
+
+        // It should still create an object store for the location
+        let store = ctx
+            .runtime_env()
+            .object_store(ListingTableUrl::parse(location)?)?;
+
+        assert_eq!(format!("{store}"), "HttpStore");
+
+        // The store must be configured for this domain
+        let expected_domain = format!("Domain(\"{domain}\")");
+        assert!(format!("{store:?}").contains(&expected_domain));
+
+        Ok(())
     }
 }
