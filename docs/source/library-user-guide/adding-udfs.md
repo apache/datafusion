@@ -99,7 +99,7 @@ let expr = add_one.call(vec![col("a")]);
 
 ### Adding a Scalar UDF by [`create_udf`]
 
-[`create_udf`] is easy to use, but it still requires Arc's of anonymous functions, and its function is limited.
+There is a an older, more concise, but also more limited API [`create_udf`] available as well
 
 #### Adding a Scalar UDF
 
