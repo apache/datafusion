@@ -135,10 +135,13 @@ pub trait TreeNode: Sized {
         FD: FnMut(Self) -> Result<Transformed<Self>>,
         FU: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        f_down(self)?.and_then_transform_on_continue(|n| {
-            n.map_children(|c| c.transform(f_down, f_up))?
-                .and_then_transform(f_up)
-        })
+        f_down(self)?.and_then_transform_on_continue(
+            |n| {
+                n.map_children(|c| c.transform(f_down, f_up))?
+                    .and_then_transform_on_continue(f_up, TreeNodeRecursion::Jump)
+            },
+            TreeNodeRecursion::Continue,
+        )
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
@@ -148,8 +151,10 @@ pub trait TreeNode: Sized {
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        f(self)?
-            .and_then_transform_on_continue(|n| n.map_children(|c| c.transform_down(f)))
+        f(self)?.and_then_transform_on_continue(
+            |n| n.map_children(|c| c.transform_down(f)),
+            TreeNodeRecursion::Continue,
+        )
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
@@ -159,9 +164,10 @@ pub trait TreeNode: Sized {
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        f(self)?.and_then_transform_on_continue(|n| {
-            n.map_children(|c| c.transform_down_mut(f))
-        })
+        f(self)?.and_then_transform_on_continue(
+            |n| n.map_children(|c| c.transform_down_mut(f)),
+            TreeNodeRecursion::Continue,
+        )
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
@@ -172,7 +178,7 @@ pub trait TreeNode: Sized {
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
         self.map_children(|c| c.transform_up(f))?
-            .and_then_transform(f)
+            .and_then_transform_on_continue(f, TreeNodeRecursion::Jump)
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
@@ -183,7 +189,7 @@ pub trait TreeNode: Sized {
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         self.map_children(|c| c.transform_up_mut(f))?
-            .and_then_transform(f)
+            .and_then_transform_on_continue(f, TreeNodeRecursion::Jump)
     }
 
     /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for
@@ -214,10 +220,16 @@ pub trait TreeNode: Sized {
         self,
         rewriter: &mut R,
     ) -> Result<Transformed<Self>> {
-        rewriter.f_down(self)?.and_then_transform_on_continue(|n| {
-            n.map_children(|c| c.rewrite(rewriter))?
-                .and_then_transform(|n| rewriter.f_up(n))
-        })
+        rewriter.f_down(self)?.and_then_transform_on_continue(
+            |n| {
+                n.map_children(|c| c.rewrite(rewriter))?
+                    .and_then_transform_on_continue(
+                        |n| rewriter.f_up(n),
+                        TreeNodeRecursion::Jump,
+                    )
+            },
+            TreeNodeRecursion::Continue,
+        )
     }
 
     /// Apply the closure `F` to the node's children
@@ -299,7 +311,7 @@ pub enum TreeNodeRecursion {
     /// In top-down traversals skip recursing into children but continue with the next
     /// node, which actually means pruning of the subtree.
     /// In bottom-up traversals bypass calling bottom-up closures till the next leaf node.
-    /// In combined traversals bypass calling bottom-up closures till the first top-down
+    /// In combined traversals bypass calling bottom-up closures till the next top-down
     /// closure.
     Jump,
 
@@ -360,14 +372,14 @@ impl<T> Transformed<T> {
     fn and_then<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
-        return_continue_on_jump: bool,
+        return_on_jump: Option<TreeNodeRecursion>,
     ) -> Result<Transformed<T>> {
         match self.tnr {
             TreeNodeRecursion::Continue => {}
             TreeNodeRecursion::Jump => {
-                if return_continue_on_jump {
+                if return_on_jump.is_some() {
                     return Ok(Transformed {
-                        tnr: TreeNodeRecursion::Continue,
+                        tnr: return_on_jump.unwrap(),
                         ..self
                     });
                 }
@@ -385,14 +397,15 @@ impl<T> Transformed<T> {
         self,
         f: F,
     ) -> Result<Transformed<T>> {
-        self.and_then(f, false)
+        self.and_then(f, None)
     }
 
     pub fn and_then_transform_on_continue<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
+        return_on_jump: TreeNodeRecursion,
     ) -> Result<Transformed<T>> {
-        self.and_then(f, true)
+        self.and_then(f, Some(return_on_jump))
     }
 }
 
@@ -541,5 +554,204 @@ impl<T: ConcreteTreeNode> TreeNode for T {
         } else {
             Ok(Transformed::no(new_self))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tree_node::{
+        Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    };
+    use crate::Result;
+
+    struct TestTreeNode<T> {
+        children: Vec<TestTreeNode<T>>,
+        data: T,
+    }
+
+    impl<T> TestTreeNode<T> {
+        fn new(children: Vec<TestTreeNode<T>>, data: T) -> Self {
+            Self { children, data }
+        }
+    }
+
+    impl<T> TreeNode for TestTreeNode<T> {
+        fn apply_children<F>(&self, op: &mut F) -> Result<TreeNodeRecursion>
+        where
+            F: FnMut(&Self) -> Result<TreeNodeRecursion>,
+        {
+            for child in &self.children {
+                handle_tree_recursion!(op(&child)?);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
+        where
+            F: FnMut(Self) -> Result<Transformed<Self>>,
+        {
+            Ok(self
+                .children
+                .into_iter()
+                .map_till_continue_and_collect(f)?
+                .map_data(|new_children| Self {
+                    children: new_children,
+                    ..self
+                }))
+        }
+    }
+
+    fn new_test_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
+        TestTreeNode::new(vec![node_i], "j".to_string())
+    }
+
+    #[test]
+    fn test_rewrite() -> Result<()> {
+        let tree = new_test_tree();
+
+        struct TestRewriter {
+            pub visits: Vec<String>,
+        }
+
+        impl TestRewriter {
+            fn new() -> Self {
+                Self { visits: vec![] }
+            }
+        }
+
+        impl TreeNodeRewriter for TestRewriter {
+            type Node = TestTreeNode<String>;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_down {}", node.data));
+                Ok(Transformed::no(node))
+            }
+
+            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_up {}", node.data));
+                Ok(Transformed::no(node))
+            }
+        }
+
+        let mut rewriter = TestRewriter::new();
+        tree.rewrite(&mut rewriter)?;
+        assert_eq!(
+            rewriter.visits,
+            vec![
+                "f_down j", "f_down i", "f_down f", "f_down e", "f_down c", "f_down b",
+                "f_up b", "f_down d", "f_down a", "f_up a", "f_up d", "f_up c", "f_up e",
+                "f_down g", "f_down h", "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_f_down_jump() -> Result<()> {
+        let tree = new_test_tree();
+
+        struct FDownJumpRewriter {
+            pub visits: Vec<String>,
+            jump_on: String,
+        }
+
+        impl FDownJumpRewriter {
+            fn new(jump_on: String) -> Self {
+                Self {
+                    visits: vec![],
+                    jump_on,
+                }
+            }
+        }
+
+        impl TreeNodeRewriter for FDownJumpRewriter {
+            type Node = TestTreeNode<String>;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_down {}", node.data));
+                Ok(if node.data == self.jump_on {
+                    Transformed::new(node, false, TreeNodeRecursion::Jump)
+                } else {
+                    Transformed::no(node)
+                })
+            }
+
+            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_up {}", node.data));
+                Ok(Transformed::no(node))
+            }
+        }
+
+        let mut rewriter = FDownJumpRewriter::new("e".to_string());
+        tree.rewrite(&mut rewriter)?;
+        assert_eq!(
+            rewriter.visits,
+            vec![
+                "f_down j", "f_down i", "f_down f", "f_down e", "f_down g", "f_down h",
+                "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_f_up_jump() -> Result<()> {
+        let tree = new_test_tree();
+
+        struct FUpJumpRewriter {
+            pub visits: Vec<String>,
+            jump_on: String,
+        }
+
+        impl FUpJumpRewriter {
+            fn new(jump_on: String) -> Self {
+                Self {
+                    visits: vec![],
+                    jump_on,
+                }
+            }
+        }
+
+        impl TreeNodeRewriter for FUpJumpRewriter {
+            type Node = TestTreeNode<String>;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_down {}", node.data));
+                Ok(Transformed::no(node))
+            }
+
+            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                self.visits.push(format!("f_up {}", node.data));
+                Ok(if node.data == self.jump_on {
+                    Transformed::new(node, false, TreeNodeRecursion::Jump)
+                } else {
+                    Transformed::no(node)
+                })
+            }
+        }
+
+        let mut rewriter = FUpJumpRewriter::new("a".to_string());
+        tree.rewrite(&mut rewriter)?;
+        assert_eq!(
+            rewriter.visits,
+            vec![
+                "f_down j", "f_down i", "f_down f", "f_down e", "f_down c", "f_down b",
+                "f_up b", "f_down d", "f_down a", "f_up a", "f_down g", "f_down h",
+                "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+            ]
+        );
+
+        Ok(())
     }
 }
