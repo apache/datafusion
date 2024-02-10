@@ -1495,14 +1495,12 @@ impl ScalarValue {
                     }
                 }
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(|e| arrow_datafusion_err!(e))?
+                arrow::compute::concat(arrays.as_slice())?
             }
             DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-                arrow::compute::concat(arrays.as_slice())
-                    .map_err(|e| arrow_datafusion_err!(e))?
+                arrow::compute::concat(arrays.as_slice())?
             }
             DataType::Dictionary(key_type, value_type) => {
                 // create the values array
