@@ -377,11 +377,8 @@ impl<T> Transformed<T> {
         match self.tnr {
             TreeNodeRecursion::Continue => {}
             TreeNodeRecursion::Jump => {
-                if return_on_jump.is_some() {
-                    return Ok(Transformed {
-                        tnr: return_on_jump.unwrap(),
-                        ..self
-                    });
+                if let Some(tnr) = return_on_jump {
+                    return Ok(Transformed { tnr, ..self });
                 }
             }
             TreeNodeRecursion::Stop => return Ok(self),
@@ -581,7 +578,7 @@ mod tests {
             F: FnMut(&Self) -> Result<TreeNodeRecursion>,
         {
             for child in &self.children {
-                handle_tree_recursion!(op(&child)?);
+                handle_tree_recursion!(op(child)?);
             }
             Ok(TreeNodeRecursion::Continue)
         }
