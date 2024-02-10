@@ -222,7 +222,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Skip),
+        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)

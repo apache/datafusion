@@ -663,7 +663,7 @@ where
                 exprs.push(expr.clone())
             }
             // stop recursing down this expr once we find a match
-            return Ok(TreeNodeRecursion::Skip);
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         Ok(TreeNodeRecursion::Continue)

@@ -66,7 +66,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if plan_hold_outer {
                     // the unsupported case
                     self.can_pull_up = false;
-                    Ok(Transformed::new(plan, false, TreeNodeRecursion::Skip))
+                    Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
                 } else {
                     Ok(Transformed::no(plan))
                 }
@@ -77,7 +77,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     (false, true) => {
                         // the unsupported case
                         self.can_pull_up = false;
-                        Ok(Transformed::new(plan, false, TreeNodeRecursion::Skip))
+                        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
                     }
                     _ => Ok(Transformed::no(plan)),
                 }
@@ -85,7 +85,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Skip))
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
             _ => Ok(Transformed::no(plan)),
         }

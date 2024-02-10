@@ -667,7 +667,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         if expr.short_circuits() || is_volatile_expression(expr)? {
-            return Ok(TreeNodeRecursion::Skip);
+            return Ok(TreeNodeRecursion::Jump);
         }
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
@@ -750,12 +750,12 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
         if expr.short_circuits() || is_volatile_expression(&expr)? {
-            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip));
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip));
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
@@ -774,7 +774,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                         return Ok(Transformed::new(
                             expr,
                             false,
-                            TreeNodeRecursion::Skip,
+                            TreeNodeRecursion::Jump,
                         ));
                     }
 
@@ -791,7 +791,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                         return Ok(Transformed::new(
                             expr,
                             false,
-                            TreeNodeRecursion::Skip,
+                            TreeNodeRecursion::Jump,
                         ));
                     }
 
@@ -810,7 +810,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     Ok(Transformed::new(
                         col(id).alias(expr_name),
                         true,
-                        TreeNodeRecursion::Skip,
+                        TreeNodeRecursion::Jump,
                     ))
                 } else {
                     self.curr_index += 1;

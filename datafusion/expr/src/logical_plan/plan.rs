@@ -652,12 +652,12 @@ impl LogicalPlan {
                         | Expr::ScalarSubquery(_)
                         | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
-                            Ok(Transformed::new(expr, false, TreeNodeRecursion::Skip))
+                            Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
                         }
                         Expr::Alias(_) => Ok(Transformed::new(
                             expr.unalias(),
                             true,
-                            TreeNodeRecursion::Skip,
+                            TreeNodeRecursion::Jump,
                         )),
                         _ => Ok(Transformed::no(expr)),
                     }

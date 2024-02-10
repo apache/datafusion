@@ -223,7 +223,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                         subqry_alias,
                     )?),
                     true,
-                    TreeNodeRecursion::Skip,
+                    TreeNodeRecursion::Jump,
                 ))
             }
             _ => Ok(Transformed::no(expr)),

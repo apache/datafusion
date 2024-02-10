@@ -57,7 +57,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
-                    Ok(TreeNodeRecursion::Skip)
+                    Ok(TreeNodeRecursion::Jump)
                 } else {
                     Ok(TreeNodeRecursion::Stop)
                 }
