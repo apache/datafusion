@@ -46,6 +46,7 @@ impl Default for GeneratorOptions {
     }
 }
 
+/// Creates access log like entries
 #[derive(Default)]
 struct BatchBuilder {
     service: StringDictionaryBuilder<Int32Type>,
