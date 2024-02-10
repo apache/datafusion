@@ -37,8 +37,11 @@ First, [install wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 Then use wasm-pack to compile the crate from within this directory
 
 ```
+export RUSTFLAGS="--cfg tokio_unstable"
 wasm-pack build
 ```
+
+**Note:** Due to limited support for WASM in `tokio`, setup `RUSTFLAGS` to ensure that all features enabled in the workspace can be compiled.
 
 ## Try it out
 
