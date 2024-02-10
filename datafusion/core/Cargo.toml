@@ -79,6 +79,7 @@ glob = "0.3.0"
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = { workspace = true }
+instant = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 num-traits = { version = "0.2", optional = true }

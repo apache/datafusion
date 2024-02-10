@@ -17,9 +17,9 @@
 
 //! Query optimizer traits
 
+use instant::Instant;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;

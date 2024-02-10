@@ -17,8 +17,10 @@
 
 //! Defines the ANALYZE operator
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, time::Instant};
+
+use instant::Instant;
 
 use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};

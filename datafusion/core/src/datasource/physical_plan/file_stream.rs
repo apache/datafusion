@@ -21,11 +21,11 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+use instant::Instant;
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{

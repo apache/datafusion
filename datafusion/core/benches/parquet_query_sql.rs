@@ -26,6 +26,7 @@ use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::stream::StreamExt;
+use instant::Instant;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distributions::uniform::SampleUniform;
@@ -36,7 +37,6 @@ use std::io::Read;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 use tempfile::NamedTempFile;
 
 /// The number of batches to write

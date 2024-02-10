@@ -24,8 +24,10 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use instant::Instant;
 
 use parking_lot::Mutex;
 

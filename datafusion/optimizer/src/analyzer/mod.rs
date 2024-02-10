@@ -34,9 +34,9 @@ use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
+use instant::Instant;
 use log::debug;
 use std::sync::Arc;
-use std::time::Instant;
 
 use self::rewrite_expr::OperatorToFunction;
 
