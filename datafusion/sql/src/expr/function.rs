@@ -16,10 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError,
-    Dependency, Result,
-};
+use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency, Result, schema_err};
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
@@ -153,11 +150,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let is_ordering_strict = order_by.iter().any(|orderby_expr| {
                 if let Expr::Sort(sort_expr) = orderby_expr {
                     if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).unwrap();
-                        return func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx]
-                                && dep.mode == Dependency::Single
-                        });
+                        let idx_result = schema.index_of_column(col);
+                        return match idx_result {
+                            Ok(index) => func_deps.iter().any(|dep| {
+                                dep.source_indices == vec![index]
+                                    && dep.mode == Dependency::Single
+                            }),
+                            Err(_) => {
+                                schema_err!("Column '{col}' not found in schema")
+                            }
+                        };
                     }
                 }
                 false
