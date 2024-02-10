@@ -211,6 +211,8 @@ jobs:
       - name: Build with wasm-pack
         working-directory: ./datafusion/wasmtest
         run: wasm-pack build --dev
+        env:
+          RUSTFLAGS: --cfg tokio_unstable
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
