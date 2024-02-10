@@ -358,9 +358,39 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#registering-a-scalar-udf">
-     Registering a Scalar UDF
+    <a class="reference internal nav-link" href="#adding-by-impl-scalarudfimpl">
+     Adding by
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       impl
+      </span>
+      <span class="pre">
+       ScalarUDFImpl
+      </span>
+     </code>
     </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#adding-a-scalar-udf-by-create-udf">
+     Adding a Scalar UDF by
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       create_udf
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Adding a Scalar UDF
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#registering-a-scalar-udf">
+       Registering a Scalar UDF
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
@@ -484,7 +514,81 @@
 <p>First we’ll talk about adding an Scalar UDF end-to-end, then we’ll talk about the differences between the different types of UDFs.</p>
 <section id="adding-a-scalar-udf">
 <h2>Adding a Scalar UDF<a class="headerlink" href="#adding-a-scalar-udf" title="Link to this heading">¶</a></h2>
-<p>A Scalar UDF is a function that takes a row of data and returns a single value. For example, this function takes a single i64 and returns a single i64 with 1 added to it:</p>
+<p>A Scalar UDF is a function that takes a row of data and returns a single value. In order for good performance
+such functions are “vectorized” in DataFusion, meaning they get one or more Arrow Arrays as input and produce
+an Arrow Array with the same number of rows as output.</p>
+<p>To create a Scalar UDF, you</p>
+<ol class="arabic simple">
+<li><p>Implement the <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results.</p></li>
+<li><p>Create a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> and register it with <code class="docutils literal notranslate"><span class="pre">SessionContext::register_udf</span></code> so it can be invoked by name.</p></li>
+</ol>
+<p>In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:</p>
+<p>For brevity, we’ll skipped some error handling, but e.g. you may want to check that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> is the expected number of arguments.</p>
+<section id="adding-by-impl-scalarudfimpl">
+<h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-scalarudfimpl" title="Link to this heading">¶</a></h3>
+<p>This a lower level API with more functionality but is more complex, also documented in <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">any</span>::<span class="n">Any</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">arrow</span>::<span class="n">datatypes</span>::<span class="n">DataType</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_common</span>::<span class="p">{</span><span class="n">DataFusionError</span><span class="p">,</span><span class="w"> </span><span class="n">plan_err</span><span class="p">,</span><span class="w"> </span><span class="nb">Result</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span>::<span class="p">{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">ColumnarValue</span><span class="p">,</span><span class="w"> </span><span class="n">Signature</span><span class="p">,</span><span class="w"> </span><span class="n">Volatility</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span>::<span class="p">{</span><span class="n">ScalarUDFImpl</span><span class="p">,</span><span class="w"> </span><span class="n">ScalarUDF</span><span class="p">};</span>
+
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span> <span class="nc">AddOne</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">signature</span>: <span class="nc">Signature</span>
+<span class="p">};</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">AddOne</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">new</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nc">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">Self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">signature</span>: <span class="nc">Signature</span>::<span class="n">uniform</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">],</span><span class="w"> </span><span class="n">Volatility</span>::<span class="n">Immutable</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="sd">/// Implement the ScalarUDFImpl trait for AddOne</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AddOne</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">as_any</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Any</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="kt">str</span> <span class="p">{</span><span class="w"> </span><span class="s">&quot;add_one&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">signature</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="nc">Signature</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">signature</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">return_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">args</span>: <span class="kp">&amp;</span><span class="p">[</span><span class="n">DataType</span><span class="p">])</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="fm">matches!</span><span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="o">&amp;</span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">plan_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;add_one only accepts Int32 arguments&quot;</span><span class="p">);</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// The actual implementation would add one to the argument</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">invoke</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">args</span>: <span class="kp">&amp;</span><span class="p">[</span><span class="n">ColumnarValue</span><span class="p">])</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">columnar_values_to_array</span><span class="p">(</span><span class="n">args</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">i64s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">as_int64_array</span><span class="p">(</span><span class="o">&amp;</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i64s</span>
+<span class="w">        </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">array_elem</span><span class="o">|</span><span class="w"> </span><span class="n">array_elem</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">value</span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">collect</span>::<span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">new_array</span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We now need to register the function with DataFusion so that it can be used in the context of a query.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Create a new ScalarUDF from the implementation</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">add_one</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ScalarUDF</span>::<span class="n">from</span><span class="p">(</span><span class="n">AddOne</span>::<span class="n">new</span><span class="p">());</span>
+
+<span class="c1">// register the UDF with the context so it can be invoked by name and from SQL</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span>::<span class="n">new</span><span class="p">();</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">register_udf</span><span class="p">(</span><span class="n">add_one</span><span class="p">.</span><span class="n">clone</span><span class="p">());</span>
+
+<span class="c1">// Call the function `add_one(col)`</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">add_one</span><span class="p">.</span><span class="n">call</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">)]);</span>
+</pre></div>
+</div>
+</section>
+<section id="adding-a-scalar-udf-by-create-udf">
+<h3>Adding a Scalar UDF by <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a><a class="headerlink" href="#adding-a-scalar-udf-by-create-udf" title="Link to this heading">¶</a></h3>
+<p>There is a an older, more concise, but also more limited API <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> available as well</p>
+<section id="id1">
+<h4>Adding a Scalar UDF<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
 
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">array</span>::<span class="p">{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Int64Array</span><span class="p">};</span>
@@ -506,7 +610,6 @@
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>For brevity, we’ll skipped some error handling, but e.g. you may want to check that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> is the expected number of arguments.</p>
 <p>This “works” in isolation, i.e. if you have a slice of <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>s, you can call <code class="docutils literal notranslate"><span class="pre">add_one</span></code> and it will return a new <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> with 1 added to each value.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">3</span><span class="p">)];</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">Int64Array</span>::<span class="n">from</span><span class="p">(</span><span class="n">input</span><span class="p">))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">ArrayRef</span><span class="p">;</span>
@@ -518,11 +621,11 @@
 </pre></div>
 </div>
 <p>The challenge however is that DataFusion doesn’t know about this function. We need to register it with DataFusion so that it can be used in the context of a query.</p>
+</section>
 <section id="registering-a-scalar-udf">
-<h3>Registering a Scalar UDF<a class="headerlink" href="#registering-a-scalar-udf" title="Link to this heading">¶</a></h3>
+<h4>Registering a Scalar UDF<a class="headerlink" href="#registering-a-scalar-udf" title="Link to this heading">¶</a></h4>
 <p>To register a Scalar UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code></a> struct and then register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.
-DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> and helper functions to make this easier.
-There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
+DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> and helper functions to make this easier.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">logical_expr</span>::<span class="p">{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">datatypes</span>::<span class="n">DataType</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span>::<span class="n">sync</span>::<span class="n">Arc</span><span class="p">;</span>
@@ -558,6 +661,7 @@ There is a lower level API with more functionality but is more complex, that is 
 <span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="o">&amp;</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
 </pre></div>
 </div>
+</section>
 </section>
 </section>
 <section id="adding-a-window-udf">
