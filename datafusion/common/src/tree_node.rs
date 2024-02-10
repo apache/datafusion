@@ -601,17 +601,17 @@ mod tests {
         }
     }
 
-    fn new_test_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
-        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
-        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
-        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
-        TestTreeNode::new(vec![node_i], "j".to_string())
+    fn new_test_tree<'a>() -> TestTreeNode<&'a str> {
+        let node_a = TestTreeNode::new(vec![], "a");
+        let node_b = TestTreeNode::new(vec![], "b");
+        let node_d = TestTreeNode::new(vec![node_a], "d");
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c");
+        let node_e = TestTreeNode::new(vec![node_c], "e");
+        let node_h = TestTreeNode::new(vec![], "h");
+        let node_g = TestTreeNode::new(vec![node_h], "g");
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f");
+        let node_i = TestTreeNode::new(vec![node_f], "i");
+        TestTreeNode::new(vec![node_i], "j")
     }
 
     #[test]
@@ -629,15 +629,15 @@ mod tests {
         }
 
         impl TreeNodeRewriter for TestRewriter {
-            type Node = TestTreeNode<String>;
+            type Node = TestTreeNode<&'static str>;
 
             fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down {}", node.data));
+                self.visits.push(format!("f_down({})", node.data));
                 Ok(Transformed::no(node))
             }
 
             fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up {}", node.data));
+                self.visits.push(format!("f_up({})", node.data));
                 Ok(Transformed::no(node))
             }
         }
@@ -647,9 +647,26 @@ mod tests {
         assert_eq!(
             rewriter.visits,
             vec![
-                "f_down j", "f_down i", "f_down f", "f_down e", "f_down c", "f_down b",
-                "f_up b", "f_down d", "f_down a", "f_up a", "f_up d", "f_up c", "f_up e",
-                "f_down g", "f_down h", "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+                "f_down(j)",
+                "f_down(i)",
+                "f_down(f)",
+                "f_down(e)",
+                "f_down(c)",
+                "f_down(b)",
+                "f_up(b)",
+                "f_down(d)",
+                "f_down(a)",
+                "f_up(a)",
+                "f_up(d)",
+                "f_up(c)",
+                "f_up(e)",
+                "f_down(g)",
+                "f_down(h)",
+                "f_up(h)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(i)",
+                "f_up(j)"
             ]
         );
 
@@ -675,10 +692,10 @@ mod tests {
         }
 
         impl TreeNodeRewriter for FDownJumpRewriter {
-            type Node = TestTreeNode<String>;
+            type Node = TestTreeNode<&'static str>;
 
             fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down {}", node.data));
+                self.visits.push(format!("f_down({})", node.data));
                 Ok(if node.data == self.jump_on {
                     Transformed::new(node, false, TreeNodeRecursion::Jump)
                 } else {
@@ -687,7 +704,7 @@ mod tests {
             }
 
             fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up {}", node.data));
+                self.visits.push(format!("f_up({})", node.data));
                 Ok(Transformed::no(node))
             }
         }
@@ -697,8 +714,17 @@ mod tests {
         assert_eq!(
             rewriter.visits,
             vec![
-                "f_down j", "f_down i", "f_down f", "f_down e", "f_down g", "f_down h",
-                "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+                "f_down(j)",
+                "f_down(i)",
+                "f_down(f)",
+                "f_down(e)",
+                "f_down(g)",
+                "f_down(h)",
+                "f_up(h)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(i)",
+                "f_up(j)"
             ]
         );
 
@@ -724,15 +750,15 @@ mod tests {
         }
 
         impl TreeNodeRewriter for FUpJumpRewriter {
-            type Node = TestTreeNode<String>;
+            type Node = TestTreeNode<&'static str>;
 
             fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down {}", node.data));
+                self.visits.push(format!("f_down({})", node.data));
                 Ok(Transformed::no(node))
             }
 
             fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up {}", node.data));
+                self.visits.push(format!("f_up({})", node.data));
                 Ok(if node.data == self.jump_on {
                     Transformed::new(node, false, TreeNodeRecursion::Jump)
                 } else {
@@ -746,9 +772,23 @@ mod tests {
         assert_eq!(
             rewriter.visits,
             vec![
-                "f_down j", "f_down i", "f_down f", "f_down e", "f_down c", "f_down b",
-                "f_up b", "f_down d", "f_down a", "f_up a", "f_down g", "f_down h",
-                "f_up h", "f_up g", "f_up f", "f_up i", "f_up j"
+                "f_down(j)",
+                "f_down(i)",
+                "f_down(f)",
+                "f_down(e)",
+                "f_down(c)",
+                "f_down(b)",
+                "f_up(b)",
+                "f_down(d)",
+                "f_down(a)",
+                "f_up(a)",
+                "f_down(g)",
+                "f_down(h)",
+                "f_up(h)",
+                "f_up(g)",
+                "f_up(f)",
+                "f_up(i)",
+                "f_up(j)"
             ]
         );
 
