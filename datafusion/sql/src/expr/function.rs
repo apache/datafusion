@@ -157,7 +157,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     && dep.mode == Dependency::Single
                             }),
                             Err(_) => {
-                                schema_err!("Column '{col}' not found in schema")
+                                schema_err!(format!("Column '{}' does not exist in schema", col))
                             }
                         };
                     }
