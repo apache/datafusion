@@ -90,7 +90,7 @@ pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt",  "sync"] }
+tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
@@ -116,7 +116,6 @@ rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
 test-utils = { path = "../../test-utils" }
 thiserror = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.27.1", features = ["fs"] }
