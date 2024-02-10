@@ -27,7 +27,6 @@ use std::iter::repeat;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
@@ -1639,18 +1638,16 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Result<Decimal128Array> {
-        match value {
+        Ok(match value {
             Some(val) => Decimal128Array::from(vec![val; size])
-                .with_precision_and_scale(precision, scale)
-                .map_err(|e| arrow_datafusion_err!(e)),
+                .with_precision_and_scale(precision, scale)?,
             None => {
                 let mut builder = Decimal128Array::builder(size)
-                    .with_precision_and_scale(precision, scale)
-                    .map_err(|e| arrow_datafusion_err!(e))?;
+                    .with_precision_and_scale(precision, scale)?;
                 builder.append_nulls(size);
-                Ok(builder.finish())
+                builder.finish()
             }
-        }
+        })
     }
 
     fn build_decimal256_array(
@@ -1659,11 +1656,10 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Result<Decimal256Array> {
-        std::iter::repeat(value)
+        Ok(std::iter::repeat(value)
             .take(size)
             .collect::<Decimal256Array>()
-            .with_precision_and_scale(precision, scale)
-            .map_err(|e| arrow_datafusion_err!(e))
+            .with_precision_and_scale(precision, scale)?)
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2053,7 +2049,7 @@ impl ScalarValue {
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
         let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
-        arrow::compute::concat(arrays.as_slice()).map_err(|e| arrow_datafusion_err!(e))
+        Ok(arrow::compute::concat(arrays.as_slice())?)
     }
 
     /// Retrieve ScalarValue for each row in `array`
