@@ -364,7 +364,9 @@ where
                     let null_index = self.offsets.len() - 1;
                     // nulls need a zero length in the offset buffer
                     let offset = self.buffer.len();
-                    self.offsets.push(O::from_usize(offset).unwrap());
+                    // safety: check for overflows at the end
+                    let offset = unsafe { O::from_usize_unchecked(offset)} ;
+                    self.offsets.push(offset);
                     self.null = Some((payload, null_index));
                     payload
                 };
@@ -400,7 +402,9 @@ where
                     // the output array, but store the actual bytes inline for
                     // comparison
                     self.buffer.append_slice(value);
-                    self.offsets.push(O::from_usize(self.buffer.len()).unwrap());
+                    // safety: check overflow at end
+                    let offset = unsafe { O::from_usize_unchecked(self.buffer.len()) };
+                    self.offsets.push(offset);
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
                         hash,
@@ -460,6 +464,8 @@ where
             };
             observe_payload_fn(payload);
         }
+        // check for overflow at the end
+        O::from_usize(self.buffer.len()).expect("buffer overflow, more than 2GB of string data");
     }
 
     /// Converts this set into a `StringArray`, `LargeStringArray`,
