@@ -1106,17 +1106,15 @@ impl DataFrame {
         ))
     }
 
-    /// Write this DataFrame to the referenced table by name.
+    /// Execute this `DataFrame` and write the results to `table_name`.
     ///
-    /// This method uses on the same underlying implementation
-    /// as the SQL Insert Into statement. Unlike most other DataFrame methods,
-    /// this method executes eagerly. Data is written to the table using an
-    /// execution plan returned by the [TableProvider]'s insert_into method.
-    /// Refer to the documentation of the specific [TableProvider] to determine
-    /// the expected data returned by the insert_into plan via this method.
-    /// For the built in ListingTable provider, a single [RecordBatch] containing
-    /// a single column and row representing the count of total rows written
-    /// is returned.
+    /// Returns a single [RecordBatch] containing a single column and
+    /// row representing the count of total rows written.
+    ///
+    /// Unlike most other `DataFrame` methods, this method executes eagerly.
+    /// Data is written to the table using the [`TableProvider::insert_into`]
+    /// method. This is the same underlying implementation used by SQL `INSERT
+    /// INTO` statements.
     pub async fn write_table(
         self,
         table_name: &str,

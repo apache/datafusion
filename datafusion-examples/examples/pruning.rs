@@ -48,7 +48,7 @@ async fn main() {
     //  File 1: x has values between `4` and `6`
     //          y has the value 10
     //
-    //  File 1: x has values between `4` and `6`
+    //  File 2: x has values between `4` and `6`
     //          y has the value of `7`
     //
     //  File 3: x has the value 1
@@ -81,8 +81,8 @@ async fn main() {
             false,
             // File 3: `x = 5 AND y = 10` can never evaluate to true because x
             // has the value `1`, and for any value of `y` the expression will
-            // evaluate to false or null (not true). Thus this file can also be
-            // skipped.
+            // evaluate to false (`x = 5 AND y = 10 -->` false AND null` -->
+            // `false`). Thus this file can also be skipped.
             false
         ]
     );
