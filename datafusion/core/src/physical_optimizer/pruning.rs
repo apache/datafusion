@@ -204,13 +204,13 @@ pub trait PruningStatistics {
 /// uncertainty propagates through expressions. SQL `NULL` behaves very
 /// differently than the `NULL` in most other languages where it is a special,
 /// sentinel value (e.g. `0` in `C/C++`). While representing uncertainty with
-/// `NULL` is powerful and elegant, SQL `NULL` s are often deeply confusing when
+/// `NULL` is powerful and elegant, SQL `NULL`s are often deeply confusing when
 /// first encountered as they behave differently than most programmers may
 /// expect.
 ///
 /// In most other programming languages,
 /// * `a == NULL` evaluates to `true` if `a` also had the value `NULL`
-/// * `a == NULL` evaluates to `false` if a has any other value
+/// * `a == NULL` evaluates to `false` if `a` has any other value
 ///
 /// However, in SQL `a = NULL` **always** evaluates to `NULL` (never `true` or `false`):
 ///
