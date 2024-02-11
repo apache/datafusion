@@ -164,7 +164,7 @@ where
 ///
 /// [`SessionContext`] provides the following functionality:
 ///
-/// * Create a DataFrame from a CSV or Parquet data source.
+/// * Create a [`DataFrame`] from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
@@ -172,7 +172,7 @@ where
 /// # Example: DataFrame API
 ///
 /// The following example demonstrates how to use the context to execute a query against a CSV
-/// data source using the DataFrame API:
+/// data source using the [`DataFrame`] API:
 ///
 /// ```
 /// use datafusion::prelude::*;

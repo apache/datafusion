@@ -61,12 +61,12 @@ use datafusion_expr::{
     instr, isnan, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
-    radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
-    round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
-    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetFieldAccess, GetIndexedField, GroupingSet,
+    radians, random, regexp_like, regexp_match, regexp_replace, repeat, replace, reverse,
+    right, round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh,
+    split_part, sqrt, starts_with, string_to_array, strpos, struct_fun, substr,
+    substr_index, substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -536,6 +536,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
+            ScalarFunction::RegexpLike => Self::RegexpLike,
+            ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
@@ -559,7 +561,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
-            ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
@@ -1632,13 +1633,19 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::RegexpReplace => Ok(regexp_replace(
+                ScalarFunction::RegexpLike => Ok(regexp_like(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::RegexpMatch => Ok(regexp_match(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::RegexpReplace => Ok(regexp_replace(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))

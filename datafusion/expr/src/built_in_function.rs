@@ -239,6 +239,10 @@ pub enum BuiltinScalarFunction {
     OctetLength,
     /// random
     Random,
+    /// regexp_like
+    RegexpLike,
+    /// regexp_match
+    RegexpMatch,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -301,8 +305,6 @@ pub enum BuiltinScalarFunction {
     Upper,
     /// uuid
     Uuid,
-    /// regexp_match
-    RegexpMatch,
     /// arrow_typeof
     ArrowTypeof,
     /// overlay
@@ -457,6 +459,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpLike => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -484,7 +488,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
@@ -712,7 +715,7 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
             BuiltinScalarFunction::InStr => {
-                utf8_to_int_type(&input_expr_types[0], "instr")
+                utf8_to_int_type(&input_expr_types[0], "instr/position")
             }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
             BuiltinScalarFunction::Lower => {
@@ -815,13 +818,22 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => {
                 utf8_to_str_type(&input_expr_types[0], "upper")
             }
-            BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
+            BuiltinScalarFunction::RegexpLike => Ok(match &input_expr_types[0] {
+                LargeUtf8 | Utf8 => Boolean,
+                Null => Null,
+                other => {
+                    return plan_err!(
+                        "The regexp_like function can only accept strings. Got {other}"
+                    );
+                }
+            }),
+            BuiltinScalarFunction::RegexpMatch => Ok(match &input_expr_types[0] {
                 LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
-                _ => {
+                other => {
                     return plan_err!(
-                        "The regexp_extract function can only accept strings."
+                        "The regexp_match function can only accept strings. Got {other}"
                     );
                 }
             }),
@@ -1223,6 +1235,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
+            BuiltinScalarFunction::RegexpLike => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::RegexpReplace => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Utf8]),
@@ -1234,15 +1264,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::NullIf => {
                 Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), self.volatility())
             }
-            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
@@ -1484,6 +1505,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // regex functions
+            BuiltinScalarFunction::RegexpLike => &["regexp_like"],
             BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
             BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
@@ -1609,42 +1631,38 @@ impl FromStr for BuiltinScalarFunction {
     }
 }
 
-/// Creates a function that returns the return type of a string function given
+/// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
 ///
 /// If the input type is `LargeUtf8` or `LargeBinary` the return type is
 /// `$largeUtf8Type`,
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
-macro_rules! make_utf8_to_return_type {
+macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
             Ok(match arg_type {
-                DataType::LargeUtf8  => $largeUtf8Type,
                 // LargeBinary inputs are automatically coerced to Utf8
-                DataType::LargeBinary => $largeUtf8Type,
-                DataType::Utf8  => $utf8Type,
+                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                 // Binary inputs are automatically coerced to Utf8
-                DataType::Binary => $utf8Type,
+                DataType::Utf8 | DataType::Binary => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8  => $largeUtf8Type,
-                    DataType::LargeBinary => $largeUtf8Type,
-                    DataType::Utf8 => $utf8Type,
-                    DataType::Binary => $utf8Type,
+                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                    DataType::Utf8 | DataType::Binary => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return plan_err!(
-                            "The {:?} function can only accept strings, but got {:?}.",
-                            name,
+                            "The {} function can only accept strings, but got {:?}.",
+                            name.to_uppercase(),
                             **value_type
                         );
                     }
                 },
                 data_type => {
                     return plan_err!(
-                        "The {:?} function can only accept strings, but got {:?}.",
-                        name,
+                        "The {} function can only accept strings, but got {:?}.",
+                        name.to_uppercase(),
                         data_type
                     );
                 }
@@ -1652,11 +1670,12 @@ macro_rules! make_utf8_to_return_type {
         }
     };
 }
+
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
-make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
-make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
+get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
     Ok(match arg_type {

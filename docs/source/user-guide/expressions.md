@@ -152,7 +152,7 @@ but these operators always return a `bool` which makes them not work with the ex
 Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
 
 ```sql
-❯ select log(-1), log(0), sqrt(-1);
+select log(-1), log(0), sqrt(-1);
 +----------------+---------------+-----------------+
 | log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
 +----------------+---------------+-----------------+

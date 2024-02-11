@@ -677,6 +677,7 @@ enum ScalarFunction {
   InStr = 132;
   MakeDate = 133;
   ArrayReverse = 134;
+  RegexpLike = 135;
 }
 
 message ScalarFunctionNode {

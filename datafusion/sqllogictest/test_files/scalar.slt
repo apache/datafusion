@@ -1957,3 +1957,42 @@ query T
 SELECT CASE 3 WHEN 1+2 THEN 'first' WHEN 1+1+1 THEN 'second' END
 ----
 first
+
+# position test
+query I
+select position('world' in 'hello world');
+----
+7
+
+# test in expression
+query I
+select 1000 where position('world' in 'hello world') != 100;
+----
+1000
+
+# test in expression
+query I
+select 100000 where position('legend' in 'league of legend') != 11;
+----
+
+# test in expression
+query I
+select 100000 where position('legend' in 'league of legend') = 11;
+----
+100000
+
+# test null
+query ?
+select position(null in null)
+----
+NULL
+
+
+query I
+select position('' in '')
+----
+1
+
+
+query error DataFusion error: Error during planning: The INSTR/POSITION function can only accept strings, but got Int64.
+select position(1 in 1)
