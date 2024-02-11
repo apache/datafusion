@@ -365,9 +365,9 @@ pub trait PruningStatistics {
 /// # Related Work
 ///
 /// [`PruningPredicate`] implements the type of min/max pruning described in
-/// Section `3.3.3` of the [`Snowflake SIGMOD Paper`]. It is described by
-/// various research such as [small materialized aggregates], [zone maps], and
-/// [data skipping].
+/// Section `3.3.3` of the [`Snowflake SIGMOD Paper`]. The technique is
+/// described by various research such as [small materialized aggregates], [zone
+/// maps], and [data skipping].
 ///
 /// [`Snowflake SIGMOD Paper`]: https://dl.acm.org/doi/10.1145/2882903.2903741
 /// [small materialized aggregates]: https://www.vldb.org/conf/1998/p476.pdf
