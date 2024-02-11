@@ -38,7 +38,7 @@ pub fn create_physical_expr(
         fun.name(),
         fun.fun(),
         input_phy_exprs.to_vec(),
-        fun.return_type_from_exprs(&input_exprs_types, input_schema)?,
+        fun.return_type_from_exprs(&input_phy_exprs, input_schema)?,
         fun.monotonicity()?,
         fun.signature().type_signature.supports_zero_argument(),
     )))
