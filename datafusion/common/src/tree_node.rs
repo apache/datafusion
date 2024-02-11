@@ -234,8 +234,7 @@ pub trait TreeNode: Sized {
     where
         F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        handle_transform_recursion_down!(f(self), |n| n
-            .map_children(|c| c.transform_down(f)))
+        handle_transform_recursion_down!(f(self), |c| c.transform_down(f))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'f' to the node and all of its
@@ -245,8 +244,7 @@ pub trait TreeNode: Sized {
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        handle_transform_recursion_down!(f(self), |n| n
-            .map_children(|c| c.transform_down_mut(f)))
+        handle_transform_recursion_down!(f(self), |c| c.transform_down_mut(f))
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given 'f' first to all of its
