@@ -30,6 +30,7 @@ use arrow_buffer::{
 use arrow_schema::DataType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use std::any::type_name;
 use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
@@ -364,7 +365,7 @@ where
                     let null_index = self.offsets.len() - 1;
                     // nulls need a zero length in the offset buffer
                     let offset = self.buffer.len();
-                    self.offsets.push(O::from_usize(offset).unwrap());
+                    self.offsets.push(O::usize_as(offset));
                     self.null = Some((payload, null_index));
                     payload
                 };
@@ -374,7 +375,7 @@ where
 
             // get the value as bytes
             let value: &[u8] = value.as_ref();
-            let value_len = O::from_usize(value.len()).unwrap();
+            let value_len = O::usize_as(value.len());
 
             // value is "small"
             let payload = if value.len() <= SHORT_VALUE_LEN {
@@ -400,7 +401,7 @@ where
                     // the output array, but store the actual bytes inline for
                     // comparison
                     self.buffer.append_slice(value);
-                    self.offsets.push(O::from_usize(self.buffer.len()).unwrap());
+                    self.offsets.push(O::usize_as(self.buffer.len()));
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
                         hash,
@@ -441,7 +442,7 @@ where
                     // so the bytes can be compared if needed
                     let offset = self.buffer.len(); // offset of start fof data
                     self.buffer.append_slice(value);
-                    self.offsets.push(O::from_usize(self.buffer.len()).unwrap());
+                    self.offsets.push(O::usize_as(self.buffer.len()));
 
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
@@ -459,6 +460,14 @@ where
                 }
             };
             observe_payload_fn(payload);
+        }
+        // Check for overflow in offsets (if more data was sent than can be represented)
+        if O::from_usize(self.buffer.len()).is_none() {
+            panic!(
+                "Put {} bytes in buffer, more than can be represented by a {}",
+                self.buffer.len(),
+                type_name::<O>()
+            );
         }
     }
 
@@ -587,7 +596,7 @@ where
     /// returns self.offset..self.offset + self.len
     #[inline(always)]
     fn range(&self) -> Range<usize> {
-        self.offset_or_inline..self.offset_or_inline + self.len.to_usize().unwrap()
+        self.offset_or_inline..self.offset_or_inline + self.len.as_usize()
     }
 }
 
@@ -788,6 +797,21 @@ mod tests {
 
         let mut set = ArrowBytesSet::<i32>::new(OutputType::Binary);
         set.insert(&values);
+    }
+
+    // put more than 2GB in a string set and expect it to panic
+    #[test]
+    #[should_panic(
+        expected = "Put 2147483648 bytes in buffer, more than can be represented by a i32"
+    )]
+    fn test_string_overflow() {
+        let mut set = ArrowBytesSet::<i32>::new(OutputType::Utf8);
+        for value in ["a", "b", "c"] {
+            // 1GB strings, so 3rd is over 2GB and should panic
+            let arr: ArrayRef =
+                Arc::new(StringArray::from_iter_values([value.repeat(1 << 30)]));
+            set.insert(&arr);
+        }
     }
 
     // inserting strings into the set does not increase reported memory
