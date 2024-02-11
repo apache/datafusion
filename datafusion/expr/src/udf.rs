@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{DFSchema, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -157,10 +157,10 @@ impl ScalarUDF {
     /// This function is used when the input arguments are [`Expr`]s.
     /// 
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
-    pub fn return_type_from_exprs<S: ExprSchema>(
+    pub fn return_type_from_exprs(
         &self,
         args: &[Expr],
-        schema: &S,
+        schema: &DFSchema,
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
         if let Some(return_type) = self.inner.return_type_from_exprs(args, schema) {
@@ -277,7 +277,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn return_type_from_exprs(
         &self,
         arg_exprs: &[Expr],
-        schema: &dyn ExprSchema,
+        schema: &DFSchema,
     ) -> Option<Result<DataType>> {
         // The default implementation returns None
         // so that people don't have to implement `return_type_from_exprs` if they dont want to

@@ -26,7 +26,7 @@ use datafusion::{
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{ExprSchema, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, DFSchema, ExprSchema, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ExprSchemable, ScalarFunctionImplementation, ScalarUDF, ScalarUDFImpl, Signature
 };
@@ -82,8 +82,8 @@ impl ScalarUDFImpl for UDFWithExprReturn {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Boolean)
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float32)
     }
     // An example of how to use the exprs to determine the return type
     // If the third argument is '0', return the type of the first argument
@@ -91,10 +91,10 @@ impl ScalarUDFImpl for UDFWithExprReturn {
     fn return_type_from_exprs(
         &self,
         arg_exprs: &[Expr],
-        schema: &dyn ExprSchema,
+        schema: &DFSchema,
     ) -> Option<Result<DataType>> {
         if arg_exprs.len() != 3 {
-            return internal_err!("The size of the args must be 3.");
+            return Some(internal_err!("The size of the args must be 3."));
         }
         let take_idx = match arg_exprs.get(2).unwrap() {
             Expr::Literal(ScalarValue::Int64(Some(idx))) if (idx == &0 || idx == &1) => {
@@ -105,8 +105,15 @@ impl ScalarUDFImpl for UDFWithExprReturn {
         Some(arg_exprs.get(take_idx).unwrap().get_type(schema))
     }
     // The actual implementation would add one to the argument
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))))
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let take_idx = match &args[2] {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+            _ => unreachable!(),
+        };
+        match &args[take_idx] {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
+            ColumnarValue::Scalar(_) => unimplemented!(),
+        }
     }
 }
 
@@ -125,18 +132,16 @@ async fn main() -> Result<()> {
     let df = ctx.table("t").await?;
     let take = df.registry().udf("my_cast")?;
     let expr0 = take
-        .call(vec![col("a"), lit("i32")])
-        .alias("take0");
+        .call(vec![col("a"), col("b"), lit(0_i64)]);
     let expr1 = take
-        .call(vec![col("a"), lit("i64")])
-        .alias("take1");
+        .call(vec![col("a"), col("b"), lit(1_i64)]);
 
     let df = df.select(vec![expr0, expr1])?;
     let schema = df.schema();
 
     // Check output schema
-    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
-    assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+    assert_eq!(schema.field(0).data_type(), &DataType::Float32);
+    assert_eq!(schema.field(1).data_type(), &DataType::Float64);
 
     df.show().await?;
     

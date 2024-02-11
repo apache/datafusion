@@ -35,24 +35,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
-pub trait ExprSchemable {
+pub trait ExprSchemable<S: ExprSchema> {
     /// given a schema, return the type of the expr
-    fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType>;
+    fn get_type(&self, schema: &S) -> Result<DataType>;
 
     /// given a schema, return the nullability of the expr
-    fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool>;
+    fn nullable(&self, input_schema: &S) -> Result<bool>;
 
     /// given a schema, return the expr's optional metadata
-    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>>;
+    fn metadata(&self, schema: &S) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField>;
 
     /// cast to a type with respect to a schema
-    fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
+    fn cast_to(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
 }
 
-impl ExprSchemable for Expr {
+impl ExprSchemable<DFSchema> for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
     ///
@@ -90,7 +90,7 @@ impl ExprSchemable for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
-    fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
+    fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
@@ -136,7 +136,8 @@ impl ExprSchemable for Expr {
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
-                        Ok(fun.return_type_from_exprs(&args, schema)?)
+                        let t = fun.return_type_from_exprs(&args, schema)?;
+                        Ok(t)
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")
@@ -220,7 +221,7 @@ impl ExprSchemable for Expr {
     /// This function errors when it is not possible to compute its
     /// nullability.  This happens when the expression refers to a
     /// column that does not exist in the schema.
-    fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
+    fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
         match self {
             Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
@@ -327,9 +328,9 @@ impl ExprSchemable for Expr {
         }
     }
 
-    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>> {
+    fn metadata(&self, schema: &DFSchema) -> Result<HashMap<String, String>> {
         match self {
-            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
+            Expr::Column(c) => Ok(schema.metadata().clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
@@ -370,7 +371,7 @@ impl ExprSchemable for Expr {
     ///
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
-    fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr> {
+    fn cast_to(self, cast_to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             return Ok(self);
@@ -394,10 +395,10 @@ impl ExprSchemable for Expr {
 }
 
 /// return the schema [`Field`] for the type referenced by `get_indexed_field`
-fn field_for_index<S: ExprSchema>(
+fn field_for_index(
     expr: &Expr,
     field: &GetFieldAccess,
-    schema: &S,
+    schema: &DFSchema,
 ) -> Result<Field> {
     let expr_dt = expr.get_type(schema)?;
     match field {
