@@ -243,13 +243,17 @@ pub trait PruningStatistics {
 /// predicate for each row in the input tables and:
 ///
 /// * Rows that evaluate to `true` are returned in the query results
+///
 /// * Rows that evaluate to `false` are not returned (“filtered out” or “pruned” or “skipped”).
-/// * Rows that evaluate to `NULL` are **NOT** returned (also “filtered out”) – *this property appears many times in the discussion below*
+///
+/// * Rows that evaluate to `NULL` are **NOT** returned (also “filtered out”).
+///   Note: *this treatment of `NULL` is **DIFFERENT** than how `NULL` is treated
+///   in the rewritten predicate described below.*
 ///
 /// # `PruningPredicate` Implementation
 ///
 /// Armed with the information in the Background section, we can now understand
-/// how the `PruningPredicate` logic works today
+/// how the `PruningPredicate` logic works.
 ///
 /// ## Interface
 ///
@@ -292,7 +296,9 @@ pub trait PruningStatistics {
 ///
 /// * `NULL`: there MAY be rows that pass the predicate, **KEEPS** the container
 ///           Note that rewritten predicate can evaluate to NULL when some of
-///           the min/max values are not known.
+///           the min/max values are not known. *Note that this is different than
+///           the SQL filter semantics where `NULL` means the row is filtered
+///           out.*
 ///
 /// * `false`: there are no rows that could possibly match the predicate,
 ///            **PRUNES** the container
@@ -302,8 +308,8 @@ pub trait PruningStatistics {
 /// provided by the `PruningStatistics`. Here are some examples of the rewritten
 /// predicates:
 ///
-/// | Original Predicate |  Rewritten Predicate |
-/// | ------------------ | -------------------- |
+/// | Original Predicate | Rewritten Predicate |
+/// | ------------------ | --------------------|
 /// | `x = 5` | `x_min <= 5 AND 5 <= x_max` |
 /// | `x < 5` | `x_max < 5` |
 /// | `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max` |
