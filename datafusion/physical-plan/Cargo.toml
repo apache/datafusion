@@ -63,3 +63,8 @@ uuid = { version = "^1.2", features = ["v4"] }
 rstest = { workspace = true }
 rstest_reuse = "0.6.0"
 termtree = "0.4.1"
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "fs",
+    "parking_lot",
+] }
