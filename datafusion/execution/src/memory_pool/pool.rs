@@ -17,10 +17,10 @@
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_common::{DataFusionError, Result};
+use hashbrown::HashMap;
 use log::debug;
 use parking_lot::Mutex;
 use std::{
-    collections::HashMap,
     fmt::Display,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -84,7 +84,7 @@ impl MemoryPool for GreedyMemoryPool {
         let mut state = self.state.lock();
         let used = state
             .pool_members
-            .entry(reservation.consumer().name().into())
+            .entry_ref(reservation.consumer().name())
             .or_insert(0);
         *used = used.saturating_add(additional);
     }
@@ -93,7 +93,7 @@ impl MemoryPool for GreedyMemoryPool {
         let mut state = self.state.lock();
         let used = state
             .pool_members
-            .entry(reservation.consumer().name().into())
+            .entry_ref(reservation.consumer().name())
             .or_insert(0);
         *used = used.saturating_sub(shrink);
     }
@@ -114,7 +114,7 @@ impl MemoryPool for GreedyMemoryPool {
         }
         let entry = state
             .pool_members
-            .entry(reservation.consumer().name().into())
+            .entry_ref(reservation.consumer().name())
             .or_insert(0);
         *entry = entry.saturating_add(additional);
         Ok(())
@@ -233,8 +233,8 @@ impl MemoryPool for FairSpillPool {
         let mut state = self.state.lock();
         let member_state = state
             .pool_members
-            .entry(reservation.consumer().name().into())
-            .or_insert(FairSpillPoolMember {
+            .entry_ref(reservation.consumer().name())
+            .or_insert_with(|| FairSpillPoolMember {
                 used: 0,
                 can_spill: reservation.registration.consumer.can_spill,
             });
@@ -246,8 +246,8 @@ impl MemoryPool for FairSpillPool {
         let mut state = self.state.lock();
         let member_state = state
             .pool_members
-            .entry(reservation.consumer().name().into())
-            .or_insert(FairSpillPoolMember {
+            .entry_ref(reservation.consumer().name())
+            .or_insert_with(|| FairSpillPoolMember {
                 used: 0,
                 can_spill: reservation.registration.consumer.can_spill,
             });
@@ -291,8 +291,8 @@ impl MemoryPool for FairSpillPool {
 
                 let entry = state
                     .pool_members
-                    .entry(reservation.consumer().name().into())
-                    .or_insert(FairSpillPoolMember {
+                    .entry_ref(reservation.consumer().name())
+                    .or_insert_with(|| FairSpillPoolMember {
                         used: 0,
                         can_spill: reservation.registration.consumer.can_spill,
                     });
@@ -316,8 +316,8 @@ impl MemoryPool for FairSpillPool {
 
                 let entry = state
                     .pool_members
-                    .entry(reservation.consumer().name().into())
-                    .or_insert(FairSpillPoolMember {
+                    .entry_ref(reservation.consumer().name())
+                    .or_insert_with(|| FairSpillPoolMember {
                         used: 0,
                         can_spill: reservation.registration.consumer.can_spill,
                     });
