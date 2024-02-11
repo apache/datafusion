@@ -49,9 +49,9 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(
+    fn f_down(
         &mut self,
         plan: &LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
@@ -72,7 +72,7 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(
+    fn f_up(
         &mut self,
         _plan: &LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
@@ -171,9 +171,9 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(
+    fn f_down(
         &mut self,
         plan: &LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
@@ -207,7 +207,7 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(
+    fn f_up(
         &mut self,
         _plan: &LogicalPlan,
     ) -> datafusion_common::Result<TreeNodeRecursion> {

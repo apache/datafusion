@@ -1148,7 +1148,7 @@ impl LogicalPlan {
     /// applies visitor to any subqueries in the plan
     pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> Result<()>
     where
-        V: TreeNodeVisitor<N = LogicalPlan>,
+        V: TreeNodeVisitor<Node = LogicalPlan>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
@@ -2834,9 +2834,9 @@ digraph {
     }
 
     impl TreeNodeVisitor for OkVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -2850,7 +2850,7 @@ digraph {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2917,23 +2917,23 @@ digraph {
     }
 
     impl TreeNodeVisitor for StoppingVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
-            self.inner.pre_visit(plan)?;
+            self.inner.f_down(plan)?;
 
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_post_in.dec() {
                 return Ok(TreeNodeRecursion::Stop);
             }
 
-            self.inner.post_visit(plan)
+            self.inner.f_up(plan)
         }
     }
 
@@ -2986,22 +2986,22 @@ digraph {
     }
 
     impl TreeNodeVisitor for ErrorVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_pre_in.dec() {
                 return not_impl_err!("Error in pre_visit");
             }
 
-            self.inner.pre_visit(plan)
+            self.inner.f_down(plan)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_post_in.dec() {
                 return not_impl_err!("Error in post_visit");
             }
 
-            self.inner.post_visit(plan)
+            self.inner.f_up(plan)
         }
     }
 
