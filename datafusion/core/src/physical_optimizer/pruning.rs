@@ -212,29 +212,30 @@ pub trait PruningStatistics {
 /// * `a == NULL` evaluates to `true` if `a` also had the value `NULL`
 /// * `a == NULL` evaluates to `false` if `a` has any other value
 ///
-/// However, in SQL `a = NULL` **always** evaluates to `NULL` (never `true` or `false`):
+/// However, in SQL `a = NULL` **always** evaluates to `NULL` (never `true` or
+/// `false`):
 ///
-/// | Expression     | Result   |
-/// | ------------- | --------- |
-/// | `1 = NULL`    | `NULL`    |
-/// | `NULL = NULL` | `NULL`    |
+/// Expression    | Result
+/// ------------- | ---------
+/// `1 = NULL`    | `NULL`
+/// `NULL = NULL` | `NULL`
 ///
 /// Also important is how `AND` and `OR` works with tri-state boolean logic as
 /// (perhaps counterintuitively) the result is **not** always NULL. While
 /// consistent with the notion of `NULL` representing “unknown”, this is again,
 /// often deeply confusing 🤯 when first encountered.
 ///
-/// | Expression       | Result    | Intuition   |
-/// | ---------------  | --------- | ----------- |
-/// | `NULL AND true`  |   `NULL`  | The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change |
-/// | `NULL AND false` |  `false`  | If the `NULL` was either `true` or `false` the overall expression is still `false` |
-/// | `NULL AND NULL`  | `NULL`    |            |
+/// Expression       | Result    | Intuition
+/// ---------------  | --------- | -----------
+/// `NULL AND true`  |   `NULL`  | The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change
+/// `NULL AND false` |  `false`  | If the `NULL` was either `true` or `false` the overall expression is still `false`
+/// `NULL AND NULL`  | `NULL`    |
 ///
-/// | Expression      | Result    | Intuition |
-/// | --------------- | --------- | ---------- |
-/// | `NULL OR true`  | `true`    |  If the `NULL` was either `true` or `false` the overall expression is still `true` |
-/// | `NULL OR false` | `NULL`    |  The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change |
-/// | `NULL OR NULL`  |  `NULL`   |            |
+/// Expression      | Result    | Intuition
+/// --------------- | --------- | ----------
+/// `NULL OR true`  | `true`    |  If the `NULL` was either `true` or `false` the overall expression is still `true`
+/// `NULL OR false` | `NULL`    |  The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change
+/// `NULL OR NULL`  |  `NULL`   |
 ///
 /// ## SQL Filter Semantics
 ///
@@ -308,12 +309,12 @@ pub trait PruningStatistics {
 /// provided by the `PruningStatistics`. Here are some examples of the rewritten
 /// predicates:
 ///
-/// | Original Predicate | Rewritten Predicate |
-/// | ------------------ | --------------------|
-/// | `x = 5` | `x_min <= 5 AND 5 <= x_max` |
-/// | `x < 5` | `x_max < 5` |
-/// | `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max` |
-/// | `x IS NULL`  | `x_null_count > 0` |
+/// Original Predicate | Rewritten Predicate
+/// ------------------ | --------------------
+/// `x = 5` | `x_min <= 5 AND 5 <= x_max`
+/// `x < 5` | `x_max < 5`
+/// `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max`
+/// `x IS NULL`  | `x_null_count > 0`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
@@ -331,18 +332,20 @@ pub trait PruningStatistics {
 /// between `1 and 100` and we know that `y` is between `4` and `7`, the input
 /// statistics might look like
 ///
-/// | Column | Value |
-/// | ------ | ----- |
-/// | x_min | 1    |
-/// | x_max | 100  |
-/// | y_min |  4   |
-/// | y_max | 7    |
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `1`
+/// `x_max`  | `100`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
 ///
 /// The rewritten predicate would look like
 ///
 /// `x_min <= 5 AND 5 <= x_max AND  y_min <= 10 AND 10 <= y_max`
 ///
-/// When these values are substituted in to the rewritten predicate and simplified, the result is `false`:
+/// When these values are substituted in to the rewritten predicate and
+/// simplified, the result is `false`:
+///
 /// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
 /// * `true AND true AND true AND false`
 /// * `false`
