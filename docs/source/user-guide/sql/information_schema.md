@@ -55,7 +55,7 @@ or
 To show the current session configuration options, use the `SHOW ALL` command or the `information_schema.df_settings` view:
 
 ```sql
-❯ select * from information_schema.df_settings;
+select * from information_schema.df_settings;
 
 +-------------------------------------------------+---------+
 | name                                            | setting |

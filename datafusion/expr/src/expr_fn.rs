@@ -740,12 +740,6 @@ scalar_expr!(
     array begin end stride,
     "returns a slice of the array."
 );
-scalar_expr!(
-    ArrayToString,
-    array_to_string,
-    array delimiter,
-    "converts each element to its text representation."
-);
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
@@ -1460,7 +1454,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
 

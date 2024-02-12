@@ -82,6 +82,9 @@ jobs:
       - name: Check function packages (encoding_expressions)
         run: cargo check --no-default-features --features=encoding_expressions -p datafusion
 
+      - name: Check function packages (array_expressions)
+        run: cargo check --no-default-features --features=array_expressions -p datafusion
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
@@ -307,6 +310,22 @@ jobs:
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features  
+
+  macos-aarch64:
+    name: cargo test (macos-aarch64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-macos-builder
+      - name: Run tests (excluding doctests)
+        shell: bash
+        run: |
+          cargo test --lib --tests --bins --features avro,json,backtrace
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)

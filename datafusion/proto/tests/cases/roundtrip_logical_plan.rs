@@ -567,13 +567,15 @@ async fn roundtrip_expr_api() -> Result<()> {
     let table = ctx.table("t1").await?;
     let schema = table.schema().clone();
 
+    // list of expressions to round trip
+    let expr_list = vec![
+        encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+        decode(lit("1234"), lit("hex")),
+        array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+    ];
+
     // ensure expressions created with the expr api can be round tripped
-    let plan = table
-        .select(vec![
-            encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
-            decode(lit("1234"), lit("hex")),
-        ])?
-        .into_optimized_plan()?;
+    let plan = table.select(expr_list)?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
