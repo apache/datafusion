@@ -18,23 +18,20 @@
 //! Execution functions
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::time::Instant;
-use std::{fs::File, sync::Arc};
 
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::{
-        get_gcs_object_store_builder, get_oss_object_store_builder,
-        get_s3_object_store_builder,
-    },
+    object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
 
-use datafusion::common::{exec_datafusion_err, plan_datafusion_err};
+use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::is_plan_streaming;
 use datafusion::error::{DataFusionError, Result};
@@ -45,8 +42,6 @@ use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 
 use datafusion::logical_expr::dml::CopyTo;
 use datafusion::sql::parser::Statement;
-use object_store::http::HttpBuilder;
-use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -280,8 +275,13 @@ async fn register_object_store(
     copy_to: &mut CopyTo,
 ) -> Result<(), DataFusionError> {
     let url = ListingTableUrl::parse(copy_to.output_url.as_str())?;
-    let store =
-        get_object_store(ctx, &mut HashMap::new(), url.scheme(), url.as_ref()).await?;
+    let store = get_object_store(
+        &ctx.state(),
+        &mut HashMap::new(),
+        url.scheme(),
+        url.as_ref(),
+    )
+    .await?;
     ctx.runtime_env().register_object_store(url.as_ref(), store);
     Ok(())
 }
@@ -295,48 +295,10 @@ async fn create_external_table(
     let url: &Url = table_path.as_ref();
 
     // registering the cloud object store dynamically using cmd.options
-    let store = get_object_store(ctx, &mut cmd.options, scheme, url).await?;
-
+    let store = get_object_store(&ctx.state(), &mut cmd.options, scheme, url).await?;
     ctx.runtime_env().register_object_store(url, store);
 
     Ok(())
-}
-
-async fn get_object_store(
-    ctx: &SessionContext,
-    options: &mut HashMap<String, String>,
-    scheme: &str,
-    url: &Url,
-) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
-    let store = match scheme {
-        "s3" => {
-            let builder = get_s3_object_store_builder(url, options).await?;
-            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
-        }
-        "oss" => {
-            let builder = get_oss_object_store_builder(url, options)?;
-            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
-        }
-        "gs" | "gcs" => {
-            let builder = get_gcs_object_store_builder(url, options)?;
-            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
-        }
-        "http" | "https" => Arc::new(
-            HttpBuilder::new()
-                .with_url(url.origin().ascii_serialization())
-                .build()?,
-        ) as Arc<dyn ObjectStore>,
-        _ => {
-            // for other types, try to get from the object_store_registry
-            ctx.runtime_env()
-                .object_store_registry
-                .get_store(url)
-                .map_err(|_| {
-                    exec_datafusion_err!("Unsupported object store scheme: {}", scheme)
-                })?
-        }
-    };
-    Ok(store)
 }
 
 #[cfg(test)]
