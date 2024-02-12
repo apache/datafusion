@@ -548,7 +548,6 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     }
 
     fn row_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        // TODO chunchun: implement this
         None
     }
 

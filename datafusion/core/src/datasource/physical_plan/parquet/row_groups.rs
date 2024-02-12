@@ -196,7 +196,6 @@ impl PruningStatistics for BloomFilterStatistics {
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        // TODO chunchun: implement this
         None
     }
 
@@ -334,7 +333,6 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        // TODO chunchun: implement this
         None
     }
 
