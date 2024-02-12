@@ -22,10 +22,7 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
-    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err, plan_err, DataFusionError, Result, ScalarValue, ExprSchema};
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -534,7 +531,7 @@ impl ScalarUDFImpl for TakeUDF {
     fn return_type_from_exprs(
         &self,
         arg_exprs: &[Expr],
-        schema: &DFSchema,
+        schema: &dyn ExprSchema,
     ) -> Result<DataType> {
         if arg_exprs.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());

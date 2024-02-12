@@ -28,31 +28,31 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema,
+    internal_err, plan_datafusion_err, plan_err, Column, DFField,
     DataFusionError, ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
-pub trait ExprSchemable<S: ExprSchema> {
+pub trait ExprSchemable {
     /// given a schema, return the type of the expr
-    fn get_type(&self, schema: &S) -> Result<DataType>;
+    fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
     /// given a schema, return the nullability of the expr
-    fn nullable(&self, input_schema: &S) -> Result<bool>;
+    fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
 
     /// given a schema, return the expr's optional metadata
-    fn metadata(&self, schema: &S) -> Result<HashMap<String, String>>;
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_field(&self, input_schema: &DFSchema) -> Result<DFField>;
+    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField>;
 
     /// cast to a type with respect to a schema
-    fn cast_to(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
+    fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
 }
 
-impl ExprSchemable<DFSchema> for Expr {
+impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
     ///
@@ -90,7 +90,7 @@ impl ExprSchemable<DFSchema> for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
-    fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
+    fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
@@ -136,8 +136,7 @@ impl ExprSchemable<DFSchema> for Expr {
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
-                        let t = fun.return_type_from_exprs(args, schema)?;
-                        Ok(t)
+                        Ok(fun.return_type_from_exprs(args, schema)?)
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")
@@ -221,7 +220,7 @@ impl ExprSchemable<DFSchema> for Expr {
     /// This function errors when it is not possible to compute its
     /// nullability.  This happens when the expression refers to a
     /// column that does not exist in the schema.
-    fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
+    fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
             Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
@@ -328,9 +327,9 @@ impl ExprSchemable<DFSchema> for Expr {
         }
     }
 
-    fn metadata(&self, schema: &DFSchema) -> Result<HashMap<String, String>> {
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
         match self {
-            Expr::Column(_) => Ok(schema.metadata().clone()),
+            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
@@ -340,7 +339,7 @@ impl ExprSchemable<DFSchema> for Expr {
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
-    fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
+    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<DFField> {
         match self {
             Expr::Column(c) => Ok(DFField::new(
                 c.relation.clone(),
@@ -371,7 +370,7 @@ impl ExprSchemable<DFSchema> for Expr {
     ///
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
-    fn cast_to(self, cast_to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+    fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             return Ok(self);
@@ -398,7 +397,7 @@ impl ExprSchemable<DFSchema> for Expr {
 fn field_for_index(
     expr: &Expr,
     field: &GetFieldAccess,
-    schema: &DFSchema,
+    schema: &dyn ExprSchema,
 ) -> Result<Field> {
     let expr_dt = expr.get_type(schema)?;
     match field {
@@ -458,23 +457,21 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::{ScalarValue, TableReference};
+    use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
             let expr = lit(ScalarValue::Null).$EXPR_TYPE();
-            assert!(!expr.nullable(&MockExprSchema::new().into_schema()).unwrap());
+            assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         }};
     }
 
     #[test]
     fn expr_schema_nullability() {
         let expr = col("foo").eq(lit(1));
-        let mock = MockExprSchema::new();
-
-        assert!(!expr.nullable(&mock.clone().into_schema()).unwrap());
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         assert!(expr
-            .nullable(&mock.with_nullable(true).into_schema())
+            .nullable(&MockExprSchema::new().with_nullable(true))
             .unwrap());
 
         test_is_expr_nullable!(is_null);
@@ -493,7 +490,6 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Int32)
                 .with_nullable(nullable)
-                .into_schema()
         };
 
         let expr = col("foo").between(lit(1), lit(2));
@@ -518,16 +514,14 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Int32)
                 .with_nullable(nullable)
-                .into_schema()
         };
 
         let expr = col("foo").in_list(vec![lit(1); 5], false);
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
         // Testing nullable() returns an error.
-
         assert!(expr
-            .nullable(&MockExprSchema::new().with_name("blarg").into_schema())
+            .nullable(&get_schema(false).with_error_on_nullable(true))
             .is_err());
 
         let null = lit(ScalarValue::Int32(None));
@@ -545,7 +539,6 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Utf8)
                 .with_nullable(nullable)
-                .into_schema()
         };
 
         let expr = col("foo").like(lit("bar"));
@@ -561,7 +554,7 @@ mod tests {
         let expr = col("foo");
         assert_eq!(
             DataType::Utf8,
-            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8).into_schema())
+            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8))
                 .unwrap()
         );
     }
@@ -573,8 +566,7 @@ mod tests {
         let expr = col("foo");
         let schema = MockExprSchema::new()
             .with_data_type(DataType::Int32)
-            .with_metadata(meta.clone())
-            .into_schema();
+            .with_metadata(meta.clone());
 
         // col and alias should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
@@ -593,7 +585,7 @@ mod tests {
         let schema = DFSchema::new_with_metadata(
             vec![DFField::new_unqualified("foo", DataType::Int32, true)
                 .with_metadata(meta.clone())],
-            meta.clone(),
+            HashMap::new(),
         )
         .unwrap();
 
@@ -622,27 +614,22 @@ mod tests {
         assert!(expr.nullable(&schema).unwrap());
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct MockExprSchema {
-        name: String,
         nullable: bool,
         data_type: DataType,
+        error_on_nullable: bool,
         metadata: HashMap<String, String>,
     }
 
     impl MockExprSchema {
         fn new() -> Self {
             Self {
-                name: "foo".to_string(),
                 nullable: false,
                 data_type: DataType::Null,
+                error_on_nullable: false,
                 metadata: HashMap::new(),
             }
-        }
-
-        fn with_name(mut self, name: impl Into<String>) -> Self {
-            self.name = name.into();
-            self
         }
 
         fn with_nullable(mut self, nullable: bool) -> Self {
@@ -655,19 +642,32 @@ mod tests {
             self
         }
 
+        fn with_error_on_nullable(mut self, error_on_nullable: bool) -> Self {
+            self.error_on_nullable = error_on_nullable;
+            self
+        }
+
         fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
             self.metadata = metadata;
             self
         }
+    }
 
+    impl ExprSchema for MockExprSchema {
+        fn nullable(&self, _col: &Column) -> Result<bool> {
+            if self.error_on_nullable {
+                internal_err!("nullable error")
+            } else {
+                Ok(self.nullable)
+            }
+        }
 
-        /// Create a new schema with a single column
-        fn into_schema(self) -> DFSchema {
-            let Self {name, nullable, data_type, metadata} = self;
+        fn data_type(&self, _col: &Column) -> Result<&DataType> {
+            Ok(&self.data_type)
+        }
 
-            let field = DFField::new_unqualified(&name, data_type, nullable)
-                .with_metadata(metadata.clone());
-            DFSchema::new_with_metadata(vec![field], metadata).unwrap()
+        fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
+            Ok(&self.metadata)
         }
     }
 }
