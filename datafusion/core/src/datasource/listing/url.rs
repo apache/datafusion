@@ -189,28 +189,34 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
     pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
-        match self.strip_prefix(path) {
-            Some(mut segments) => match &self.glob {
-                Some(glob) => {
-                    if ignore_subdirectory {
-                        segments
-                            .next()
-                            .map_or(false, |file_name| glob.matches(file_name))
-                    } else {
-                        let stripped = segments.join("/");
-                        glob.matches(&stripped)
-                    }
+
+        let Some(all_segments) = self.strip_prefix(path) else {
+            return false
+        };
+
+        // remove any segments that contain `=` as they are allowed even
+        // when ignore subdirectories is `true`
+        let mut segments = all_segments.filter(|s| !s.contains('='));
+
+        match &self.glob {
+            Some(glob) => {
+                if ignore_subdirectory {
+                    segments
+                        .next()
+                        .map_or(false, |file_name| glob.matches(file_name))
+                } else {
+                    let stripped = segments.join("/");
+                    glob.matches(&stripped)
                 }
-                None => {
-                    if ignore_subdirectory {
-                        let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
-                        !has_subdirectory
-                    } else {
-                        true
-                    }
+            }
+            None => {
+                if ignore_subdirectory {
+                    let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
+                    !has_subdirectory
+                } else {
+                    true
                 }
-            },
-            None => false,
+            }
         }
     }
 
@@ -230,11 +236,11 @@ impl ListingTableUrl {
         if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
         }
-        Some(stripped.split_terminator(DELIMITER))
+        Some( stripped.split_terminator(DELIMITER))
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
-    pub(crate) async fn list_all_files<'a>(
+    pub async fn list_all_files<'a>(
         &'a self,
         ctx: &'a SessionState,
         store: &'a dyn ObjectStore,
