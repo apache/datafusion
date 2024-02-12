@@ -1129,19 +1129,18 @@ pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
     fields
         .into_iter()
         .map(|field| {
-            if !name_map.contains_key(field.name()) {
-                name_map.insert(field.name().to_string(), 0);
-                field
-            } else {
-                let cur_cnt = &name_map.get(field.name());
-                let name = field.name().to_string() + ":" + &cur_cnt.unwrap().to_string();
-                name_map.insert(field.name().to_string(), cur_cnt.unwrap() + 1);
+            let counter = name_map.entry(field.name().to_string()).or_insert(0);
+            *counter += 1;
+            if *counter > 1 {
+                let new_name = format!("{}:{}", field.name(), counter);
                 DFField::new(
                     field.qualifier().cloned(),
-                    &name,
+                    &new_name,
                     field.data_type().clone(),
                     field.is_nullable(),
                 )
+            } else {
+                field
             }
         })
         .collect()
@@ -1385,7 +1384,6 @@ pub fn project(
     let mut projected_expr = vec![];
     for e in expr {
         let e = e.into();
-        //println!("cur_expression is {:?}", e);
         match e {
             Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
