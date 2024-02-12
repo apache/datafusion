@@ -17,8 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err, DFSchema,
-    DataFusionError, Dependency, Result, SchemaError,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError,
+    Dependency, Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
@@ -153,22 +153,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
                 if let Expr::Sort(sort_expr) = orderby_expr {
                     if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx_result = schema.index_of_column(col);
-
-                        // Propagate the error to the caller and return it immediately
-                        let idx = idx_result
-                            .map_err(|_| -> Result<usize, DataFusionError> {
-                                schema_err!(SchemaError::FieldNotFound {
-                                    field: Box::new(col.clone()),
-                                    valid_fields: schema
-                                        .fields()
-                                        .iter()
-                                        .map(|f| f.qualified_column())
-                                        .collect(),
-                                })
-                            })
-                            .ok()?;
-
+                        let idx = schema.index_of_column(col).ok()?;
                         return if func_deps.iter().any(|dep| {
                             dep.source_indices == vec![idx]
                                 && dep.mode == Dependency::Single
