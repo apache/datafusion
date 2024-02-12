@@ -1489,11 +1489,6 @@ async fn test_read_batches_empty() -> Result<()> {
     let state = SessionState::new_with_config_rt(config, runtime);
     let ctx = SessionContext::new_with_state(state);
 
-    let _schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("number", DataType::Float32, false),
-    ]));
-
     let batches = vec![];
     let df = ctx.read_batches(batches).unwrap();
     df.clone().show().await.unwrap();
