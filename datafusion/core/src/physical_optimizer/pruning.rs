@@ -149,11 +149,12 @@ pub trait PruningStatistics {
 /// for any row in the Row Group, the entire Row Group is skipped during query
 /// execution.
 ///
-/// The `PruningPredicate` API is designed to be general, so it can used for
-/// pruning other types of containers (e.g. files) based on statistics that may
-/// be known from external catalogs (e.g. Delta Lake) or other sources.
+/// The `PruningPredicate` API is general, and can be used for pruning other
+/// types of containers (e.g. files) based on statistics that may be known from
+/// external catalogs (e.g. Delta Lake) or other sources. How this works is a
+/// subtle topic.  See the Background and Implementation section for details.
 ///
-/// It currently supports:
+/// `PruningPredicate` supports:
 ///
 /// 1. Arbitrary expressions (including user defined functions)
 ///
@@ -190,6 +191,188 @@ pub trait PruningStatistics {
 /// ```
 ///
 /// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
+///
+/// # Background
+///
+/// ## Boolean Tri-state logic
+///
+/// To understand the details of the rest of this documentation, it is important
+/// to understand how the tri-state boolean logic in SQL works. As this is
+/// somewhat esoteric, we review it here.
+///
+/// SQL has a notion of `NULL` that represents the value is `“unknown”` and this
+/// uncertainty propagates through expressions. SQL `NULL` behaves very
+/// differently than the `NULL` in most other languages where it is a special,
+/// sentinel value (e.g. `0` in `C/C++`). While representing uncertainty with
+/// `NULL` is powerful and elegant, SQL `NULL`s are often deeply confusing when
+/// first encountered as they behave differently than most programmers may
+/// expect.
+///
+/// In most other programming languages,
+/// * `a == NULL` evaluates to `true` if `a` also had the value `NULL`
+/// * `a == NULL` evaluates to `false` if `a` has any other value
+///
+/// However, in SQL `a = NULL` **always** evaluates to `NULL` (never `true` or
+/// `false`):
+///
+/// Expression    | Result
+/// ------------- | ---------
+/// `1 = NULL`    | `NULL`
+/// `NULL = NULL` | `NULL`
+///
+/// Also important is how `AND` and `OR` works with tri-state boolean logic as
+/// (perhaps counterintuitively) the result is **not** always NULL. While
+/// consistent with the notion of `NULL` representing “unknown”, this is again,
+/// often deeply confusing 🤯 when first encountered.
+///
+/// Expression       | Result    | Intuition
+/// ---------------  | --------- | -----------
+/// `NULL AND true`  |   `NULL`  | The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change
+/// `NULL AND false` |  `false`  | If the `NULL` was either `true` or `false` the overall expression is still `false`
+/// `NULL AND NULL`  | `NULL`    |
+///
+/// Expression      | Result    | Intuition
+/// --------------- | --------- | ----------
+/// `NULL OR true`  | `true`    |  If the `NULL` was either `true` or `false` the overall expression is still `true`
+/// `NULL OR false` | `NULL`    |  The `NULL` stands for “unknown” and if it were `true` or `false` the overall expression value could change
+/// `NULL OR NULL`  |  `NULL`   |
+///
+/// ## SQL Filter Semantics
+///
+/// The SQL `WHERE` clause has a boolean expression, often called a filter or
+/// predicate. The semantics of this predicate are that the query evaluates the
+/// predicate for each row in the input tables and:
+///
+/// * Rows that evaluate to `true` are returned in the query results
+///
+/// * Rows that evaluate to `false` are not returned (“filtered out” or “pruned” or “skipped”).
+///
+/// * Rows that evaluate to `NULL` are **NOT** returned (also “filtered out”).
+///   Note: *this treatment of `NULL` is **DIFFERENT** than how `NULL` is treated
+///   in the rewritten predicate described below.*
+///
+/// # `PruningPredicate` Implementation
+///
+/// Armed with the information in the Background section, we can now understand
+/// how the `PruningPredicate` logic works.
+///
+/// ## Interface
+///
+/// **Inputs**
+/// 1. An input schema describing what columns exist
+///
+/// 2. A predicate (expression that evaluates to a boolean)
+///
+/// 3. [`PruningStatistics`] that provides information about columns in that
+/// schema, for multiple “containers”. For each column in each container, it
+/// provides optional information on contained values, min_values, max_values,
+/// and null_counts counts.
+///
+/// **Outputs**:
+/// A (non null) boolean value for each container:
+/// * `true`: There MAY be rows that match the predicate
+///
+/// * `false`: There are no rows that could possibly match the predicate (the
+/// predicate can never possibly be true). The container can be pruned (skipped)
+/// entirely.
+///
+/// Note that in order to be correct, `PruningPredicate` must return false
+/// **only** if it can determine that for all rows in the container, the
+/// predicate could never evaluate to `true` (always evaluates to either `NULL`
+/// or `false`).
+///
+/// ## Contains Analysis and Min/Max Rewrite
+///
+/// `PruningPredicate` works by first analyzing the predicate to see what
+/// [`LiteralGuarantee`] must hold for the predicate to be true.
+///
+/// Then, the `PruningPredicate` rewrites the original predicate into an
+/// expression that references the min/max values of each column in the original
+/// predicate.
+///
+/// When the min/max values are actually substituted in to this expression and
+/// evaluated, the result means
+///
+/// * `true`: there MAY be rows that pass the predicate, **KEEPS** the container
+///
+/// * `NULL`: there MAY be rows that pass the predicate, **KEEPS** the container
+///           Note that rewritten predicate can evaluate to NULL when some of
+///           the min/max values are not known. *Note that this is different than
+///           the SQL filter semantics where `NULL` means the row is filtered
+///           out.*
+///
+/// * `false`: there are no rows that could possibly match the predicate,
+///            **PRUNES** the container
+///
+/// For example, given a column `x`, the `x_min` and `x_max` and `x_null_count`
+/// represent the minimum and maximum values, and the null count of column `x`,
+/// provided by the `PruningStatistics`. Here are some examples of the rewritten
+/// predicates:
+///
+/// Original Predicate | Rewritten Predicate
+/// ------------------ | --------------------
+/// `x = 5` | `x_min <= 5 AND 5 <= x_max`
+/// `x < 5` | `x_max < 5`
+/// `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max`
+/// `x IS NULL`  | `x_null_count > 0`
+///
+/// ## Predicate Evaluation
+/// The PruningPredicate works in two passes
+///
+/// **First pass**:  For each `LiteralGuarantee` calls
+/// [`PruningStatistics::contained`] and rules out containers where the
+/// LiteralGuarantees are not satisfied
+///
+/// **Second Pass**: Evaluates the rewritten expression using the
+/// min/max/null_counts values for each column for each container. For any
+/// container that this expression evaluates to `false`, it rules out those
+/// containers.
+///
+/// For example, given the predicate, `x = 5 AND y = 10`, if we know `x` is
+/// between `1 and 100` and we know that `y` is between `4` and `7`, the input
+/// statistics might look like
+///
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `1`
+/// `x_max`  | `100`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
+///
+/// The rewritten predicate would look like
+///
+/// `x_min <= 5 AND 5 <= x_max AND  y_min <= 10 AND 10 <= y_max`
+///
+/// When these values are substituted in to the rewritten predicate and
+/// simplified, the result is `false`:
+///
+/// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
+/// * `true AND true AND true AND false`
+/// * `false`
+///
+/// Returning `false` means the container can be pruned, which matches the
+/// intuition that  `x = 5 AND y = 10` can’t be true for any row if all values of `y`
+/// are `7` or less.
+///
+/// If, for some other container, we knew `y` was between the values `4` and
+/// `15`, then the rewritten predicate evaluates to `true` (verifying this is
+/// left as an exercise to the reader -- are you still here?), and the container
+/// **could not** be pruned. The intuition is that there may be rows where the
+/// predicate *might* evaluate to `true`, and the only way to find out is to do
+/// more analysis, for example by actually reading the data and evaluating the
+/// predicate row by row.
+///
+/// # Related Work
+///
+/// [`PruningPredicate`] implements the type of min/max pruning described in
+/// Section `3.3.3` of the [`Snowflake SIGMOD Paper`]. The technique is
+/// described by various research such as [small materialized aggregates], [zone
+/// maps], and [data skipping].
+///
+/// [`Snowflake SIGMOD Paper`]: https://dl.acm.org/doi/10.1145/2882903.2903741
+/// [small materialized aggregates]: https://www.vldb.org/conf/1998/p476.pdf
+/// [zone maps]: https://dl.acm.org/doi/10.1007/978-3-642-03730-6_10
+///[data skipping]: https://dl.acm.org/doi/10.1145/2588555.2610515
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated
@@ -227,6 +410,9 @@ impl PruningPredicate {
     /// For example, the filter expression `(column / 2) = 4` becomes
     /// the pruning predicate
     /// `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
+    ///
+    /// See the struct level documentation on [`PruningPredicate`] for more
+    /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // build predicate expression once
         let mut required_columns = RequiredColumns::new();

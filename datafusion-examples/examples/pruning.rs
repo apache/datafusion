@@ -81,8 +81,8 @@ async fn main() {
             false,
             // File 3: `x = 5 AND y = 10` can never evaluate to true because x
             // has the value `1`, and for any value of `y` the expression will
-            // evaluate to false (`x = 5 AND y = 10 -->` false AND null` --> `false`). Thus this file can also be
-            // skipped.
+            // evaluate to false (`x = 5 AND y = 10 -->` false AND null` -->
+            // `false`). Thus this file can also be skipped.
             false
         ]
     );
