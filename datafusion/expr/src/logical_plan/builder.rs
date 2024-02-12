@@ -1132,7 +1132,7 @@ pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
             let counter = name_map.entry(field.name().to_string()).or_insert(0);
             *counter += 1;
             if *counter > 1 {
-                let new_name = format!("{}:{}", field.name(), counter);
+                let new_name = format!("{}:{}", field.name(), *counter - 1);
                 DFField::new(
                     field.qualifier().cloned(),
                     &new_name,
@@ -2115,9 +2115,9 @@ mod tests {
             remove_redundant,
             vec![
                 DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("a:0", DataType::Int32, false),
+                DFField::new_unqualified("a:1", DataType::Int32, false),
                 DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("b:0", DataType::Int32, false)
+                DFField::new_unqualified("b:1", DataType::Int32, false)
             ]
         );
         Ok(())
