@@ -1498,7 +1498,7 @@ async fn test_read_batches_empty() -> Result<()> {
     let df = ctx.read_batches(batches).unwrap();
     df.clone().show().await.unwrap();
     let result = df.collect().await?;
-    let expected = vec!["++", "++"];
+    let expected = ["++", "++"];
     assert_batches_sorted_eq!(expected, &result);
     Ok(())
 }
