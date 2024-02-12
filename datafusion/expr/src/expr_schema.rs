@@ -136,7 +136,7 @@ impl ExprSchemable<DFSchema> for Expr {
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
-                        let t = fun.return_type_from_exprs(&args, schema)?;
+                        let t = fun.return_type_from_exprs(args, schema)?;
                         Ok(t)
                     }
                     ScalarFunctionDefinition::Name(_) => {
@@ -458,21 +458,23 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::{Column, ScalarValue, TableReference};
+    use datafusion_common::{ScalarValue, TableReference};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
             let expr = lit(ScalarValue::Null).$EXPR_TYPE();
-            assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+            assert!(!expr.nullable(&MockExprSchema::new().into_schema()).unwrap());
         }};
     }
 
     #[test]
     fn expr_schema_nullability() {
         let expr = col("foo").eq(lit(1));
-        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        let mock = MockExprSchema::new();
+
+        assert!(!expr.nullable(&mock.clone().into_schema()).unwrap());
         assert!(expr
-            .nullable(&MockExprSchema::new().with_nullable(true))
+            .nullable(&mock.with_nullable(true).into_schema())
             .unwrap());
 
         test_is_expr_nullable!(is_null);
@@ -491,6 +493,7 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Int32)
                 .with_nullable(nullable)
+                .into_schema()
         };
 
         let expr = col("foo").between(lit(1), lit(2));
@@ -515,14 +518,16 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Int32)
                 .with_nullable(nullable)
+                .into_schema()
         };
 
         let expr = col("foo").in_list(vec![lit(1); 5], false);
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
         // Testing nullable() returns an error.
+
         assert!(expr
-            .nullable(&get_schema(false).with_error_on_nullable(true))
+            .nullable(&MockExprSchema::new().with_name("blarg").into_schema())
             .is_err());
 
         let null = lit(ScalarValue::Int32(None));
@@ -540,6 +545,7 @@ mod tests {
             MockExprSchema::new()
                 .with_data_type(DataType::Utf8)
                 .with_nullable(nullable)
+                .into_schema()
         };
 
         let expr = col("foo").like(lit("bar"));
@@ -555,7 +561,7 @@ mod tests {
         let expr = col("foo");
         assert_eq!(
             DataType::Utf8,
-            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8))
+            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8).into_schema())
                 .unwrap()
         );
     }
@@ -567,7 +573,8 @@ mod tests {
         let expr = col("foo");
         let schema = MockExprSchema::new()
             .with_data_type(DataType::Int32)
-            .with_metadata(meta.clone());
+            .with_metadata(meta.clone())
+            .into_schema();
 
         // col and alias should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
@@ -586,7 +593,7 @@ mod tests {
         let schema = DFSchema::new_with_metadata(
             vec![DFField::new_unqualified("foo", DataType::Int32, true)
                 .with_metadata(meta.clone())],
-            HashMap::new(),
+            meta.clone(),
         )
         .unwrap();
 
@@ -615,22 +622,27 @@ mod tests {
         assert!(expr.nullable(&schema).unwrap());
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct MockExprSchema {
+        name: String,
         nullable: bool,
         data_type: DataType,
-        error_on_nullable: bool,
         metadata: HashMap<String, String>,
     }
 
     impl MockExprSchema {
         fn new() -> Self {
             Self {
+                name: "foo".to_string(),
                 nullable: false,
                 data_type: DataType::Null,
-                error_on_nullable: false,
                 metadata: HashMap::new(),
             }
+        }
+
+        fn with_name(mut self, name: impl Into<String>) -> Self {
+            self.name = name.into();
+            self
         }
 
         fn with_nullable(mut self, nullable: bool) -> Self {
@@ -643,32 +655,19 @@ mod tests {
             self
         }
 
-        fn with_error_on_nullable(mut self, error_on_nullable: bool) -> Self {
-            self.error_on_nullable = error_on_nullable;
-            self
-        }
-
         fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
             self.metadata = metadata;
             self
         }
-    }
 
-    impl ExprSchema for MockExprSchema {
-        fn nullable(&self, _col: &Column) -> Result<bool> {
-            if self.error_on_nullable {
-                internal_err!("nullable error")
-            } else {
-                Ok(self.nullable)
-            }
-        }
 
-        fn data_type(&self, _col: &Column) -> Result<&DataType> {
-            Ok(&self.data_type)
-        }
+        /// Create a new schema with a single column
+        fn into_schema(self) -> DFSchema {
+            let Self {name, nullable, data_type, metadata} = self;
 
-        fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
-            Ok(&self.metadata)
+            let field = DFField::new_unqualified(&name, data_type, nullable)
+                .with_metadata(metadata.clone());
+            DFSchema::new_with_metadata(vec![field], metadata).unwrap()
         }
     }
 }

@@ -42,7 +42,6 @@ pub fn create_physical_expr(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
@@ -98,7 +97,7 @@ mod tests {
         // create and register the udf
         let udf = ScalarUDF::from(TestScalarUDF::new());
 
-        let p_expr = create_physical_expr(&udf, &[], &Schema::empty())?;
+        let p_expr = create_physical_expr(&udf, &[], DataType::Float64)?;
 
         assert_eq!(
             p_expr
