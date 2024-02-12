@@ -637,7 +637,7 @@ fn _build_format_options<'a>(
     Ok(format_options)
 }
 
-/// Special version when arg[1] is a scalar
+/// Special version when arg\[1] is a scalar
 fn _to_char_scalar(expression: ColumnarValue, format: &str) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
