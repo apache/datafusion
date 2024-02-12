@@ -189,9 +189,8 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
     pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
-
         let Some(all_segments) = self.strip_prefix(path) else {
-            return false
+            return false;
         };
 
         // remove any segments that contain `=` as they are allowed even
@@ -236,7 +235,7 @@ impl ListingTableUrl {
         if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
         }
-        Some( stripped.split_terminator(DELIMITER))
+        Some(stripped.split_terminator(DELIMITER))
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
