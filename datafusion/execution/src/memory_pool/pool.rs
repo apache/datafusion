@@ -58,12 +58,48 @@ impl MemoryPool for UnboundedMemoryPool {
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
     pool_size: usize,
-    state: Mutex<GreedyMemoryPoolState>,
+    meta: Mutex<PoolMeta>,
 }
 
-#[derive(Debug)]
-struct GreedyMemoryPoolState {
+// PoolMeta tracks memory usage across multiple consumers.
+#[derive(Debug, Default)]
+struct PoolMeta {
+    // Maps consumer names to the amount of memory they use.
     pool_members: HashMap<String, usize>,
+    // The total memory usage of all consumers.
+    total_size: usize,
+}
+
+impl PoolMeta {
+    fn unregister(&mut self, consumer: &MemoryConsumer) -> usize {
+        if let Some(used) = self.pool_members.remove(consumer.name()) {
+            self.total_size = self.total_size.saturating_sub(used);
+            return used;
+        };
+
+        0
+    }
+
+    fn grow(&mut self, reservation: &MemoryReservation, additional: usize) {
+        let used = self
+            .pool_members
+            .entry_ref(reservation.consumer().name())
+            .or_insert(0);
+        *used = used.saturating_add(additional);
+
+        self.total_size = self.total_size.saturating_add(additional);
+    }
+
+    fn shrink(&mut self, reservation: &MemoryReservation, shrink: usize) {
+        let used = self
+            .pool_members
+            .entry_ref(reservation.consumer().name())
+            .or_insert(0);
+
+        *used = used.saturating_sub(shrink);
+
+        self.total_size = self.total_size.saturating_sub(shrink);
+    }
 }
 
 impl GreedyMemoryPool {
@@ -72,35 +108,25 @@ impl GreedyMemoryPool {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
             pool_size,
-            state: Mutex::new(GreedyMemoryPoolState {
-                pool_members: HashMap::new(),
-            }),
+            meta: Mutex::new(PoolMeta::default()),
         }
     }
 }
 
 impl MemoryPool for GreedyMemoryPool {
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
-        let mut state = self.state.lock();
-        let used = state
-            .pool_members
-            .entry_ref(reservation.consumer().name())
-            .or_insert(0);
-        *used = used.saturating_add(additional);
+        let mut state = self.meta.lock();
+        state.grow(reservation, additional);
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
-        let mut state = self.state.lock();
-        let used = state
-            .pool_members
-            .entry_ref(reservation.consumer().name())
-            .or_insert(0);
-        *used = used.saturating_sub(shrink);
+        let mut state = self.meta.lock();
+        state.shrink(reservation, shrink);
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        let mut state = self.state.lock();
-        let used: usize = state.pool_members.values().sum();
+        let mut state = self.meta.lock();
+        let used: usize = state.total_size;
         if used.saturating_add(additional) > self.pool_size {
             // dropping the mutex so that the display trait method does not deadlock
             drop(state);
@@ -112,39 +138,28 @@ impl MemoryPool for GreedyMemoryPool {
                 self.pool_size.saturating_sub(used),
             ));
         }
-        let entry = state
-            .pool_members
-            .entry_ref(reservation.consumer().name())
-            .or_insert(0);
-        *entry = entry.saturating_add(additional);
+
+        state.grow(reservation, additional);
+
         Ok(())
     }
 
     fn reserved(&self) -> usize {
-        let state = self.state.lock();
-        state.pool_members.values().sum()
+        let state = self.meta.lock();
+        state.total_size
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
-        let mut state = self.state.lock();
-        state.pool_members.remove(consumer.name());
+        let mut state = self.meta.lock();
+        state.unregister(consumer);
     }
 }
 
 impl Display for GreedyMemoryPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
-        let used: usize = state.pool_members.values().sum();
+        let state = self.meta.lock();
+        let used: usize = state.total_size;
         let free = self.pool_size.saturating_sub(used);
-
-        let mut allocations = state.pool_members.iter().collect::<Vec<_>>();
-        allocations.sort_by(|(_, a), (_, b)| a.cmp(b).reverse());
-
-        let allocation_report = allocations
-            .iter()
-            .fold("".to_string(), |acc, (member, bytes)| {
-                format!("{acc}\t{bytes}: {member}\n")
-            });
 
         write!(
             f,
@@ -153,8 +168,23 @@ impl Display for GreedyMemoryPool {
             used,
             free,
             self.pool_size,
-            allocation_report
+            state
         )
+    }
+}
+
+impl Display for PoolMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut allocations = self.pool_members.iter().collect::<Vec<_>>();
+        allocations.sort_by(|(_, a), (_, b)| a.cmp(b).reverse());
+
+        let allocation_report = allocations
+            .iter()
+            .fold("".to_string(), |acc, (member, bytes)| {
+                format!("{acc}\t{bytes}: {member}\n")
+            });
+
+        write!(f, "{}", allocation_report)
     }
 }
 
@@ -184,19 +214,14 @@ impl Display for GreedyMemoryPool {
 pub struct FairSpillPool {
     /// The total memory limit
     pool_size: usize,
-
     state: Mutex<FairSpillPoolState>,
 }
 
-#[derive(Debug)]
-struct FairSpillPoolMember {
-    used: usize,
-    can_spill: bool,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct FairSpillPoolState {
-    pool_members: HashMap<String, FairSpillPoolMember>,
+    meta: PoolMeta,
+    num_spill: usize,
+    spillable: usize,
 }
 
 impl FairSpillPool {
@@ -205,54 +230,44 @@ impl FairSpillPool {
         debug!("Created new FairSpillPool(pool_size={pool_size})");
         Self {
             pool_size,
-            state: Mutex::new(FairSpillPoolState {
-                pool_members: HashMap::new(),
-            }),
+            state: Mutex::new(FairSpillPoolState::default()),
         }
     }
 }
 
 impl MemoryPool for FairSpillPool {
     fn register(&self, consumer: &MemoryConsumer) {
-        let mut state = self.state.lock();
-        state.pool_members.insert(
-            consumer.name().into(),
-            FairSpillPoolMember {
-                used: 0,
-                can_spill: consumer.can_spill,
-            },
-        );
+        if consumer.can_spill {
+            self.state.lock().num_spill += 1;
+        }
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         let mut state = self.state.lock();
-        state.pool_members.remove(consumer.name());
+        let used = state.meta.unregister(consumer);
+
+        if consumer.can_spill {
+            state.num_spill = state.num_spill.saturating_sub(1);
+            state.spillable = state.spillable.saturating_sub(used);
+        }
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut state = self.state.lock();
-        let member_state = state
-            .pool_members
-            .entry_ref(reservation.consumer().name())
-            .or_insert_with(|| FairSpillPoolMember {
-                used: 0,
-                can_spill: reservation.registration.consumer.can_spill,
-            });
+        state.meta.grow(reservation, additional);
 
-        member_state.used = member_state.used.saturating_add(additional);
+        if reservation.registration.consumer.can_spill {
+            state.spillable = state.spillable.saturating_add(additional);
+        }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut state = self.state.lock();
-        let member_state = state
-            .pool_members
-            .entry_ref(reservation.consumer().name())
-            .or_insert_with(|| FairSpillPoolMember {
-                used: 0,
-                can_spill: reservation.registration.consumer.can_spill,
-            });
+        state.meta.shrink(reservation, shrink);
 
-        member_state.used = member_state.used.saturating_sub(shrink);
+        if reservation.registration.consumer.can_spill {
+            state.spillable = state.spillable.saturating_sub(shrink);
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -260,17 +275,13 @@ impl MemoryPool for FairSpillPool {
 
         match reservation.registration.consumer.can_spill {
             true => {
-                let unspillable: usize = state
-                    .pool_members
-                    .values()
-                    .filter_map(|e| (!e.can_spill).then_some(e.used))
-                    .sum();
+                let unspillable: usize =
+                    state.meta.total_size.saturating_sub(state.spillable);
 
                 // The total amount of memory available to spilling consumers
                 let spill_available = self.pool_size.saturating_sub(unspillable);
 
-                let num_spill =
-                    state.pool_members.values().filter(|e| e.can_spill).count();
+                let num_spill = state.num_spill;
 
                 // No spiller may use more than their fraction of the memory available
                 let available = spill_available
@@ -289,18 +300,11 @@ impl MemoryPool for FairSpillPool {
                     ));
                 }
 
-                let entry = state
-                    .pool_members
-                    .entry_ref(reservation.consumer().name())
-                    .or_insert_with(|| FairSpillPoolMember {
-                        used: 0,
-                        can_spill: reservation.registration.consumer.can_spill,
-                    });
-
-                entry.used = entry.used.saturating_add(additional);
+                state.meta.grow(reservation, additional);
+                state.spillable = state.spillable.saturating_add(additional);
             }
             false => {
-                let total_used: usize = state.pool_members.values().map(|e| e.used).sum();
+                let total_used: usize = state.meta.total_size;
                 let available = self.pool_size.saturating_sub(total_used);
 
                 if available < additional {
@@ -314,15 +318,7 @@ impl MemoryPool for FairSpillPool {
                     ));
                 }
 
-                let entry = state
-                    .pool_members
-                    .entry_ref(reservation.consumer().name())
-                    .or_insert_with(|| FairSpillPoolMember {
-                        used: 0,
-                        can_spill: reservation.registration.consumer.can_spill,
-                    });
-
-                entry.used = entry.used.saturating_add(additional);
+                state.meta.grow(reservation, additional);
             }
         }
         Ok(())
@@ -330,59 +326,31 @@ impl MemoryPool for FairSpillPool {
 
     fn reserved(&self) -> usize {
         let state = self.state.lock();
-        state
-            .pool_members
-            .values()
-            .map(|FairSpillPoolMember { used, .. }| used)
-            .sum()
+        state.meta.total_size
     }
 }
 
 impl Display for FairSpillPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.state.lock();
-        let mut num_spill = 0;
-        let mut unspillable_memory = 0;
-        let mut spillable_memory = 0;
+        let num_spill = state.num_spill;
+        let unspillable_memory = state.meta.total_size.saturating_sub(state.spillable);
+        let spillable_memory = state.spillable;
 
-        for member in state.pool_members.values() {
-            match member.can_spill {
-                true => {
-                    num_spill += 1;
-                    spillable_memory += member.used
-                }
-                false => unspillable_memory += member.used,
-            }
-        }
         let free = self
             .pool_size
-            .saturating_sub(unspillable_memory + spillable_memory);
-
-        let mut allocations = state.pool_members.iter().collect::<Vec<_>>();
-        allocations.sort_by(|(_, a), (_, b)| a.used.cmp(&b.used).reverse());
-
-        let allocation_report = allocations.iter().fold(
-            "".to_string(),
-            |acc, (member, FairSpillPoolMember { can_spill, used })| {
-                let can_spill = if *can_spill {
-                    "spillable"
-                } else {
-                    "unspillable"
-                };
-                format!("{acc}\t{used}: [{can_spill}] {member}\n")
-            },
-        );
+            .saturating_sub(unspillable_memory.saturating_add(spillable_memory));
 
         write!(
             f,
             "FairSpillPool {} allocations, {} spillable used, {} total spillable, {} unspillable used, {} free, {} capacity\n{}",
-            state.pool_members.len(),
+            state.meta.pool_members.len(),
             spillable_memory,
             num_spill,
             unspillable_memory,
             free,
             self.pool_size,
-            allocation_report
+            state.meta
         )
     }
 }
