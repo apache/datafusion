@@ -195,8 +195,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
-            } else if let Some(_) = is_ordering_strict {
-                WindowFrame::new(Some(true))
+            } else if let Some(is_ordering_strict) = is_ordering_strict {
+                match is_ordering_strict {
+                    true => WindowFrame::new(Some(true)),
+                    false => WindowFrame::new(Some(false)),
+                }
             } else {
                 WindowFrame::new((!order_by.is_empty()).then_some(false))
             };
