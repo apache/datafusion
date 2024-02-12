@@ -36,6 +36,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -941,7 +942,11 @@ impl SessionContext {
     ) -> Result<DataFrame> {
         // check schema uniqueness
         let mut batches = batches.into_iter().peekable();
-        let schema: SchemaRef = batches.peek().unwrap().schema().clone();
+        let schema = if let Some(batch) = batches.peek() {
+            batch.schema().clone()
+        } else {
+            Arc::new(Schema::empty())
+        };
         let provider =
             MemTable::try_new(schema, batches.map(|batch| vec![batch]).collect())?;
         Ok(DataFrame::new(
