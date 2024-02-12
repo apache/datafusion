@@ -2053,6 +2053,32 @@ mod tests {
     }
 
     #[test]
+    fn row_group_predicate_is_null() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "c1_null_count@0 > 0";
+
+        let expr = col("c1").is_null();
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_is_not_null() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "true";
+
+        let expr = col("c1").is_not_null();
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
     fn row_group_predicate_required_columns() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
