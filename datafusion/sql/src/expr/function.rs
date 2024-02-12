@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency, Result, schema_err, SchemaError};
+use datafusion_common::{
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err, DFSchema,
+    DataFusionError, Dependency, Result, SchemaError,
+};
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
@@ -153,24 +156,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let idx_result = schema.index_of_column(col);
 
                         // Propagate the error to the caller and return it immediately
-                        let idx = idx_result.map_err(|_| -> Result<usize, DataFusionError> {
-                             schema_err!(SchemaError::FieldNotFound {
-                                field: Box::new(col.clone()),
-                                valid_fields: schema
-                                    .fields()
-                                    .iter()
-                                    .map(|f| f.qualified_column())
-                                    .collect(),
+                        let idx = idx_result
+                            .map_err(|_| -> Result<usize, DataFusionError> {
+                                schema_err!(SchemaError::FieldNotFound {
+                                    field: Box::new(col.clone()),
+                                    valid_fields: schema
+                                        .fields()
+                                        .iter()
+                                        .map(|f| f.qualified_column())
+                                        .collect(),
+                                })
                             })
-                        }).ok()?;
+                            .ok()?;
 
                         return if func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                            dep.source_indices == vec![idx]
+                                && dep.mode == Dependency::Single
                         }) {
                             Some(true)
                         } else {
                             Some(false)
-                        }
+                        };
                     }
                 }
                 Some(false)
