@@ -1465,7 +1465,7 @@ async fn test_read_batches() -> Result<()> {
     let df = ctx.read_batches(batches).unwrap();
     df.clone().show().await.unwrap();
     let result = df.collect().await?;
-    let expected = vec![
+    let expected = [
         "+----+--------+",
         "| id | number |",
         "+----+--------+",
@@ -1489,7 +1489,7 @@ async fn test_read_batches_empty() -> Result<()> {
     let state = SessionState::new_with_config_rt(config, runtime);
     let ctx = SessionContext::new_with_state(state);
 
-    let schema = Arc::new(Schema::new(vec![
+    let _schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("number", DataType::Float32, false),
     ]));
