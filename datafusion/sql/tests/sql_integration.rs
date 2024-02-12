@@ -4343,6 +4343,13 @@ fn test_multi_grouping_sets() {
     quick_test(sql, expected);
 }
 
+#[test]
+fn test_field_not_found_window_function() {
+    let sql = "SELECT count() OVER (order by a);";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_eq!("Schema error: No field named a.", err.strip_backtrace());
+}
+
 fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
