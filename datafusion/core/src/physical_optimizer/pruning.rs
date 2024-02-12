@@ -151,7 +151,7 @@ pub trait PruningStatistics {
 ///
 /// The `PruningPredicate` API is general, and can be used for pruning other
 /// types of containers (e.g. files) based on statistics that may be known from
-/// external catalogs (e.g. Delta Lake) or other sources. How his works is a
+/// external catalogs (e.g. Delta Lake) or other sources. How this works is a
 /// subtle topic.  See the Background and Implementation section for details.
 ///
 /// `PruningPredicate` supports:
