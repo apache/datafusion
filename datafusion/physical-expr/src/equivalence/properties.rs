@@ -708,16 +708,20 @@ impl EquivalenceProperties {
             let ordered_exprs = search_indices
                 .iter()
                 .flat_map(|&idx| {
-                    let ExprOrdering { expr, data: sort_props, .. } =
+                    let ExprOrdering { expr, data, .. } =
                         eq_properties.get_expr_ordering(exprs[idx].clone());
-                    match sort_props {
+                    match data {
                         SortProperties::Ordered(options) => {
                             Some((PhysicalSortExpr { expr, options }, idx))
-                        },
-                        SortProperties::Singleton => {
-                            Some((PhysicalSortExpr { expr, options: SortOptions::default() }, idx))
-                        },
-                        SortProperties::Unordered => None
+                        }
+                        SortProperties::Singleton => Some((
+                            PhysicalSortExpr {
+                                expr,
+                                options: SortOptions::default(),
+                            },
+                            idx,
+                        )),
+                        SortProperties::Unordered => None,
                     }
                 })
                 .collect::<Vec<_>>();
