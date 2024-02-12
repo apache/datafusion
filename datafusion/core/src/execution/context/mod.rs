@@ -942,10 +942,8 @@ impl SessionContext {
         // check schema uniqueness
         let mut batches = batches.into_iter().peekable();
         let schema: SchemaRef = batches.peek().unwrap().schema().clone();
-        let provider = MemTable::try_new(
-            schema,
-            batches.into_iter().map(|batch| vec![batch]).collect(),
-        )?;
+        let provider =
+            MemTable::try_new(schema, batches.map(|batch| vec![batch]).collect())?;
         Ok(DataFrame::new(
             self.state(),
             LogicalPlanBuilder::scan(
@@ -2169,8 +2167,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow_array::Int32Array;
-    use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
