@@ -28,6 +28,7 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
+use arrow_array::Float32Array;
 use arrow_schema::ArrowError;
 use std::sync::Arc;
 
@@ -1429,6 +1430,89 @@ async fn unnest_analyze_metrics() -> Result<()> {
     assert_contains!(&formatted, "output_rows=10");
     assert_contains!(&formatted, "output_batches=1");
 
+    Ok(())
+}
+#[tokio::test]
+async fn test_read_batches() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("number", DataType::Float32, false),
+    ]));
+
+    let batches = vec![
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.11, 2.22, 3.33])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2])),
+                Arc::new(Float32Array::from(vec![4.44, 5.02, 6.03])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 3])),
+                Arc::new(Float32Array::from(vec![6.01, 2.02, 3.03])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 1, 2])),
+                Arc::new(Float32Array::from(vec![1000.01, 2.02, 3.03])),
+            ],
+        )
+        .unwrap(),
+    ];
+    let df = ctx.read_batches(batches).unwrap();
+    df.clone().show().await.unwrap();
+    let result = df.collect().await?;
+    let expected = vec![
+        "+----+---------+",
+        "| id | number  |",
+        "+----+---------+",
+        "| 1  | 1.12    |",
+        "| 2  | 3.4     |",
+        "| 3  | 2.33    |",
+        "| 4  | 9.1     |",
+        "| 5  | 6.66    |",
+        "| 3  | 1.11    |",
+        "| 4  | 2.22    |",
+        "| 5  | 3.33    |",
+        "| 0  | 4.44    |",
+        "| 1  | 5.02    |",
+        "| 2  | 6.03    |",
+        "| 0  | 6.01    |",
+        "| 1  | 2.02    |",
+        "| 3  | 3.03    |",
+        "| 3  | 1000.01 |",
+        "| 1  | 2.02    |",
+        "| 2  | 3.03    |",
+        "+----+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
     Ok(())
 }
 

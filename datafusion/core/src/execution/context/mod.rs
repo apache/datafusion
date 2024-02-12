@@ -934,7 +934,28 @@ impl SessionContext {
             .build()?,
         ))
     }
-
+    /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
+    pub fn read_batches(
+        &self,
+        batches: impl IntoIterator<Item = RecordBatch>,
+    ) -> Result<DataFrame> {
+        // check schema uniqueness
+        let mut batches = batches.into_iter().peekable();
+        let schema: SchemaRef = batches.peek().unwrap().schema().clone();
+        let provider = MemTable::try_new(
+            schema,
+            batches.into_iter().map(|batch| vec![batch]).collect(),
+        )?;
+        Ok(DataFrame::new(
+            self.state(),
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        ))
+    }
     /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
@@ -2148,6 +2169,8 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
+    use arrow_array::Int32Array;
+    use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
     use datafusion_expr::Expr;
     use std::env;
