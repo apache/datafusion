@@ -1120,6 +1120,34 @@ fn build_is_null_column_expr(
     }
 }
 
+/// Given an expression reference to `expr`, if `expr` is a column expression,
+/// returns a pruning expression in terms of IsNotNull that will evaluate to true
+/// if the column does NOT contain null, and false if it may contain null
+fn build_is_not_null_column_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+        let field = schema.field_with_name(col.name()).ok()?;
+
+        let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
+        required_columns
+            .null_count_column_expr(col, expr, null_count_field)
+            .map(|null_count_column_expr| {
+                // IsNotNull(column) => null_count = 0
+                Arc::new(phys_expr::BinaryExpr::new(
+                    null_count_column_expr,
+                    Operator::Eq,
+                    Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                )) as _
+            })
+            .ok()
+    } else {
+        None
+    }
+}
+
 /// The maximum number of entries in an `InList` that might be rewritten into
 /// an OR chain
 const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
@@ -1145,6 +1173,14 @@ fn build_predicate_expression(
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
         return build_is_null_column_expr(is_null.arg(), schema, required_columns)
             .unwrap_or(unhandled);
+    }
+    if let Some(is_not_null) = expr_any.downcast_ref::<phys_expr::IsNotNullExpr>() {
+        return build_is_not_null_column_expr(
+            is_not_null.arg(),
+            schema,
+            required_columns,
+        )
+        .unwrap_or(unhandled);
     }
     if let Some(col) = expr_any.downcast_ref::<phys_expr::Column>() {
         return build_single_column_expr(col, schema, required_columns, false)
@@ -2068,7 +2104,7 @@ mod tests {
     #[test]
     fn row_group_predicate_is_not_null() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "true";
+        let expected_expr = "c1_null_count@0 = 0";
 
         let expr = col("c1").is_not_null();
         let predicate_expr =
