@@ -42,7 +42,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
-use arrow_array::{GenericStringArray, StringArray};
+use arrow_array::{GenericStringArray, NullArray, StringArray};
 use chrono::prelude::*;
 use chrono::LocalResult::Single;
 use chrono::{Duration, LocalResult, Months, NaiveDate};
@@ -583,19 +583,29 @@ pub fn to_char(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         return exec_err!("to_char function requires 2 arguments, got {}", args.len());
     }
 
-    let is_scalar = args
-        .iter()
-        .fold(Option::<usize>::None, |acc, arg| match arg {
-            ColumnarValue::Scalar(_) => acc,
-            ColumnarValue::Array(a) => Some(a.len()),
-        })
-        .is_none();
-
-    let args = ColumnarValue::values_to_arrays(args)?;
-    if is_scalar {
-        _to_char_scalar(&args)
-    } else {
-        _to_char_array(&args)
+    match &args[1] {
+        // null format, return none
+        ColumnarValue::Scalar(ScalarValue::Utf8(None)) => match &args[0] {
+            ColumnarValue::Scalar(_) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Array(a) => Ok(ColumnarValue::Array(Arc::new(NullArray::new(
+                a.len(),
+            ))
+                as ArrayRef)),
+        },
+        // constant format
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
+            // invoke to_char_scalar with the known string, without converting to array
+            _to_char_scalar(args[0].clone(), format)
+        }
+        ColumnarValue::Array(_) => _to_char_array(args),
+        _ => {
+            exec_err!(
+                "Format for `to_char` must be non-null Utf8, received {:?}",
+                args[1].data_type()
+            )
+        }
     }
 }
 
@@ -627,36 +637,44 @@ fn _build_format_options<'a>(
     Ok(format_options)
 }
 
-fn _to_char_scalar(args: &[ArrayRef]) -> Result<ColumnarValue> {
-    if &DataType::Utf8 != args[1].data_type() {
-        return exec_err!(
-            "Format for `to_char` must be non-null Utf8, received {:?}",
-            args[1].data_type()
-        );
-    }
-
-    let format = args[1].as_string::<i32>().value(0);
-    let format_options = match _build_format_options(args[0].data_type(), format) {
+fn _to_char_scalar(expression: ColumnarValue, format: &str) -> Result<ColumnarValue> {
+    // it's possible that the expression is a scalar however because
+    // of the implementation in arrow-rs we need to convert it to an array
+    let data_type = &expression.data_type();
+    let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
+    let array = expression.into_array(1)?;
+    let format_options = match _build_format_options(data_type, format) {
         Ok(value) => value,
         Err(value) => return value,
     };
 
-    let formatter = ArrayFormatter::try_new(args[0].as_ref(), &format_options)?;
-    let formatted = (0..args[0].len())
-        .map(|i| formatter.value(i).to_string())
-        .collect::<Vec<_>>();
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
+    let formatted: Result<Vec<_>, arrow_schema::ArrowError> = (0..array.len())
+        .map(|i| formatter.value(i).try_to_string())
+        .collect();
 
-    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-        formatted.first().unwrap().to_string(),
-    ))))
+    if let Ok(formatted) = formatted {
+        if is_scalar_expression {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                formatted.first().unwrap().to_string(),
+            ))))
+        } else {
+            Ok(ColumnarValue::Array(
+                Arc::new(StringArray::from(formatted)) as ArrayRef
+            ))
+        }
+    } else {
+        exec_err!("{}", formatted.unwrap_err())
+    }
 }
 
-fn _to_char_array(args: &[ArrayRef]) -> Result<ColumnarValue> {
+fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arrays = ColumnarValue::values_to_arrays(args)?;
     let mut results: Vec<String> = vec![];
-    let format_array = args[1].as_string::<i32>();
-    let data_type = args[0].data_type();
+    let format_array = arrays[1].as_string::<i32>();
+    let data_type = arrays[0].data_type();
 
-    for idx in 0..args[0].len() {
+    for idx in 0..arrays[0].len() {
         let format = format_array.value(idx);
         let format_options = match _build_format_options(data_type, format) {
             Ok(value) => value,
@@ -664,13 +682,22 @@ fn _to_char_array(args: &[ArrayRef]) -> Result<ColumnarValue> {
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
         // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(args[0].as_ref(), &format_options)?;
-        results.push(formatter.value(idx).to_string());
+        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
+        let result = formatter.value(idx).try_to_string();
+        match result {
+            Ok(value) => results.push(value),
+            Err(e) => return exec_err!("{}", e),
+        }
     }
 
-    Ok(ColumnarValue::Array(
-        Arc::new(StringArray::from(results)) as ArrayRef
-    ))
+    match args[0] {
+        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
+            results,
+        )) as ArrayRef)),
+        ColumnarValue::Scalar(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            results.first().unwrap().to_string(),
+        )))),
+    }
 }
 
 /// make_date(year, month, day) SQL function implementation
@@ -3067,6 +3094,76 @@ mod tests {
             let result =
                 to_char(&[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)])
                     .expect("that to_char parsed values without error");
+
+            if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
+                assert_eq!(expected, date.unwrap());
+            } else {
+                panic!("Expected a scalar value")
+            }
+        }
+
+        let scalar_array_data = vec![
+            (
+                ScalarValue::Date32(Some(18506)),
+                StringArray::from(vec!["%Y::%m::%d".to_string()]),
+                "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date64(Some(date.timestamp_millis())),
+                StringArray::from(vec!["%Y::%m::%d".to_string()]),
+                "2020::01::02".to_string(),
+            ),
+            (
+                ScalarValue::Time32Second(Some(31851)),
+                StringArray::from(vec!["%H-%M-%S".to_string()]),
+                "08-50-51".to_string(),
+            ),
+            (
+                ScalarValue::Time32Millisecond(Some(18506000)),
+                StringArray::from(vec!["%H-%M-%S".to_string()]),
+                "05-08-26".to_string(),
+            ),
+            (
+                ScalarValue::Time64Microsecond(Some(12344567000)),
+                StringArray::from(vec!["%H-%M-%S %f".to_string()]),
+                "03-25-44 567000000".to_string(),
+            ),
+            (
+                ScalarValue::Time64Nanosecond(Some(12344567890000)),
+                StringArray::from(vec!["%H-%M-%S %f".to_string()]),
+                "03-25-44 567890000".to_string(),
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
+                "2020::01::02 05::04::03".to_string(),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
+                "2020::01::02 05::04::03".to_string(),
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
+                "2020::01::02 05::04::03 000012000".to_string(),
+            ),
+            (
+                ScalarValue::TimestampNanosecond(
+                    Some(date.timestamp_nanos_opt().unwrap()),
+                    None,
+                ),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
+                "2020::01::02 05::04::03 000012345".to_string(),
+            ),
+        ];
+
+        for (value, format, expected) in scalar_array_data {
+            let result = to_char(&[
+                ColumnarValue::Scalar(value),
+                ColumnarValue::Array(Arc::new(format) as ArrayRef),
+            ])
+            .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
                 assert_eq!(expected, date.unwrap());
