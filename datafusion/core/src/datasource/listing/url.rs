@@ -210,7 +210,7 @@ impl ListingTableUrl {
             }
             None => {
                 if ignore_subdirectory {
-                    let has_subdirectory = segments.collect::<Vec<_>>().len() > 1;
+                    let has_subdirectory = segments.count() > 1;
                     !has_subdirectory
                 } else {
                     true

@@ -188,7 +188,6 @@ mod tests {
 
     #[test]
     fn test_url_contains() {
-        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("file:///var/data/mytable/").unwrap();
 
         // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
