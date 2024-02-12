@@ -627,6 +627,7 @@ fn _build_format_options<'a>(
     Ok(format_options)
 }
 
+/// Special version when arg[1] is a scalar
 fn _to_char_scalar(args: &[ArrayRef]) -> Result<ColumnarValue> {
     if &DataType::Utf8 != args[1].data_type() {
         return exec_err!(
