@@ -75,6 +75,7 @@ This crate has several [features] which can be specified in your `Cargo.toml`.
 
 Default features:
 
+- `array_expressions`: functions for working with arrays such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
 - `encoding_expressions`: `encode` and `decode` functions
