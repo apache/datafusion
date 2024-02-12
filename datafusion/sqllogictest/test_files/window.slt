@@ -4079,3 +4079,26 @@ ProjectionExec: expr=[COUNT(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] 
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query I
+select ROW_NUMBER() over (partition by a) from (select * from a where a = 1);
+----
+1
+
+query TT
+EXPLAIN select ROW_NUMBER() over (partition by a) from (select * from a where a = 1);
+----
+logical_plan
+Projection: ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+--WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+----Filter: a.a = Int64(1)
+------TableScan: a projection=[a]
+physical_plan
+ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+--BoundedWindowAggExec: wdw=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
+----CoalesceBatchesExec: target_batch_size=4096
+------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------CoalesceBatchesExec: target_batch_size=4096
+------------FilterExec: a@0 = 1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
