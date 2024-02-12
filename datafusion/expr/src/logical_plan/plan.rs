@@ -2373,11 +2373,13 @@ impl Aggregate {
         if is_grouping_set {
             fields = fields
                 .into_iter()
-                .map(|field| field.with_nullable(true))
+                .map(|(q, f)| (q, f.with_nullable(true)))
                 .collect::<Vec<_>>();
         }
 
         fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+
+        // let schema = DFSchema::from_field_specific_qualified_schema(fields);
 
         let schema =
             DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
@@ -2475,7 +2477,7 @@ fn calc_func_dependencies_for_project(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
-    let input_fields = input.schema().fields();
+    let input_fields = input.schema().field_names();
     // Calculate expression indices (if present) in the input schema.
     let proj_indices = exprs
         .iter()
@@ -2486,9 +2488,7 @@ fn calc_func_dependencies_for_project(
                 }
                 _ => format!("{}", expr),
             };
-            input_fields
-                .iter()
-                .position(|item| item.qualified_name() == expr_name)
+            input_fields.into_iter().position(|item| item == expr_name)
         })
         .collect::<Vec<_>>();
     Ok(input
