@@ -109,6 +109,14 @@ pub trait PruningStatistics {
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
+    /// Return the total row counts for the named column in each container
+    /// as an `Option<UInt64Array>`.
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
+
     /// Returns [`BooleanArray`] where each row represents information known
     /// about specific literal `values` in a column.
     ///
@@ -266,7 +274,7 @@ pub trait PruningStatistics {
 /// 3. [`PruningStatistics`] that provides information about columns in that
 /// schema, for multiple “containers”. For each column in each container, it
 /// provides optional information on contained values, min_values, max_values,
-/// and null_counts counts.
+/// null_counts counts, and row_counts counts.
 ///
 /// **Outputs**:
 /// A (non null) boolean value for each container:
@@ -304,6 +312,7 @@ pub trait PruningStatistics {
 /// * `false`: there are no rows that could possibly match the predicate,
 ///            **PRUNES** the container
 ///
+/// TODO chunchun: add x_row_count explanation and example
 /// For example, given a column `x`, the `x_min` and `x_max` and `x_null_count`
 /// represent the minimum and maximum values, and the null count of column `x`,
 /// provided by the `PruningStatistics`. Here are some examples of the rewritten
@@ -324,9 +333,11 @@ pub trait PruningStatistics {
 /// LiteralGuarantees are not satisfied
 ///
 /// **Second Pass**: Evaluates the rewritten expression using the
-/// min/max/null_counts values for each column for each container. For any
+/// min/max/null_counts/row_counts values for each column for each container. For any
 /// container that this expression evaluates to `false`, it rules out those
 /// containers.
+///
+/// TODO chunchun: add example for row_counts
 ///
 /// For example, given the predicate, `x = 5 AND y = 10`, if we know `x` is
 /// between `1 and 100` and we know that `y` is between `4` and `7`, the input
@@ -921,6 +932,7 @@ fn rewrite_expr_to_prunable(
     scalar_expr: &PhysicalExprRef,
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
+    // TODO chunchun: add rewrote for col is all NULL
     if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
@@ -1358,6 +1370,7 @@ mod tests {
         max: Option<ArrayRef>,
         /// Optional values
         null_counts: Option<ArrayRef>,
+        row_counts: Option<ArrayRef>,
         /// Optional known values (e.g. mimic a bloom filter)
         /// (value, contained)
         /// If present, all BooleanArrays must be the same size as min/max
@@ -1437,6 +1450,10 @@ mod tests {
             self.null_counts.clone()
         }
 
+        fn row_counts(&self) -> Option<ArrayRef> {
+            self.row_counts.clone()
+        }
+
         /// return an iterator over all arrays in this statistics
         fn arrays(&self) -> Vec<ArrayRef> {
             let contained_arrays = self
@@ -1448,6 +1465,7 @@ mod tests {
                 self.min.as_ref().cloned(),
                 self.max.as_ref().cloned(),
                 self.null_counts.as_ref().cloned(),
+                self.row_counts.as_ref().cloned(),
             ]
             .into_iter()
             .flatten()
@@ -1503,6 +1521,20 @@ mod tests {
 
             self.assert_invariants();
             self.null_counts = Some(null_counts);
+            self
+        }
+
+        /// Add row counts. There must be the same number of row counts as
+        /// there are containers
+        fn with_row_counts(
+            mut self,
+            counts: impl IntoIterator<Item = Option<i64>>,
+        ) -> Self {
+            let row_counts: ArrayRef =
+                Arc::new(counts.into_iter().collect::<Int64Array>());
+
+            self.assert_invariants();
+            self.row_counts = Some(row_counts);
             self
         }
 
@@ -1573,6 +1605,28 @@ mod tests {
             self
         }
 
+        /// Add row counts for the specified columm.
+        /// There must be the same number of row counts as
+        /// there are containers
+        fn with_row_counts(
+            mut self,
+            name: impl Into<String>,
+            counts: impl IntoIterator<Item = Option<i64>>,
+        ) -> Self {
+            let col = Column::from_name(name.into());
+
+            // take stats out and update them
+            let container_stats = self
+                .stats
+                .remove(&col)
+                .unwrap_or_default()
+                .with_row_counts(counts);
+
+            // put stats back in
+            self.stats.insert(col, container_stats);
+            self
+        }
+
         /// Add contained information for the specified columm.
         fn with_contained(
             mut self,
@@ -1625,6 +1679,13 @@ mod tests {
                 .unwrap_or(None)
         }
 
+        fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+            self.stats
+                .get(column)
+                .map(|container_stats| container_stats.row_counts())
+                .unwrap_or(None)
+        }
+
         fn contained(
             &self,
             column: &Column,
@@ -1657,6 +1718,10 @@ mod tests {
         }
 
         fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             None
         }
 
@@ -2823,6 +2888,8 @@ mod tests {
             expected_ret,
         );
     }
+
+    // TODO chunchun: add test for a column is all null, use row_counts
 
     #[test]
     fn prune_cast_column_scalar() {
