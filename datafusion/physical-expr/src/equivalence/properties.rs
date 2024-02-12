@@ -714,13 +714,11 @@ impl EquivalenceProperties {
                         SortProperties::Ordered(options) => {
                             Some((PhysicalSortExpr { expr, options }, idx))
                         }
-                        SortProperties::Singleton => Some((
-                            PhysicalSortExpr {
-                                expr,
-                                options: SortOptions::default(),
-                            },
-                            idx,
-                        )),
+                        SortProperties::Singleton => {
+                            // Assign default ordering to constant expressions
+                            let options = SortOptions::default();
+                            Some((PhysicalSortExpr { expr, options }, idx))
+                        }
                         SortProperties::Unordered => None,
                     }
                 })
