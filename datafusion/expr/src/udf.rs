@@ -149,6 +149,7 @@ impl ScalarUDF {
     /// The datatype this function returns given the input argument input types.
     /// This function is used when the input arguments are [`Expr`]s.
     ///
+    ///
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
     pub fn return_type_from_exprs(
         &self,
