@@ -1204,7 +1204,6 @@ pub fn build_join_schema(
             right_fields.clone()
         }
     };
-    //println!("total fields is {:?}", fields);
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
@@ -1212,7 +1211,6 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    // let schema = DFSchema::new_with_metadata(change_redundant_column(fields), metadata)?;
     let schema = DFSchema::new_with_metadata(fields, metadata)?;
     schema.with_functional_dependencies(func_dependencies)
 }
@@ -1268,7 +1266,6 @@ pub(crate) fn validate_unique_names<'a>(
                 Ok(())
             },
             Some((existing_position, existing_expr)) => {
-                //println!("node_name is {}, existing expr is {:?}", node_name, existing_expr);
                 plan_err!("{node_name} require unique expression names \
                              but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
                              at position {position} have the same name. Consider aliasing (\"AS\") one of them."

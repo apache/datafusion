@@ -70,10 +70,6 @@ impl MemTable {
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
         for batches in partitions.iter().flatten() {
             let batches_schema = batches.schema();
-            println!(
-                "the new schema is {:?}, schema set is {:?}",
-                batches_schema, schema
-            );
             if !schema.contains(&batches_schema) {
                 debug!(
                     "mem table schema does not contain batches schema. \
