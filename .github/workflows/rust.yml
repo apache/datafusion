@@ -308,6 +308,22 @@ jobs:
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features  
 
+  macos-aarch64:
+    name: cargo test (macos-aarch64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-macos-builder
+      - name: Run tests (excluding doctests)
+        shell: bash
+        run: |
+          cargo test --lib --tests --bins --features avro,json,backtrace
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
+
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: [ linux-build-lib ]
