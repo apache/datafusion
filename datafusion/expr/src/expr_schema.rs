@@ -330,7 +330,7 @@ impl ExprSchemable<DFSchema> for Expr {
 
     fn metadata(&self, schema: &DFSchema) -> Result<HashMap<String, String>> {
         match self {
-            Expr::Column(c) => Ok(schema.metadata().clone()),
+            Expr::Column(_) => Ok(schema.metadata().clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
