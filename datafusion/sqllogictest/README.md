@@ -163,7 +163,7 @@ root:
 mkdir -p datafusion/sqllogictest/test_files/tpch/data
 docker run -it \
   -v "$(realpath datafusion/sqllogictest/test_files/tpch/data)":/data \
-  ghcr.io/databloom-ai/tpch-docker:main -vf -s 0.1
+  ghcr.io/scalytics/tpch-docker:main -vf -s 0.1
 ```
 
 Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
