@@ -31,57 +31,14 @@ use std::sync::Arc;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
-#[derive(Debug)]
-pub(super) struct ArrayToString {
-    signature: Signature,
-    aliases: Vec<String>,
-}
-
-impl ArrayToString {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![
-                String::from("array_to_string"),
-                String::from("list_to_string"),
-                String::from("array_join"),
-                String::from("list_join"),
-            ],
-        }
-    }
-}
-
-impl ScalarUDFImpl for ArrayToString {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "array_to_string"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
-            _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        crate::to_string::array_to_string(&args).map(ColumnarValue::Array)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-}
+// Create static instances of ScalarUDFs for each function
+make_udf_function!(ArrayToString,
+    array_to_string,
+    array delimiter, // arg name
+    "converts each element to its text representation.", // doc
+    // name of the function to create (just) the `ScalarUDF`
+    udf
+);
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -155,155 +112,203 @@ macro_rules! call_array_function {
     }};
 }
 
-/// Array_to_string SQL function
-pub(super) fn array_to_string(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
-        return exec_err!("array_to_string expects two or three arguments");
-    }
+#[derive(Debug)]
+pub(super) struct ArrayToString {
+    signature: Signature,
+    aliases: Vec<String>,
+}
 
-    let arr = &args[0];
-
-    let delimiters = as_string_array(&args[1])?;
-    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
-
-    let mut null_string = String::from("");
-    let mut with_null_string = false;
-    if args.len() == 3 {
-        null_string = as_string_array(&args[2])?.value(0).to_string();
-        with_null_string = true;
-    }
-
-    fn compute_array_to_string(
-        arg: &mut String,
-        arr: ArrayRef,
-        delimiter: String,
-        null_string: String,
-        with_null_string: bool,
-    ) -> datafusion_common::Result<&mut String> {
-        match arr.data_type() {
-            DataType::List(..) => {
-                let list_array = as_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::LargeList(..) => {
-                let list_array = as_large_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::Null => Ok(arg),
-            data_type => {
-                macro_rules! array_function {
-                    ($ARRAY_TYPE:ident) => {
-                        to_string!(
-                            arg,
-                            arr,
-                            &delimiter,
-                            &null_string,
-                            with_null_string,
-                            $ARRAY_TYPE
-                        )
-                    };
-                }
-                call_array_function!(data_type, false)
-            }
+impl ArrayToString {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![
+                String::from("array_to_string"),
+                String::from("list_to_string"),
+                String::from("array_join"),
+                String::from("list_join"),
+            ],
         }
     }
+}
 
-    fn generate_string_array<O: OffsetSizeTrait>(
-        list_arr: &GenericListArray<O>,
-        delimiters: Vec<Option<&str>>,
-        null_string: String,
-        with_null_string: bool,
-    ) -> datafusion_common::Result<StringArray> {
-        let mut res: Vec<Option<String>> = Vec::new();
-        for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
+impl ScalarUDFImpl for ArrayToString {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_to_string"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
+            _ => {
+                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+
+        if args.len() < 2 || args.len() > 3 {
+            return exec_err!("array_to_string expects two or three arguments");
+        }
+
+        let arr = &args[0];
+
+        let delimiters = as_string_array(&args[1])?;
+        let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
+
+        let mut null_string = String::from("");
+        let mut with_null_string = false;
+        if args.len() == 3 {
+            null_string = as_string_array(&args[2])?.value(0).to_string();
+            with_null_string = true;
+        }
+
+        fn compute_array_to_string(
+            arg: &mut String,
+            arr: ArrayRef,
+            delimiter: String,
+            null_string: String,
+            with_null_string: bool,
+        ) -> datafusion_common::Result<&mut String> {
+            match arr.data_type() {
+                DataType::List(..) => {
+                    let list_array = as_list_array(&arr)?;
+                    for i in 0..list_array.len() {
+                        compute_array_to_string(
+                            arg,
+                            list_array.value(i),
+                            delimiter.clone(),
+                            null_string.clone(),
+                            with_null_string,
+                        )?;
+                    }
+
+                    Ok(arg)
+                }
+                DataType::LargeList(..) => {
+                    let list_array = as_large_list_array(&arr)?;
+                    for i in 0..list_array.len() {
+                        compute_array_to_string(
+                            arg,
+                            list_array.value(i),
+                            delimiter.clone(),
+                            null_string.clone(),
+                            with_null_string,
+                        )?;
+                    }
+
+                    Ok(arg)
+                }
+                DataType::Null => Ok(arg),
+                data_type => {
+                    macro_rules! array_function {
+                        ($ARRAY_TYPE:ident) => {
+                            to_string!(
+                                arg,
+                                arr,
+                                &delimiter,
+                                &null_string,
+                                with_null_string,
+                                $ARRAY_TYPE
+                            )
+                        };
+                    }
+                    call_array_function!(data_type, false)
+                }
+            }
+        }
+
+        fn generate_string_array<O: OffsetSizeTrait>(
+            list_arr: &GenericListArray<O>,
+            delimiters: Vec<Option<&str>>,
+            null_string: String,
+            with_null_string: bool,
+        ) -> datafusion_common::Result<StringArray> {
+            let mut res: Vec<Option<String>> = Vec::new();
+            for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
+                if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
+                    let mut arg = String::from("");
+                    let s = compute_array_to_string(
+                        &mut arg,
+                        arr,
+                        delimiter.to_string(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?
+                    .clone();
+
+                    if let Some(s) = s.strip_suffix(delimiter) {
+                        res.push(Some(s.to_string()));
+                    } else {
+                        res.push(Some(s));
+                    }
+                } else {
+                    res.push(None);
+                }
+            }
+
+            Ok(StringArray::from(res))
+        }
+
+        let arr_type = arr.data_type();
+        let string_arr = match arr_type {
+            DataType::List(_) | DataType::FixedSizeList(_, _) => {
+                let list_array = as_list_array(&arr)?;
+                generate_string_array::<i32>(
+                    list_array,
+                    delimiters,
+                    null_string,
+                    with_null_string,
+                )?
+            }
+            DataType::LargeList(_) => {
+                let list_array = as_large_list_array(&arr)?;
+                generate_string_array::<i64>(
+                    list_array,
+                    delimiters,
+                    null_string,
+                    with_null_string,
+                )?
+            }
+            _ => {
                 let mut arg = String::from("");
+                let mut res: Vec<Option<String>> = Vec::new();
+                // delimiter length is 1
+                assert_eq!(delimiters.len(), 1);
+                let delimiter = delimiters[0].unwrap();
                 let s = compute_array_to_string(
                     &mut arg,
-                    arr,
+                    arr.clone(),
                     delimiter.to_string(),
-                    null_string.clone(),
+                    null_string,
                     with_null_string,
                 )?
                 .clone();
 
-                if let Some(s) = s.strip_suffix(delimiter) {
-                    res.push(Some(s.to_string()));
+                if !s.is_empty() {
+                    let s = s.strip_suffix(delimiter).unwrap().to_string();
+                    res.push(Some(s));
                 } else {
                     res.push(Some(s));
                 }
-            } else {
-                res.push(None);
+                StringArray::from(res)
             }
-        }
+        };
 
-        Ok(StringArray::from(res))
+        Ok(ColumnarValue::Array(Arc::new(string_arr)))
     }
 
-    let arr_type = arr.data_type();
-    let string_arr = match arr_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) => {
-            let list_array = as_list_array(&arr)?;
-            generate_string_array::<i32>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&arr)?;
-            generate_string_array::<i64>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        _ => {
-            let mut arg = String::from("");
-            let mut res: Vec<Option<String>> = Vec::new();
-            // delimiter length is 1
-            assert_eq!(delimiters.len(), 1);
-            let delimiter = delimiters[0].unwrap();
-            let s = compute_array_to_string(
-                &mut arg,
-                arr.clone(),
-                delimiter.to_string(),
-                null_string,
-                with_null_string,
-            )?
-            .clone();
-
-            if !s.is_empty() {
-                let s = s.strip_suffix(delimiter).unwrap().to_string();
-                res.push(Some(s));
-            } else {
-                res.push(Some(s));
-            }
-            StringArray::from(res)
-        }
-    };
-
-    Ok(Arc::new(string_arr))
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
 }
