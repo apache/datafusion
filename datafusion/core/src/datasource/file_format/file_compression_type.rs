@@ -269,7 +269,6 @@ mod tests {
     use datafusion_common::file_options::file_type::FileType;
     use futures::StreamExt;
     use std::str::FromStr;
-    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn get_ext_with_compression() {
