@@ -56,7 +56,9 @@ impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
     ///
-    /// Note: [DFSchema] implements [ExprSchema].
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
     ///
     /// # Examples
     ///
@@ -213,7 +215,9 @@ impl ExprSchemable for Expr {
 
     /// Returns the nullability of the expression based on [ExprSchema].
     ///
-    /// Note: [DFSchema] implements [ExprSchema].
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
     ///
     /// # Errors
     ///
