@@ -813,20 +813,16 @@ fn try_swapping_with_sym_hash_join(
     )?)))
 }
 
-/// Compare the inputs and outputs of the projection. If the projection causes
-/// any change in the fields, it returns `false`.
+/// Compare the inputs and outputs of the projection. All expressions must be
+/// columns without alias, and projection does not change the order of fields.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
-    all_alias_free_columns(projection.expr()) && {
-        let schema = projection.schema();
-        let input_schema = projection.input().schema();
-        let fields = schema.fields();
-        let input_fields = input_schema.fields();
-        fields.len() == input_fields.len()
-            && fields
-                .iter()
-                .zip(input_fields.iter())
-                .all(|(out, input)| out.eq(input))
-    }
+    let exprs = projection.expr();
+    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
+        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        col.name() == alias && col.index() == idx
+    }) && exprs.len() == projection.input().schema().fields().len()
 }
 
 /// Given the expression set of a projection, checks if the projection causes
