@@ -31,7 +31,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::SchemaRef;
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinSide, JoinType};
 
@@ -710,10 +710,16 @@ impl EquivalenceProperties {
                 .flat_map(|&idx| {
                     let ExprOrdering { expr, data, .. } =
                         eq_properties.get_expr_ordering(exprs[idx].clone());
-                    if let SortProperties::Ordered(options) = data {
-                        Some((PhysicalSortExpr { expr, options }, idx))
-                    } else {
-                        None
+                    match data {
+                        SortProperties::Ordered(options) => {
+                            Some((PhysicalSortExpr { expr, options }, idx))
+                        }
+                        SortProperties::Singleton => {
+                            // Assign default ordering to constant expressions
+                            let options = SortOptions::default();
+                            Some((PhysicalSortExpr { expr, options }, idx))
+                        }
+                        SortProperties::Unordered => None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -839,7 +845,7 @@ fn is_constant_recurse(
     constants: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
 ) -> bool {
-    if physical_exprs_contains(constants, expr) {
+    if physical_exprs_contains(constants, expr) || expr.as_any().is::<Literal>() {
         return true;
     }
     let children = expr.children();
@@ -1881,6 +1887,36 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_find_longest_permutation2() -> Result<()> {
+        // Schema satisfies following orderings:
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        // and
+        // Column [a=c] (e.g they are aliases).
+        // At below we add [d ASC, h DESC] also, for test purposes
+        let (test_schema, mut eq_properties) = create_test_params()?;
+        let col_h = &col("h", &test_schema)?;
+
+        // Add column h as constant
+        eq_properties = eq_properties.add_constants(vec![col_h.clone()]);
+
+        let test_cases = vec![
+            // TEST CASE 1
+            // ordering of the constants are treated as default ordering.
+            // This is the convention currently used.
+            (vec![col_h], vec![(col_h, SortOptions::default())]),
+        ];
+        for (exprs, expected) in test_cases {
+            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let expected = convert_to_sort_exprs(&expected);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn test_get_meet_ordering() -> Result<()> {
         let schema = create_test_schema()?;
