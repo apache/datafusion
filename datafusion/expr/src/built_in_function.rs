@@ -946,7 +946,7 @@ impl BuiltinScalarFunction {
                 Signature::array(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayElement => {
-                Signature::array_and_index(false, self.volatility())
+                Signature::array_and_index(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::array(true, self.volatility()),

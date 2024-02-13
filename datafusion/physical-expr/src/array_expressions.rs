@@ -433,6 +433,7 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&args[1])?;
             general_array_element::<i64>(array, indexes)
         }
+        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_element does not support type: {:?}",
             args[0].data_type()
