@@ -43,8 +43,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionImplementation,
+    expr_vec_fmt, ColumnarValue, FuncMonotonicity, ScalarFunctionImplementation,
 };
 
 /// Physical expression of a scalar function
@@ -142,12 +141,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
-        let inputs = if self.args.is_empty()
-        {
+        let inputs = if self.args.is_empty() {
             vec![ColumnarValue::create_null_array(batch.num_rows())]
         } else {
-            self
-                .args
+            self.args
                 .iter()
                 .map(|e| e.evaluate(batch))
                 .collect::<Result<Vec<_>>>()?

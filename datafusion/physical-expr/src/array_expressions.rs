@@ -751,6 +751,7 @@ where
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
         let start = offset_window[0].to_usize().unwrap();
         let end = offset_window[1].to_usize().unwrap();
+
         if is_append {
             mutable.extend(values_index, start, end);
             mutable.extend(element_index, row_index, row_index + 1);
@@ -2294,55 +2295,4 @@ where
         arrow_array::make_array(data),
         Some(nulls.into()),
     )?))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::Int64Type;
-
-    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
-    #[test]
-    fn test_align_array_dimensions() {
-        let array1d_1 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), Some(3)]),
-                Some(vec![Some(4), Some(5)]),
-            ]));
-        let array1d_2 =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                Some(vec![Some(6), Some(7), Some(8)]),
-            ]));
-
-        let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
-        let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
-
-        let res = align_array_dimensions::<i32>(vec![
-            array1d_1.to_owned(),
-            array2d_2.to_owned(),
-        ])
-        .unwrap();
-
-        let expected = as_list_array(&array2d_1).unwrap();
-        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
-        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
-        assert_eq!(
-            datafusion_common::utils::list_ndims(res[0].data_type()),
-            expected_dim
-        );
-
-        let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
-        let array3d_2 = array_into_list_array(array2d_2.to_owned());
-        let res =
-            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
-                .unwrap();
-
-        let expected = as_list_array(&array3d_1).unwrap();
-        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
-        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
-        assert_eq!(
-            datafusion_common::utils::list_ndims(res[0].data_type()),
-            expected_dim
-        );
-    }
 }

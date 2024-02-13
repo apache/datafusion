@@ -140,9 +140,9 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
 ///
 /// 3) scalar || array -> array prepend
 ///
-/// 4) (arry concat, array append, array prepend) || array -> array concat
+/// 4) (aray concat, array append, array prepend) || array -> array concat
 ///
-/// 5) (arry concat, array append, array prepend) || scalar -> array append
+/// 5) (array concat, array append, array prepend) || scalar -> array append
 fn rewrite_array_concat_operator_to_func(
     left: &Expr,
     op: Operator,
@@ -154,120 +154,35 @@ fn rewrite_array_concat_operator_to_func(
         return None;
     }
 
-    fn is_make_array(expr: &Expr) -> bool {
+    fn fn_name(expr: &Expr) -> Option<&str> {
         if let Expr::ScalarFunction(ScalarFunction { func_def, .. }) = expr {
-            func_def.name() == "make_array"
+            Some(func_def.name())
         } else {
-            false
-        }
-    }
-
-    fn is_array_concat(expr: &Expr) -> bool {
-        if let Expr::ScalarFunction(ScalarFunction { func_def, .. }) = expr {
-            func_def.name() == "array_concat"
-        } else {
-            false
+            None
         }
     }
 
     // TODO figure out how to generalize this so it isn't hard coded by name
-    match (left, right) {
+    match (fn_name(left), fn_name(right)) {
         // Chain concat operator (a || b) || array,
-        // (arry concat, array append, array prepend) || array -> array concat
+        // (array concat, array append, array prepend) || array -> array concat
         (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
+            Some("array_concat") | Some("array_append") | Some("array_prepend"),
+            Some("make_array"),
         ) => Some(BuiltinScalarFunction::ArrayConcat),
         // Chain concat operator (a || b) || scalar,
-        // (arry concat, array append, array prepend) || scalar -> array append
-        (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
-                args: _left_args,
-            }),
-            _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            _scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        // (array concat, array append, array prepend) || scalar -> array append
+        (Some("array_concat") | Some("array_append") | Some("array_prepend"), _) => {
+            Some(BuiltinScalarFunction::ArrayAppend)
+        }
         // array || array -> array concat
-        (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        ) => Some(BuiltinScalarFunction::ArrayConcat),
+        (Some("make_array"), Some("make_array")) => {
+            Some(BuiltinScalarFunction::ArrayConcat)
+        }
         // array || scalar -> array append
-        (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _left_args,
-            }),
-            _right_scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        (Some("make_array"), _) => Some(BuiltinScalarFunction::ArrayAppend),
         // scalar || array -> array prepend
-        (
-            _left_scalar,
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        ) => Some(BuiltinScalarFunction::ArrayPrepend),
-
+        (_, Some("make_array")) => Some(BuiltinScalarFunction::ArrayPrepend),
         _ => None,
     }
 }

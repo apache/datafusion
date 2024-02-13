@@ -45,9 +45,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, Expr, ExprSchemable,
-    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
+    Projection, ScalarFunctionDefinition, Signature, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 use crate::analyzer::AnalyzerRule;
@@ -578,7 +578,6 @@ fn coerce_arguments_for_signature(
         .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
         .collect::<Result<Vec<_>>>()
 }
-
 
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {

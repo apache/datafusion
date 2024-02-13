@@ -564,7 +564,7 @@ enum ScalarFunction {
   Sqrt = 17;
   Tan = 18;
   Trunc = 19;
-  Array = 20;
+  // 20 was Array
   RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
@@ -661,8 +661,8 @@ enum ScalarFunction {
   ArrayPopBack = 116;
   StringToArray = 117;
   ToTimestampNanos = 118;
-  ArrayIntersect = 119;
-  ArrayUnion = 120;
+  // 119 was ArrayIntersect
+  // 120 was ArrayUnion
   OverLay = 121;
   Range = 122;
   ArrayExcept = 123;
@@ -671,7 +671,7 @@ enum ScalarFunction {
   SubstrIndex = 126;
   FindInSet = 127;
   ArraySort = 128;
-  ArrayDistinct = 129;
+  // 129 was ArrayDistinct
   ArrayResize = 130;
   EndsWith = 131;
   InStr = 132;

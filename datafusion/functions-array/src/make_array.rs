@@ -26,7 +26,7 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Expr, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -39,6 +39,11 @@ make_udf_function!(
     "returns an Arrow array using the specified input expressions.",
     udf
 );
+
+/// Create a new array from a list of expressions
+pub fn array(args: Vec<Expr>) -> Expr {
+    udf().call(args)
+}
 
 #[derive(Debug)]
 pub(super) struct MakeArray {
@@ -64,7 +69,7 @@ impl ScalarUDFImpl for MakeArray {
         self
     }
     fn name(&self) -> &str {
-        "array_to_string"
+        "make_array"
     }
 
     fn signature(&self) -> &Signature {
@@ -212,4 +217,95 @@ fn array_array<O: OffsetSizeTrait>(
         arrow::array::make_array(data),
         None,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::ListArray;
+    use arrow::datatypes::Int64Type;
+    use datafusion_common::cast::as_list_array;
+
+    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
+    #[test]
+    fn test_align_array_dimensions() {
+        let array1d_1 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+            ]));
+        let array1d_2 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(6), Some(7), Some(8)]),
+            ]));
+
+        let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
+        let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
+
+        let res = align_array_dimensions::<i32>(vec![
+            array1d_1.to_owned(),
+            array2d_2.to_owned(),
+        ])
+        .unwrap();
+
+        let expected = as_list_array(&array2d_1).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            datafusion_common::utils::list_ndims(res[0].data_type()),
+            expected_dim
+        );
+
+        let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
+        let array3d_2 = array_into_list_array(array2d_2.to_owned());
+        let res =
+            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
+                .unwrap();
+
+        let expected = as_list_array(&array3d_1).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            datafusion_common::utils::list_ndims(res[0].data_type()),
+            expected_dim
+        );
+    }
+
+    fn align_array_dimensions<O: OffsetSizeTrait>(
+        args: Vec<ArrayRef>,
+    ) -> Result<Vec<ArrayRef>> {
+        let args_ndim = args
+            .iter()
+            .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
+            .collect::<Vec<_>>();
+        let max_ndim = args_ndim.iter().max().unwrap_or(&0);
+
+        // Align the dimensions of the arrays
+        let aligned_args: Result<Vec<ArrayRef>> = args
+            .into_iter()
+            .zip(args_ndim.iter())
+            .map(|(array, ndim)| {
+                if ndim < max_ndim {
+                    let mut aligned_array = array.clone();
+                    for _ in 0..(max_ndim - ndim) {
+                        let data_type = aligned_array.data_type().to_owned();
+                        let array_lengths = vec![1; aligned_array.len()];
+                        let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
+
+                        aligned_array = Arc::new(GenericListArray::<O>::try_new(
+                            Arc::new(Field::new("item", data_type, true)),
+                            offsets,
+                            aligned_array,
+                            None,
+                        )?)
+                    }
+                    Ok(aligned_array)
+                } else {
+                    Ok(array.clone())
+                }
+            })
+            .collect();
+
+        aligned_args
+    }
 }

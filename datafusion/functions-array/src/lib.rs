@@ -41,7 +41,7 @@ use std::sync::Arc;
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::{
-        make_array::make_array,
+        make_array::{array, make_array},
         set_ops::{array_distinct, array_intersect, array_union},
         to_string::array_to_string,
     };
