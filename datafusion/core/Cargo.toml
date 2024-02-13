@@ -92,7 +92,7 @@ pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true}
+tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
