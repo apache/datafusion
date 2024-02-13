@@ -185,8 +185,6 @@ pub enum BuiltinScalarFunction {
     Cardinality,
     /// array_resize
     ArrayResize,
-    /// construct an array from columns
-    MakeArray,
     /// Flatten
     Flatten,
     /// Range
@@ -439,7 +437,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
             BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
-            BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -661,20 +658,6 @@ impl BuiltinScalarFunction {
                 }
             }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
-            BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
-                0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
-                _ => {
-                    let mut expr_type = Null;
-                    for input_expr_type in input_expr_types {
-                        if !input_expr_type.equals_datatype(&Null) {
-                            expr_type = input_expr_type.clone();
-                            break;
-                        }
-                    }
-
-                    Ok(List(Arc::new(Field::new("item", expr_type, true))))
-                }
-            },
             BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -936,10 +919,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayAppend => {
                 Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::MakeArray => {
-                // 0 or more arguments of arbitrary type
-                Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
@@ -1641,7 +1620,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
             BuiltinScalarFunction::Cardinality => &["cardinality"],
             BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
-            BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
             BuiltinScalarFunction::ArrayIntersect => {
                 &["array_intersect", "list_intersect"]
             }

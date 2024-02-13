@@ -756,11 +756,6 @@ scalar_expr!(
     "returns an array with the specified size filled with the given value."
 );
 
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an Arrow array using the specified input expressions."
-);
 scalar_expr!(
     ArrayIntersect,
     array_intersect,

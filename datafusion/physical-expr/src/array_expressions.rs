@@ -229,7 +229,6 @@ fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     Ok(())
 }
 
-
 fn general_array_element<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     indexes: &Int64Array,

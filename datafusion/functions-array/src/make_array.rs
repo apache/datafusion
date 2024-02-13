@@ -17,20 +17,28 @@
 
 //! implementation of make_array function
 
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{
+    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
+    MutableArrayData, NullArray, OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Utf8};
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    BuiltinScalarFunction, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, new_null_array, NullArray, OffsetSizeTrait};
-use arrow::buffer::OffsetBuffer;
-use datafusion_common::utils::array_into_list_array;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(
-    MakeArray, make_array, xx, // arg name
-    "yyy", // The name of the function to create the ScalarUDF
+    MakeArray,
+    make_array,
+    array,
+    "returns an Arrow array using the specified input expressions.",
     udf
 );
 
@@ -43,12 +51,11 @@ pub(super) struct MakeArray {
 impl MakeArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature:                 // 0 or more arguments of arbitrary type
+            Signature::one_of(vec![TypeSignature::VariadicEqual, TypeSignature::Any(0)],
+                Volatility::Immutable),
             aliases: vec![
-                String::from("array_to_string"),
-                String::from("list_to_string"),
-                String::from("array_join"),
-                String::from("list_join"),
+            "make_list".to_string(),
             ],
         }
     }
@@ -68,12 +75,20 @@ impl ScalarUDFImpl for MakeArray {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
+        match arg_types.len() {
+            0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
             _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
+                let mut expr_type = Null;
+                for input_expr_type in arg_types {
+                    if !input_expr_type.equals_datatype(&Null) {
+                        expr_type = input_expr_type.clone();
+                        break;
+                    }
+                }
+
+                Ok(List(Arc::new(Field::new("item", expr_type, true))))
             }
-        })
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -85,7 +100,6 @@ impl ScalarUDFImpl for MakeArray {
         &self.aliases
     }
 }
-
 
 /// `make_array` SQL function
 fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
@@ -109,8 +123,6 @@ fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         _ => array_array::<i32>(arrays, data_type),
     }
 }
-
-
 
 /// Convert one or more [`ArrayRef`] of the same type into a
 /// `ListArray` or 'LargeListArray' depending on the offset size.
