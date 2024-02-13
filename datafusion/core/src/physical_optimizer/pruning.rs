@@ -315,7 +315,7 @@ pub trait PruningStatistics {
 /// `x < 5` | `x_max < 5`
 /// `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max`
 /// `x IS NULL`  | `x_null_count > 0`
-/// `x IS NOT NULL`  | `x_null_count = 0
+/// `x IS NOT NULL`  | `x_null_count = 0`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
