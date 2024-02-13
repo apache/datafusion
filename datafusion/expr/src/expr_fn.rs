@@ -890,6 +890,12 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
+scalar_expr!(
+    ToChar,
+    to_char,
+    datetime format,
+    "converts a date, time, timestamp or duration to a string based on the provided format"
+);
 nary_scalar_expr!(
     ToTimestamp,
     to_timestamp,

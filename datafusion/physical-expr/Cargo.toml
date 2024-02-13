@@ -94,3 +94,7 @@ name = "to_timestamp"
 [[bench]]
 harness = false
 name = "regexp"
+
+[[bench]]
+harness = false
+name = "to_char"

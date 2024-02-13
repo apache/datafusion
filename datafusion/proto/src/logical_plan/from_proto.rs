@@ -550,6 +550,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
+            ScalarFunction::ToChar => Self::ToChar,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
@@ -1701,6 +1702,16 @@ pub fn parse_expr(
                         .collect::<std::result::Result<_, _>>()?;
                     Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
                         BuiltinScalarFunction::MakeDate,
+                        args,
+                    )))
+                }
+                ScalarFunction::ToChar => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToChar,
                         args,
                     )))
                 }
