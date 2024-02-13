@@ -490,4 +490,38 @@ mod tests {
         r1.try_grow(10).unwrap();
         assert_eq!(pool.reserved(), 20);
     }
+
+    #[test]
+    fn test_greedy_pool_display() {
+        let greedy_pool = Arc::new(GreedyMemoryPool::new(1000));
+        let pool: Arc<dyn MemoryPool> = greedy_pool.clone();
+
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+
+        r1.grow(100);
+        r2.grow(321);
+
+        assert_eq!(
+            format!("{}", greedy_pool),
+            "GreedyPool 2 allocations, 421 used, 579 free, 1000 capacity.\nConsumers:\n321: r2\n100: r1\n"
+        );
+    }
+
+    #[test]
+    fn test_fair_pool_display() {
+        let fair_pool = Arc::new(FairSpillPool::new(1000));
+        let pool: Arc<dyn MemoryPool> = fair_pool.clone();
+
+        let mut r1 = MemoryConsumer::new("r1").register(&pool);
+        let mut r2 = MemoryConsumer::new("r2").register(&pool);
+
+        r1.grow(100);
+        r2.grow(321);
+
+        assert_eq!(
+        format!("{}", fair_pool),
+        "FairSpillPool 2 allocations, 0 spillable used, 0 total spillable, 421 unspillable used, 579 free, 1000 capacity.\nConsumers:\n321: r2\n100: r1\n"
+        );
+    }
 }
