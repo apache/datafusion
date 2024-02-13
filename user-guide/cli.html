@@ -653,8 +653,9 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
 <span class="m">2</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
 </pre></div>
 </div>
-<p>You can also query directly from the remote location via HTTP(S) without
-registering the location as a table</p>
+<p>You can also query directly from any remote location supported by DataFusion without
+registering the location as a table.
+For example, to read from a remote parquet file via HTTP(S) you can use the following:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span>
 <span class="o">+</span><span class="c1">----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
@@ -662,6 +663,13 @@ registering the location as a table</p>
 <span class="o">|</span><span class="w"> </span><span class="mi">1000000</span><span class="w">  </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+</span>
 <span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">595</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>To read from an AWS S3 or GCS, use <code class="docutils literal notranslate"><span class="pre">s3</span></code> or <code class="docutils literal notranslate"><span class="pre">gs</span></code> as a protocol prefix. For example, this will read a file<br />
+in S3 bucket named <code class="docutils literal notranslate"><span class="pre">my-data-bucket</span></code>. Note that this is not a real file location and therefore the query
+will fail, you need to use your own file location in S3. Also, you need to set the relevent access credentials
+as environmental variables (e.g. for AWS S3 you need to at least <code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code> and <code class="docutils literal notranslate"><span class="pre">AWS_SECRET_ACCESS_KEY</span></code>)</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;s3://my-data-bucket/athena_partitioned/hits.parquet&#39;</span>
 </pre></div>
 </div>
 </section>
