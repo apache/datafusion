@@ -194,8 +194,9 @@ DataFusion CLI v16.0.0
 2 rows in set. Query took 0.007 seconds.
 ```
 
-You can also query directly from the remote location via HTTP(S) without
-registering the location as a table
+You can also query directly from any remote location supported by DataFusion without
+registering the location as a table.
+For example, to read from a remote parquet file via HTTP(S) you can use the following:
 
 ```sql
 select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet'
@@ -205,6 +206,15 @@ select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_par
 | 1000000  |
 +----------+
 1 row in set. Query took 0.595 seconds.
+```
+
+To read from an AWS S3 or GCS, use `s3` or `gs` as a protocol prefix. For example, this will read a file  
+in S3 bucket named `my-data-bucket`. Note that this is not a real file location and therefore the query
+will fail, you need to use your own file location in S3. Also, you need to set the relevent access credentials
+as environmental variables (e.g. for AWS S3 you need to at least `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
+
+```sql
+select count(*) from 's3://my-data-bucket/athena_partitioned/hits.parquet'
 ```
 
 ## Creating External Tables
