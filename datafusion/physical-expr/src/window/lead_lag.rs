@@ -39,6 +39,7 @@ pub struct WindowShift {
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool
 }
 
 impl WindowShift {
@@ -60,6 +61,7 @@ pub fn lead(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool
 ) -> WindowShift {
     WindowShift {
         name,
@@ -67,6 +69,7 @@ pub fn lead(
         shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
         expr,
         default_value,
+        ignore_nulls
     }
 }
 
@@ -77,6 +80,7 @@ pub fn lag(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool
 ) -> WindowShift {
     WindowShift {
         name,
@@ -84,6 +88,7 @@ pub fn lag(
         shift_offset: shift_offset.unwrap_or(1),
         expr,
         default_value,
+        ignore_nulls
     }
 }
 
@@ -120,6 +125,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: -self.shift_offset,
             expr: self.expr.clone(),
             default_value: self.default_value.clone(),
+            ignore_nulls: self.ignore_nulls
         }))
     }
 }
