@@ -1840,12 +1840,8 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error
+statement error DataFusion error: Failed to coerce arguments for NULLIF
 SELECT nullif(1);
-----
-DataFusion error: Failed to coerce arguments for NULLIF
-caused by
-Error during planning: Coercion from [Int64] to the signature Uniform(2, [Boolean, UInt8, UInt16, UInt32, UInt64, Int8, Int16, Int32, Int64, Float32, Float64, Utf8, LargeUtf8]) failed.
 
 
 # error message for wrong function signature (Exact: exact number of args of an exact type)
