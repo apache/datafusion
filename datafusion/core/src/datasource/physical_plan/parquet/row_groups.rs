@@ -664,7 +664,7 @@ mod tests {
         use datafusion_expr::{col, lit};
         // test row group predicate with an unknown (Null) expr
         //
-        // c1 > 15 and c2 = NULL => c1_max > 15 and null
+        // c1 > 15 and c2 = NULL => c1_max > 15 and NULL
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
