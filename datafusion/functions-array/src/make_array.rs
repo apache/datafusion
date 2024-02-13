@@ -102,7 +102,7 @@ impl ScalarUDFImpl for MakeArray {
 }
 
 /// `make_array` SQL function
-fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let mut data_type = DataType::Null;
     for arg in arrays {
         let arg_data_type = arg.data_type();

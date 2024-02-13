@@ -43,3 +43,4 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 log = "0.4.20"
 paste = "1.0.14"
+itertools = "0.12.1"

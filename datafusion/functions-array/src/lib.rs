@@ -42,7 +42,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::{
         make_array::make_array,
-        set_ops::{array_intersect, array_union},
+        set_ops::{array_intersect, array_union, array_distinct},
         to_string::array_to_string,
     };
 }
@@ -54,6 +54,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         make_array::udf(),
         set_ops::union_udf(),
         set_ops::intersect_udf(),
+        set_ops::distinct_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
