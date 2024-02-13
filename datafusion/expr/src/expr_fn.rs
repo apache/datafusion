@@ -662,12 +662,7 @@ scalar_expr!(
     array,
     "returns the number of dimensions of the array."
 );
-scalar_expr!(
-    ArrayDistinct,
-    array_distinct,
-    array,
-    "return distinct values from the array after removing duplicates."
-);
+
 scalar_expr!(
     ArrayPosition,
     array_position,
@@ -740,7 +735,6 @@ scalar_expr!(
     array begin end stride,
     "returns a slice of the array."
 );
-scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
     Cardinality,
@@ -754,13 +748,6 @@ scalar_expr!(
     array_resize,
     array size value,
     "returns an array with the specified size filled with the given value."
-);
-
-scalar_expr!(
-    ArrayIntersect,
-    array_intersect,
-    first_array second_array,
-    "Returns an array of the elements in the intersection of array1 and array2."
 );
 
 nary_scalar_expr!(

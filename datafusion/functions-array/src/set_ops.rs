@@ -17,43 +17,41 @@
 
 //! implementation of make_array function
 
-use arrow::array::{new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray, OffsetSizeTrait, new_empty_array, make_array};
+use crate::make_array::make_array_inner;
+use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Utf8};
+use arrow::compute;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use itertools::Itertools;
-use datafusion_common::utils::array_into_list_array;
-use datafusion_common::{plan_err, DataFusionError, Result, internal_err, exec_err};
+use arrow::row::{RowConverter, SortField};
+use datafusion_common::cast::{as_large_list_array, as_list_array};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use arrow::compute;
-use arrow::row::{RowConverter, SortField};
-use datafusion_common::cast::{as_large_list_array, as_list_array};
-use crate::make_array::make_array_inner;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(
     ArrayUnion,
     array_union,
-    xx,    // arg name
-    "yyy", // The name of the function to create the ScalarUDF
+    array1 array2,
+    "returns an array of the elements in the union of array1 and array2 without duplicates.",
     union_udf
 );
 make_udf_function!(
     ArrayIntersect,
     array_intersect,
-    xx,    // arg name
-    "yyy", // The name of the function to create the ScalarUDF
+    first_array second_array,
+    "Returns an array of the elements in the intersection of array1 and array2.",
     intersect_udf
 );
 make_udf_function!(
     ArrayDistinct,
     array_distinct,
-    xx,    // arg name
-    "yyy", // The name of the function to create the ScalarUDF
+    array,
+    "return distinct values from the array after removing duplicates.",
     distinct_udf
 );
 
@@ -66,8 +64,8 @@ pub(super) struct ArrayUnion {
 impl ArrayUnion {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::any(2, Volatility::Immutable),
+            aliases: vec!["list_union".to_string()],
         }
     }
 }
@@ -85,13 +83,11 @@ impl ScalarUDFImpl for ArrayUnion {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
-            _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+        match (&arg_types[0], &arg_types[1]) {
+            (&DataType::Null, dt) => Ok(dt.clone()),
+            (dt, DataType::Null) => Ok(dt.clone()),
+            (dt, _) => Ok(dt.clone()),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -102,8 +98,7 @@ impl ScalarUDFImpl for ArrayUnion {
         let array1 = &args[0];
         let array2 = &args[1];
 
-        general_set_op(array1, array2, SetOp::Union)
-            .map(ColumnarValue::Array)
+        general_set_op(array1, array2, SetOp::Union).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {
@@ -120,8 +115,8 @@ pub(super) struct ArrayIntersect {
 impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::any(2, Volatility::Immutable),
+            aliases: vec!["list_intersect".to_string()],
         }
     }
 }
@@ -131,7 +126,7 @@ impl ScalarUDFImpl for ArrayIntersect {
         self
     }
     fn name(&self) -> &str {
-        "array_union"
+        "array_intersect"
     }
 
     fn signature(&self) -> &Signature {
@@ -139,34 +134,33 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
-            _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+        match (arg_types[0].clone(), arg_types[1].clone()) {
+            (DataType::Null, DataType::Null) | (DataType::Null, _) => Ok(DataType::Null),
+            (_, DataType::Null) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Null,
+                true,
+            )))),
+            (dt, _) => Ok(dt),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            if args.len() != 2 {
-                return exec_err!("array_intersect needs two arguments");
-            }
-            let args = ColumnarValue::values_to_arrays(args)?;
+        if args.len() != 2 {
+            return exec_err!("array_intersect needs two arguments");
+        }
+        let args = ColumnarValue::values_to_arrays(args)?;
 
-            let array1 = &args[0];
-            let array2 = &args[1];
+        let array1 = &args[0];
+        let array2 = &args[1];
 
-            general_set_op(array1, array2, SetOp::Intersect)
-                .map(ColumnarValue::Array)
+        general_set_op(array1, array2, SetOp::Intersect).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
 }
-
-
 
 #[derive(Debug)]
 pub(super) struct ArrayDistinct {
@@ -177,8 +171,8 @@ pub(super) struct ArrayDistinct {
 impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::any(1, Volatility::Immutable),
+            aliases: vec!["list_distinct".to_string()],
         }
     }
 }
@@ -196,27 +190,20 @@ impl ScalarUDFImpl for ArrayDistinct {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
-            _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+        Ok(arg_types[0].clone())
     }
 
     /// array_distinct SQL function
     /// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            if args.len() != 1 {
-                return exec_err!("array_distinct needs one argument");
-            }
+        if args.len() != 1 {
+            return exec_err!("array_distinct needs one argument");
+        }
         // handle null
         if args[0].data_type() == DataType::Null {
             return Ok(args[0].clone());
         }
         let args = ColumnarValue::values_to_arrays(args)?;
-
 
         // handle for list & largelist
         match args[0].data_type() {
@@ -228,17 +215,17 @@ impl ScalarUDFImpl for ArrayDistinct {
                 let array = as_large_list_array(&args[0])?;
                 general_array_distinct(array, field)
             }
-            array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
-        }.map(ColumnarValue::Array)
-
+            array_type => {
+                exec_err!("array_distinct does not support type '{array_type:?}'")
+            }
+        }
+        .map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
 }
-
-
 
 #[derive(Debug, PartialEq)]
 enum SetOp {
@@ -383,8 +370,6 @@ fn general_set_op(
         }
     }
 }
-
-
 
 fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,

@@ -2134,7 +2134,6 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
     Ok(Arc::new(list_array) as ArrayRef)
 }
 
-
 /// array_resize SQL function
 pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {

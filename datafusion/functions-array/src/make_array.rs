@@ -22,13 +22,11 @@ use arrow::array::{
     MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Utf8};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{
-    BuiltinScalarFunction, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;

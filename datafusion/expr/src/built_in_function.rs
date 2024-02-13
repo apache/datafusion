@@ -141,8 +141,6 @@ pub enum BuiltinScalarFunction {
     ArrayPopBack,
     /// array_dims
     ArrayDims,
-    /// array_distinct
-    ArrayDistinct,
     /// array_element
     ArrayElement,
     /// array_empty
@@ -175,10 +173,6 @@ pub enum BuiltinScalarFunction {
     ArrayReverse,
     /// array_slice
     ArraySlice,
-    /// array_intersect
-    ArrayIntersect,
-    /// array_union
-    ArrayUnion,
     /// array_except
     ArrayExcept,
     /// cardinality
@@ -412,7 +406,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -432,8 +425,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => Volatility::Immutable,
             BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
             BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
@@ -596,7 +587,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
-            BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
                 | LargeList(field)
@@ -628,24 +618,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayResize => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayIntersect => {
-                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, DataType::Null) | (DataType::Null, _) => {
-                        Ok(DataType::Null)
-                    }
-                    (_, DataType::Null) => {
-                        Ok(List(Arc::new(Field::new("item", Null, true))))
-                    }
-                    (dt, _) => Ok(dt),
-                }
-            }
-            BuiltinScalarFunction::ArrayUnion => {
-                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, dt) => Ok(dt),
-                    (dt, DataType::Null) => Ok(dt),
-                    (dt, _) => Ok(dt),
-                }
-            }
+
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
@@ -942,7 +915,6 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayDistinct => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::variadic_any(self.volatility())
             }
@@ -969,9 +941,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => {
                 Signature::variadic_any(self.volatility())
             }
-
-            BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayResize => {
                 Signature::variadic_any(self.volatility())
@@ -1566,7 +1535,6 @@ impl BuiltinScalarFunction {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
             BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
-            BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
@@ -1617,12 +1585,8 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
-            BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
             BuiltinScalarFunction::Cardinality => &["cardinality"],
             BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
-            BuiltinScalarFunction::ArrayIntersect => {
-                &["array_intersect", "list_intersect"]
-            }
             BuiltinScalarFunction::OverLay => &["overlay"],
             BuiltinScalarFunction::Range => &["range", "generate_series"],
 

@@ -42,7 +42,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::{
         make_array::make_array,
-        set_ops::{array_intersect, array_union, array_distinct},
+        set_ops::{array_distinct, array_intersect, array_union},
         to_string::array_to_string,
     };
 }
