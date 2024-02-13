@@ -35,6 +35,7 @@ pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     file_schema: SchemaRef,
     limit: Option<usize>,
+    collect_stats: bool,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
     // These statistics can be calculated as long as at least one file provides
@@ -78,6 +79,9 @@ pub async fn get_statistics_with_limit(
             while let Some(current) = all_files.next().await {
                 let (file, file_stats) = current?;
                 result_files.push(file);
+                if !collect_stats {
+                    continue;
+                }
 
                 // We accumulate the number of rows, total byte size and null
                 // counts across all the files in question. If any file does not

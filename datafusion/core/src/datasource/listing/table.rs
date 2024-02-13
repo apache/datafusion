@@ -880,8 +880,13 @@ impl ListingTable {
             .boxed()
             .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (files, statistics) =
-            get_statistics_with_limit(files, self.schema(), limit).await?;
+        let (files, statistics) = get_statistics_with_limit(
+            files,
+            self.schema(),
+            limit,
+            self.options.collect_stat,
+        )
+        .await?;
 
         Ok((
             split_files(files, self.options.target_partitions),
