@@ -43,7 +43,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
+    expr_vec_fmt, ColumnarValue, FuncMonotonicity,
     ScalarFunctionImplementation,
 };
 
@@ -142,30 +142,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
-        let inputs = match (
-            self.args.is_empty(),
-            self.name.parse::<BuiltinScalarFunction>(),
-        ) {
-            // MakeArray support zero argument but has the different behavior from the array with one null.
-            (true, Ok(scalar_fun))
-                if scalar_fun
-                    .signature()
-                    .type_signature
-                    .supports_zero_argument()
-                    && scalar_fun != BuiltinScalarFunction::MakeArray =>
-            {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            // If the function supports zero argument, we pass in a null array indicating the batch size.
-            // This is for user-defined functions.
-            (true, Err(_)) if self.supports_zero_argument => {
-                vec![ColumnarValue::create_null_array(batch.num_rows())]
-            }
-            _ => self
+        let inputs = if self.args.is_empty()
+        {
+            vec![ColumnarValue::create_null_array(batch.num_rows())]
+        } else {
+            self
                 .args
                 .iter()
                 .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
+                .collect::<Result<Vec<_>>>()?
         };
 
         // evaluate the function

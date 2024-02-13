@@ -90,8 +90,8 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Ok(make_array_inner(&ColumnarValue::values_to_arrays(args)?)
-            .map(ColumnarValue::Array)?)
+        make_array_inner(&ColumnarValue::values_to_arrays(args)?)
+            .map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

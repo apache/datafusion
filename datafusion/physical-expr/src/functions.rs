@@ -351,9 +351,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayDims => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_dims)(args)
         }),
-        BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_distinct)(args)
-        }),
         BuiltinScalarFunction::ArrayElement => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_element)(args)
         }),
@@ -411,9 +408,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
-        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
         BuiltinScalarFunction::Range => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::gen_range)(args)
         }),
@@ -422,12 +416,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayResize => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_resize)(args)
-        }),
-        BuiltinScalarFunction::MakeArray => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::make_array)(args)
-        }),
-        BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_union)(args)
         }),
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),

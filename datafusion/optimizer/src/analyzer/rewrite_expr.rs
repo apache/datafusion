@@ -154,6 +154,23 @@ fn rewrite_array_concat_operator_to_func(
         return None;
     }
 
+    fn is_make_array(expr: &Expr) -> bool {
+        if let Expr::ScalarFunction(ScalarFunction { func_def, .. }) = expr {
+            func_def.name() == "make_array"
+        } else {
+            false
+        }
+    }
+
+    fn is_array_concat(expr: &Expr) -> bool {
+        if let Expr::ScalarFunction(ScalarFunction { func_def, .. }) = expr {
+            func_def.name() == "array_concat"
+        } else {
+            false
+        }
+    }
+
+    // TODO figure out how to generalize this so it isn't hard coded by name
     match (left, right) {
         // Chain concat operator (a || b) || array,
         // (arry concat, array append, array prepend) || array -> array concat
