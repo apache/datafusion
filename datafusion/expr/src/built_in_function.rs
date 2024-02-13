@@ -23,7 +23,6 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
@@ -83,8 +82,6 @@ pub enum BuiltinScalarFunction {
     Gcd,
     /// lcm, Least common multiple
     Lcm,
-    /// isnan
-    Isnan,
     /// iszero
     Iszero,
     /// ln, Natural logarithm
@@ -233,8 +230,6 @@ pub enum BuiltinScalarFunction {
     Ltrim,
     /// md5
     MD5,
-    /// nullif
-    NullIf,
     /// octet_length
     OctetLength,
     /// random
@@ -384,7 +379,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Gcd => Volatility::Immutable,
-            BuiltinScalarFunction::Isnan => Volatility::Immutable,
             BuiltinScalarFunction::Iszero => Volatility::Immutable,
             BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
@@ -456,7 +450,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lower => Volatility::Immutable,
             BuiltinScalarFunction::Ltrim => Volatility::Immutable,
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
-            BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpLike => Volatility::Immutable,
@@ -726,11 +719,6 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "ltrim")
             }
             BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
-            BuiltinScalarFunction::NullIf => {
-                // NULLIF has two args and they might get coerced, get a preview of this
-                let coerced_types = data_types(input_expr_types, &self.signature());
-                coerced_types.map(|typs| typs[0].clone())
-            }
             BuiltinScalarFunction::OctetLength => {
                 utf8_to_int_type(&input_expr_types[0], "octet_length")
             }
@@ -871,7 +859,7 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
-            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => Ok(Boolean),
+            BuiltinScalarFunction::Iszero => Ok(Boolean),
 
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
@@ -1261,9 +1249,6 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
-            BuiltinScalarFunction::NullIf => {
-                Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), self.volatility())
-            }
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
@@ -1368,12 +1353,10 @@ impl BuiltinScalarFunction {
                 vec![Int32, Int64, UInt32, UInt64, Utf8],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
-                Signature::one_of(
-                    vec![Exact(vec![Float32]), Exact(vec![Float64])],
-                    self.volatility(),
-                )
-            }
+            BuiltinScalarFunction::Iszero => Signature::one_of(
+                vec![Exact(vec![Float32]), Exact(vec![Float64])],
+                self.volatility(),
+            ),
         }
     }
 
@@ -1439,7 +1422,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => &["factorial"],
             BuiltinScalarFunction::Floor => &["floor"],
             BuiltinScalarFunction::Gcd => &["gcd"],
-            BuiltinScalarFunction::Isnan => &["isnan"],
             BuiltinScalarFunction::Iszero => &["iszero"],
             BuiltinScalarFunction::Lcm => &["lcm"],
             BuiltinScalarFunction::Ln => &["ln"],
@@ -1462,7 +1444,6 @@ impl BuiltinScalarFunction {
 
             // conditional functions
             BuiltinScalarFunction::Coalesce => &["coalesce"],
-            BuiltinScalarFunction::NullIf => &["nullif"],
 
             // string functions
             BuiltinScalarFunction::Ascii => &["ascii"],
