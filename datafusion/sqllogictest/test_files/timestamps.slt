@@ -2657,7 +2657,7 @@ PT123456S
 query T
 select to_char(arrow_cast(123456, 'Duration(Second)'), null);
 ----
-NULL
+PT123456S
 
 query error DataFusion error: Execution error: Cast error: Format error
 SELECT to_char(timestamps, '%X%K') from formats;
@@ -2665,8 +2665,11 @@ SELECT to_char(timestamps, '%X%K') from formats;
 query error DataFusion error: Execution error: Cast error: Format error
 SELECT to_char('2000-02-03'::date, '%X%K');
 
-query error DataFusion error: Arrow error: Invalid argument error: column types must match schema types, expected Utf8 but found Null at column index 0
+query T
 SELECT to_char(timestamps, null) from formats;
+----
+2024-01-01T06:00:00Z
+2025-01-01T23:59:58Z
 
 query T
 SELECT to_char(null, '%d-%m-%Y');

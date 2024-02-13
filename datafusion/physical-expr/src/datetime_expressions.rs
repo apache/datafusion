@@ -42,7 +42,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
-use arrow_array::{GenericStringArray, NullArray, StringArray};
+use arrow_array::{GenericStringArray, StringArray};
 use chrono::prelude::*;
 use chrono::LocalResult::Single;
 use chrono::{Duration, LocalResult, Months, NaiveDate};
@@ -584,20 +584,15 @@ pub fn to_char(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     match &args[1] {
-        // null format, return none
-        ColumnarValue::Scalar(ScalarValue::Utf8(None)) => match &args[0] {
-            ColumnarValue::Scalar(_) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-            }
-            ColumnarValue::Array(a) => Ok(ColumnarValue::Array(Arc::new(NullArray::new(
-                a.len(),
-            ))
-                as ArrayRef)),
-        },
+        // null format, use default formats
+        ColumnarValue::Scalar(ScalarValue::Utf8(None))
+        | ColumnarValue::Scalar(ScalarValue::Null) => {
+            _to_char_scalar(args[0].clone(), None)
+        }
         // constant format
         ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
             // invoke to_char_scalar with the known string, without converting to array
-            _to_char_scalar(args[0].clone(), format)
+            _to_char_scalar(args[0].clone(), Some(format))
         }
         ColumnarValue::Array(_) => _to_char_array(args),
         _ => {
@@ -611,8 +606,11 @@ pub fn to_char(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 fn _build_format_options<'a>(
     data_type: &DataType,
-    format: &'a str,
+    format: Option<&'a str>,
 ) -> Result<FormatOptions<'a>, Result<ColumnarValue>> {
+    let Some(format) = format else {
+        return Ok(FormatOptions::new());
+    };
     let format_options = match data_type {
         DataType::Date32 => FormatOptions::new().with_date_format(Some(format)),
         DataType::Date64 => FormatOptions::new().with_datetime_format(Some(format)),
@@ -638,7 +636,10 @@ fn _build_format_options<'a>(
 }
 
 /// Special version when arg\[1] is a scalar
-fn _to_char_scalar(expression: ColumnarValue, format: &str) -> Result<ColumnarValue> {
+fn _to_char_scalar(
+    expression: ColumnarValue,
+    format: Option<&str>,
+) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
     let data_type = &expression.data_type();
@@ -676,7 +677,11 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
 
     for idx in 0..arrays[0].len() {
-        let format = format_array.value(idx);
+        let format = if format_array.is_null(idx) {
+            None
+        } else {
+            Some(format_array.value(idx))
+        };
         let format_options = match _build_format_options(data_type, format) {
             Ok(value) => value,
             Err(value) => return value,
