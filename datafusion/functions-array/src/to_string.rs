@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! implementation kernels for array functions
+//! implementation of array_to_string function
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
@@ -24,9 +24,64 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{exec_err, plan_err, DataFusionError};
 use std::any::type_name;
 use std::sync::Arc;
+
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
+
+#[derive(Debug)]
+pub(super) struct ArrayToString {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayToString {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![
+                String::from("array_to_string"),
+                String::from("list_to_string"),
+                String::from("array_join"),
+                String::from("list_join"),
+            ],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayToString {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_to_string"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
+            _ => {
+                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::to_string::array_to_string(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{

@@ -49,8 +49,8 @@ macro_rules! make_udf_function {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
-            pub fn $EXPR_FN($($arg: Expr),*) -> Expr {
-                Expr::ScalarFunction(ScalarFunction::new_udf(
+            pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+                datafusion_expr::Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
                     $SCALAR_UDF_FN(),
                     vec![$($arg),*],
                 ))

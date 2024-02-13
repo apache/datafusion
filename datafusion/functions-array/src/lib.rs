@@ -28,23 +28,31 @@
 #[macro_use]
 pub mod macros;
 
-mod kernels;
-mod udf;
+mod to_string;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
 use log::debug;
 use std::sync::Arc;
+use to_string::ArrayToString;
+
+// Create static instances of ScalarUDFs for each function
+make_udf_function!(ArrayToString,
+    array_to_string,
+    array delimiter, // arg name
+    "converts each element to its text representation.", // doc
+    ®array_to_string_udf // internal function name
+);
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::udf::array_to_string;
+    pub use super::array_to_string;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<ScalarUDF>> = vec![udf::array_to_string_udf()];
+    let functions: Vec<Arc<ScalarUDF>> = vec![array_to_string_udf()];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {
