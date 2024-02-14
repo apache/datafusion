@@ -620,13 +620,20 @@ mod tests {
                 ParquetStatistics::boolean(Some(false), Some(true), None, 1, false),
             ],
         );
-        vec![rgm1, rgm2]
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            vec![
+                ParquetStatistics::int32(Some(17), Some(30), None, 1, false),
+                ParquetStatistics::boolean(Some(false), Some(true), None, 0, false),
+            ],
+        );
+        vec![rgm1, rgm2, rgm3]
     }
 
     #[test]
     fn row_group_pruning_predicate_null_expr() {
         use datafusion_expr::{col, lit};
-        // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
+        // c1 > 15 and IsNull(c2) => c1_max > 15 and c2_null_count > 0
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
@@ -657,7 +664,7 @@ mod tests {
         use datafusion_expr::{col, lit};
         // test row group predicate with an unknown (Null) expr
         //
-        // int > 1 and bool = NULL => c1_max > 1 and null
+        // c1 > 15 and c2 = NULL => c1_max > 15 and NULL
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
@@ -672,7 +679,7 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         // bool = NULL always evaluates to NULL (and thus will not
-        // pass predicates. Ideally these should both be false
+        // pass predicates. Ideally these should all be false
         assert_eq!(
             prune_row_groups_by_statistics(
                 &schema,
@@ -682,7 +689,39 @@ mod tests {
                 Some(&pruning_predicate),
                 &metrics
             ),
-            vec![1]
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_not_null_expr() {
+        use datafusion_expr::{col, lit};
+        // c1 > 15 and IsNotNull(c2) => c1_max > 15 and c2_null_count = 0
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Boolean, false),
+        ]));
+        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let expr = col("c1").gt(lit(15)).and(col("c2").is_not_null());
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let groups = gen_row_group_meta_data_for_pruning_predicate();
+
+        let metrics = parquet_file_metrics();
+        assert_eq!(
+            prune_row_groups_by_statistics(
+                &schema,
+                &schema_descr,
+                &groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            // The first row group was filtered out because c1_max is 10, which is smaller than 15.
+            // The second row group was filtered out because it contains null value on "c2".
+            // The third row group is kept because c1_max is 30, which is greater than 15 AND
+            // it does NOT contain any null value on "c2".
+            vec![2]
         );
     }
 
