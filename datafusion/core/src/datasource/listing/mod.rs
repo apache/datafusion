@@ -190,6 +190,18 @@ mod tests {
     fn test_url_contains() {
         let url = ListingTableUrl::parse("file:///var/data/mytable/").unwrap();
 
+        // standard case with default config
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/data.parquet").unwrap(),
+            true
+        ));
+
+        // standard case with `ignore_subdirectory` set to false
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/data.parquet").unwrap(),
+            false
+        ));
+
         // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
         // a direct child of the `url`
         assert!(url
@@ -218,5 +230,11 @@ mod tests {
             &Path::parse("/var/data/mytable/year=2024/data.parquet").unwrap(),
             true
         ));
+
+        // testing an empty path with default config
+        assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), true));
+
+        // testing an empty path with `ignore_subdirectory` set to false
+        assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
     }
 }

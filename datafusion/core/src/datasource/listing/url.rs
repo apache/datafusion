@@ -209,14 +209,12 @@ impl ListingTableUrl {
                     glob.matches(&stripped)
                 }
             }
-            None => {
-                if ignore_subdirectory {
-                    let has_subdirectory = segments.count() > 1;
-                    !has_subdirectory
-                } else {
-                    true
-                }
-            }
+            // where we are ignoring subdirectories, we require
+            // the path to be either empty, or contain just the
+            // final file name segment.
+            None if ignore_subdirectory => segments.count() <= 1,
+            // in this case, any valid path at or below the url is allowed
+            None => true,
         }
     }
 
