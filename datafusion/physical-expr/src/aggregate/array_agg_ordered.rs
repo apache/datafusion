@@ -208,6 +208,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             return Ok(());
         }
 
+        // println!("values: {:?}", values);
+
         let n_row = values[0].len();
         for index in 0..n_row {
             let row = get_row_at_idx(values, index)?;
@@ -222,6 +224,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
+        println!("states: {:?}", states);
 
         // First entry in the state is the aggregation result. Second entry
         // stores values received for ordering requirement columns for each
@@ -246,10 +249,15 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         partition_ordering_values.push(self.ordering_values.clone().into());
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
-        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-        for v in array_agg_res.into_iter() {
-            partition_values.push(v.into());
-        }
+        // let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+        let array_agg_res = ScalarValue::convert_first_level_array_to_scalar_vec(array_agg_values)?;
+        println!("array_agg_res: {:?}", array_agg_res);
+        partition_values.push(array_agg_res.into());
+        // // println!("array_agg_res: {:?}", array_agg_res);
+        // println!("array_v2: {:?}", array_v2);
+        // for v in array_agg_res.into_iter() {
+        //     partition_values.push(v.into());
+        // }
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
 

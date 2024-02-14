@@ -2192,6 +2192,36 @@ impl ScalarValue {
         Ok(scalars)
     }
 
+    /// convert_array_to_scalar_vec but only convert the first level instead of recursively converting all the levels
+    pub fn convert_first_level_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Self>> {
+        let mut scalars = Vec::with_capacity(array.len());
+
+        if array.len() == 0 {
+            return Ok(vec![]);
+        }
+        assert_eq!(array.len(), 1);
+
+        for index in 0..array.len() {
+            let nested_array = match array.data_type() {
+                DataType::List(_) => {
+                    array.as_list::<i32>().value(index)
+                }
+                DataType::LargeList(_) => {
+                    array.as_list::<i64>().value(index)
+                }
+                _ => {
+                    return _internal_err!("ScalarValue is not a list");
+                }
+            };
+
+            for index in 0..nested_array.len() {
+                let sv = ScalarValue::try_from_array(nested_array.as_ref(), index)?;
+                scalars.push(sv);
+            }
+        }
+        Ok(scalars)
+    }
+
     // TODO: Support more types after other ScalarValue is wrapped with ArrayRef
     /// Get raw data (inner array) inside ScalarValue
     pub fn raw_data(&self) -> Result<ArrayRef> {
