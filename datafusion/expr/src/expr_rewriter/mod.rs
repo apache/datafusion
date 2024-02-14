@@ -262,9 +262,9 @@ mod test {
     use super::*;
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-    use datafusion_common::{DFField, DFSchema, ScalarValue};
+    use datafusion_common::{DFSchema, OwnedTableReference, ScalarValue};
     use std::ops::Add;
 
     #[derive(Default)]
@@ -318,20 +318,21 @@ mod test {
         let expr = col("a") + col("b") + col("c");
 
         // Schemas with some matching and some non matching cols
-        let schema_a = make_schema_with_empty_metadata(vec![
-            make_field("tableA", "a"),
-            make_field("tableA", "aa"),
-        ]);
-        let schema_c = make_schema_with_empty_metadata(vec![
-            make_field("tableC", "cc"),
-            make_field("tableC", "c"),
-        ]);
-        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
+        let schema_a = make_schema_with_empty_metadata(
+            vec![Some("tableA".into()), Some("tableA".into())],
+            vec!["a", "aa"],
+        );
+        let schema_c = make_schema_with_empty_metadata(
+            vec![Some("tableC".into()), Some("tableC".into())],
+            vec!["cc", "c"],
+        );
+        let schema_b =
+            make_schema_with_empty_metadata(vec![Some("tableB".into())], vec!["b"]);
         // non matching
-        let schema_f = make_schema_with_empty_metadata(vec![
-            make_field("tableC", "f"),
-            make_field("tableC", "ff"),
-        ]);
+        let schema_f = make_schema_with_empty_metadata(
+            vec![Some("tableC".into()), Some("tableC".into())],
+            vec!["f", "ff"],
+        );
         let schemas = vec![schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -349,9 +350,12 @@ mod test {
     fn normalize_cols_priority() {
         let expr = col("a") + col("b");
         // Schemas with multiple matches for column a, first takes priority
-        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
-        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
-        let schema_a2 = make_schema_with_empty_metadata(vec![make_field("tableA2", "a")]);
+        let schema_a =
+            make_schema_with_empty_metadata(vec![Some("tableA".into())], vec!["a"]);
+        let schema_b =
+            make_schema_with_empty_metadata(vec![Some("tableB".into())], vec!["b"]);
+        let schema_a2 =
+            make_schema_with_empty_metadata(vec![Some("tableA2".into())], vec!["a"]);
         let schemas = vec![schema_a2, schema_b, schema_a]
             .into_iter()
             .map(Arc::new)
@@ -367,7 +371,7 @@ mod test {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
         let schema_a =
-            make_schema_with_empty_metadata(vec![make_field("\"tableA\"", "a")]);
+            make_schema_with_empty_metadata(vec![Some("\"tableA\"".into())], vec!["a"]);
         let schemas = vec![schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -388,8 +392,16 @@ mod test {
         assert_eq!(unnormalized_expr, col("a") + col("b"));
     }
 
-    fn make_schema_with_empty_metadata(fields: Vec<DFField>) -> DFSchema {
-        DFSchema::new_with_metadata(fields, HashMap::new()).unwrap()
+    fn make_schema_with_empty_metadata(
+        qualifiers: Vec<Option<OwnedTableReference>>,
+        fields: Vec<&'static str>,
+    ) -> DFSchema {
+        let fields = fields
+            .iter()
+            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {
