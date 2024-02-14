@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarValue`]: stores single constant values
+//! [`ScalarValue`]: stores single  values
 
 mod struct_builder;
 
@@ -57,13 +57,33 @@ use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 pub use struct_builder::ScalarStructBuilder;
 
-/// A dynamically typed, nullable single value, (the single-valued counter-part
-/// to arrow [`Array`])
+/// A dynamically typed, nullable single value.
+///
+/// While an arrow  [`Array`]) stores one or more values of the same type, in a
+/// single column, a `ScalarValue` stores a single value of a single type, the
+/// equivalent of 1 row and one column.
+///
+/// ```text
+///  ┌────────┐
+///  │ value1 │
+///  │ value2 │                  ┌────────┐
+///  │ value3 │                  │ value2 │
+///  │  ...   │                  └────────┘
+///  │ valueN │
+///  └────────┘
+///
+///    Array                     ScalarValue
+///
+/// stores multiple,             stores a single,
+/// possibly null, values of     possible null, value
+/// the same type
+/// ```
 ///
 /// # Performance
 ///
-/// In general, please use arrow [`Array`]s rather than [`ScalarValue`] whenever
-/// possible, as it is far more efficient for multiple values.
+/// In general, performance will be better using arrow [`Array`]s rather than
+/// [`ScalarValue`], as it is far more efficient to process multiple values at
+/// once (vecctorized processing).
 ///
 /// # Example
 /// ```
