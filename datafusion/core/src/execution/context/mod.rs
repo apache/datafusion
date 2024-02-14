@@ -947,8 +947,7 @@ impl SessionContext {
         } else {
             Arc::new(Schema::empty())
         };
-        let provider =
-            MemTable::try_new(schema, batches.map(|batch| vec![batch]).collect())?;
+        let provider = MemTable::try_new(schema, vec![batches.collect()])?;
         Ok(DataFrame::new(
             self.state(),
             LogicalPlanBuilder::scan(
