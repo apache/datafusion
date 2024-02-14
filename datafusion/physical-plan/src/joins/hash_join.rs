@@ -60,8 +60,8 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result,
+    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
+    JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -408,6 +408,30 @@ impl HashJoinExec {
         // In current implementation right side is always probe side.
         JoinSide::Right
     }
+
+    /// project the output of the join
+    pub fn with_projection(&self, projection: &Vec<usize>) -> Result<Self> {
+        let new_schema = project_schema(&self.schema, Some(projection))?;
+        let new_column_indices = projection
+            .iter()
+            .map(|i| self.column_indices[*i].clone())
+            .collect();
+        Ok(Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            schema: new_schema,
+            left_fut: Default::default(),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            column_indices: new_column_indices,
+            null_equals_null: self.null_equals_null,
+            output_order: self.output_order.clone(),
+        })
+    }
 }
 
 impl DisplayAs for HashJoinExec {
@@ -418,6 +442,30 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                // If output schema is less than the schema of the join, then it means that projection is applied.
+                let display_projections = if self.schema.fields.len()
+                    != build_join_schema(
+                        &self.left.schema(),
+                        &self.right.schema(),
+                        &self.join_type,
+                    )
+                    .0
+                    .fields
+                    .len()
+                {
+                    format!(
+                        ", projection=[{}]",
+                        self.schema
+                            .fields
+                            .iter()
+                            .zip(self.column_indices.iter())
+                            .map(|(f, index)| format!("{}@{}", f.name(), index.index))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".to_string()
+                };
                 let on = self
                     .on
                     .iter()
@@ -426,8 +474,8 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
-                    self.mode, self.join_type, on, display_filter
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
+                    self.mode, self.join_type, on, display_filter, display_projections
                 )
             }
         }
