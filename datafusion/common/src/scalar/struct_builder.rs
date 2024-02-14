@@ -81,7 +81,7 @@ impl ScalarStructBuilder {
         for array in &arrays {
             if array.len() != 1 {
                 return _internal_err!(
-                    "Error building SclarValue::Struct. \
+                    "Error building ScalarValue::Struct. \
                 Expected array with exactly one element, found array with {} elements",
                     array.len()
                 );
