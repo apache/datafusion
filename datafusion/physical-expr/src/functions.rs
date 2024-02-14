@@ -33,9 +33,8 @@
 use crate::execution_props::ExecutionProps;
 use crate::sort_properties::SortProperties;
 use crate::{
-    array_expressions, conditional_expressions, datetime_expressions,
-    expressions::nullif_func, math_expressions, string_expressions, struct_expressions,
-    PhysicalExpr, ScalarFunctionExpr,
+    array_expressions, conditional_expressions, datetime_expressions, math_expressions,
+    string_expressions, struct_expressions, PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -281,9 +280,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
         BuiltinScalarFunction::Gcd => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::gcd)(args))
-        }
-        BuiltinScalarFunction::Isnan => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::isnan)(args))
         }
         BuiltinScalarFunction::Iszero => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::iszero)(args))
@@ -593,7 +589,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
-        BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {

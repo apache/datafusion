@@ -29,10 +29,14 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [features]
+# enable core functions
+core_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
-default = ["encoding_expressions"]
-# enable the encode/decode functions
+default = ["core_expressions", "encoding_expressions", "math_expressions"]
+# enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
+# enable math functions
+math_expressions = []
 
 
 [lib]
