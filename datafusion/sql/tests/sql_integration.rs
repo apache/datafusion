@@ -4345,9 +4345,25 @@ fn test_multi_grouping_sets() {
 
 #[test]
 fn test_field_not_found_window_function() {
-    let sql = "SELECT count() OVER (order by a);";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named a.", err.strip_backtrace());
+    let order_by_sql = "SELECT count() OVER (order by a);";
+    let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
+    assert_eq!(
+        "Schema error: No field named a.",
+        order_by_err.strip_backtrace()
+    );
+
+    let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
+    let partition_by_err =
+        logical_plan(partition_by_sql).expect_err("query should have failed");
+    assert_eq!(
+        "Schema error: No field named a.",
+        partition_by_err.strip_backtrace()
+    );
+
+    let qualified_sql =
+        "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
+    let expected = "Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\n    TableScan: orders";
+    quick_test(qualified_sql, expected);
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {
