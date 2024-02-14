@@ -27,6 +27,7 @@ use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
 use object_store::path::Path;
+use object_store::path::DELIMITER;
 use object_store::{ObjectMeta, ObjectStore};
 use std::sync::Arc;
 use url::Url;
@@ -194,7 +195,7 @@ impl ListingTableUrl {
         };
 
         // remove any segments that contain `=` as they are allowed even
-        // when ignore subdirectories is `true`
+        // when ignore subdirectories is `true`.
         let mut segments = all_segments.filter(|s| !s.contains('='));
 
         match &self.glob {
@@ -204,7 +205,7 @@ impl ListingTableUrl {
                         .next()
                         .map_or(false, |file_name| glob.matches(file_name))
                 } else {
-                    let stripped = segments.join("/");
+                    let stripped = segments.join(DELIMITER);
                     glob.matches(&stripped)
                 }
             }
@@ -221,7 +222,7 @@ impl ListingTableUrl {
 
     /// Returns `true` if `path` refers to a collection of objects
     pub fn is_collection(&self) -> bool {
-        self.url.as_str().ends_with('/')
+        self.url.as_str().ends_with(DELIMITER)
     }
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
@@ -230,7 +231,6 @@ impl ListingTableUrl {
         &'a self,
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
-        use object_store::path::DELIMITER;
         let mut stripped = path.as_ref().strip_prefix(self.prefix.as_ref())?;
         if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
