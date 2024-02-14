@@ -121,3 +121,42 @@ macro_rules! make_package {
         }
     };
 }
+
+/// Invokes a function on each element of an array and returns the result as a new array
+///
+/// $ARG: ArrayRef
+/// $NAME: name of the function (for error messages)
+/// $ARGS_TYPE: the type of array to cast the argument to
+/// $RETURN_TYPE: the type of array to return
+/// $FUNC: the function to apply to each element of $ARG
+///
+macro_rules! make_function_scalar_inputs_return_type {
+    ($ARG: expr, $NAME:expr, $ARG_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
+        let arg = downcast_arg!($ARG, $NAME, $ARG_TYPE);
+
+        arg.iter()
+            .map(|a| match a {
+                Some(a) => Some($FUNC(a)),
+                _ => None,
+            })
+            .collect::<$RETURN_TYPE>()
+    }};
+}
+
+/// Downcast an argument to a specific array type, returning an internal error
+/// if the cast fails
+///
+/// $ARG: ArrayRef
+/// $NAME: name of the argument (for error messages)
+/// $ARRAY_TYPE: the type of array to cast the argument to
+macro_rules! downcast_arg {
+    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast {} to {}",
+                $NAME,
+                std::any::type_name::<$ARRAY_TYPE>()
+            ))
+        })?
+    }};
+}
