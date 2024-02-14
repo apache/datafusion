@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType};
-use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
+use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -149,18 +149,9 @@ impl DisplayAs for StreamingTableExec {
                     write!(f, ", infinite_source=true")?;
                 }
 
-                self.projected_output_ordering
-                    .first()
-                    .map_or(Ok(()), |ordering| {
-                        if !ordering.is_empty() {
-                            write!(
-                                f,
-                                ", output_ordering={}",
-                                OutputOrderingDisplay(ordering)
-                            )?;
-                        }
-                        Ok(())
-                    })
+                display_orderings(f, &self.projected_output_ordering)?;
+
+                Ok(())
             }
         }
     }
