@@ -3336,7 +3336,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Error building SclarValue::Struct. Expected array with exactly one element, found array with 4 elements"
+        expected = "Error building ScalarValue::Struct. Expected array with exactly one element, found array with 4 elements"
     )]
     fn test_scalar_value_from_for_struct_should_panic() {
         let _ = ScalarStructBuilder::new()
