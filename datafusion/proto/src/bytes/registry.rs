@@ -42,4 +42,16 @@ impl FunctionRegistry for NoRegistry {
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{name}'")
     }
+    fn register_udaf(
+        &mut self,
+        _udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        unimplemented!()
+    }
+    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        unimplemented!()
+    }
+    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        unimplemented!()
+    }
 }

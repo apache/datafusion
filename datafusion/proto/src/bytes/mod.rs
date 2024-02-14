@@ -140,6 +140,24 @@ impl Serializeable for Expr {
                     Arc::new(|| unimplemented!()),
                 )))
             }
+            fn register_udaf(
+                &mut self,
+                _udaf: Arc<AggregateUDF>,
+            ) -> Result<Option<Arc<AggregateUDF>>> {
+                unimplemented!()
+            }
+            fn register_udf(
+                &mut self,
+                _udf: Arc<datafusion_expr::ScalarUDF>,
+            ) -> Result<Option<Arc<datafusion_expr::ScalarUDF>>> {
+                unimplemented!()
+            }
+            fn register_udwf(
+                &mut self,
+                _udaf: Arc<WindowUDF>,
+            ) -> Result<Option<Arc<WindowUDF>>> {
+                unimplemented!()
+            }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;
 

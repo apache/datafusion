@@ -44,10 +44,7 @@ pub trait FunctionRegistry {
     ///
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
-    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
-        not_impl_err!("Registering ScalarUDF")
-    }
-
+    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>>;
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
     ///
@@ -56,18 +53,14 @@ pub trait FunctionRegistry {
     fn register_udaf(
         &mut self,
         _udaf: Arc<AggregateUDF>,
-    ) -> Result<Option<Arc<AggregateUDF>>> {
-        not_impl_err!("Registering AggregateUDF")
-    }
+    ) -> Result<Option<Arc<AggregateUDF>>>;
 
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
-    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
-        not_impl_err!("Registering WindowUDF")
-    }
+    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>>;
 }
 
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
@@ -133,5 +126,14 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
+    }
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.udafs.insert(udaf.name().into(), udaf))
+    }
+    fn register_udwf(&mut self, udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.udwfs.insert(udaf.name().into(), udaf))
     }
 }
