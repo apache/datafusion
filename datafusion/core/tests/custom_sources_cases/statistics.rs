@@ -20,21 +20,22 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::{
     datasource::{TableProvider, TableType},
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        expressions::PhysicalSortExpr, ColumnStatistics, DisplayAs, DisplayFormatType,
-        ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+        SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
 };
+use datafusion_common::{project_schema, stats::Precision};
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use async_trait::async_trait;
-use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion_common::{project_schema, stats::Precision};
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -42,6 +43,7 @@ use datafusion_common::{project_schema, stats::Precision};
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
+    cache: PlanPropertiesCache,
 }
 
 impl StatisticsValidation {
@@ -51,7 +53,26 @@ impl StatisticsValidation {
             schema.fields().len(),
             "the column statistics vector length should be the number of fields"
         );
-        Self { stats, schema }
+        let cache = PlanPropertiesCache::new_default(schema.clone());
+        Self {
+            stats,
+            schema,
+            cache,
+        }
+        .with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(2));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -131,16 +152,8 @@ impl ExecutionPlan for StatisticsValidation {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(2)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

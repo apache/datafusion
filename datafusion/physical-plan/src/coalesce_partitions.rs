@@ -21,17 +21,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
-use super::{DisplayAs, SendableRecordBatchStream, Statistics};
+use super::{DisplayAs, PlanPropertiesCache, SendableRecordBatchStream, Statistics};
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -41,20 +38,41 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl CoalescePartitionsExec {
     /// Create a new CoalescePartitionsExec
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
+        .with_cache()
     }
 
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let mut eq_properties = self.input.equivalence_properties().clone();
+        // Coalesce partitions loses existing orderings.
+        eq_properties.clear_orderings();
+
+        // Output Partitioning
+        let output_partitioning = Partitioning::UnknownPartitioning(1);
+
+        // Execution Mode
+        let exec_mode = self.input.unbounded_output();
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -78,34 +96,12 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut output_eq = self.input.equivalence_properties();
-        // Coalesce partitions loses existing orderings.
-        output_eq.clear_orderings();
-        output_eq
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

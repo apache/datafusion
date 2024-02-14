@@ -19,10 +19,10 @@
 //! type, conceptually is like joining each row with all the values in the list column.
 use std::{any::Any, sync::Arc};
 
-use super::DisplayAs;
+use super::{DisplayAs, PlanPropertiesCache};
 use crate::{
-    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
+    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, PhysicalExpr,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -60,6 +60,7 @@ pub struct UnnestExec {
     options: UnnestOptions,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl UnnestExec {
@@ -70,13 +71,28 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         UnnestExec {
             input,
             schema,
             column,
             options,
             metrics: Default::default(),
+            cache,
         }
+        .with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(self.input.output_partitioning().clone());
+
+        // Execution Mode
+        new_cache = new_cache.with_exec_mode(self.input.unbounded_output());
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -99,19 +115,12 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
     }
 
     fn with_new_children(
@@ -128,14 +137,6 @@ impl ExecutionPlan for UnnestExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn execute(

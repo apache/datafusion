@@ -1995,6 +1995,7 @@ mod tests {
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
+    use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -2561,7 +2562,28 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        schema: SchemaRef,
+        cache: PlanPropertiesCache,
+    }
+
+    impl NoOpExecutionPlan {
+        fn new(schema: SchemaRef) -> Self {
+            let cache = PlanPropertiesCache::new_default(schema.clone());
+            Self { cache }.with_cache()
+        }
+
+        fn with_cache(mut self) -> Self {
+            let mut new_cache = self.cache;
+            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+            // Output Partitioning
+            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+            // Execution Mode
+            new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
+
+            self.cache = new_cache;
+            self
+        }
     }
 
     impl DisplayAs for NoOpExecutionPlan {
@@ -2580,16 +2602,8 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.schema.clone()
-        }
-
-        fn output_partitioning(&self) -> Partitioning {
-            Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            None
+        fn cache(&self) -> &PlanPropertiesCache {
+            &self.cache
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -2627,13 +2641,9 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Ok(Some(Arc::new(NoOpExecutionPlan {
-                schema: SchemaRef::new(Schema::new(vec![Field::new(
-                    "b",
-                    DataType::Int32,
-                    false,
-                )])),
-            })))
+            Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
+                Schema::new(vec![Field::new("b", DataType::Int32, false)]),
+            )))))
         }
     }
 

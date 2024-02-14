@@ -24,8 +24,8 @@ use std::task::{Context, Poll};
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -48,6 +48,7 @@ pub struct MemoryExec {
     projection: Option<Vec<usize>>,
     // Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
+    cache: PlanPropertiesCache,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -100,29 +101,13 @@ impl ExecutionPlan for MemoryExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.sort_information
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(self.schema(), &self.sort_information)
     }
 
     fn with_new_children(
@@ -168,13 +153,16 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
+        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
             projected_schema,
             projection,
             sort_information: vec![],
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
@@ -203,11 +191,35 @@ impl MemoryExec {
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
         self.sort_information = sort_information;
-        self
+
+        // With updated sort information, we need to update equivalence properties also.
+        let eq_properties = self.equivalent_properties_helper();
+        self.cache = self.cache.with_eq_properties(eq_properties);
+        self.with_cache()
     }
 
     pub fn original_schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn equivalent_properties_helper(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(self.schema(), &self.sort_information)
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = self.equivalent_properties_helper();
+
+        // Output Partitioning
+        let output_partitioning =
+            Partitioning::UnknownPartitioning(self.partitions.len());
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -292,7 +304,7 @@ mod tests {
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let expected_output_order = vec![
+        let sort1 = vec![
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -302,18 +314,22 @@ mod tests {
                 options: SortOptions::default(),
             },
         ];
-        let expected_order_eq = vec![PhysicalSortExpr {
+        let sort2 = vec![PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
         }];
-        let sort_information =
-            vec![expected_output_order.clone(), expected_order_eq.clone()];
+        let mut expected_output_order = vec![];
+        expected_output_order.extend(sort1.clone());
+        expected_output_order.extend(sort2.clone());
+
+        let sort_information = vec![sort1.clone(), sort2.clone()];
         let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
             .with_sort_information(sort_information);
 
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
         let eq_properties = mem_exec.equivalence_properties();
-        assert!(eq_properties.oeq_class().contains(&expected_order_eq));
+        assert!(eq_properties.oeq_class().contains(&sort1));
+        assert!(eq_properties.oeq_class().contains(&sort2));
         Ok(())
     }
 }

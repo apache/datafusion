@@ -26,15 +26,14 @@ use std::{
 
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortExpr;
 
 use futures::Stream;
 use tokio::sync::Barrier;
@@ -121,6 +120,7 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
+    cache: PlanPropertiesCache,
 }
 
 impl MockExec {
@@ -132,11 +132,14 @@ impl MockExec {
     /// ensure any poll loops are correct. This behavior can be
     /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Self {
             data,
             schema,
             use_task: true,
+            cache,
         }
+        .with_cache()
     }
 
     /// If `use_task` is true (the default) then the batches are sent
@@ -144,6 +147,19 @@ impl MockExec {
     /// not immediately ready
     pub fn with_use_task(mut self, use_task: bool) -> Self {
         self.use_task = use_task;
+        self
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
         self
     }
 }
@@ -167,20 +183,12 @@ impl ExecutionPlan for MockExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        vec![]
     }
 
     fn with_new_children(
@@ -276,6 +284,7 @@ pub struct BarrierExec {
 
     /// all streams wait on this barrier to produce
     barrier: Arc<Barrier>,
+    cache: PlanPropertiesCache,
 }
 
 impl BarrierExec {
@@ -283,11 +292,14 @@ impl BarrierExec {
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
         let barrier = Arc::new(Barrier::new(data.len() + 1));
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Self {
             data,
             schema,
             barrier,
+            cache,
         }
+        .with_cache()
     }
 
     /// wait until all the input streams and this function is ready
@@ -295,6 +307,20 @@ impl BarrierExec {
         println!("BarrierExec::wait waiting on barrier");
         self.barrier.wait().await;
         println!("BarrierExec::wait done waiting");
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache
+            .with_partitioning(Partitioning::UnknownPartitioning(self.data.len()));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -317,16 +343,8 @@ impl ExecutionPlan for BarrierExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.data.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -383,7 +401,7 @@ impl ExecutionPlan for BarrierExec {
 /// A mock execution plan that errors on a call to execute
 #[derive(Debug)]
 pub struct ErrorExec {
-    schema: SchemaRef,
+    cache: PlanPropertiesCache,
 }
 
 impl Default for ErrorExec {
@@ -399,7 +417,21 @@ impl ErrorExec {
             DataType::Int64,
             true,
         )]));
-        Self { schema }
+        let cache = PlanPropertiesCache::new_default(schema.clone());
+        Self { cache }.with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -422,16 +454,8 @@ impl ExecutionPlan for ErrorExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -460,6 +484,7 @@ impl ExecutionPlan for ErrorExec {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
+    cache: PlanPropertiesCache,
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
@@ -468,10 +493,26 @@ impl StatisticsExec {
                 .column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
+        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
+            cache,
         }
+        .with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(2));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -499,16 +540,8 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(2)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -548,16 +581,20 @@ pub struct BlockingExec {
 
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
+    cache: PlanPropertiesCache,
 }
 
 impl BlockingExec {
     /// Create new [`BlockingExec`] with a give schema and number of partitions.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Self {
             schema,
             n_partitions,
             refs: Default::default(),
+            cache,
         }
+        .with_cache()
     }
 
     /// Weak pointer that can be used for ref-counting this execution plan and its streams.
@@ -567,6 +604,20 @@ impl BlockingExec {
     /// loop. Use [`assert_strong_count_converges_to_zero`] to archive this.
     pub fn refs(&self) -> Weak<()> {
         Arc::downgrade(&self.refs)
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache
+            .with_partitioning(Partitioning::UnknownPartitioning(self.n_partitions));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -589,21 +640,13 @@ impl ExecutionPlan for BlockingExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.n_partitions)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(
@@ -681,21 +724,40 @@ pub struct PanicExec {
     /// Number of output partitions. Each partition will produce this
     /// many empty output record batches prior to panicing
     batches_until_panics: Vec<usize>,
+    cache: PlanPropertiesCache,
 }
 
 impl PanicExec {
     /// Create new [`PanicExec`] with a give schema and number of
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Self {
             schema,
             batches_until_panics: vec![0; n_partitions],
+            cache,
         }
+        .with_cache()
     }
 
     /// Set the number of batches prior to panic for a partition
     pub fn with_partition_panic(mut self, partition: usize, count: usize) -> Self {
         self.batches_until_panics[partition] = count;
+        self
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        let num_partitions = self.batches_until_panics.len();
+        new_cache = new_cache
+            .with_partitioning(Partitioning::UnknownPartitioning(num_partitions));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
         self
     }
 }
@@ -719,22 +781,13 @@ impl ExecutionPlan for PanicExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        let num_partitions = self.batches_until_panics.len();
-        Partitioning::UnknownPartitioning(num_partitions)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

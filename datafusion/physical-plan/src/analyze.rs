@@ -20,9 +20,8 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
-use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{DisplayAs, Distribution, SendableRecordBatchStream};
+use super::{DisplayAs, Distribution, PlanPropertiesCache, SendableRecordBatchStream};
 
 use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
@@ -45,6 +44,7 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
+    cache: PlanPropertiesCache,
 }
 
 impl AnalyzeExec {
@@ -55,12 +55,15 @@ impl AnalyzeExec {
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         AnalyzeExec {
             verbose,
             show_statistics,
             input,
             schema,
+            cache,
         }
+        .with_cache()
     }
 
     /// access to verbose
@@ -76,6 +79,19 @@ impl AnalyzeExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = self.input.unbounded_output();
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -99,8 +115,8 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -110,26 +126,6 @@ impl ExecutionPlan for AnalyzeExec {
     /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![]
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            internal_err!("Streaming execution of AnalyzeExec is not possible")
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

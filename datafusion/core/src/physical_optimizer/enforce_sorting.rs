@@ -64,7 +64,6 @@ use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion_physical_plan::unbounded_output;
 
 use itertools::izip;
 
@@ -208,7 +207,7 @@ fn replace_with_partial_sort(
     let plan_any = plan.as_any();
     if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
         let child = sort_plan.children()[0].clone();
-        if !unbounded_output(&child) {
+        if !child.unbounded_output().is_unbounded() {
             return Ok(plan);
         }
 
@@ -574,7 +573,7 @@ fn remove_corresponding_sort_from_sub_plan(
         {
             node.plan = Arc::new(RepartitionExec::try_new(
                 node.children[0].plan.clone(),
-                repartition.output_partitioning(),
+                repartition.output_partitioning().clone(),
             )?) as _;
         }
     };

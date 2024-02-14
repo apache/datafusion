@@ -32,13 +32,14 @@ use std::task::{Context, Poll};
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinFilter, JoinOn,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinFilter, JoinOn,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    exec_mode_flatten, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, PhysicalExpr, PlanPropertiesCache, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;
@@ -53,9 +54,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExprRef, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
 
@@ -81,12 +80,11 @@ pub struct SortMergeJoinExec {
     left_sort_exprs: Vec<PhysicalSortExpr>,
     /// The right SortExpr
     right_sort_exprs: Vec<PhysicalSortExpr>,
-    /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
     pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    cache: PlanPropertiesCache,
 }
 
 impl SortMergeJoinExec {
@@ -137,19 +135,9 @@ impl SortMergeJoinExec {
             })
             .unzip();
 
-        let output_ordering = calculate_join_output_ordering(
-            left.output_ordering().unwrap_or(&[]),
-            right.output_ordering().unwrap_or(&[]),
-            join_type,
-            &on,
-            left_schema.fields.len(),
-            &Self::maintains_input_order(join_type),
-            Some(Self::probe_side(&join_type)),
-        );
-
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Ok(Self {
             left,
             right,
@@ -160,10 +148,11 @@ impl SortMergeJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             left_sort_exprs,
             right_sort_exprs,
-            output_ordering,
             sort_options,
             null_equals_null,
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     /// Get probe side (e.g streaming side) information for this sort merge join.
@@ -211,6 +200,35 @@ impl SortMergeJoinExec {
     pub fn left(&self) -> &dyn ExecutionPlan {
         self.left.as_ref()
     }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = join_equivalence_properties(
+            self.left.equivalence_properties().clone(),
+            self.right.equivalence_properties().clone(),
+            &self.join_type,
+            self.schema(),
+            &self.maintains_input_order(),
+            Some(Self::probe_side(&self.join_type)),
+            self.on(),
+        );
+
+        // Output Partitioning
+        let left_columns_len = self.left.schema().fields.len();
+        let output_partitioning = partitioned_join_output_partitioning(
+            self.join_type,
+            self.left.output_partitioning().clone(),
+            self.right.output_partitioning().clone(),
+            left_columns_len,
+        );
+
+        // Execution Mode
+        let exec_mode = exec_mode_flatten([&self.left, &self.right]);
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
 }
 
 impl DisplayAs for SortMergeJoinExec {
@@ -243,8 +261,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -267,34 +285,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         Self::maintains_input_order(self.join_type)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            Some(Self::probe_side(&self.join_type)),
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

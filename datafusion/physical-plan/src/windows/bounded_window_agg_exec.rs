@@ -35,7 +35,7 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    InputOrderMode, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+    InputOrderMode, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
     Statistics, WindowExpr,
 };
 
@@ -58,9 +58,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use ahash::RandomState;
 use futures::stream::Stream;
@@ -91,6 +89,7 @@ pub struct BoundedWindowAggExec {
     // `ordered_partition_by_indices` would be 0, 1.
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    cache: PlanPropertiesCache,
 }
 
 impl BoundedWindowAggExec {
@@ -121,7 +120,8 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
-        Ok(Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let window = Self {
             input,
             window_expr,
             schema,
@@ -129,7 +129,9 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
-        })
+            cache,
+        };
+        Ok(window.with_cache())
     }
 
     /// Window expressions
@@ -179,6 +181,28 @@ impl BoundedWindowAggExec {
             }
         })
     }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties =
+            window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
+
+        // As we can have repartitioning using the partition keys, this can
+        // be either one or more than one, depending on the presence of
+        // repartitioning.
+        let output_partitioning = self.input.output_partitioning().clone();
+
+        // unbounded output
+        let unbounded_output = self.input.unbounded_output();
+
+        // Construct properties cache
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            output_partitioning,
+            unbounded_output,
+        );
+        self
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -216,28 +240,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // As we can have repartitioning using the partition keys, this can
-        // be either one or more than one, depending on the presence of
-        // repartitioning.
-        self.input.output_partitioning()
-    }
-
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input().output_ordering()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -263,11 +271,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         } else {
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

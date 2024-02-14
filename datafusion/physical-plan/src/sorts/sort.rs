@@ -36,22 +36,22 @@ use crate::sorts::streaming_merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
+    ExecutionPlan, Partitioning, PlanPropertiesCache, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
@@ -676,6 +676,7 @@ pub struct SortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    cache: PlanPropertiesCache,
 }
 
 impl SortExec {
@@ -692,13 +693,16 @@ impl SortExec {
     /// Create a new sort execution plan that produces a single,
     /// sorted output partition.
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
         Self {
             expr,
             input,
             metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning: false,
             fetch: None,
+            cache,
         }
+        .with_cache()
     }
 
     /// Create a new sort execution plan with the option to preserve
@@ -732,7 +736,7 @@ impl SortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
-        self
+        self.with_cache()
     }
 
     /// Modify how many rows to include in the result
@@ -761,6 +765,35 @@ impl SortExec {
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
     }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        // Reset the ordering equivalence class with the new ordering:
+        let eq_properties = self
+            .input
+            .equivalence_properties()
+            .clone()
+            .with_reorder(self.expr.to_vec());
+
+        // Output Partitioning
+        let output_partitioning = if self.preserve_partitioning {
+            self.input.output_partitioning().clone()
+        } else {
+            Partitioning::UnknownPartitioning(1)
+        };
+
+        // Execution Mode
+        let exec_mode = match self.input.unbounded_output() {
+            ExecutionMode::Unbounded | ExecutionMode::InExecutable => {
+                ExecutionMode::InExecutable
+            }
+            ExecutionMode::Bounded => ExecutionMode::Bounded,
+        };
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
 }
 
 impl DisplayAs for SortExec {
@@ -788,28 +821,8 @@ impl ExecutionPlan for SortExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        if self.preserve_partitioning {
-            self.input.output_partitioning()
-        } else {
-            Partitioning::UnknownPartitioning(1)
-        }
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            plan_err!("Sort Error: Can not sort unbounded inputs.")
-        } else {
-            Ok(false)
-        }
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -828,17 +841,6 @@ impl ExecutionPlan for SortExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        Some(&self.expr)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Reset the ordering equivalence class with the new ordering:
-        self.input
-            .equivalence_properties()
-            .with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

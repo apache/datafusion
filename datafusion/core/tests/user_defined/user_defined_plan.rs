@@ -82,16 +82,16 @@ use datafusion::{
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
-        expressions::PhysicalSortExpr, DisplayAs, DisplayFormatType, Distribution,
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+        RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
+use datafusion_common::arrow_datafusion_err;
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use async_trait::async_trait;
-use datafusion_common::arrow_datafusion_err;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -395,10 +395,10 @@ impl ExtensionPlanner for TopKPlanner {
                 assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
                 assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
                 // figure out input name
-                Some(Arc::new(TopKExec {
-                    input: physical_inputs[0].clone(),
-                    k: topk_node.k,
-                }))
+                Some(Arc::new(TopKExec::new(
+                    physical_inputs[0].clone(),
+                    topk_node.k,
+                )))
             } else {
                 None
             },
@@ -412,6 +412,27 @@ struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maxium number of values
     k: usize,
+    cache: PlanPropertiesCache,
+}
+
+impl TopKExec {
+    fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
+        Self { input, k, cache }.with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
+    }
 }
 
 impl Debug for TopKExec {
@@ -441,16 +462,8 @@ impl ExecutionPlan for TopKExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -465,10 +478,7 @@ impl ExecutionPlan for TopKExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TopKExec {
-            input: children[0].clone(),
-            k: self.k,
-        }))
+        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
     }
 
     /// Execute one partition and return an iterator over RecordBatch

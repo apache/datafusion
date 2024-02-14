@@ -22,12 +22,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::{
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+use super::{
+    DisplayAs, ExecutionMode, PlanPropertiesCache, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
+use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
@@ -51,17 +51,21 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
         GlobalLimitExec {
             input,
             skip,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
+        .with_cache()
     }
 
     /// Input execution plan
@@ -77,6 +81,21 @@ impl GlobalLimitExec {
     /// Maximum number of rows to fetch
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = self.input.equivalence_properties().clone();
+
+        // Output Partitioning
+        let output_partitioning = Partitioning::UnknownPartitioning(1);
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -105,8 +124,8 @@ impl ExecutionPlan for GlobalLimitExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -116,10 +135,6 @@ impl ExecutionPlan for GlobalLimitExec {
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
     }
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
@@ -127,14 +142,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -146,10 +153,6 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
     }
 
     fn execute(
@@ -272,16 +275,20 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
     pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
         Self {
             input,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
+        .with_cache()
     }
 
     /// Input execution plan
@@ -292,6 +299,21 @@ impl LocalLimitExec {
     /// Maximum number of rows to fetch
     pub fn fetch(&self) -> usize {
         self.fetch
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = self.input.equivalence_properties().clone();
+
+        // Output Partitioning
+        let output_partitioning = self.input.output_partitioning().clone();
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -315,37 +337,20 @@ impl ExecutionPlan for LocalLimitExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
 
-    // Local limit will not change the input plan's ordering
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
     }
 
     fn with_new_children(

@@ -20,8 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
-use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
+use super::{
+    common, DisplayAs, ExecutionMode, PlanPropertiesCache, SendableRecordBatchStream,
+    Statistics,
+};
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -39,6 +41,7 @@ pub struct ValuesExec {
     schema: SchemaRef,
     /// The data
     data: Vec<RecordBatch>,
+    cache: PlanPropertiesCache,
 }
 
 impl ValuesExec {
@@ -85,7 +88,7 @@ impl ValuesExec {
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(schema.clone(), arr)?;
         let data: Vec<RecordBatch> = vec![batch];
-        Ok(Self { schema, data })
+        Self::try_new_from_batches(schema, data)
     }
 
     /// Create a new plan using the provided schema and batches.
@@ -109,15 +112,31 @@ impl ValuesExec {
             }
         }
 
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Ok(ValuesExec {
             schema,
             data: batches,
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     /// provides the data
     pub fn data(&self) -> Vec<RecordBatch> {
         self.data.clone()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -141,30 +160,22 @@ impl ExecutionPlan for ValuesExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ValuesExec {
-            schema: self.schema.clone(),
-            data: self.data.clone(),
-        }))
+        Ok(Arc::new(ValuesExec::try_new_from_batches(
+            self.schema.clone(),
+            self.data.clone(),
+        )?))
     }
 
     fn execute(

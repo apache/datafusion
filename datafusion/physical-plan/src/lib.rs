@@ -31,11 +31,11 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalSortExpr, PhysicalSortRequirement,
+    EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use futures::stream::TryStreamExt;
@@ -121,21 +121,23 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef;
+    fn schema(&self) -> SchemaRef {
+        self.cache().schema().clone()
+    }
+
+    fn cache(&self) -> &PlanPropertiesCache;
 
     /// Specifies how the output of this `ExecutionPlan` is split into
     /// partitions.
-    fn output_partitioning(&self) -> Partitioning;
+    fn output_partitioning(&self) -> &Partitioning {
+        &self.cache().partitioning
+    }
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        if _children.iter().any(|&x| x) {
-            plan_err!("Plan does not support infinite stream from its children")
-        } else {
-            Ok(false)
-        }
+    fn unbounded_output(&self) -> ExecutionMode {
+        self.cache().exec_mode
     }
 
     /// If the output of this `ExecutionPlan` within each partition is sorted,
@@ -148,7 +150,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// It is safe to return `None` here if your `ExecutionPlan` does not
     /// have any particular output order here
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.cache().output_ordering.as_deref()
+    }
 
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -225,8 +229,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new(self.schema())
+    fn equivalence_properties(&self) -> &EquivalenceProperties {
+        &self.cache().eq_properties
     }
 
     /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
@@ -446,6 +450,147 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ExecutionMode {
+    Bounded,
+    Unbounded,
+    InExecutable,
+}
+
+impl ExecutionMode {
+    pub fn is_unbounded(&self) -> bool {
+        matches!(self, ExecutionMode::Unbounded)
+    }
+
+    pub fn is_executable(&self) -> bool {
+        matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
+    }
+}
+
+fn exec_mode_flatten_helper(modes: &[ExecutionMode]) -> ExecutionMode {
+    let mut result = ExecutionMode::Bounded;
+    for mode in modes {
+        match (mode, result) {
+            (ExecutionMode::InExecutable, _) | (_, ExecutionMode::InExecutable) => {
+                // If any of the modes is `InExecutable`. result is `InExecutable`
+                // Return immediately
+                return ExecutionMode::InExecutable;
+            }
+            (
+                ExecutionMode::Unbounded,
+                ExecutionMode::Bounded | ExecutionMode::Unbounded,
+            )
+            | (ExecutionMode::Bounded, ExecutionMode::Unbounded) => {
+                // Unbounded mode eats up bounded mode.
+                result = ExecutionMode::Unbounded;
+            }
+            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
+                // When both modes are bounded, result is bounded
+                result = ExecutionMode::Bounded;
+            }
+        }
+    }
+    result
+}
+
+fn exec_mode_flatten<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> ExecutionMode {
+    let modes = children
+        .into_iter()
+        .map(|child| child.unbounded_output())
+        .collect::<Vec<_>>();
+    exec_mode_flatten_helper(&modes)
+}
+
+fn exec_mode_safe_flatten_helper(modes: &[ExecutionMode]) -> ExecutionMode {
+    let mut result = ExecutionMode::Bounded;
+    for mode in modes {
+        match (mode, result) {
+            (ExecutionMode::Unbounded | ExecutionMode::InExecutable, _)
+            | (_, ExecutionMode::Unbounded | ExecutionMode::InExecutable) => {
+                // If any of the modes is `InExecutable`. result is `InExecutable`
+                // Return immediately
+                return ExecutionMode::InExecutable;
+            }
+            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
+                // When both modes are bounded, result is bounded
+                result = ExecutionMode::Bounded;
+            }
+        }
+    }
+    result
+}
+
+fn exec_mode_safe_flatten<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> ExecutionMode {
+    let modes = children
+        .into_iter()
+        .map(|child| child.unbounded_output())
+        .collect::<Vec<_>>();
+    exec_mode_safe_flatten_helper(&modes)
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanPropertiesCache {
+    pub eq_properties: EquivalenceProperties,
+    pub partitioning: Partitioning,
+    pub exec_mode: ExecutionMode,
+    output_ordering: Option<LexOrdering>,
+}
+
+impl PlanPropertiesCache {
+    pub fn new(
+        eq_properties: EquivalenceProperties,
+        partitioning: Partitioning,
+        exec_mode: ExecutionMode,
+    ) -> Self {
+        let output_ordering = eq_properties.oeq_class().output_ordering();
+        Self {
+            eq_properties,
+            partitioning,
+            exec_mode,
+            output_ordering,
+        }
+    }
+
+    pub fn new_default(schema: SchemaRef) -> PlanPropertiesCache {
+        // Defaults are most restrictive possible values.
+        let eq_properties = EquivalenceProperties::new(schema);
+        let partitioning = Partitioning::UnknownPartitioning(0);
+        let exec_mode = ExecutionMode::InExecutable;
+        let output_ordering = None;
+        Self {
+            eq_properties,
+            partitioning,
+            exec_mode,
+            output_ordering,
+        }
+    }
+
+    pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+        self.partitioning = partitioning;
+        self
+    }
+
+    pub fn with_exec_mode(mut self, exec_mode: ExecutionMode) -> Self {
+        self.exec_mode = exec_mode;
+        self
+    }
+
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        self.output_ordering = eq_properties.oeq_class().output_ordering();
+        self.eq_properties = eq_properties;
+        self
+    }
+
+    /// Get schema of the node.
+    fn schema(&self) -> &SchemaRef {
+        self.eq_properties.schema()
+    }
+}
+
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
 /// Currently there are 3 kinds of execution plan which needs data exchange
@@ -593,17 +738,6 @@ pub fn execute_stream_partitioned(
         streams.push(plan.execute(i, context.clone())?);
     }
     Ok(streams)
-}
-
-// Get output (un)boundedness information for the given `plan`.
-pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let children_unbounded_output = plan
-        .children()
-        .iter()
-        .map(unbounded_output)
-        .collect::<Vec<_>>();
-    plan.unbounded_output(&children_unbounded_output)
-        .unwrap_or(true)
 }
 
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].

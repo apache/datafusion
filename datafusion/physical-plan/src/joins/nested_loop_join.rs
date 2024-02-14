@@ -34,8 +34,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream,
+    exec_mode_safe_flatten, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -49,7 +49,6 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -93,6 +92,7 @@ pub struct NestedLoopJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl NestedLoopJoinExec {
@@ -108,6 +108,7 @@ impl NestedLoopJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
+        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
         Ok(NestedLoopJoinExec {
             left,
             right,
@@ -117,7 +118,9 @@ impl NestedLoopJoinExec {
             inner_table: Default::default(),
             column_indices,
             metrics: Default::default(),
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     /// left side
@@ -138,6 +141,40 @@ impl NestedLoopJoinExec {
     /// How the join is performed
     pub fn join_type(&self) -> &JoinType {
         &self.join_type
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = join_equivalence_properties(
+            self.left.equivalence_properties().clone(),
+            self.right.equivalence_properties().clone(),
+            &self.join_type,
+            self.schema(),
+            &self.maintains_input_order(),
+            None,
+            // No on columns in nested loop join
+            &[],
+        );
+
+        // Output Partitioning
+        // the partition of output is determined by the rule of `required_input_distribution`
+        let output_partitioning = if self.join_type == JoinType::Full {
+            self.left.output_partitioning().clone()
+        } else {
+            partitioned_join_output_partitioning(
+                self.join_type,
+                self.left.output_partitioning().clone(),
+                self.right.output_partitioning().clone(),
+                self.left.schema().fields.len(),
+            )
+        };
+
+        // Execution Mode
+        let exec_mode = exec_mode_safe_flatten([&self.left, &self.right]);
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -164,44 +201,12 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        // the partition of output is determined by the rule of `required_input_distribution`
-        if self.join_type == JoinType::Full {
-            self.left.output_partitioning()
-        } else {
-            partitioned_join_output_partitioning(
-                self.join_type,
-                self.left.output_partitioning(),
-                self.right.output_partitioning(),
-                self.left.schema().fields.len(),
-            )
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // no specified order for the output
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         distribution_from_join_type(&self.join_type)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            None,
-            // No on columns in nested loop join
-            &[],
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -754,7 +759,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
     fn build_table(
         a: (&str, &Vec<i32>),

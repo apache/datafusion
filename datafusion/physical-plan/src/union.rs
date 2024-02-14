@@ -27,12 +27,11 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    expressions::PhysicalSortExpr,
+    exec_mode_flatten,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::common::get_meet_of_orderings;
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
@@ -91,108 +90,29 @@ pub struct UnionExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Schema of Union
-    schema: SchemaRef,
+    cache: PlanPropertiesCache,
 }
 
 impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-
+        let cache = PlanPropertiesCache::new_default(schema);
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema,
+            cache,
         }
+        .with_cache()
     }
 
     /// Get inputs of the execution plan
     pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
         &self.inputs
     }
-}
 
-impl DisplayAs for UnionExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "UnionExec")
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for UnionExec {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children.iter().any(|x| *x))
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        self.inputs.clone()
-    }
-
-    /// Output of the union is the combination of all output partitions of the inputs
-    fn output_partitioning(&self) -> Partitioning {
-        // Output the combination of all output partitions of the inputs if the Union is not partition aware
-        let num_partitions = self
-            .inputs
-            .iter()
-            .map(|plan| plan.output_partitioning().partition_count())
-            .sum();
-
-        Partitioning::UnknownPartitioning(num_partitions)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // The output ordering is the "meet" of its input orderings.
-        // The meet is the finest ordering that satisfied by all the input
-        // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
-        get_meet_of_orderings(&self.inputs)
-    }
-
-    fn maintains_input_order(&self) -> Vec<bool> {
-        // If the Union has an output ordering, it maintains at least one
-        // child's ordering (i.e. the meet).
-        // For instance, assume that the first child is SortExpr('a','b','c'),
-        // the second child is SortExpr('a','b') and the third child is
-        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
-        // which is the "meet" of all input orderings. In this example, this
-        // function will return vec![false, true, true], indicating that we
-        // preserve the orderings for the 2nd and the 3rd children.
-        if let Some(output_ordering) = self.output_ordering() {
-            self.inputs()
-                .iter()
-                .map(|child| {
-                    if let Some(child_ordering) = child.output_ordering() {
-                        output_ordering.len() == child_ordering.len()
-                    } else {
-                        false
-                    }
-                })
-                .collect()
-        } else {
-            vec![false; self.inputs().len()]
-        }
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
         // TODO: In some cases, we should be able to preserve some equivalence
         //       classes and constants. Add support for such cases.
         let children_eqs = self
@@ -200,7 +120,7 @@ impl ExecutionPlan for UnionExec {
             .iter()
             .map(|child| child.equivalence_properties())
             .collect::<Vec<_>>();
-        let mut result = EquivalenceProperties::new(self.schema());
+        let mut eq_properties = EquivalenceProperties::new(self.schema());
         // Use the ordering equivalence class of the first child as the seed:
         let mut meets = children_eqs[0]
             .oeq_class()
@@ -228,8 +148,77 @@ impl ExecutionPlan for UnionExec {
         }
         // We know have all the valid orderings after union, remove redundant
         // entries (implicitly) and return:
-        result.add_new_orderings(meets);
-        result
+        eq_properties.add_new_orderings(meets);
+
+        // Output Partitioning
+        // Output the combination of all output partitions of the inputs if the Union is not partition aware
+        let num_partitions = self
+            .inputs
+            .iter()
+            .map(|plan| plan.output_partitioning().partition_count())
+            .sum();
+        let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
+
+        // Execution Mode
+        let exec_mode = exec_mode_flatten(self.inputs.iter());
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
+}
+
+impl DisplayAs for UnionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "UnionExec")
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for UnionExec {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        self.inputs.clone()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // If the Union has an output ordering, it maintains at least one
+        // child's ordering (i.e. the meet).
+        // For instance, assume that the first child is SortExpr('a','b','c'),
+        // the second child is SortExpr('a','b') and the third child is
+        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
+        // which is the "meet" of all input orderings. In this example, this
+        // function will return vec![false, true, true], indicating that we
+        // preserve the orderings for the 2nd and the 3rd children.
+        if let Some(output_ordering) = self.output_ordering() {
+            self.inputs()
+                .iter()
+                .map(|child| {
+                    if let Some(child_ordering) = child.output_ordering() {
+                        output_ordering.len() == child_ordering.len()
+                    } else {
+                        false
+                    }
+                })
+                .collect()
+        } else {
+            vec![false; self.inputs().len()]
+        }
     }
 
     fn with_new_children(
@@ -328,8 +317,7 @@ pub struct InterleaveExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Schema of Interleave
-    schema: SchemaRef,
+    cache: PlanPropertiesCache,
 }
 
 impl InterleaveExec {
@@ -342,17 +330,33 @@ impl InterleaveExec {
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
         }
-
+        let cache = PlanPropertiesCache::new_default(schema);
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema,
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     /// Get inputs of the execution plan
     pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
         &self.inputs
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+
+        // Output Partitioning
+        let output_partitioning = self.inputs[0].output_partitioning().clone();
+        new_cache = new_cache.with_partitioning(output_partitioning);
+
+        // Execution Mode
+        let exec_mode = exec_mode_flatten(self.inputs.iter());
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -376,30 +380,12 @@ impl ExecutionPlan for InterleaveExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children.iter().any(|x| *x))
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         self.inputs.clone()
-    }
-
-    /// All inputs must have the same partitioning. The output partioning of InterleaveExec is the same as the inputs
-    /// (NOT combined). E.g. if there are 10 inputs where each is `Hash(3)`-partitioned, InterleaveExec is also
-    /// `Hash(3)`-partitioned.
-    fn output_partitioning(&self) -> Partitioning {
-        self.inputs[0].output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -485,8 +471,8 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
     let reference = first.borrow().output_partitioning();
     matches!(reference, Partitioning::Hash(_, _))
         && inputs
-            .map(|plan| plan.borrow().output_partitioning())
-            .all(|partition| partition == reference)
+            .map(|plan| plan.borrow().output_partitioning().clone())
+            .all(|partition| partition == *reference)
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
@@ -614,7 +600,7 @@ mod tests {
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {

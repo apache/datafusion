@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -44,9 +45,8 @@ use crate::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_physical_expr::{
-    EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -89,7 +89,6 @@ pub struct ParquetExec {
     /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -103,6 +102,7 @@ pub struct ParquetExec {
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    cache: PlanPropertiesCache,
 }
 
 impl ParquetExec {
@@ -150,14 +150,13 @@ impl ParquetExec {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = PlanPropertiesCache::new_default(projected_schema);
         Self {
             pushdown_filters: None,
             reorder_filters: None,
             enable_page_index: None,
             enable_bloom_filter: None,
             base_config,
-            projected_schema,
             projected_statistics,
             projected_output_ordering,
             metrics,
@@ -166,7 +165,9 @@ impl ParquetExec {
             page_pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
+            cache,
         }
+        .with_cache()
     }
 
     /// Ref to the base configs
@@ -260,6 +261,36 @@ impl ParquetExec {
         self.enable_bloom_filter
             .unwrap_or(config_options.execution.parquet.bloom_filter_enabled)
     }
+
+    fn output_partitioning_helper(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        );
+
+        // Output Partitioning
+        let output_partitioning = self.output_partitioning_helper();
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = self.output_partitioning_helper();
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
+    }
 }
 
 impl DisplayAs for ParquetExec {
@@ -306,31 +337,13 @@ impl ExecutionPlan for ParquetExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.projected_schema)
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
     }
 
     fn with_new_children(
@@ -356,7 +369,7 @@ impl ExecutionPlan for ParquetExec {
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
         }
         Ok(Some(Arc::new(new_plan)))
     }

@@ -444,7 +444,7 @@ mod tests {
 
     use datafusion_common::DataFusionError;
 
-    use crate::{DisplayAs, ExecutionPlan};
+    use crate::{DisplayAs, ExecutionPlan, PlanPropertiesCache};
 
     use super::DisplayableExecutionPlan;
 
@@ -470,18 +470,12 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> arrow_schema::SchemaRef {
-            Arc::new(arrow_schema::Schema::empty())
+        fn cache(&self) -> &PlanPropertiesCache {
+            unimplemented!()
         }
 
-        fn output_partitioning(&self) -> datafusion_physical_expr::Partitioning {
-            datafusion_physical_expr::Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(
-            &self,
-        ) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-            None
+        fn output_partitioning(&self) -> &datafusion_physical_expr::Partitioning {
+            &datafusion_physical_expr::Partitioning::UnknownPartitioning(1)
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

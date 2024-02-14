@@ -33,7 +33,6 @@ use crate::{
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::is_plan_streaming;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
 use datafusion::physical_plan::{collect, execute_stream};
@@ -232,7 +231,7 @@ async fn exec_and_print(
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if is_plan_streaming(&physical_plan)? {
+        if physical_plan.unbounded_output().is_unbounded() {
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {

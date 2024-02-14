@@ -23,12 +23,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, Statistics};
+use super::{DisplayAs, PlanPropertiesCache, Statistics};
 use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -36,7 +34,6 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -51,16 +48,20 @@ pub struct CoalesceBatchesExec {
     target_batch_size: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
+        let cache = PlanPropertiesCache::new_default(input.schema());
         Self {
             input,
             target_batch_size,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
+        .with_cache()
     }
 
     /// The input plan
@@ -71,6 +72,22 @@ impl CoalesceBatchesExec {
     /// Minimum number of rows for coalesces batches
     pub fn target_batch_size(&self) -> usize {
         self.target_batch_size
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = self.input.equivalence_properties().clone();
+
+        // Output Partitioning
+        // The coalesce batches operator does not make any changes to the partitioning of its input
+        let output_partitioning = self.input.output_partitioning().clone();
+
+        // Execution Mode
+        let exec_mode = self.input.unbounded_output();
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -98,32 +115,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        // The coalesce batches operator does not make any changes to the schema of its input
-        self.input.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // The coalesce batches operator does not make any changes to the partitioning of its input
-        self.input.output_partitioning()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // The coalesce batches operator does not make any changes to the sorting of its input
-        self.input.output_ordering()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -132,10 +129,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -302,7 +295,7 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::MemoryExec, repartition::RepartitionExec};
+    use crate::{memory::MemoryExec, repartition::RepartitionExec, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::UInt32Array;

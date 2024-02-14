@@ -24,13 +24,12 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -43,6 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{self, GetOptions};
 use object_store::{GetResultPayload, ObjectStore};
@@ -54,11 +54,11 @@ use tokio::task::JoinSet;
 pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
+    cache: PlanPropertiesCache,
 }
 
 impl NdJsonExec {
@@ -69,20 +69,51 @@ impl NdJsonExec {
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = PlanPropertiesCache::new_default(projected_schema);
         Self {
             base_config,
-            projected_schema,
             projected_statistics,
             projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
+            cache,
         }
+        .with_cache()
     }
 
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    fn output_partitioning_helper(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        );
+
+        // Output Partitioning
+        let output_partitioning = self.output_partitioning_helper();
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = self.output_partitioning_helper();
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
     }
 }
 
@@ -101,26 +132,8 @@ impl ExecutionPlan for NdJsonExec {
     fn as_any(&self) -> &dyn Any {
         self
     }
-
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -151,7 +164,7 @@ impl ExecutionPlan for NdJsonExec {
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
             return Ok(Some(Arc::new(new_plan)));
         }
 

@@ -21,14 +21,13 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::metrics::BaselineMetrics;
-use super::RecordBatchStream;
 use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     work_table::{WorkTable, WorkTableExec},
-    SendableRecordBatchStream, Statistics,
+    ExecutionMode, SendableRecordBatchStream, Statistics,
 };
+use super::{PlanPropertiesCache, RecordBatchStream};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -69,6 +68,7 @@ pub struct RecursiveQueryExec {
     is_distinct: bool,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl RecursiveQueryExec {
@@ -83,6 +83,7 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, work_table.clone())?;
+        let cache = PlanPropertiesCache::new_default(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -90,7 +91,22 @@ impl RecursiveQueryExec {
             is_distinct,
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
-        })
+            cache,
+        }
+        .with_cache())
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -99,19 +115,12 @@ impl ExecutionPlan for RecursiveQueryExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.static_term.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.static_term.clone(), self.recursive_term.clone()]
-    }
-
-    // Distribution on a recursive query is really tricky to handle.
-    // For now, we are going to use a single partition but in the
-    // future we might find a better way to handle this.
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
     }
 
     // TODO: control these hints and see whether we can
@@ -131,22 +140,16 @@ impl ExecutionPlan for RecursiveQueryExec {
         ]
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RecursiveQueryExec {
-            name: self.name.clone(),
-            static_term: children[0].clone(),
-            recursive_term: children[1].clone(),
-            is_distinct: self.is_distinct,
-            work_table: self.work_table.clone(),
-            metrics: self.metrics.clone(),
-        }))
+        Ok(Arc::new(RecursiveQueryExec::try_new(
+            self.name.clone(),
+            children[0].clone(),
+            children[1].clone(),
+            self.is_distinct,
+        )?))
     }
 
     fn execute(

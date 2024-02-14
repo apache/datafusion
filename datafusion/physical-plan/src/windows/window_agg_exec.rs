@@ -30,9 +30,9 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
-    WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
+    ExecutionPlan, PhysicalExpr, PlanPropertiesCache, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
 use arrow::compute::{concat, concat_batches};
@@ -45,9 +45,9 @@ use arrow::{
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalSortRequirement;
 
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
@@ -68,6 +68,7 @@ pub struct WindowAggExec {
     /// Partition by indices that defines preset for existing ordering
     // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    cache: PlanPropertiesCache,
 }
 
 impl WindowAggExec {
@@ -82,14 +83,17 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        Ok(Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let window = Self {
             input,
             window_expr,
             schema,
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
-        })
+            cache,
+        };
+        Ok(window.with_cache())
     }
 
     /// Window expressions
@@ -114,6 +118,34 @@ impl WindowAggExec {
             partition_by,
             &self.ordered_partition_by_indices,
         )
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties =
+            window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
+
+        // output partitioning
+        // because we can have repartitioning using the partition keys
+        // this would be either 1 or more than 1 depending on the presense of
+        // repartitioning
+        let output_partitioning = self.input.output_partitioning().clone();
+
+        // unbounded output
+        let unbounded_output = match self.input.unbounded_output() {
+            ExecutionMode::Bounded => ExecutionMode::Bounded,
+            ExecutionMode::Unbounded | ExecutionMode::InExecutable => {
+                ExecutionMode::InExecutable
+            }
+        };
+
+        // Construct properties cache
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            output_partitioning,
+            unbounded_output,
+        );
+        self
     }
 }
 
@@ -151,37 +183,12 @@ impl ExecutionPlan for WindowAggExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // because we can have repartitioning using the partition keys
-        // this would be either 1 or more than 1 depending on the presense of
-        // repartitioning
-        self.input.output_partitioning()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            plan_err!(
-                "Window Error: Windowing is not currently support for unbounded inputs."
-            )
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input().output_ordering()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -208,11 +215,6 @@ impl ExecutionPlan for WindowAggExec {
         } else {
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn with_new_children(

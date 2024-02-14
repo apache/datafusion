@@ -46,11 +46,12 @@ use crate::joins::utils::{
     JoinHashMapType, JoinOn, StatefulStreamResult,
 };
 use crate::{
+    exec_mode_flatten,
     expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanPropertiesCache,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -176,8 +177,6 @@ pub struct SymmetricHashJoinExec {
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// The schema once the join is applied
-    schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Execution metrics
@@ -192,6 +191,7 @@ pub struct SymmetricHashJoinExec {
     pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
+    cache: PlanPropertiesCache,
 }
 
 impl SymmetricHashJoinExec {
@@ -233,13 +233,13 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
+        let cache = PlanPropertiesCache::new_default(Arc::new(schema));
         Ok(SymmetricHashJoinExec {
             left,
             right,
             on,
             filter,
             join_type: *join_type,
-            schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
@@ -247,7 +247,39 @@ impl SymmetricHashJoinExec {
             left_sort_exprs,
             right_sort_exprs,
             mode,
-        })
+            cache,
+        }
+        .with_cache())
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = join_equivalence_properties(
+            self.left.equivalence_properties().clone(),
+            self.right.equivalence_properties().clone(),
+            &self.join_type,
+            self.schema(),
+            &self.maintains_input_order(),
+            // Has alternating probe side
+            None,
+            self.on(),
+        );
+
+        // Output Partitioning
+        let left_columns_len = self.left.schema().fields.len();
+        let output_partitioning = partitioned_join_output_partitioning(
+            self.join_type,
+            self.left.output_partitioning().clone(),
+            self.right.output_partitioning().clone(),
+            left_columns_len,
+        );
+
+        // Execution Mode
+        let exec_mode = exec_mode_flatten([&self.left, &self.right]);
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 
     /// left stream
@@ -353,12 +385,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children.iter().any(|u| *u))
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -389,34 +417,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 .as_ref()
                 .map(PhysicalSortRequirement::from_sort_exprs),
         ]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    // TODO: Output ordering might be kept for some cases.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            // Has alternating probe side
-            None,
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

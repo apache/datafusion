@@ -28,11 +28,10 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan,
-    SendableRecordBatchStream,
+    project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
+    PlanPropertiesCache, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
@@ -190,6 +189,7 @@ impl TableProvider for CustomDataSource {
 struct CustomExec {
     db: CustomDataSource,
     projected_schema: SchemaRef,
+    cache: PlanPropertiesCache,
 }
 
 impl CustomExec {
@@ -199,10 +199,28 @@ impl CustomExec {
         db: CustomDataSource,
     ) -> Self {
         let projected_schema = project_schema(&schema, projections).unwrap();
+        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
         Self {
             db,
             projected_schema,
+            cache,
         }
+        .with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+
+        // Output Partitioning
+        let output_partitioning =
+            datafusion::physical_plan::Partitioning::UnknownPartitioning(1);
+        new_cache = new_cache.with_partitioning(output_partitioning);
+
+        // Execution Mode
+        new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -217,16 +235,8 @@ impl ExecutionPlan for CustomExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        datafusion::physical_plan::Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

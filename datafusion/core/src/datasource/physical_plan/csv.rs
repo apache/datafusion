@@ -24,13 +24,12 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::listing::{FileRange, ListingTableUrl};
+use crate::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -41,6 +40,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use bytes::{Buf, Bytes};
 use datafusion_common::config::ConfigOptions;
@@ -54,7 +54,6 @@ use tokio::task::JoinSet;
 pub struct CsvExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
@@ -64,6 +63,7 @@ pub struct CsvExec {
     metrics: ExecutionPlanMetricsSet,
     /// Compression type of the file associated with CsvExec
     pub file_compression_type: FileCompressionType,
+    cache: PlanPropertiesCache,
 }
 
 impl CsvExec {
@@ -78,10 +78,9 @@ impl CsvExec {
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = PlanPropertiesCache::new_default(projected_schema);
         Self {
             base_config,
-            projected_schema,
             projected_statistics,
             projected_output_ordering,
             has_header,
@@ -90,7 +89,9 @@ impl CsvExec {
             escape,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
+            cache,
         }
+        .with_cache()
     }
 
     /// Ref to the base configs
@@ -115,6 +116,36 @@ impl CsvExec {
     pub fn escape(&self) -> Option<u8> {
         self.escape
     }
+
+    fn output_partitioning_helper(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        );
+
+        // Output Partitioning
+        let output_partitioning = self.output_partitioning_helper();
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = self.output_partitioning_helper();
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
+    }
 }
 
 impl DisplayAs for CsvExec {
@@ -135,28 +166,8 @@ impl ExecutionPlan for CsvExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -194,7 +205,7 @@ impl ExecutionPlan for CsvExec {
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
             return Ok(Some(Arc::new(new_plan)));
         }
         Ok(None)
@@ -558,7 +569,6 @@ mod tests {
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
-        assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
 
         let mut stream = csv.execute(0, task_ctx)?;
@@ -624,7 +634,6 @@ mod tests {
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
-        assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
 
         let mut stream = csv.execute(0, task_ctx)?;
@@ -690,7 +699,6 @@ mod tests {
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
-        assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -754,7 +762,6 @@ mod tests {
             file_compression_type.to_owned(),
         );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
-        assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
         // errors due to https://github.com/apache/arrow-datafusion/issues/4918
@@ -817,7 +824,6 @@ mod tests {
             file_compression_type.to_owned(),
         );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
-        assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;

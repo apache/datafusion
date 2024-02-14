@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::DisplayAs;
+use super::{DisplayAs, ExecutionMode, PlanPropertiesCache};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -36,7 +36,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -44,7 +44,7 @@ use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, FirstValue, LastValue, Max, Min, UnKnownColumn},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
-    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -268,8 +268,7 @@ pub struct AggregateExec {
     required_input_ordering: Option<LexRequirement>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
-    /// Describe how the output is ordered
-    output_ordering: Option<LexOrdering>,
+    cache: PlanPropertiesCache,
 }
 
 impl AggregateExec {
@@ -344,7 +343,7 @@ impl AggregateExec {
             &new_requirement,
             &mut aggr_expr,
             &group_by,
-            &input_eq_properties,
+            input_eq_properties,
             &mode,
         )?;
         new_requirement.extend(req);
@@ -366,11 +365,8 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let aggregate_eqs =
-            input_eq_properties.project(&projection_mapping, schema.clone());
-        let output_ordering = aggregate_eqs.oeq_class().output_ordering();
-
-        Ok(AggregateExec {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let aggregate = AggregateExec {
             mode,
             group_by,
             aggr_expr,
@@ -383,8 +379,9 @@ impl AggregateExec {
             required_input_ordering,
             limit: None,
             input_order_mode,
-            output_ordering,
-        })
+            cache,
+        };
+        Ok(aggregate.with_cache())
     }
 
     /// Aggregation mode (full, partial)
@@ -507,6 +504,55 @@ impl AggregateExec {
         }
         true
     }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = self
+            .input
+            .equivalence_properties()
+            .project(&self.projection_mapping, self.schema());
+
+        // Output partitioning
+        let mut output_partitioning = self.input.output_partitioning().clone();
+        if self.mode.is_first_stage() {
+            // First stage aggregation will not change the output partitioning,
+            // but needs to respect aliases (e.g. mapping in the GROUP BY
+            // expression).
+            let input_eq_properties = self.input.equivalence_properties();
+            // First stage Aggregation will not change the output partitioning but need to respect the Alias
+            let input_partition = self.input.output_partitioning();
+            if let Partitioning::Hash(exprs, part) = input_partition {
+                let normalized_exprs = exprs
+                    .iter()
+                    .map(|expr| {
+                        input_eq_properties
+                            .project_expr(expr, &self.projection_mapping)
+                            .unwrap_or_else(|| {
+                                Arc::new(UnKnownColumn::new(&expr.to_string()))
+                            })
+                    })
+                    .collect();
+                output_partitioning = Partitioning::Hash(normalized_exprs, *part);
+            }
+        }
+
+        // Unbounded Output
+        let mut unbounded_output = self.input.unbounded_output();
+        if self.input.unbounded_output() == ExecutionMode::Unbounded
+            && self.input_order_mode == InputOrderMode::Linear
+        {
+            // Cannot run without breaking pipeline.
+            unbounded_output = ExecutionMode::InExecutable;
+        }
+
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            output_partitioning,
+            unbounded_output,
+        );
+        self
+    }
+
     pub fn input_order_mode(&self) -> &InputOrderMode {
         &self.input_order_mode
     }
@@ -595,58 +641,8 @@ impl ExecutionPlan for AggregateExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        let input_partition = self.input.output_partitioning();
-        if self.mode.is_first_stage() {
-            // First stage aggregation will not change the output partitioning,
-            // but needs to respect aliases (e.g. mapping in the GROUP BY
-            // expression).
-            let input_eq_properties = self.input.equivalence_properties();
-            // First stage Aggregation will not change the output partitioning but need to respect the Alias
-            let input_partition = self.input.output_partitioning();
-            if let Partitioning::Hash(exprs, part) = input_partition {
-                let normalized_exprs = exprs
-                    .into_iter()
-                    .map(|expr| {
-                        input_eq_properties
-                            .project_expr(&expr, &self.projection_mapping)
-                            .unwrap_or_else(|| {
-                                Arc::new(UnKnownColumn::new(&expr.to_string()))
-                            })
-                    })
-                    .collect();
-                return Partitioning::Hash(normalized_exprs, part);
-            }
-        }
-        // Final Aggregation's output partitioning is the same as its real input
-        input_partition
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            if self.input_order_mode == InputOrderMode::Linear {
-                // Cannot run without breaking pipeline.
-                plan_err!(
-                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."
-                )
-            } else {
-                Ok(true)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -665,12 +661,6 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![self.required_input_ordering.clone()]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input
-            .equivalence_properties()
-            .project(&self.projection_mapping, self.schema())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -1630,6 +1620,28 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
+        cache: PlanPropertiesCache,
+    }
+
+    impl TestYieldingExec {
+        fn new(yield_first: bool) -> Self {
+            let schema = some_data().0;
+            let cache = PlanPropertiesCache::new_default(schema);
+            Self { yield_first, cache }.with_cache()
+        }
+
+        fn with_cache(mut self) -> Self {
+            let mut new_cache = self.cache;
+            // Output Partitioning
+            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+            // Execution Mode
+            let exec_mode = ExecutionMode::Bounded;
+            new_cache = new_cache.with_exec_mode(exec_mode);
+
+            self.cache = new_cache;
+            self
+        }
     }
 
     impl DisplayAs for TestYieldingExec {
@@ -1650,16 +1662,9 @@ mod tests {
         fn as_any(&self) -> &dyn Any {
             self
         }
-        fn schema(&self) -> SchemaRef {
-            some_data().0
-        }
 
-        fn output_partitioning(&self) -> Partitioning {
-            Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            None
+        fn cache(&self) -> &PlanPropertiesCache {
+            &self.cache
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -1741,72 +1746,63 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_source_not_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: false });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
         check_aggregates(input, false).await
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_source_not_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: false });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
         check_grouping_sets(input, false).await
     }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: true });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
         check_aggregates(input, false).await
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_with_yielding() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: true });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
         check_grouping_sets(input, false).await
     }
 
     #[tokio::test]
     async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: false });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
         check_aggregates(input, true).await
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: false });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(false));
 
         check_grouping_sets(input, true).await
     }
 
     #[tokio::test]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: true });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
         check_aggregates(input, true).await
     }
 
     #[tokio::test]
     async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: true });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
 
         check_grouping_sets(input, true).await
     }
 
     #[tokio::test]
     async fn test_oom() -> Result<()> {
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestYieldingExec { yield_first: true });
+        let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
         let input_schema = input.schema();
 
         let runtime = Arc::new(

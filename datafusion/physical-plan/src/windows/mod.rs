@@ -27,7 +27,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, unbounded_output, ExecutionPlan, InputOrderMode, PhysicalExpr,
+    udaf, ExecutionPlan, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -372,8 +372,8 @@ pub(crate) fn window_equivalence_properties(
 ) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.equivalence_properties()`.
-    let mut window_eq_properties =
-        EquivalenceProperties::new(schema.clone()).extend(input.equivalence_properties());
+    let mut window_eq_properties = EquivalenceProperties::new(schema.clone())
+        .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
@@ -415,7 +415,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = unbounded_output(input);
+    let is_unbounded = input.unbounded_output().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
@@ -477,7 +477,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
-    let input_eqs = input.equivalence_properties();
+    let input_eqs = input.equivalence_properties().clone();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {

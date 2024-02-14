@@ -23,13 +23,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::{
-    ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, PlanPropertiesCache, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    Column, DisplayFormatType, ExecutionPlan, Partitioning,
+    Column, DisplayFormatType, ExecutionPlan,
 };
 
 use arrow::compute::filter_record_batch;
@@ -44,8 +44,7 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, EquivalenceProperties, ExprBoundaries,
-    PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -63,6 +62,7 @@ pub struct FilterExec {
     metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 all rows
     default_selectivity: u8,
+    cache: PlanPropertiesCache,
 }
 
 impl FilterExec {
@@ -72,12 +72,17 @@ impl FilterExec {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
-            DataType::Boolean => Ok(Self {
-                predicate,
-                input: input.clone(),
-                metrics: ExecutionPlanMetricsSet::new(),
-                default_selectivity: 20,
-            }),
+            DataType::Boolean => {
+                let cache = PlanPropertiesCache::new_default(input.schema());
+                Ok(Self {
+                    predicate,
+                    input: input.clone(),
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    default_selectivity: 20,
+                    cache,
+                }
+                .with_cache())
+            }
             other => {
                 plan_err!("Filter predicate must return boolean values, not {other:?}")
             }
@@ -109,6 +114,35 @@ impl FilterExec {
     pub fn default_selectivity(&self) -> u8 {
         self.default_selectivity
     }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let stats = self.statistics().unwrap();
+        // Combine the equal predicates with the input equivalence properties
+        let mut eq_properties = self.input.equivalence_properties().clone();
+        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
+        for (lhs, rhs) in equal_pairs {
+            let lhs_expr = Arc::new(lhs.clone()) as _;
+            let rhs_expr = Arc::new(rhs.clone()) as _;
+            eq_properties.add_equal_conditions(&lhs_expr, &rhs_expr)
+        }
+        // Add the columns that have only one value (singleton) after filtering to constants.
+        let constants = collect_columns(self.predicate())
+            .into_iter()
+            .filter(|column| stats.column_statistics[column.index()].is_singleton())
+            .map(|column| Arc::new(column) as _);
+        eq_properties = eq_properties.add_constants(constants);
+
+        // Output Partitioning
+        let output_partitioning = self.input.output_partitioning().clone();
+
+        // Execution Mode
+        let exec_mode = self.input.unbounded_output();
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
+    }
 }
 
 impl DisplayAs for FilterExec {
@@ -131,53 +165,17 @@ impl ExecutionPlan for FilterExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        // The filter operator does not make any changes to the schema of its input
-        self.input.schema()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
 
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let stats = self.statistics().unwrap();
-        // Combine the equal predicates with the input equivalence properties
-        let mut result = self.input.equivalence_properties();
-        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
-        for (lhs, rhs) in equal_pairs {
-            let lhs_expr = Arc::new(lhs.clone()) as _;
-            let rhs_expr = Arc::new(rhs.clone()) as _;
-            result.add_equal_conditions(&lhs_expr, &rhs_expr)
-        }
-        // Add the columns that have only one value (singleton) after filtering to constants.
-        let constants = collect_columns(self.predicate())
-            .into_iter()
-            .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as _);
-        result.add_constants(constants)
     }
 
     fn with_new_children(

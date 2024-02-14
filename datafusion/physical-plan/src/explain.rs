@@ -20,8 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
-use super::{DisplayAs, SendableRecordBatchStream};
+use super::{DisplayAs, ExecutionMode, PlanPropertiesCache, SendableRecordBatchStream};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -43,6 +42,7 @@ pub struct ExplainExec {
     stringified_plans: Vec<StringifiedPlan>,
     /// control which plans to print
     verbose: bool,
+    cache: PlanPropertiesCache,
 }
 
 impl ExplainExec {
@@ -52,11 +52,14 @@ impl ExplainExec {
         stringified_plans: Vec<StringifiedPlan>,
         verbose: bool,
     ) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         ExplainExec {
             schema,
             stringified_plans,
             verbose,
+            cache,
         }
+        .with_cache()
     }
 
     /// The strings to be printed
@@ -67,6 +70,19 @@ impl ExplainExec {
     /// access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        let exec_mode = ExecutionMode::Bounded;
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -90,22 +106,13 @@ impl ExecutionPlan for ExplainExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

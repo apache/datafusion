@@ -47,7 +47,6 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_expr::PhysicalSortExpr;
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -59,6 +58,7 @@ pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
 
 use crate::datasource::stream::{StreamConfig, StreamTable};
 pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -231,6 +231,7 @@ pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
     partitions: usize,
+    cache: PlanPropertiesCache,
 }
 impl UnboundedExec {
     /// Create new exec that clones the given record batch to its output.
@@ -241,11 +242,33 @@ impl UnboundedExec {
         batch: RecordBatch,
         partitions: usize,
     ) -> Self {
+        let cache = PlanPropertiesCache::new_default(batch.schema());
         Self {
             batch_produce,
             batch,
             partitions,
+            cache,
         }
+        .with_cache()
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+
+        // Output Partitioning
+        new_cache = new_cache
+            .with_partitioning(Partitioning::UnknownPartitioning(self.partitions));
+
+        // Execution Mode
+        let exec_mode = if self.batch_produce.is_none() {
+            ExecutionMode::Unbounded
+        } else {
+            ExecutionMode::Bounded
+        };
+        new_cache = new_cache.with_exec_mode(exec_mode);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -272,19 +295,8 @@ impl ExecutionPlan for UnboundedExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.batch.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions)
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(self.batch_produce.is_none())
-    }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -54,7 +54,6 @@ use datafusion_physical_expr::{
     PhysicalExprRef, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
 use itertools::izip;
@@ -433,7 +432,7 @@ where
             right_keys,
         },
         new_positions,
-    )) = try_reorder(join_key_pairs.clone(), parent_required, &eq_properties)
+    )) = try_reorder(join_key_pairs.clone(), parent_required, eq_properties)
     {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -616,8 +615,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 join_key_pairs,
                 Some(left.output_partitioning()),
                 Some(right.output_partitioning()),
-                &left.equivalence_properties(),
-                &right.equivalence_properties(),
+                left.equivalence_properties(),
+                right.equivalence_properties(),
             ) {
                 if !new_positions.is_empty() {
                     let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -655,8 +654,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
             join_key_pairs,
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &left.equivalence_properties(),
-            &right.equivalence_properties(),
+            left.equivalence_properties(),
+            right.equivalence_properties(),
         ) {
             if !new_positions.is_empty() {
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -682,14 +681,14 @@ pub(crate) fn reorder_join_keys_to_inputs(
 /// Reorder the current join keys ordering based on either left partition or right partition
 fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
-    left_partition: Option<Partitioning>,
-    right_partition: Option<Partitioning>,
+    left_partition: Option<&Partitioning>,
+    right_partition: Option<&Partitioning>,
     left_equivalence_properties: &EquivalenceProperties,
     right_equivalence_properties: &EquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    match (left_partition, right_partition.clone()) {
+    match (left_partition, right_partition) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
-            try_reorder(join_keys.clone(), &left_exprs, left_equivalence_properties)
+            try_reorder(join_keys.clone(), left_exprs, left_equivalence_properties)
                 .or_else(|| {
                     reorder_current_join_keys(
                         join_keys,
@@ -701,7 +700,7 @@ fn reorder_current_join_keys(
                 })
         }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
-            try_reorder(join_keys, &right_exprs, right_equivalence_properties)
+            try_reorder(join_keys, right_exprs, right_equivalence_properties)
         }
         _ => None,
     }
@@ -887,7 +886,7 @@ fn add_hash_on_top(
         .plan
         .output_partitioning()
         .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
-            input.plan.equivalence_properties()
+            input.plan.equivalence_properties().clone()
         });
 
     // Add hash repartitioning when:
@@ -1077,7 +1076,7 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
-    let is_unbounded = unbounded_output(&dist_context.plan);
+    let is_unbounded = dist_context.plan.unbounded_output().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
@@ -1344,6 +1343,7 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, expressions::Column,
         LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
+    use datafusion_physical_plan::PlanPropertiesCache;
 
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
@@ -1351,22 +1351,41 @@ pub(crate) mod tests {
     struct SortRequiredExec {
         input: Arc<dyn ExecutionPlan>,
         expr: LexOrdering,
+        cache: PlanPropertiesCache,
     }
 
     impl SortRequiredExec {
         fn new(input: Arc<dyn ExecutionPlan>) -> Self {
             let expr = input.output_ordering().unwrap_or(&[]).to_vec();
-            Self { input, expr }
+            Self::new_with_requirement(input, expr)
         }
 
         fn new_with_requirement(
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
         ) -> Self {
+            let cache = PlanPropertiesCache::new_default(input.schema());
             Self {
                 input,
                 expr: requirement,
+                cache,
             }
+            .with_cache()
+        }
+
+        fn with_cache(mut self) -> Self {
+            // Equivalence Properties
+            let eq_properties = self.input.equivalence_properties().clone();
+
+            // Output Partitioning
+            let output_partitioning = self.input.output_partitioning().clone();
+
+            // Execution Mode
+            let exec_mode = self.input.unbounded_output();
+
+            self.cache =
+                PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+            self
         }
     }
 
@@ -1389,20 +1408,12 @@ pub(crate) mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.input.schema()
-        }
-
-        fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
-            self.input.output_partitioning()
+        fn cache(&self) -> &PlanPropertiesCache {
+            &self.cache
         }
 
         fn benefits_from_input_partitioning(&self) -> Vec<bool> {
             vec![false]
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            self.input.output_ordering()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

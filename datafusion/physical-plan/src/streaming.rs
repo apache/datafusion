@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, DisplayFormatType};
+use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanPropertiesCache};
 use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
@@ -29,7 +29,7 @@ use arrow::datatypes::SchemaRef;
 use arrow_schema::Schema;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -58,6 +58,7 @@ pub struct StreamingTableExec {
     projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
+    cache: PlanPropertiesCache,
 }
 
 impl StreamingTableExec {
@@ -84,14 +85,16 @@ impl StreamingTableExec {
             Some(p) => Arc::new(schema.project(p)?),
             None => schema,
         };
-
+        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
         Ok(Self {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
             projected_output_ordering: projected_output_ordering.into_iter().collect(),
             infinite,
-        })
+            cache,
+        }
+        .with_cache())
     }
 
     pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
@@ -116,6 +119,29 @@ impl StreamingTableExec {
 
     pub fn is_infinite(&self) -> bool {
         self.infinite
+    }
+
+    fn with_cache(mut self) -> Self {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        );
+
+        // Output Partitioning
+        let output_partitioning =
+            Partitioning::UnknownPartitioning(self.partitions.len());
+
+        // Execution Mode
+        let exec_mode = if self.infinite {
+            ExecutionMode::Unbounded
+        } else {
+            ExecutionMode::Bounded
+        };
+
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self
     }
 }
 
@@ -149,18 +175,28 @@ impl DisplayAs for StreamingTableExec {
                     write!(f, ", infinite_source=true")?;
                 }
 
-                self.projected_output_ordering
-                    .first()
-                    .map_or(Ok(()), |ordering| {
-                        if !ordering.is_empty() {
-                            write!(
-                                f,
-                                ", output_ordering={}",
-                                OutputOrderingDisplay(ordering)
-                            )?;
+                let orderings = &self.projected_output_ordering;
+                if let Some(ordering) = orderings.first() {
+                    if !ordering.is_empty() {
+                        let start = if orderings.len() == 1 {
+                            ", output_ordering="
+                        } else {
+                            ", output_orderings=["
+                        };
+                        write!(f, "{}", start)?;
+                        for (idx, ordering) in
+                            orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
+                        {
+                            match idx {
+                                0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
+                                _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
+                            }
                         }
-                        Ok(())
-                    })
+                        let end = if orderings.len() == 1 { "" } else { "]" };
+                        write!(f, "{}", end)?;
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -172,29 +208,8 @@ impl ExecutionPlan for StreamingTableExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions.len())
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(self.infinite)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

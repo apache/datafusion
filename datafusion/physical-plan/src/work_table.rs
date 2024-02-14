@@ -26,9 +26,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Partitioning;
 
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
-
-use super::expressions::PhysicalSortExpr;
+use crate::{
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanPropertiesCache,
+};
 
 use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -85,17 +85,21 @@ pub struct WorkTableExec {
     work_table: Arc<WorkTable>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanPropertiesCache,
 }
 
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
     pub fn new(name: String, schema: SchemaRef) -> Self {
+        let cache = PlanPropertiesCache::new_default(schema.clone());
         Self {
             name,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
+            cache,
         }
+        .with_cache()
     }
 
     pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
@@ -104,7 +108,20 @@ impl WorkTableExec {
             schema: self.schema.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
+            cache: self.cache.clone(),
         }
+    }
+
+    fn with_cache(mut self) -> Self {
+        let mut new_cache = self.cache;
+        // Output Partitioning
+        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+
+        // Execution Mode
+        new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
+
+        self.cache = new_cache;
+        self
     }
 }
 
@@ -127,16 +144,12 @@ impl ExecutionPlan for WorkTableExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn cache(&self) -> &PlanPropertiesCache {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -145,10 +158,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

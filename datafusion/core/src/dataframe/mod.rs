@@ -2886,7 +2886,7 @@ mod tests {
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
             physical_plan.output_partitioning(),
-            Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
+            Partitioning::UnknownPartitioning(partition_count) if *partition_count == default_partition_count * 2));
         Ok(())
     }
 
@@ -2935,7 +2935,7 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(left_exprs, default_partition_count)
+                        &Partitioning::Hash(left_exprs, default_partition_count)
                     );
                 }
                 JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
@@ -2945,13 +2945,13 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(right_exprs, default_partition_count)
+                        &Partitioning::Hash(right_exprs, default_partition_count)
                     );
                 }
                 JoinType::Full => {
                     assert!(matches!(
                         out_partitioning,
-                    Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                    &Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
         }
