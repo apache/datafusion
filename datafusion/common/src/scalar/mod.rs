@@ -2192,8 +2192,41 @@ impl ScalarValue {
         Ok(scalars)
     }
 
-    /// convert_array_to_scalar_vec but only convert the first level instead of recursively converting all the levels
-    /// List(List(1, 2, 3))
+    /// convert_array_to_scalar_vec but only convert the first level instead of recursively converting
+    /// all the levels, so list remains as ScalarValue::List
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::utils::array_into_list_array;
+    /// use std::sync::Arc;
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
+    /// let list_arr = array_into_list_array(Arc::new(list_arr));
+    ///
+    /// let scalar_vec = ScalarValue::convert_first_level_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    /// ]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(4), Some(5)]),
+    /// ]);
+    ///
+    /// let expected = vec![
+    ///   vec![
+    ///     ScalarValue::List(Arc::new(l1)),
+    ///     ScalarValue::List(Arc::new(l2)),
+    ///   ],
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
     pub fn convert_first_level_array_to_scalar_vec(
         array: &dyn Array,
     ) -> Result<Vec<Vec<Self>>> {

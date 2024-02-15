@@ -141,20 +141,20 @@ AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
 
 # test array_agg_order with list data type
 statement ok
-CREATE TABLE agg_order_list_table AS VALUES
+CREATE TABLE array_agg_order_list_table AS VALUES
   ('w', 1, [1,2,3], 10),
   ('b', 2, [4,5,6], 20),
   ('b', 1, [7,8,9], 30)
 ;
 
-query T?
-select column1, array_agg(column3 order by column2, column4) from agg_order_list_table group by column1;
+query T? rowsort
+select column1, array_agg(column3 order by column2, column4) from array_agg_order_list_table group by column1;
 ----
-w [[1, 2, 3]]
 b [[7, 8, 9], [4, 5, 6]]
+w [[1, 2, 3]]
 
 statement ok
-drop table agg_order_list_table;
+drop table array_agg_order_list_table;
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
