@@ -39,10 +39,10 @@ impl ScalarStructBuilder {
         Self::default()
     }
 
-    /// Return a new [`ScalarValue::Struct`] with a single null value.
+    /// Return a new [`ScalarValue::Struct`] with a single `null` value.
     ///
     /// Note this is different from a struct where each of the specified fields
-    /// are null (e.g. `{a: NULL}`
+    /// are null (e.g. `{a: NULL}`)
     ///
     /// # Example
     ///
