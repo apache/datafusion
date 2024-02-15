@@ -3103,6 +3103,11 @@ impl fmt::Display for ScalarValue {
                 // ScalarValue Struct should always have a single element
                 assert_eq!(struct_arr.len(), 1);
 
+                if struct_arr.null_count() == struct_arr.len() {
+                    write!(f, "NULL")?;
+                    return Ok(());
+                }
+
                 let columns = struct_arr.columns();
                 let fields = struct_arr.fields();
                 let nulls = struct_arr.nulls();
@@ -3298,6 +3303,7 @@ mod tests {
         as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
     };
 
+    use crate::assert_batches_eq;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
@@ -5688,6 +5694,59 @@ mod tests {
         let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
         let array = arrow::compute::concat(&arrays).unwrap();
         check_array(array);
+    }
+
+    #[test]
+    fn test_struct_display() {
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Utf8, true);
+
+        let s = ScalarStructBuilder::new()
+            .with_scalar(field_a, ScalarValue::from(1i32))
+            .with_scalar(field_b, ScalarValue::Utf8(None))
+            .build()
+            .unwrap();
+
+        assert_eq!(s.to_string(), "{a:1,b:}");
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+        let expected = [
+            "+-------------+",
+            "| s           |",
+            "+-------------+",
+            "| {a: 1, b: } |",
+            "+-------------+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
+    }
+
+    #[test]
+    fn test_struct_display_null() {
+        let fields = vec![Field::new("a", DataType::Int32, false)];
+        let s = ScalarStructBuilder::new_null(fields);
+        assert_eq!(s.to_string(), "NULL");
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+
+        #[rustfmt::skip]
+        let expected = [
+            "+---+",
+            "| s |",
+            "+---+",
+            "|   |",
+            "+---+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
     }
 
     #[test]

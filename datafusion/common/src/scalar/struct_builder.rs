@@ -53,8 +53,8 @@ impl ScalarStructBuilder {
     ///    Field::new("a", DataType::Int32, false),
     /// ];
     /// let sv = ScalarStructBuilder::new_null(fields);
-    /// // Note this not is `null`, but a struct with a single field that is `null`
-    /// assert_eq!(format!("{sv}"), "{a:NULL}");
+    /// // Note this is `null`, not `{a:NULL}`
+    /// assert_eq!(format!("{sv}"), "NULL");
     ///```
     pub fn new_null(fields: impl IntoFields) -> ScalarValue {
         DataType::Struct(fields.into()).try_into().unwrap()
