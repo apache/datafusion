@@ -18,12 +18,15 @@
 //! "core" DataFusion functions
 
 mod nullif;
+mod arrow_cast;
 
 // create UDFs
 make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
+make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
-    (nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.")
+    (nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."),
+    (arrow_cast, arg_1 arg_2, "returns arg_1 parsed to the `arrow_type` given the second argument. This can be used to cast to a specific `arrow_type`.")
 );
 

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod arrow_cast;
 mod binary_op;
 mod function;
 mod grouping_set;
