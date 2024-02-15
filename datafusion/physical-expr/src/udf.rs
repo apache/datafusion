@@ -17,28 +17,24 @@
 
 //! UDF support
 use crate::{PhysicalExpr, ScalarFunctionExpr};
-use arrow::datatypes::Schema;
+use arrow_schema::DataType;
 use datafusion_common::Result;
 pub use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 /// Create a physical expression of the UDF.
-/// This function errors when `args`' can't be coerced to a valid argument type of the UDF.
+///
+/// Arguments:
 pub fn create_physical_expr(
     fun: &ScalarUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
+    return_type: DataType,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_exprs_types = input_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
         fun.fun(),
         input_phy_exprs.to_vec(),
-        fun.return_type(&input_exprs_types)?,
+        return_type,
         fun.monotonicity()?,
         fun.signature().type_signature.supports_zero_argument(),
     )))
@@ -46,7 +42,6 @@ pub fn create_physical_expr(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
@@ -102,7 +97,7 @@ mod tests {
         // create and register the udf
         let udf = ScalarUDF::from(TestScalarUDF::new());
 
-        let p_expr = create_physical_expr(&udf, &[], &Schema::empty())?;
+        let p_expr = create_physical_expr(&udf, &[], DataType::Float64)?;
 
         assert_eq!(
             p_expr
