@@ -133,13 +133,13 @@ fn get_valid_types(
     fn array_append_and_optional_index(
         current_types: &[DataType],
     ) -> Result<Vec<Vec<DataType>>> {
-        // make sure there's at least 2 arguments
+        // make sure there's 2 or 3 arguments
         if !(current_types.len() == 2 || current_types.len() == 3) {
             return Ok(vec![vec![]]);
         }
 
         let first_two_types = &current_types[0..2];
-        let valid_types = array_append_or_prepend_valid_types(first_two_types, true)?;
+        let mut valid_types = array_append_or_prepend_valid_types(first_two_types, true)?;
 
         let valid_types_with_index = valid_types
             .iter()
@@ -150,7 +150,6 @@ fn get_valid_types(
             })
             .collect::<Vec<_>>();
 
-        let mut valid_types = valid_types;
         valid_types.extend(valid_types_with_index);
 
         Ok(valid_types)
