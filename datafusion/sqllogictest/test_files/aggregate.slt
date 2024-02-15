@@ -170,6 +170,30 @@ w [9, 5, 2]
 statement ok
 drop table array_agg_order_list_table;
 
+# test array_agg_distinct with list data type
+statement ok
+CREATE TABLE array_agg_distinct_list_table AS VALUES
+  ('w', [0,1]),
+  ('w', [0,1]),
+  ('w', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [0,1])
+;
+
+# Apply array_sort to have determinisitic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
+query ??
+select array_sort(c1), array_sort(c2) from (
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+);
+----
+[b, w] [[0, 1], [1, 0]]
+
+statement ok
+drop table array_agg_distinct_list_table;
+
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
