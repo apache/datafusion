@@ -510,11 +510,11 @@ impl LogicalPlan {
                     cross.left.head_output_expr()
                 }
             }
-            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
-                union.schema.fields()[0].qualified_column(),
-            ))),
+            LogicalPlan::Union(union) => {
+                Ok(Some(Expr::Column(union.schema.field_names()[0].into())))
+            }
             LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
-                table.projected_schema.fields()[0].qualified_column(),
+                table.projected_schema.field_names()[0].into(),
             ))),
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
@@ -2373,18 +2373,19 @@ impl Aggregate {
         if is_grouping_set {
             fields = fields
                 .into_iter()
-                .map(|(q, f)| (q, f.with_nullable(true)))
+                .map(|(q, f)| (q, f.with_nullable(true).into()))
                 .collect::<Vec<_>>();
         }
 
         fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+        let (q, f): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+            fields.into_iter().unzip();
 
-        // let schema = DFSchema::from_field_specific_qualified_schema(fields);
+        let schema = Arc::new(Schema::new(f));
+        let dfschema =
+            DFSchema::from_field_specific_qualified_schema(q, &schema).unwrap();
 
-        let schema =
-            DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
-
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(dfschema))
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of
@@ -2624,7 +2625,6 @@ pub struct Unnest {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -2974,7 +2974,7 @@ digraph {
 
     #[test]
     fn projection_expr_schema_mismatch() -> Result<()> {
-        let empty_schema = Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new())?);
+        let empty_schema = Arc::new(DFSchema::empty());
         let p = Projection::try_new_with_schema(
             vec![col("a")],
             Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -3168,10 +3168,10 @@ digraph {
             filters: vec![],
             fetch: None,
         }));
-        let col = schema.field(0).qualified_column();
+        let col = schema.field_names()[0];
 
         let filter = Filter::try_new(
-            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
             scan,
         )
         .unwrap();
@@ -3198,10 +3198,10 @@ digraph {
             filters: vec![],
             fetch: None,
         }));
-        let col = schema.field(0).qualified_column();
+        let col = schema.field_names()[0];
 
         let filter = Filter::try_new(
-            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
             scan,
         )
         .unwrap();
