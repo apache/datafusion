@@ -21,22 +21,23 @@
 
 //! Regex expressions
 
+use std::sync::{Arc, OnceLock};
+
 use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
+    Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray, new_null_array,
     OffsetSizeTrait,
 };
+use hashbrown::HashMap;
+use regex::Regex;
 
 use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
 use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
+    cast::as_generic_string_array, DataFusionError, Result,
 };
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use hashbrown::HashMap;
-use regex::Regex;
-use std::sync::{Arc, OnceLock};
 
 use crate::functions::{
-    make_scalar_function_inner, make_scalar_function_with_hints, Hint,
+    Hint, make_scalar_function_inner, make_scalar_function_with_hints,
 };
 
 /// Get the first argument from the given string array.
@@ -188,7 +189,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             arrow_string::regexp::regexp_match(values, regex, Some(flags))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
-        other => internal_err!(
+        other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -341,7 +342,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => internal_err!(
+        other => exec_err!(
             "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
         ),
     }
@@ -374,7 +375,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         3 => None,
         4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
-            return internal_err!(
+            return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
             )
         }
