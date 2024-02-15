@@ -526,7 +526,7 @@ impl ScalarUDFImpl for TakeUDF {
         not_impl_err!("Not called because the return_type_from_exprs is implemented")
     }
 
-    /// Thus function returns the type of the first or second argument based on
+    /// This function returns the type of the first or second argument based on
     /// the third argument:
     ///
     /// 1. If the third argument is '0', return the type of the first argument
@@ -558,7 +558,7 @@ impl ScalarUDFImpl for TakeUDF {
         arg_exprs.get(take_idx).unwrap().get_type(schema)
     }
 
-    // The actual implementation rethr
+    // The actual implementation
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
@@ -595,8 +595,8 @@ async fn verify_udf_return_type() -> Result<()> {
     let schema = df.schema();
 
     // The output schema should be
-    // * type of column smallint_col (float64)
-    // * type of column double_col (float32)
+    // * type of column smallint_col (int32)
+    // * type of column double_col (float64)
     assert_eq!(schema.field(0).data_type(), &DataType::Int32);
     assert_eq!(schema.field(1).data_type(), &DataType::Float64);
 
