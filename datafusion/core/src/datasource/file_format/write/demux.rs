@@ -329,9 +329,9 @@ fn compute_partition_keys_by_row<'a>(
         let mut partition_values = vec![];
 
         let dtype = schema.field_with_name(col)?.data_type();
-        let col_array = rb
-            .column_by_name(col)
-            .ok_or(DataFusionError::Execution(format!(
+        let col_array =
+            rb.column_by_name(col)
+                .ok_or(DataFusionError::Execution(format!(
             "PartitionBy Column {} does not exist in source data! Got schema {schema}.",
             col,
         )))?;
