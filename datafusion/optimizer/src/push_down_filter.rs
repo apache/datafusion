@@ -701,10 +701,14 @@ impl OptimizerRule for PushDownFilter {
                 self.try_optimize(&new_filter, _config)?
                     .unwrap_or(new_filter)
             }
-            LogicalPlan::Repartition(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Sort(_) => {
+            LogicalPlan::Repartition(_) | LogicalPlan::Sort(_) => {
                 // commutable
+                let new_filter =
+                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
+                child_plan.with_new_inputs(&[new_filter])?
+            }
+            LogicalPlan::Distinct(d) if d.on_expr.is_none() => {
+                // note that we check if on_expr is None as DISTINCT ON with on_expr is not commutable
                 let new_filter =
                     plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 child_plan.with_new_inputs(&[new_filter])?
