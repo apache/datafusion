@@ -91,7 +91,7 @@ pub enum TypeSignature {
     /// DataFusion attempts to coerce all argument types to match the first argument's type
     ///
     /// # Examples
-    /// Given types in signature should be coericible to the same final type.
+    /// Given types in signature should be coercible to the same final type.
     /// A function such as `make_array` is `VariadicEqual`.
     ///
     /// `make_array(i32, i64) -> make_array(i64, i64)`
