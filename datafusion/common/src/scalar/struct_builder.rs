@@ -39,10 +39,10 @@ impl ScalarStructBuilder {
         Self::default()
     }
 
-    /// Return a new [`ScalarValue::Struct`] with a single struct where all the
-    /// specified fields are null.
+    /// Return a new [`ScalarValue::Struct`] with a single null value.
     ///
-    /// Note, this is different from a single null value in the struct
+    /// Note this is different from a struct where each of the specified fields
+    /// are null (e.g. `{a: NULL}`
     ///
     /// # Example
     ///
@@ -53,9 +53,26 @@ impl ScalarStructBuilder {
     ///    Field::new("a", DataType::Int32, false),
     /// ];
     /// let sv = ScalarStructBuilder::new_null(fields);
-    /// // Note this is `null`, not `{a:NULL}`
+    /// // Note this is `NULL`, not `{a: NULL}`
     /// assert_eq!(format!("{sv}"), "NULL");
     ///```
+    ///
+    /// To create a struct where the *fields* are null, use `Self::new()` and
+    /// pass null values for each field:
+    ///
+    /// ```rust
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::scalar::{ScalarStructBuilder, ScalarValue};
+    /// // make a nullable field
+    /// let field = Field::new("a", DataType::Int32, true);
+    /// // add a null value for the "a" field
+    /// let sv = ScalarStructBuilder::new()
+    ///   .with_scalar(field, ScalarValue::Int32(None))
+    ///   .build()
+    ///   .unwrap();
+    /// // value is not null, but field is
+    /// assert_eq!(format!("{sv}"), "{a:}");
+    /// ```
     pub fn new_null(fields: impl IntoFields) -> ScalarValue {
         DataType::Struct(fields.into()).try_into().unwrap()
     }
