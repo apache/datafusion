@@ -325,8 +325,6 @@ fn compute_partition_keys_by_row<'a>(
     // DataType within the partition_by array and infer the correct type from the
     // batch schema instead.
     let schema = rb.schema();
-    println!("{schema}");
-    println!("{rb:?}");
     for (col, _) in partition_by.iter() {
         let mut partition_values = vec![];
 
