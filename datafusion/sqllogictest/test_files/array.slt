@@ -2603,6 +2603,11 @@ select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4,
 ----
 2 2
 
+query I
+SELECT array_position(arrow_cast([1, 2, 3, 4, 5], 'List(Int32)'), 5)
+----
+5
+
 # list_position scalar function #5 (function alias `array_position`)
 query III
 select list_position(['h', 'e', 'l', 'l', 'o'], 'l'), list_position([1, 2, 3, 4, 5], 5), list_position([1, 1, 1], 1);
