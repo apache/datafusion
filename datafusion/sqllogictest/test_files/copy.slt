@@ -25,6 +25,44 @@ COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compressi
 ----
 2
 
+# Copy to directory as partitioned files
+query IT
+COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, compression 'zstd(10)', partition_by 'col2');
+----
+2
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
+
+query I?
+select * from validate_partitioned_parquet;
+----
+2 Bar
+1 Foo
+
+# Copy to directory as partitioned files
+query ITT
+COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
+(format parquet, compression 'zstd(10)', partition_by 'column2, column3');
+----
+3
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
+
+query I??
+select * from validate_partitioned_parquet2;
+----
+3 c z
+1 a x
+2 b y
+
+
+
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
 ----

@@ -319,14 +319,24 @@ fn compute_partition_keys_by_row<'a>(
 ) -> Result<Vec<Vec<&'a str>>> {
     let mut all_partition_values = vec![];
 
-    for (col, dtype) in partition_by.iter() {
+    // For the purposes of writing partitioned data, we can rely on schema inference
+    // to determine the type of the partition cols in order to provide a more ergonomic
+    // UI which does not require specifying DataTypes manually. So, we ignore the
+    // DataType within the partition_by array and infer the correct type from the
+    // batch schema instead.
+    let schema = rb.schema();
+    println!("{schema}");
+    println!("{rb:?}");
+    for (col, _) in partition_by.iter() {
         let mut partition_values = vec![];
-        let col_array =
-            rb.column_by_name(col)
-                .ok_or(DataFusionError::Execution(format!(
-                    "PartitionBy Column {} does not exist in source data!",
-                    col
-                )))?;
+
+        let dtype = schema.field_with_name(col)?.data_type();
+        let col_array = rb
+            .column_by_name(col)
+            .ok_or(DataFusionError::Execution(format!(
+            "PartitionBy Column {} does not exist in source data! Got schema {schema}.",
+            col,
+        )))?;
 
         match dtype {
             DataType::Utf8 => {
