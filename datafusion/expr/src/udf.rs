@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{DataFusionError, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -254,7 +254,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn signature(&self) -> &Signature;
 
     /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments
+    /// the arguments.
+    ///
+    /// # Notes
+    ///
+    /// If you provide an implementation for [`Self::return_type_from_exprs`],
+    /// DataFusion will not call `return_type` (this function). In this case it
+    /// is recommended to return [`DataFusionError::Internal`].
+    ///
+    /// [`DataFusionError::NotImplemented`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// What [`DataType`] will be returned by this function, given the
