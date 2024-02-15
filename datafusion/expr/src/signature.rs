@@ -133,6 +133,7 @@ pub enum ArrayFunctionSignature {
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
     ArrayAndIndex,
+    ArrayAndElementAndOptionalIndex,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -140,6 +141,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
                 write!(f, "array, element")
+            }
+            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
+                write!(f, "array, element, [index]")
             }
             ArrayFunctionSignature::ElementAndArray => {
                 write!(f, "element, array")
@@ -288,6 +292,15 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndElement,
+            ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for Array functions with an optional index
+    pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
             ),
             volatility,
         }

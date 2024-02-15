@@ -130,6 +130,31 @@ fn get_valid_types(
             _ => Ok(vec![vec![]]),
         }
     }
+    fn array_append_and_optional_index(
+        current_types: &[DataType],
+    ) -> Result<Vec<Vec<DataType>>> {
+        // make sure there's at least 2 arguments
+        if !(current_types.len() == 2 || current_types.len() == 3) {
+            return Ok(vec![vec![]]);
+        }
+
+        let first_two_types = &current_types[0..2];
+        let valid_types = array_append_or_prepend_valid_types(first_two_types, true)?;
+
+        let valid_types_with_index = valid_types
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                t.push(DataType::Int64);
+                t
+            })
+            .collect::<Vec<_>>();
+
+        let mut valid_types = valid_types;
+        valid_types.extend(valid_types_with_index);
+
+        Ok(valid_types)
+    }
     fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != 2 {
             return Ok(vec![vec![]]);
@@ -183,6 +208,9 @@ fn get_valid_types(
         {
             ArrayFunctionSignature::ArrayAndElement => {
                 return array_append_or_prepend_valid_types(current_types, true)
+            }
+            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
+                return array_append_and_optional_index(current_types)
             }
             ArrayFunctionSignature::ArrayAndIndex => {
                 return array_and_index(current_types)
