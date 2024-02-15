@@ -52,7 +52,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::cast::as_list_array;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 pub use struct_builder::ScalarStructBuilder;
@@ -2143,63 +2142,6 @@ impl ScalarValue {
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    ///
-    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-    ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    None,
-    ///    Some(vec![Some(4), Some(5)])
-    /// ]);
-    ///
-    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
-    ///
-    /// let expected = vec![
-    ///   vec![
-    ///     ScalarValue::Int32(Some(1)),
-    ///     ScalarValue::Int32(Some(2)),
-    ///     ScalarValue::Int32(Some(3)),
-    ///   ],
-    ///   vec![],
-    ///   vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(5))]
-    /// ];
-    ///
-    /// assert_eq!(scalar_vec, expected);
-    /// ```
-    pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-        let mut scalars = Vec::with_capacity(array.len());
-
-        for index in 0..array.len() {
-            let scalar_values = match array.data_type() {
-                DataType::List(_) => {
-                    let list_array = as_list_array(array);
-                    match list_array.is_null(index) {
-                        true => Vec::new(),
-                        false => {
-                            let nested_array = list_array.value(index);
-                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?
-                                .into_iter()
-                                .flatten()
-                                .collect()
-                        }
-                    }
-                }
-                _ => {
-                    let scalar = ScalarValue::try_from_array(array, index)?;
-                    vec![scalar]
-                }
-            };
-            scalars.push(scalar_values);
-        }
-        Ok(scalars)
-    }
-
-    /// convert_array_to_scalar_vec but only convert the first level instead of recursively converting
-    /// all the levels, so list remains as ScalarValue::List
-    ///
-    /// Example
-    /// ```
-    /// use datafusion_common::ScalarValue;
-    /// use arrow::array::ListArray;
-    /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::utils::array_into_list_array;
     /// use std::sync::Arc;
     ///
@@ -2207,9 +2149,30 @@ impl ScalarValue {
     ///    Some(vec![Some(1), Some(2), Some(3)]),
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
+    ///
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let expected = vec![
+    /// vec![
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(Some(2)),
+    ///     ScalarValue::Int32(Some(3)),
+    /// ],
+    /// vec![
+    ///    ScalarValue::Int32(Some(4)),
+    ///    ScalarValue::Int32(Some(5)),
+    /// ],
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
     /// let list_arr = array_into_list_array(Arc::new(list_arr));
     ///
-    /// let scalar_vec = ScalarValue::convert_first_level_array_to_scalar_vec(&list_arr).unwrap();
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///     Some(vec![Some(1), Some(2), Some(3)]),
@@ -2227,9 +2190,7 @@ impl ScalarValue {
     ///
     /// assert_eq!(scalar_vec, expected);
     /// ```
-    pub fn convert_first_level_array_to_scalar_vec(
-        array: &dyn Array,
-    ) -> Result<Vec<Vec<Self>>> {
+    pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
         let mut scalars = Vec::with_capacity(array.len());
 
         for index in 0..array.len() {

@@ -246,8 +246,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         partition_ordering_values.push(self.ordering_values.clone().into());
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
-        let array_agg_res =
-            ScalarValue::convert_first_level_array_to_scalar_vec(array_agg_values)?;
+        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
         for v in array_agg_res.into_iter() {
             partition_values.push(v.into());
         }

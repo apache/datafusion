@@ -236,7 +236,7 @@ impl Accumulator for NthValueAccumulator {
         let n_required = self.n.unsigned_abs() as usize;
         if self.ordering_req.is_empty() {
             let array_agg_res =
-                ScalarValue::convert_first_level_array_to_scalar_vec(array_agg_values)?;
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
             for v in array_agg_res.into_iter() {
                 self.values.extend(v);
                 if self.values.len() > n_required {
@@ -260,7 +260,7 @@ impl Accumulator for NthValueAccumulator {
             partition_ordering_values.push(self.ordering_values.clone());
 
             let array_agg_res =
-                ScalarValue::convert_first_level_array_to_scalar_vec(array_agg_values)?;
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
 
             for v in array_agg_res.into_iter() {
                 partition_values.push(v.into());
