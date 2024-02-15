@@ -459,7 +459,24 @@ impl DisplayAs for HashJoinExec {
                             .fields
                             .iter()
                             .zip(self.column_indices.iter())
-                            .map(|(f, index)| format!("{}@{}", f.name(), index.index))
+                            .map(|(f, index)| format!(
+                                "{}@{}",
+                                f.name(),
+                                // Adjust index for right side
+                                index.index
+                                    + match index.side {
+                                        JoinSide::Left => 0,
+                                        JoinSide::Right => match self.join_type {
+                                            JoinType::Inner
+                                            | JoinType::Left
+                                            | JoinType::Full
+                                            | JoinType::Right => {
+                                                self.left.schema().fields.len()
+                                            }
+                                            _ => 0,
+                                        },
+                                    }
+                            ))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
