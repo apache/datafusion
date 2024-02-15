@@ -29,8 +29,10 @@ use itertools::izip;
 use itertools::multiunzip;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
-/// If the optional `limit` is provided, includes only sufficient files.
-/// Needed to read up to `limit` number of rows.
+/// If the optional `limit` is provided, includes only sufficient files. Needed to read up to
+/// `limit` number of rows. `collect_stats` is passed down from the configuration parameter on
+/// `ListingTable`. If it is false we only construct bare statistics and skip a potentially expensive
+///  call to `multiunzip` for constructing file level summary statistics.
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     file_schema: SchemaRef,
