@@ -696,9 +696,9 @@ impl DFField {
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(qualifier) = &self.qualifier {
-            format!("{}.{}", qualifier, self.field.name())
+            format!("{}.{}", qualifier, self.name())
         } else {
-            self.field.name().to_owned()
+            self.name().to_owned()
         }
     }
 

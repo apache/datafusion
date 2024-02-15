@@ -534,8 +534,14 @@ impl ExprMask {
             Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
         );
 
+        let mut is_udf = matches!(expr, Expr::ScalarUDF(..));
+
+        if let Expr::Cast(c) = expr {
+            is_udf |= matches!(c.expr.as_ref(), Expr::ScalarUDF(_));
+        }
+
         match self {
-            Self::Normal => is_normal_minus_aggregates || is_aggr,
+            Self::Normal => is_normal_minus_aggregates || is_aggr || is_udf,
             Self::NormalAndAggregates => is_normal_minus_aggregates,
         }
     }
@@ -629,7 +635,9 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr) {
+        if self.expr_mask.ignores(expr) || Self::desc_expr(expr).contains("now()")
+        // Obviously horrendous
+        {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
