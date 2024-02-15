@@ -262,7 +262,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// DataFusion will not call `return_type` (this function). In this case it
     /// is recommended to return [`DataFusionError::Internal`].
     ///
-    /// [`DataFusionError::NotImplemented`]: datafusion_common::DataFusionError::Internal
+    /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// What [`DataType`] will be returned by this function, given the
