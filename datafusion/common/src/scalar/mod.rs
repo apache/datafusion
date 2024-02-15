@@ -83,7 +83,7 @@ pub use struct_builder::ScalarStructBuilder;
 ///
 /// In general, performance will be better using arrow [`Array`]s rather than
 /// [`ScalarValue`], as it is far more efficient to process multiple values at
-/// once (vecctorized processing).
+/// once (vectorized processing).
 ///
 /// # Example
 /// ```

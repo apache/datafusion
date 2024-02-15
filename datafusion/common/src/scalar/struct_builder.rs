@@ -39,8 +39,23 @@ impl ScalarStructBuilder {
         Self::default()
     }
 
-    /// Return a new [`ScalarValue::Struct`] with the specified fields and a
-    /// single null value
+    /// Return a new [`ScalarValue::Struct`] with a single struct where all the
+    /// specified fields are null.
+    ///
+    /// Note, this is different from a single null value in the struct
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::scalar::ScalarStructBuilder;
+    /// let fields = vec![
+    ///    Field::new("a", DataType::Int32, false),
+    /// ];
+    /// let sv = ScalarStructBuilder::new_null(fields);
+    /// // Note this not is `null`, but a struct with a single field that is `null`
+    /// assert_eq!(format!("{sv}"), "{a:NULL}");
+    ///```
     pub fn new_null(fields: impl IntoFields) -> ScalarValue {
         DataType::Struct(fields.into()).try_into().unwrap()
     }
