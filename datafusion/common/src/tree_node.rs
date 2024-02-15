@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::Result;
 
 /// This macro is used to determine continuation after a top-down closure is applied
-/// during "visit" traversals.
+/// during visiting traversals.
 ///
 /// If the function returns [`TreeNodeRecursion::Continue`], the normal execution of the
 /// function continues.
@@ -43,7 +43,7 @@ macro_rules! handle_visit_recursion_down {
     };
 }
 
-/// This macro is used to determine continuation between visiting siblings during "visit"
+/// This macro is used to determine continuation between visiting siblings during visiting
 /// traversals.
 ///
 /// If the function returns [`TreeNodeRecursion::Continue`] or
@@ -60,7 +60,7 @@ macro_rules! handle_visit_recursion {
 }
 
 /// This macro is used to determine continuation before a bottom-up closure is applied
-/// during "visit" traversals.
+/// during visiting traversals.
 ///
 /// If the function returns [`TreeNodeRecursion::Continue`], the normal execution of the
 /// function continues.
@@ -80,7 +80,7 @@ macro_rules! handle_visit_recursion_up {
     };
 }
 
-/// This macro is used to determine continuation during top-down "transform" traversals.
+/// This macro is used to determine continuation during top-down transforming traversals.
 ///
 /// After the bottom-up closure returns with [`Transformed`] depending on the returned
 /// [`TreeNodeRecursion`], [`Transformed::and_then()`] decides about recursion
@@ -95,7 +95,7 @@ macro_rules! handle_transform_recursion_down {
     };
 }
 
-/// This macro is used to determine continuation during combined "transform" traversals.
+/// This macro is used to determine continuation during combined transforming traversals.
 ///
 /// After the bottom-up closure returns with [`Transformed`] depending on the returned
 /// [`TreeNodeRecursion`], [`Transformed::and_then()`] decides about recursion
@@ -105,10 +105,10 @@ macro_rules! handle_transform_recursion_down {
 /// continuation and [`TreeNodeRecursion`] state propagation.
 #[macro_export]
 macro_rules! handle_transform_recursion {
-    ($F_DOWN:expr, $SELF:expr, $F_UP:expr) => {
+    ($F_DOWN:expr, $F_SELF:expr, $F_UP:expr) => {
         $F_DOWN?.and_then(
             |n| {
-                n.map_children($SELF)?
+                n.map_children($F_SELF)?
                     .and_then($F_UP, Some(TreeNodeRecursion::Jump))
             },
             Some(TreeNodeRecursion::Continue),
@@ -116,7 +116,7 @@ macro_rules! handle_transform_recursion {
     };
 }
 
-/// This macro is used to determine continuation during bottom-up traversal.
+/// This macro is used to determine continuation during bottom-up transforming traversals.
 ///
 /// After recursing into children returns with [`Transformed`] depending on the returned
 /// [`TreeNodeRecursion`], [`Transformed::and_then()`] decides about recursion

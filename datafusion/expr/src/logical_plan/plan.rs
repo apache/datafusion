@@ -646,29 +646,24 @@ impl LogicalPlan {
                 // Decimal128(Some(69999999999999),30,15)
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
-                fn unalias_down(expr: Expr) -> Result<Transformed<Expr>> {
-                    match expr {
-                        Expr::Exists { .. }
-                        | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery(_) => {
-                            // subqueries could contain aliases so we don't recurse into those
-                            Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                let predicate = predicate
+                    .transform_down(&mut |expr| {
+                        match expr {
+                            Expr::Exists { .. }
+                            | Expr::ScalarSubquery(_)
+                            | Expr::InSubquery(_) => {
+                                // subqueries could contain aliases so we don't recurse into those
+                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                            }
+                            Expr::Alias(_) => Ok(Transformed::new(
+                                expr.unalias(),
+                                true,
+                                TreeNodeRecursion::Jump,
+                            )),
+                            _ => Ok(Transformed::no(expr)),
                         }
-                        Expr::Alias(_) => Ok(Transformed::new(
-                            expr.unalias(),
-                            true,
-                            TreeNodeRecursion::Jump,
-                        )),
-                        _ => Ok(Transformed::no(expr)),
-                    }
-                }
-
-                fn dummy_up(expr: Expr) -> Result<Transformed<Expr>> {
-                    Ok(Transformed::no(expr))
-                }
-
-                let predicate =
-                    predicate.transform(&mut unalias_down, &mut dummy_up)?.data;
+                    })?
+                    .data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
