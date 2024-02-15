@@ -24,20 +24,18 @@
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray, new_null_array,
+    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
     OffsetSizeTrait,
 };
 use hashbrown::HashMap;
 use regex::Regex;
 
 use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
-use datafusion_common::{
-    cast::as_generic_string_array, DataFusionError, Result,
-};
+use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 use crate::functions::{
-    Hint, make_scalar_function_inner, make_scalar_function_with_hints,
+    make_scalar_function_inner, make_scalar_function_with_hints, Hint,
 };
 
 /// Get the first argument from the given string array.

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BooleanArray, new_null_array};
-use arrow::compute::{and, is_not_null, is_null};
+use arrow::array::{new_null_array, Array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
+use arrow::compute::{and, is_not_null, is_null};
 
-use datafusion_common::{DataFusionError, exec_err, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// coalesce evaluates to the first value which is not NULL
