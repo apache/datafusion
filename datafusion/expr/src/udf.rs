@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, ExprSchema, Result};
+use datafusion_common::{ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
