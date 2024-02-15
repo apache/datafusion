@@ -3184,7 +3184,7 @@ DROP TABLE t;
 statement ok
 CREATE TABLE t(a BIGINT) AS VALUES(1), (2), (3);
 
-# The column name referenced by GROUP-BY is ambiguous
+# The column name referenced by GROUP-BY is ambiguous, prefer the column in base plan
 query I
 SELECT 0 as "t.a" FROM t GROUP BY t.a;
 ----
