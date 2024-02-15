@@ -848,6 +848,18 @@ impl SessionContext {
         self.state.write().register_udwf(Arc::new(f)).ok();
     }
 
+    pub fn deregister_udf(&self, name: &str) {
+        self.state.write().deregister_udf(name);
+    }
+
+    pub fn deregister_udaf(&self, name: &str) {
+        self.state.write().deregister_udaf(name);
+    }
+
+    pub fn deregister_udwf(&self, name: &str) {
+        self.state.write().deregister_udwf(name);
+    }
+
     /// Creates a [`DataFrame`] for reading a data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -1985,6 +1997,24 @@ impl FunctionRegistry for SessionState {
 
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
+    }
+
+    fn deregister_udf(&mut self, name: &str) -> Result<Option<Arc<ScalarUDF>>> {
+        let udf = self.scalar_functions.remove(name);
+        if let Some(udf) = &udf {
+            for alias in udf.aliases() {
+                self.scalar_functions.remove(alias);
+            }
+        }
+        Ok(udf)
+    }
+
+    fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.aggregate_functions.remove(name))
+    }
+
+    fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.window_functions.remove(name))
     }
 }
 
