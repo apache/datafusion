@@ -35,6 +35,7 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
@@ -469,7 +470,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
@@ -494,9 +495,14 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ParquetFormat::new()
-            .with_enable_pruning(self.parquet_pruning)
-            .with_skip_metadata(self.skip_metadata);
+        let mut file_format = ParquetFormat::new();
+            if let Some(parquet_pruning) = self.parquet_pruning{
+                file_format = file_format.with_enable_pruning(parquet_pruning)
+            }
+        if let Some(skip_metadata) = self.skip_metadata{
+            file_format = file_format.with_skip_metadata(skip_metadata)
+        }
+
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -520,7 +526,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = JsonFormat::default()
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))

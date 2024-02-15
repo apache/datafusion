@@ -51,28 +51,40 @@ use datafusion_physical_plan::ExecutionPlan;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {
-    schema_infer_max_rec: Option<usize>,
-    file_compression_type: FileCompressionType,
+    options: JsonOptions
 }
 
 impl Default for JsonFormat {
     fn default() -> Self {
         Self {
-            schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            options: JsonOptions::default(),
         }
     }
 }
 
 impl JsonFormat {
+
+    pub fn with_options(mut self, options: JsonOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn options(&self) -> &JsonOptions {
+        &self.options
+    }
+
     /// Set a limit in terms of records to scan to infer the schema
     /// - defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
-    pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
-        self.schema_infer_max_rec = max_rec;
+    pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
+        self.options.schema_infer_max_rec = max_rec;
         self
     }
 
@@ -82,7 +94,7 @@ impl JsonFormat {
         mut self,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        self.file_compression_type = file_compression_type;
+        self.options.compression = file_compression_type.into();
         self
     }
 }
@@ -100,8 +112,8 @@ impl FileFormat for JsonFormat {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
-        let file_compression_type = self.file_compression_type.to_owned();
+        let mut records_to_read = self.options.schema_infer_max_rec;
+        let file_compression_type = FileCompressionType::from(self.options.compression);
         for object in objects {
             let mut take_while = || {
                 let should_take = records_to_read > 0;
@@ -154,7 +166,7 @@ impl FileFormat for JsonFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
+        let exec = NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
         Ok(Arc::new(exec))
     }
 
@@ -169,11 +181,14 @@ impl FileFormat for JsonFormat {
             return not_impl_err!("Overwrites are not implemented yet for Json");
         }
 
-        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
+        if self.options.compression != CompressionTypeVariant::UNCOMPRESSED {
             return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
+
+        let writer_options = JsonWriterOptions::try_from(&self.options)?;
+
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(JsonSink::new(conf));
+        let sink = Arc::new(JsonSink::new(conf, writer_options));
 
         Ok(Arc::new(FileSinkExec::new(
             input,
@@ -217,6 +232,8 @@ impl BatchSerializer for JsonSerializer {
 pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
+    ///
+    writer_options: JsonWriterOptions
 }
 
 impl Debug for JsonSink {
@@ -239,8 +256,8 @@ impl DisplayAs for JsonSink {
 
 impl JsonSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    pub fn new(config: FileSinkConfig, writer_options: JsonWriterOptions) -> Self {
+        Self { config, writer_options }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -253,8 +270,7 @@ impl JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let writer_options = self.config.file_type_writer_options.try_into_json()?;
-        let compression = &writer_options.compression;
+        let compression = &self.writer_options.compression;
 
         let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
 
@@ -413,7 +429,7 @@ mod tests {
         let ctx = session.state();
         let store = Arc::new(LocalFileSystem::new()) as _;
         let filename = "tests/data/schema_infer_limit.json";
-        let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
+        let format = JsonFormat::default().with_schema_infer_max_rec(3);
 
         let file_schema = format
             .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])

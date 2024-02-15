@@ -253,7 +253,7 @@ impl RunOpt {
                 }
                 "parquet" => {
                     let path = format!("{path}/{table}");
-                    let format = ParquetFormat::default().with_enable_pruning(Some(true));
+                    let format = ParquetFormat::default().with_enable_pruning(true);
 
                     (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
                 }

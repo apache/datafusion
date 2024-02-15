@@ -28,6 +28,7 @@ use parquet::{
     file::properties::{EnabledStatistics, WriterVersion},
     schema::types::ColumnPath,
 };
+use crate::config::ParquetOptions;
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
@@ -208,6 +209,73 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
                 _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for Parquet format!")))
             }
         }
+        Ok(ParquetWriterOptions {
+            writer_options: builder.build(),
+        })
+    }
+}
+
+impl TryFrom<&ParquetOptions> for ParquetWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(
+        parquet_session_options: &ParquetOptions,
+    ) -> Result<Self> {
+        let mut builder = WriterProperties::builder()
+            .set_data_page_size_limit(parquet_session_options.data_pagesize_limit)
+            .set_write_batch_size(parquet_session_options.write_batch_size)
+            .set_writer_version(parse_version_string(
+                &parquet_session_options.writer_version,
+            )?)
+            .set_dictionary_page_size_limit(
+                parquet_session_options.dictionary_page_size_limit,
+            )
+            .set_max_row_group_size(parquet_session_options.max_row_group_size)
+            .set_created_by(parquet_session_options.created_by.clone())
+            .set_column_index_truncate_length(
+                parquet_session_options.column_index_truncate_length,
+            )
+            .set_data_page_row_count_limit(parquet_session_options.data_page_row_count_limit)
+            .set_bloom_filter_enabled(parquet_session_options.bloom_filter_enabled);
+
+        builder = match &parquet_session_options.encoding {
+            Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.dictionary_enabled {
+            Some(enabled) => builder.set_dictionary_enabled(*enabled),
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.compression {
+            Some(compression) => {
+                builder.set_compression(parse_compression_string(compression)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.statistics_enabled {
+            Some(statistics) => {
+                builder.set_statistics_enabled(parse_statistics_string(statistics)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.max_statistics_size {
+            Some(size) => builder.set_max_statistics_size(*size),
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.bloom_filter_fpp {
+            Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
+            None => builder,
+        };
+
+        builder = match &parquet_session_options.bloom_filter_ndv {
+            Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
+            None => builder,
+        };
         Ok(ParquetWriterOptions {
             writer_options: builder.build(),
         })

@@ -73,6 +73,12 @@ impl From<CompressionTypeVariant> for FileCompressionType {
     }
 }
 
+impl From<FileCompressionType> for CompressionTypeVariant {
+    fn from(t: FileCompressionType) -> Self {
+        t.variant
+    }
+}
+
 impl FromStr for FileCompressionType {
     type Err = DataFusionError;
 

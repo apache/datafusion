@@ -53,6 +53,8 @@ use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
+use datafusion_common::config::{CsvOptions, ParquetOptions};
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, SharedBuffer};
@@ -62,6 +64,7 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
+use crate::datasource::file_format::csv::CsvFormat;
 
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
@@ -93,14 +96,17 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 ///
 /// TODO: Deprecate and remove overrides
 /// <https://github.com/apache/arrow-datafusion/issues/4349>
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ParquetFormat {
-    /// Override the global setting for `enable_pruning`
-    enable_pruning: Option<bool>,
-    /// Override the global setting for `metadata_size_hint`
-    metadata_size_hint: Option<usize>,
-    /// Override the global setting for `skip_metadata`
-    skip_metadata: Option<bool>,
+    options: ParquetOptions
+}
+
+impl Default for ParquetFormat {
+    fn default() -> Self {
+        Self {
+            options: ParquetOptions::default(),
+        }
+    }
 }
 
 impl ParquetFormat {
@@ -111,15 +117,14 @@ impl ParquetFormat {
 
     /// Activate statistics based row group level pruning
     /// - If `None`, defaults to value on `config_options`
-    pub fn with_enable_pruning(mut self, enable: Option<bool>) -> Self {
-        self.enable_pruning = enable;
+    pub fn with_enable_pruning(mut self, enable: bool) -> Self {
+        self.options.pruning = enable;
         self
     }
 
     /// Return `true` if pruning is enabled
-    pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_pruning
-            .unwrap_or(config_options.execution.parquet.pruning)
+    pub fn enable_pruning(&self) -> bool {
+        self.options.pruning
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -129,14 +134,13 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
-        self.metadata_size_hint = size_hint;
+        self.options.metadata_size_hint = size_hint;
         self
     }
 
     /// Return the metadata size hint if set
-    pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
-        let hint = config_options.execution.parquet.metadata_size_hint;
-        self.metadata_size_hint.or(hint)
+    pub fn metadata_size_hint(&self) -> Option<usize> {
+        self.options.metadata_size_hint
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -144,16 +148,15 @@ impl ParquetFormat {
     /// metadata.
     ///
     /// - If `None`, defaults to value on `config_options`
-    pub fn with_skip_metadata(mut self, skip_metadata: Option<bool>) -> Self {
-        self.skip_metadata = skip_metadata;
+    pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
+        self.options.skip_metadata = skip_metadata;
         self
     }
 
     /// Returns `true` if schema metadata will be cleared prior to
     /// schema merging.
-    pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
-        self.skip_metadata
-            .unwrap_or(config_options.execution.parquet.skip_metadata)
+    pub fn skip_metadata(&self) -> bool {
+        self.options.skip_metadata
     }
 }
 
@@ -201,7 +204,7 @@ impl FileFormat for ParquetFormat {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
-                    self.metadata_size_hint,
+                    self.metadata_size_hint(),
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -222,7 +225,7 @@ impl FileFormat for ParquetFormat {
             .map(|(_, schema)| schema)
             .collect::<Vec<_>>();
 
-        let schema = if self.skip_metadata(state.config_options()) {
+        let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
@@ -242,7 +245,7 @@ impl FileFormat for ParquetFormat {
             store.as_ref(),
             table_schema,
             object,
-            self.metadata_size_hint,
+            self.metadata_size_hint(),
         )
         .await?;
         Ok(stats)
@@ -250,7 +253,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
+        _state: &SessionState,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -258,14 +261,14 @@ impl FileFormat for ParquetFormat {
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = self
-            .enable_pruning(state.config_options())
+            .enable_pruning()
             .then(|| filters.cloned())
             .flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
-            self.metadata_size_hint(state.config_options()),
+            self.metadata_size_hint(),
         )))
     }
 
@@ -281,7 +284,7 @@ impl FileFormat for ParquetFormat {
         }
 
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(ParquetSink::new(conf));
+        let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(FileSinkExec::new(
             input,
@@ -540,6 +543,8 @@ async fn fetch_statistics(
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
+    ///
+    parquet_options: ParquetOptions
 }
 
 impl Debug for ParquetSink {
@@ -562,8 +567,8 @@ impl DisplayAs for ParquetSink {
 
 impl ParquetSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    pub fn new(config: FileSinkConfig, parquet_options: ParquetOptions) -> Self {
+        Self { config, parquet_options }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -634,17 +639,14 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let parquet_props = self
-            .config
-            .file_type_writer_options
-            .try_into_parquet()?
-            .writer_options();
+        let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
+
 
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
-        let parquet_opts = &context.session_config().options().execution.parquet;
+        let parquet_opts = &self.parquet_options;
         let allow_single_file_parallelism = parquet_opts.allow_single_file_parallelism;
 
         let part_col = if !self.config.table_partition_cols.is_empty() {
@@ -675,7 +677,7 @@ impl DataSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         object_store.clone(),
-                        parquet_props.clone(),
+                        parquet_props.writer_options().clone(),
                     )
                     .await?;
                 file_write_tasks.spawn(async move {
@@ -704,7 +706,7 @@ impl DataSink for ParquetSink {
                         writer,
                         rx,
                         schema,
-                        &props,
+                        props.writer_options(),
                         parallel_options_clone,
                     )
                     .await

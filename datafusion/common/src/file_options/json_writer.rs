@@ -24,6 +24,7 @@ use crate::{
     error::{DataFusionError, Result},
     parsers::CompressionTypeVariant,
 };
+use crate::config::JsonOptions;
 
 use super::StatementOptions;
 
@@ -55,5 +56,13 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for JsonWriterOptions {
             }
         }
         Ok(JsonWriterOptions { compression })
+    }
+}
+
+impl TryFrom<&JsonOptions> for JsonWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &JsonOptions) -> Result<Self> {
+        Ok(JsonWriterOptions { compression:  value.compression})
     }
 }

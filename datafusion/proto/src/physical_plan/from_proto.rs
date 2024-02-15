@@ -770,7 +770,7 @@ impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(convert_required!(value.config)?))
+        Ok(Self::new(convert_required!(value.config)?, value.))
     }
 }
 

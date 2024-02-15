@@ -17,10 +17,12 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 use crate::error::_internal_err;
+use crate::parsers::CompressionTypeVariant;
 use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
+use std::str::FromStr;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -929,6 +931,17 @@ config_field!(f64);
 config_field!(u8);
 config_field!(u64);
 
+impl ConfigField for CompressionTypeVariant {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CompressionTypeVariant::from_str(value)?;
+        Ok(())
+    }
+}
+
 /// An implementation trait used to recursively walk configuration
 trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
@@ -1059,5 +1072,390 @@ macro_rules! extensions_options {
                 ]
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TableOptions {
+    /// Catalog options
+    pub format: FormatOptions,
+    /// Forkta olacak
+    pub key: KeyOptions,
+    /// Optional extensions registered using [`Extensions::insert`]
+    pub extensions: Extensions,
+}
+
+impl ConfigField for TableOptions {
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        self.format.visit(v, "format", "");
+        self.key.visit(v, "key", "");
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Extensions are handled in the public `ConfigOptions::set`
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match key {
+            "format" => self.format.set(rem, value),
+            "key" => self.key.set(rem, value),
+            _ => _internal_err!("Config value \"{key}\" not found on TableOptions"),
+        }
+    }
+}
+
+impl TableOptions {
+    /// Creates a new [`ConfigOptions`] with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn default_from_session_config(config: &ConfigOptions) -> Self {
+        let mut initial = TableOptions::default();
+        initial.format.parquet = config.execution.parquet.clone();
+        initial.format.csv = initial.format.csv.with_has_header(config.catalog.has_header);
+        initial
+    }
+
+    /// Set extensions to provided value
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    /// Set a configuration option
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let (prefix, _) = key.split_once('.').ok_or_else(|| {
+            DataFusionError::External(
+                format!("could not find config namespace for key \"{key}\"",).into(),
+            )
+        })?;
+
+        // Since we do not have a global prefix for all default options,
+        // we do not split the prefix from the key value.
+        if prefix == "format" || prefix == "key" {
+            return ConfigField::set(self, key, value);
+        }
+
+        let e = self.extensions.0.get_mut(prefix);
+        let e = e.ok_or_else(|| {
+            DataFusionError::External(
+                format!("Could not find config namespace \"{prefix}\"",).into(),
+            )
+        })?;
+        e.0.set(key, value)
+    }
+
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.visit(&mut keys, "format", "");
+        ret.visit(&mut keys, "key", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                ret.set(&key, var)?;
+            }
+        }
+
+        Ok(ret)
+    }
+
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn alter_with_string_hash_map(
+        &mut self,
+        settings: &HashMap<String, String>,
+    ) -> Result<()> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        self.visit(&mut keys, "format", "");
+        self.visit(&mut keys, "key", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                self.set(&key, var)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the [`ConfigEntry`] stored within this [`ConfigOptions`]
+    pub fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.visit(&mut v, "format", "");
+        self.visit(&mut v, "key", "");
+
+        v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
+        v.0
+    }
+}
+
+config_namespace! {
+    /// Options controlling explain output
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    pub struct FormatOptions {
+        pub csv: CsvOptions, default = Default::default()
+        pub parquet: ParquetOptions, default = Default::default()
+        pub json: JsonOptions, default = Default::default()
+    }
+}
+
+config_namespace! {
+    /// Options controlling explain output
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    pub struct CsvOptions {
+        pub has_header: bool, default = false
+        pub delimiter: u8, default = b','
+        pub quote: u8, default = b'"'
+        pub escape: Option<u8>, default = None
+        pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        pub schema_infer_max_rec: usize, default = 100
+        pub date_format: Option<String>,  default = None
+        pub datetime_format: Option<String>,  default = None
+        pub timestamp_format: Option<String>,  default = None
+        pub timestamp_tz_format: Option<String>,  default = None
+        pub time_format: Option<String>,  default = None
+        pub null_value: Option<String>,  default = None
+    }
+}
+
+impl CsvOptions {
+    /// Set a limit in terms of records to scan to infer the schema
+    /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
+        self.schema_infer_max_rec = max_rec;
+        self
+    }
+
+    /// Set true to indicate that the first line is a header.
+    /// - default to true
+    pub fn with_has_header(mut self, has_header: bool) -> Self {
+        self.has_header = has_header;
+        self
+    }
+
+    /// True if the first line is a header.
+    pub fn has_header(&self) -> bool {
+        self.has_header
+    }
+
+    /// The character separating values within a row.
+    /// - default to ','
+    pub fn with_delimiter(mut self, delimiter: u8) -> Self {
+        self.delimiter = delimiter;
+        self
+    }
+
+    /// The quote character in a row.
+    /// - default to '"'
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// The escape character in a row.
+    /// - default is None
+    pub fn with_escape(mut self, escape: Option<u8>) -> Self {
+        self.escape = escape;
+        self
+    }
+
+    /// Set a `CompressionTypeVariant` of CSV
+    /// - defaults to `CompressionTypeVariant::UNCOMPRESSED`
+    pub fn with_file_compression_type(
+        mut self,
+        compression: CompressionTypeVariant,
+    ) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// The delimiter character.
+    pub fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
+
+    /// The quote character.
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// The escape character.
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
+    }
+}
+
+config_namespace! {
+    /// Options controlling explain output
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    pub struct JsonOptions {
+        pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        pub schema_infer_max_rec: usize, default = 100
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct KafkaConfig {
+    /// Should "foo" be replaced by "bar"?
+    pub properties: HashMap<String, String>,
+}
+
+impl ExtensionOptions for KafkaConfig {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        assert_eq!(key, "kafka");
+        self.properties.insert(rem.to_owned(), value.to_owned());
+        println!("key: {}, value: {}", rem, value);
+        Ok(())
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        self.properties
+            .iter()
+            .map(|(k, v)| ConfigEntry {
+                key: k.into(),
+                value: Some(v.into()),
+                description: "",
+            })
+            .collect()
+    }
+}
+
+impl ConfigExtension for KafkaConfig {
+    const PREFIX: &'static str = "kafka";
+}
+
+config_namespace! {
+    /// My own config options.
+    pub struct KeyOptions {
+        /// Should "foo" be replaced by "bar"?
+        pub format: FormatOptions, default = Default::default()
+
+        /// How many "baz" should be created?
+        pub fields: String, default = "".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{Extensions, KafkaConfig, KeyOptions, TableOptions};
+
+    #[test]
+    fn create_table_config() {
+        let mut extension = Extensions::new();
+        extension.insert(KafkaConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let kafka_config = table_config.extensions.get::<KafkaConfig>();
+        assert!(kafka_config.is_some())
+    }
+
+    #[test]
+    fn alter_kafka_config() {
+        let mut extension = Extensions::new();
+        extension.insert(KafkaConfig::default());
+        let mut table_config = TableOptions::new().with_extensions(extension);
+        table_config
+            .set("format.parquet.write_batch_size", "10")
+            .unwrap();
+        assert_eq!(table_config.format.parquet.write_batch_size, 10);
+        table_config.set("kafka.bootstrap.servers", "mete").unwrap();
+        let kafka_config = table_config.extensions.get::<KafkaConfig>().unwrap();
+        assert_eq!(
+            kafka_config.properties.get("bootstrap.servers").unwrap(),
+            "mete"
+        );
+    }
+
+    #[test]
+    fn alter_keyed_stream_format() {
+        let mut extension = Extensions::new();
+        extension.insert(KafkaConfig::default());
+        let mut table_config = TableOptions::new().with_extensions(extension);
+        table_config
+            .set("format.parquet.write_batch_size", "10")
+            .unwrap();
+        assert_eq!(table_config.format.parquet.write_batch_size, 10);
+        table_config
+            .set("key.format.parquet.write_batch_size", "10")
+            .unwrap();
+        table_config.set("key.fields", "user1;user2").unwrap();
+        assert_eq!(table_config.key.format.parquet.write_batch_size, 10);
+        assert_eq!(table_config.key.fields, "user1;user2");
     }
 }

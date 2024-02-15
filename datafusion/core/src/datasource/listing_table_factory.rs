@@ -32,7 +32,7 @@ use crate::datasource::listing::{
 };
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
-use crate::execution::context::SessionState;
+use crate::execution::context::{create_table_options_from_cmd, SessionState};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
@@ -59,7 +59,7 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
+        let table_config = create_table_options_from_cmd(state.config_options(), &cmd)?;
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
@@ -67,25 +67,14 @@ impl TableProviderFactory for ListingTableFactory {
         let file_extension = get_extension(cmd.location.as_str());
 
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => {
-                let mut statement_options = StatementOptions::from(&cmd.options);
-                let mut csv_format = CsvFormat::default()
-                    .with_has_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type);
-                if let Some(quote) = statement_options.take_str_option("quote") {
-                    csv_format = csv_format.with_quote(quote.as_bytes()[0])
-                }
-                if let Some(escape) = statement_options.take_str_option("escape") {
-                    csv_format = csv_format.with_escape(Some(escape.as_bytes()[0]))
-                }
-                Arc::new(csv_format)
-            }
+            FileType::CSV => Arc::new(
+                CsvFormat::default().with_options(table_config.format.csv.clone()),
+            ),
             #[cfg(feature = "parquet")]
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
             FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
+                JsonFormat::default().with_options(table_config.format.json.clone())
             ),
             FileType::ARROW => Arc::new(ArrowFormat),
         };

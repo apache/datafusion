@@ -61,6 +61,7 @@ use datafusion_physical_expr::{
 };
 
 use async_trait::async_trait;
+use datafusion_common::config::CsvOptions;
 use futures::{future, stream, StreamExt, TryStreamExt};
 
 /// Configuration for creating a [`ListingTable`]

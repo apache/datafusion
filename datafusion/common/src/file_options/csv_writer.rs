@@ -21,6 +21,7 @@ use std::str::FromStr;
 
 use arrow::csv::WriterBuilder;
 
+use crate::config::{CsvOptions, TableOptions};
 use crate::{
     config::ConfigOptions,
     error::{DataFusionError, Result},
@@ -103,6 +104,35 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
         Ok(CsvWriterOptions {
             writer_options: builder,
             compression,
+        })
+    }
+}
+
+impl TryFrom<&CsvOptions> for CsvWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvOptions) -> Result<Self> {
+        let mut builder = WriterBuilder::default()
+            .with_header(value.has_header)
+            .with_delimiter(value.delimiter);
+        if let Some(v) = &value.date_format {
+            builder = builder.with_date_format(v.into())
+        }
+        if let Some(v) = &value.datetime_format {
+            builder = builder.with_datetime_format(v.into())
+        }
+        if let Some(v) = &value.timestamp_format {
+            builder = builder.with_timestamp_format(v.into())
+        }
+        if let Some(v) = &value.time_format {
+            builder = builder.with_time_format(v.into())
+        }
+        if let Some(v) = &value.null_value {
+            builder = builder.with_null(v.into())
+        }
+        Ok(CsvWriterOptions {
+            writer_options: builder,
+            compression: value.compression,
         })
     }
 }
