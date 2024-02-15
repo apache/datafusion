@@ -125,7 +125,7 @@ impl CrossJoinExec {
         let exec_mode = match (left_unbounded, right_unbounded) {
             (ExecutionMode::Bounded, ExecutionMode::Bounded) => ExecutionMode::Bounded,
             // If any of the inputs is unbounded, cross join break pipeline.
-            (_, _) => ExecutionMode::InExecutable,
+            (_, _) => ExecutionMode::PipelineBreaking,
         };
 
         self.cache =

@@ -542,7 +542,7 @@ impl AggregateExec {
             && self.input_order_mode == InputOrderMode::Linear
         {
             // Cannot run without breaking pipeline.
-            unbounded_output = ExecutionMode::InExecutable;
+            unbounded_output = ExecutionMode::PipelineBreaking;
         }
 
         self.cache = PlanPropertiesCache::new(

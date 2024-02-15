@@ -134,8 +134,8 @@ impl WindowAggExec {
         // unbounded output
         let unbounded_output = match self.input.unbounded_output() {
             ExecutionMode::Bounded => ExecutionMode::Bounded,
-            ExecutionMode::Unbounded | ExecutionMode::InExecutable => {
-                ExecutionMode::InExecutable
+            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
+                ExecutionMode::PipelineBreaking
             }
         };
 

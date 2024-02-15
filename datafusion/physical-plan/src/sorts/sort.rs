@@ -784,8 +784,8 @@ impl SortExec {
 
         // Execution Mode
         let exec_mode = match self.input.unbounded_output() {
-            ExecutionMode::Unbounded | ExecutionMode::InExecutable => {
-                ExecutionMode::InExecutable
+            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
+                ExecutionMode::PipelineBreaking
             }
             ExecutionMode::Bounded => ExecutionMode::Bounded,
         };

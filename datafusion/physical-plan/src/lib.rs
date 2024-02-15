@@ -450,19 +450,45 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// Describes the execution mode of each operator's resulting stream.
+///
+/// This enum defines the possible execution modes:
+///
+/// - `Bounded`: Represents a mode where execution is limited or constrained within certain bounds.
+///   In this mode, the process operates within defined limits or boundaries.
+///
+/// - `Unbounded`: Indicates a mode where execution is not limited by any specific bounds.
+///   Processes or tasks in this mode can operate without constraints or limitations.
+///
+/// - `PipelineBreaking`: Denotes a mode where execution can potentially break pipeline constraints.
+///   This mode may disrupt established pipelines or processes that rely on sequential operation.
+///
+/// This enum can be used to specify the behavior or characteristics of a process or task
+/// in various execution scenarios.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExecutionMode {
+    /// Represents the mode where generated stream is bounded, e.g. finite.
     Bounded,
+    /// Represents the mode where generated stream is unbounded, e.g. infinite.
+    /// Operator can generate streaming results with bounded memory.
+    /// In this mode, execution can still continue successfully.
     Unbounded,
-    InExecutable,
+    /// Represents the mode, where input stream to the operator is unbounded. However,
+    /// operator cannot generate streaming results from streaming inputs. In this case,
+    /// execution mode will be pipeline breaking. e.g. operator requires unbounded memory
+    /// to generate its result.
+    PipelineBreaking,
 }
 
 impl ExecutionMode {
+    /// Check whether the execution mode is unbounded or not.
     pub fn is_unbounded(&self) -> bool {
         matches!(self, ExecutionMode::Unbounded)
     }
 
-    pub fn is_executable(&self) -> bool {
+    /// Check whether the execution is pipeline friendly. If so, operator can execute
+    /// safely.
+    pub fn pipeline_friendly(&self) -> bool {
         matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
     }
 }
@@ -471,10 +497,11 @@ fn exec_mode_flatten_helper(modes: &[ExecutionMode]) -> ExecutionMode {
     let mut result = ExecutionMode::Bounded;
     for mode in modes {
         match (mode, result) {
-            (ExecutionMode::InExecutable, _) | (_, ExecutionMode::InExecutable) => {
-                // If any of the modes is `InExecutable`. result is `InExecutable`
+            (ExecutionMode::PipelineBreaking, _)
+            | (_, ExecutionMode::PipelineBreaking) => {
+                // If any of the modes is `InExecutable`. result is `PipelineBreaking`
                 // Return immediately
-                return ExecutionMode::InExecutable;
+                return ExecutionMode::PipelineBreaking;
             }
             (
                 ExecutionMode::Unbounded,
@@ -493,6 +520,9 @@ fn exec_mode_flatten_helper(modes: &[ExecutionMode]) -> ExecutionMode {
     result
 }
 
+/// Constructs execution mode of the operator using its children.
+/// This util assumes operator applied is pipeline friendly. For operators
+/// not pipeline friendly, `exec_mode_safe_flatten` should be used.
 fn exec_mode_flatten<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> ExecutionMode {
@@ -507,21 +537,23 @@ fn exec_mode_safe_flatten_helper(modes: &[ExecutionMode]) -> ExecutionMode {
     let mut result = ExecutionMode::Bounded;
     for mode in modes {
         match (mode, result) {
-            (ExecutionMode::Unbounded | ExecutionMode::InExecutable, _)
-            | (_, ExecutionMode::Unbounded | ExecutionMode::InExecutable) => {
-                // If any of the modes is `InExecutable`. result is `InExecutable`
-                // Return immediately
-                return ExecutionMode::InExecutable;
-            }
             (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
                 // When both modes are bounded, result is bounded
                 result = ExecutionMode::Bounded;
+            }
+            (_, _) => {
+                // If any of the modes is `InExecutable` or `Unbounded`. result is `PipelineBreaking`
+                // Return immediately
+                return ExecutionMode::PipelineBreaking;
             }
         }
     }
     result
 }
 
+/// Constructs execution mode of the operator using its children.
+/// This util assumes operator applied is not pipeline friendly. For operators
+/// that pipeline friendly, `exec_mode_flatten` should be used.
 fn exec_mode_safe_flatten<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> ExecutionMode {
@@ -532,20 +564,30 @@ fn exec_mode_safe_flatten<'a>(
     exec_mode_safe_flatten_helper(&modes)
 }
 
+/// Represents a cache for plan properties used in query optimization.
+///
+/// This struct holds various properties useful for the query planning, which are used
+/// during optimization and execution phases.
 #[derive(Debug, Clone)]
 pub struct PlanPropertiesCache {
+    /// Stores Equivalence Properties of the  [`ExecutionPlan`]. See [`EquivalenceProperties`]
     pub eq_properties: EquivalenceProperties,
+    /// Stores Output Partitioning of the [`ExecutionPlan`]. See [`Partitioning`]
     pub partitioning: Partitioning,
+    /// Stores Execution Mode of the [`ExecutionPlan`]. See [`ExecutionMode`]
     pub exec_mode: ExecutionMode,
+    /// Stores output ordering of the [`ExecutionPlan`]. `None` represents, no ordering.
     output_ordering: Option<LexOrdering>,
 }
 
 impl PlanPropertiesCache {
+    /// Construct a new `PlanPropertiesCache` from the
     pub fn new(
         eq_properties: EquivalenceProperties,
         partitioning: Partitioning,
         exec_mode: ExecutionMode,
     ) -> Self {
+        // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.oeq_class().output_ordering();
         Self {
             eq_properties,
@@ -555,11 +597,13 @@ impl PlanPropertiesCache {
         }
     }
 
+    /// Construct a default `PlanPropertiesCache`, for a given schema.
     pub fn new_default(schema: SchemaRef) -> PlanPropertiesCache {
         // Defaults are most restrictive possible values.
         let eq_properties = EquivalenceProperties::new(schema);
+        // Please note that this default is not safe, and should be overwritten.
         let partitioning = Partitioning::UnknownPartitioning(0);
-        let exec_mode = ExecutionMode::InExecutable;
+        let exec_mode = ExecutionMode::PipelineBreaking;
         let output_ordering = None;
         Self {
             eq_properties,
@@ -569,17 +613,21 @@ impl PlanPropertiesCache {
         }
     }
 
+    /// Overwrite partitioning with its new value
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.partitioning = partitioning;
         self
     }
 
+    /// Overwrite Execution Mode with its new value
     pub fn with_exec_mode(mut self, exec_mode: ExecutionMode) -> Self {
         self.exec_mode = exec_mode;
         self
     }
 
+    /// Overwrite Equivalence Properties with its new value
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        // Changing equivalence properties, changes output ordering also. Make sure to overwrite it.
         self.output_ordering = eq_properties.oeq_class().output_ordering();
         self.eq_properties = eq_properties;
         self

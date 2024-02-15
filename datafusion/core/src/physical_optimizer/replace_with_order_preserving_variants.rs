@@ -241,7 +241,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant = config.optimizer.prefer_existing_sort
-        || !requirements.plan.unbounded_output().is_executable();
+        || !requirements.plan.unbounded_output().pipeline_friendly();
 
     // Create an alternate plan with order-preserving variants:
     let mut alternate_plan = plan_with_order_preserving_variants(

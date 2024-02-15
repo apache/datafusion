@@ -461,7 +461,7 @@ impl HashJoinExec {
                 ));
 
         let exec_mode = if breaking {
-            ExecutionMode::InExecutable
+            ExecutionMode::PipelineBreaking
         } else {
             exec_mode_flatten([left, right])
         };
