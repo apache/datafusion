@@ -647,7 +647,7 @@ impl LogicalPlan {
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
                 let predicate = predicate
-                    .transform_down(&mut |expr| {
+                    .transform_down(&|expr| {
                         match expr {
                             Expr::Exists { .. }
                             | Expr::ScalarSubquery(_)

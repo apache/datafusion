@@ -2667,7 +2667,7 @@ pub enum ScalarFunction {
     Lower = 33,
     Ltrim = 34,
     Md5 = 35,
-    NullIf = 36,
+    ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
     RegexpReplace = 39,
@@ -2728,7 +2728,7 @@ pub enum ScalarFunction {
     ArrayPrepend = 94,
     ArrayRemove = 95,
     ArrayReplace = 96,
-    ArrayToString = 97,
+    /// 97 was ArrayToString
     Cardinality = 98,
     ArrayElement = 99,
     ArraySlice = 100,
@@ -2742,7 +2742,7 @@ pub enum ScalarFunction {
     ArrayReplaceAll = 110,
     Nanvl = 111,
     Flatten = 112,
-    Isnan = 113,
+    /// 113 was IsNan
     Iszero = 114,
     ArrayEmpty = 115,
     ArrayPopBack = 116,
@@ -2765,6 +2765,7 @@ pub enum ScalarFunction {
     MakeDate = 133,
     ArrayReverse = 134,
     RegexpLike = 135,
+    ToChar = 136,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2809,7 +2810,6 @@ impl ScalarFunction {
             ScalarFunction::Lower => "Lower",
             ScalarFunction::Ltrim => "Ltrim",
             ScalarFunction::Md5 => "MD5",
-            ScalarFunction::NullIf => "NullIf",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::RegexpReplace => "RegexpReplace",
@@ -2870,7 +2870,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
@@ -2884,7 +2883,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
-            ScalarFunction::Isnan => "Isnan",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
@@ -2907,6 +2905,7 @@ impl ScalarFunction {
             ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
             ScalarFunction::RegexpLike => "RegexpLike",
+            ScalarFunction::ToChar => "ToChar",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2948,7 +2947,6 @@ impl ScalarFunction {
             "Lower" => Some(Self::Lower),
             "Ltrim" => Some(Self::Ltrim),
             "MD5" => Some(Self::Md5),
-            "NullIf" => Some(Self::NullIf),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "RegexpReplace" => Some(Self::RegexpReplace),
@@ -3009,7 +3007,6 @@ impl ScalarFunction {
             "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
-            "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
@@ -3023,7 +3020,6 @@ impl ScalarFunction {
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Flatten" => Some(Self::Flatten),
-            "Isnan" => Some(Self::Isnan),
             "Iszero" => Some(Self::Iszero),
             "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
@@ -3046,6 +3042,7 @@ impl ScalarFunction {
             "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
             "RegexpLike" => Some(Self::RegexpLike),
+            "ToChar" => Some(Self::ToChar),
             _ => None,
         }
     }

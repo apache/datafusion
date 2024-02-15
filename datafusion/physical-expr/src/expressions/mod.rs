@@ -32,7 +32,6 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
-mod nullif;
 mod try_cast;
 
 /// Module with some convenient methods used in expression building
@@ -92,7 +91,6 @@ pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
-pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state

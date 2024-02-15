@@ -77,7 +77,7 @@ criterion = "0.5"
 datafusion = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
-tokio = { version = "1.28", features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[bench]]
 harness = false
@@ -94,3 +94,7 @@ name = "to_timestamp"
 [[bench]]
 harness = false
 name = "regexp"
+
+[[bench]]
+harness = false
+name = "to_char"

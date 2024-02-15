@@ -51,7 +51,7 @@ sqllogictest = "0.19.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { version = "1.0" }
+tokio = { workspace = true }
 tokio-postgres = { version = "0.7.7", optional = true }
 
 [features]
@@ -61,7 +61,7 @@ postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-pro
 [dev-dependencies]
 env_logger = { workspace = true }
 num_cpus = { workspace = true }
-tokio = { version = "1.0", features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[test]]
 harness = false

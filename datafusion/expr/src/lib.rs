@@ -30,7 +30,6 @@ mod built_in_function;
 mod built_in_window_function;
 mod columnar_value;
 mod literal;
-mod nullif;
 mod operator;
 mod partition_evaluator;
 mod signature;
@@ -74,7 +73,6 @@ pub use function::{
 pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
-pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{

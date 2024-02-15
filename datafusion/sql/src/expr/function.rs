@@ -149,18 +149,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
 
             let func_deps = schema.functional_dependencies();
-            // Find whether ties are possible in the given ordering:
-            let is_ordering_strict = order_by.iter().any(|orderby_expr| {
+            // Find whether ties are possible in the given ordering
+            let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
                 if let Expr::Sort(sort_expr) = orderby_expr {
                     if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).unwrap();
-                        return func_deps.iter().any(|dep| {
+                        let idx = schema.index_of_column(col).ok()?;
+                        return if func_deps.iter().any(|dep| {
                             dep.source_indices == vec![idx]
                                 && dep.mode == Dependency::Single
-                        });
+                        }) {
+                            Some(true)
+                        } else {
+                            Some(false)
+                        };
                     }
                 }
-                false
+                Some(false)
             });
 
             let window_frame = window
@@ -176,8 +180,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let window_frame = if let Some(window_frame) = window_frame {
                 regularize_window_order_by(&window_frame, &mut order_by)?;
                 window_frame
-            } else if is_ordering_strict {
-                WindowFrame::new(Some(true))
+            } else if let Some(is_ordering_strict) = is_ordering_strict {
+                WindowFrame::new(Some(is_ordering_strict))
             } else {
                 WindowFrame::new((!order_by.is_empty()).then_some(false))
             };

@@ -264,10 +264,10 @@ ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t2_id@1], 4), input_partitions=4
 ----------ProjectionExec: expr=[SUM(t2.t2_int)@2 as SUM(t2.t2_int), t2_id@0 as t2_id]
-------------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id, Utf8("a")@1 as Utf8("a")], aggr=[SUM(t2.t2_int)]
+------------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id, Utf8("a")@1 as Utf8("a")], aggr=[SUM(t2.t2_int)], ordering_mode=PartiallySorted([1])
 --------------CoalesceBatchesExec: target_batch_size=2
 ----------------RepartitionExec: partitioning=Hash([t2_id@0, Utf8("a")@1], 4), input_partitions=4
-------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id, a as Utf8("a")], aggr=[SUM(t2.t2_int)]
+------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id, a as Utf8("a")], aggr=[SUM(t2.t2_int)], ordering_mode=PartiallySorted([1])
 --------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query II rowsort
