@@ -24,7 +24,7 @@ DataFusion supports `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` and Scalar Subqueries
 The examples below are based on the following table.
 
 ```sql
-❯ select * from x;
+select * from x;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -38,7 +38,7 @@ The `EXISTS` syntax can be used to find all rows in a relation where a correlate
 for that row. Only correlated subqueries are supported.
 
 ```sql
-❯ select * from x y where exists (select * from x where x.column_1 = y.column_1);
+select * from x y where exists (select * from x where x.column_1 = y.column_1);
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -53,7 +53,7 @@ The `NOT EXISTS` syntax can be used to find all rows in a relation where a corre
 for that row. Only correlated subqueries are supported.
 
 ```sql
-❯ select * from x y where not exists (select * from x where x.column_1 = y.column_1);
+select * from x y where not exists (select * from x where x.column_1 = y.column_1);
 0 rows in set.
 ```
 
@@ -63,7 +63,7 @@ The `IN` syntax can be used to find all rows in a relation where a given express
 results of a correlated subquery.
 
 ```sql
-❯ select * from x where column_1 in (select column_1 from x);
+select * from x where column_1 in (select column_1 from x);
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -78,7 +78,7 @@ The `NOT IN` syntax can be used to find all rows in a relation where a given exp
 results of a correlated subquery.
 
 ```sql
-❯ select * from x where column_1 not in (select column_1 from x);
+select * from x where column_1 not in (select column_1 from x);
 0 rows in set.
 ```
 
@@ -88,7 +88,7 @@ A scalar subquery can be used to produce a single value that can be used in many
 is an example of a filter using a scalar subquery. Only correlated subqueries are supported.
 
 ```sql
-❯ select * from x y where column_1 < (select sum(column_2) from x where x.column_1 = y.column_1);
+select * from x y where column_1 < (select sum(column_2) from x where x.column_1 = y.column_1);
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+

@@ -20,6 +20,8 @@ use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
+use arrow_array::types::Int32Type;
+use arrow_array::ListArray;
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
@@ -40,6 +42,7 @@ fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
+        Field::new("l", DataType::new_list(DataType::Int32, true), true),
     ]))
 }
 
@@ -57,6 +60,12 @@ async fn create_test_table() -> Result<DataFrame> {
                 "123AbcDef",
             ])),
             Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ])),
         ],
     )?;
 
@@ -67,7 +76,7 @@ async fn create_test_table() -> Result<DataFrame> {
     ctx.table("test").await
 }
 
-/// Excutes an expression on the test dataframe as a select.
+/// Executes an expression on the test dataframe as a select.
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, using the assert_batch_eq! macro
 macro_rules! assert_fn_batches {
@@ -857,6 +866,25 @@ async fn test_fn_decode() -> Result<()> {
         "| CBAdef                                         |",
         "| 123AbcDef                                      |",
         "+------------------------------------------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_array_to_string() -> Result<()> {
+    let expr = array_to_string(col("l"), lit("***"));
+
+    let expected = [
+        "+-------------------------------------+",
+        "| array_to_string(test.l,Utf8(\"***\")) |",
+        "+-------------------------------------+",
+        "| 0***1***2                           |",
+        "|                                     |",
+        "| 3***5                               |",
+        "| 6***7                               |",
+        "+-------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 

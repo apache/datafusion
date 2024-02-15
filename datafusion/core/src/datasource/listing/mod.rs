@@ -139,8 +139,8 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::local::LocalFileSystem;
-    use std::sync::Arc;
+    use object_store::{local::LocalFileSystem, path::Path};
+    use std::{ops::Not, sync::Arc};
     use url::Url;
 
     #[test]
@@ -184,5 +184,57 @@ mod tests {
         let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
         sut.get_store(url.as_ref()).unwrap();
+    }
+
+    #[test]
+    fn test_url_contains() {
+        let url = ListingTableUrl::parse("file:///var/data/mytable/").unwrap();
+
+        // standard case with default config
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/data.parquet").unwrap(),
+            true
+        ));
+
+        // standard case with `ignore_subdirectory` set to false
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/data.parquet").unwrap(),
+            false
+        ));
+
+        // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
+        // a direct child of the `url`
+        assert!(url
+            .contains(
+                &Path::parse("/var/data/mytable/mysubfolder/data.parquet").unwrap(),
+                true
+            )
+            .not());
+
+        // when we set `ignore_subdirectory` to false, we should not ignore the file
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/mysubfolder/data.parquet").unwrap(),
+            false
+        ));
+
+        // as above, `ignore_subdirectory` is false, so we include the file
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/year=2024/data.parquet").unwrap(),
+            false
+        ));
+
+        // in this case, we include the file even when `ignore_subdirectory` is true because the
+        // path segment is a hive partition which doesn't count as a subdirectory for the purposes
+        // of `Url::contains`
+        assert!(url.contains(
+            &Path::parse("/var/data/mytable/year=2024/data.parquet").unwrap(),
+            true
+        ));
+
+        // testing an empty path with default config
+        assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), true));
+
+        // testing an empty path with `ignore_subdirectory` set to false
+        assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
     }
 }

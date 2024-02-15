@@ -15,17 +15,89 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Encoding expressions
+
+use arrow::{
+    datatypes::DataType,
+};
+use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_expr::{ColumnarValue};
+
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{ ScalarValue};
+
+#[derive(Debug)]
+pub(super) struct NullIfFunc {
+    signature: Signature,
+}
+
+/// Currently supported types by the nullif function.
+/// The order of these types correspond to the order on which coercion applies
+/// This should thus be from least informative to most informative
+static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
+    DataType::Boolean,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::Float32,
+    DataType::Float64,
+    DataType::Utf8,
+    DataType::LargeUtf8,
+];
+
+
+impl NullIfFunc {
+    pub fn new() -> Self {
+        Self {
+            signature:
+            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(),
+                Volatility::Immutable,
+            )
+        }
+    }
+}
+
+impl ScalarUDFImpl for NullIfFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "nullif"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        // NULLIF has two args and they might get coerced, get a preview of this
+        let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
+        coerced_types.map(|typs| typs[0].clone())
+            .map_err(|e| e.context("Failed to coerce arguments for NULLIF")
+        )
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        nullif_func(args)
+    }
+}
+
+
 
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
-pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return internal_err!(
             "{:?} args were supplied but NULLIF takes exactly two args",

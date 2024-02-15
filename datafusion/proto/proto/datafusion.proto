@@ -580,7 +580,7 @@ enum ScalarFunction {
   Lower = 33;
   Ltrim = 34;
   MD5 = 35;
-  NullIf = 36;
+  //  36 was NullIf
   OctetLength = 37;
   Random = 38;
   RegexpReplace = 39;
@@ -641,7 +641,7 @@ enum ScalarFunction {
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
-  ArrayToString = 97;
+  // 97 was ArrayToString
   Cardinality = 98;
   ArrayElement = 99;
   ArraySlice = 100;
@@ -655,7 +655,7 @@ enum ScalarFunction {
   ArrayReplaceAll = 110;
   Nanvl = 111;
   Flatten = 112;
-  Isnan = 113;
+  // 113 was IsNan
   Iszero = 114;
   ArrayEmpty = 115;
   ArrayPopBack = 116;
@@ -678,6 +678,7 @@ enum ScalarFunction {
   MakeDate = 133;
   ArrayReverse = 134;
   RegexpLike = 135;
+  ToChar = 136;
 }
 
 message ScalarFunctionNode {

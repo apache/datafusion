@@ -22339,7 +22339,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Lower => "Lower",
             Self::Ltrim => "Ltrim",
             Self::Md5 => "MD5",
-            Self::NullIf => "NullIf",
             Self::OctetLength => "OctetLength",
             Self::Random => "Random",
             Self::RegexpReplace => "RegexpReplace",
@@ -22400,7 +22399,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayPrepend => "ArrayPrepend",
             Self::ArrayRemove => "ArrayRemove",
             Self::ArrayReplace => "ArrayReplace",
-            Self::ArrayToString => "ArrayToString",
             Self::Cardinality => "Cardinality",
             Self::ArrayElement => "ArrayElement",
             Self::ArraySlice => "ArraySlice",
@@ -22414,7 +22412,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReplaceAll => "ArrayReplaceAll",
             Self::Nanvl => "Nanvl",
             Self::Flatten => "Flatten",
-            Self::Isnan => "Isnan",
             Self::Iszero => "Iszero",
             Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayPopBack => "ArrayPopBack",
@@ -22437,6 +22434,7 @@ impl serde::Serialize for ScalarFunction {
             Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
             Self::RegexpLike => "RegexpLike",
+            Self::ToChar => "ToChar",
         };
         serializer.serialize_str(variant)
     }
@@ -22484,7 +22482,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Lower",
             "Ltrim",
             "MD5",
-            "NullIf",
             "OctetLength",
             "Random",
             "RegexpReplace",
@@ -22545,7 +22542,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayPrepend",
             "ArrayRemove",
             "ArrayReplace",
-            "ArrayToString",
             "Cardinality",
             "ArrayElement",
             "ArraySlice",
@@ -22559,7 +22555,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReplaceAll",
             "Nanvl",
             "Flatten",
-            "Isnan",
             "Iszero",
             "ArrayEmpty",
             "ArrayPopBack",
@@ -22582,6 +22577,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "MakeDate",
             "ArrayReverse",
             "RegexpLike",
+            "ToChar",
         ];
 
         struct GeneratedVisitor;
@@ -22658,7 +22654,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Lower" => Ok(ScalarFunction::Lower),
                     "Ltrim" => Ok(ScalarFunction::Ltrim),
                     "MD5" => Ok(ScalarFunction::Md5),
-                    "NullIf" => Ok(ScalarFunction::NullIf),
                     "OctetLength" => Ok(ScalarFunction::OctetLength),
                     "Random" => Ok(ScalarFunction::Random),
                     "RegexpReplace" => Ok(ScalarFunction::RegexpReplace),
@@ -22719,7 +22714,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayPrepend" => Ok(ScalarFunction::ArrayPrepend),
                     "ArrayRemove" => Ok(ScalarFunction::ArrayRemove),
                     "ArrayReplace" => Ok(ScalarFunction::ArrayReplace),
-                    "ArrayToString" => Ok(ScalarFunction::ArrayToString),
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "ArrayElement" => Ok(ScalarFunction::ArrayElement),
                     "ArraySlice" => Ok(ScalarFunction::ArraySlice),
@@ -22733,7 +22727,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReplaceAll" => Ok(ScalarFunction::ArrayReplaceAll),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
                     "Flatten" => Ok(ScalarFunction::Flatten),
-                    "Isnan" => Ok(ScalarFunction::Isnan),
                     "Iszero" => Ok(ScalarFunction::Iszero),
                     "ArrayEmpty" => Ok(ScalarFunction::ArrayEmpty),
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
@@ -22756,6 +22749,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     "RegexpLike" => Ok(ScalarFunction::RegexpLike),
+                    "ToChar" => Ok(ScalarFunction::ToChar),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
