@@ -26,6 +26,7 @@ use std::sync::Arc;
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float16Type, Float32Type,
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType,
@@ -241,11 +242,10 @@ impl Accumulator for DistinctCountAccumulator {
             return Ok(());
         }
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars);
-        }
-        Ok(())
+        let array = &states[0];
+        let list_array = array.as_list::<i32>();
+        let inner_array = list_array.value(0);
+        self.update_batch(&[inner_array])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
