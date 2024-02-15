@@ -2579,7 +2579,7 @@ fn approx_median_window() {
 fn select_arrow_cast() {
     let sql = "SELECT arrow_cast(1234, 'Float64'), arrow_cast('foo', 'LargeUtf8')";
     let expected = "\
-    Projection: CAST(Int64(1234) AS Float64), CAST(Utf8(\"foo\") AS LargeUtf8)\
+    Projection: arrow_cast(Int64(1234), Utf8(\"Float64\")), arrow_cast(Utf8(\"foo\"), Utf8(\"LargeUtf8\"))\
     \n  EmptyRelation";
     quick_test(sql, expected);
 }
@@ -2673,11 +2673,17 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default().with_udf(make_udf(
-        "nullif",
-        vec![DataType::Int32, DataType::Int32],
-        DataType::Int32,
-    ));
+    let context = MockContextProvider::default()
+        .with_udf(make_udf(
+            "nullif",
+            vec![DataType::Int32, DataType::Int32],
+            DataType::Int32,
+        ))
+        .with_udf(make_udf(
+            "arrow_cast",
+            vec![DataType::Int64, DataType::Utf8],
+            DataType::Float64,
+        ));
 
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
