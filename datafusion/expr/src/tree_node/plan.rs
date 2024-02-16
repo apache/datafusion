@@ -102,13 +102,11 @@ impl TreeNode for LogicalPlan {
         // Propagate up `t.transformed` and `t.tnr` along with the node containing
         // transformed children.
         if t2 {
-            Ok(Transformed::new(
-                self.with_new_exprs(self.expressions(), t.data)?,
-                t.transformed,
-                t.tnr,
-            ))
+            t.flat_map_data(|new_children| {
+                self.with_new_exprs(self.expressions(), new_children)
+            })
         } else {
-            Ok(Transformed::new(self, t.transformed, t.tnr))
+            Ok(t.map_data(|_| self))
         }
     }
 }
