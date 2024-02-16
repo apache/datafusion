@@ -134,7 +134,7 @@ pub enum ArrayFunctionSignature {
     ElementAndArray,
     /// Specialized Signature for Array functions of the form (List/LargeList, Index)
     ArrayAndIndex,
-    /// Specialized Signature for Array functions of the form (List/LargeList, Element, [Index])
+    /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
     ArrayAndElementAndOptionalIndex,
 }
 
