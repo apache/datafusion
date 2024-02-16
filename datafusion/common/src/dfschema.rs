@@ -124,6 +124,20 @@ impl DFSchema {
         }
     }
 
+    pub fn new_with_metadata(
+        fields: Vec<Field>,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        let field_count = fields.len();
+        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+        Self {
+            inner: schema,
+            field_qualifiers: vec![None; field_count],
+            functional_dependencies: FunctionalDependencies::empty(),
+        }
+    }
+
+    // TODO Check this vs `try_from_qualified_schema`
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn from_qualified_schema<'a>(
         qualifier: impl Into<TableReference<'a>>,

@@ -2096,7 +2096,10 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                let df_schema = DFSchema::from_qualified_schema(table_name, table_source);
+                let df_schema = DFSchema::try_from_qualified_schema(
+                    table_name,
+                    &table_source.schema(),
+                )?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
             })
             .unwrap_or_else(|| {
@@ -2286,18 +2289,24 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+            exprlist_to_fields(&select_expr, &input)?
+                .into_iter()
+                .unzip();
 
-        let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&select_expr, &input)?,
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
             input.schema().metadata().clone(),
-        )?;
+        ));
+        let dfschema =
+            DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
             select_expr,
             sort_expr: None,
             input,
-            schema: Arc::new(schema),
+            schema: Arc::new(dfschema),
         };
 
         if let Some(sort_expr) = sort_expr {

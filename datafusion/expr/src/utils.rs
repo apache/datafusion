@@ -30,7 +30,7 @@ use crate::{
     Operator, TryCast,
 };
 
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
@@ -433,13 +433,14 @@ pub fn expand_qualified_wildcard(
     let projected_func_dependencies = schema
         .functional_dependencies()
         .project_functional_dependencies(&qualified_indices, qualified_indices.len());
-    let qualified_fields = get_at_indices(schema.fields(), &qualified_indices)?;
-    if qualified_fields.is_empty() {
+    let fields_with_qualified = get_at_indices(schema.fields(), &qualified_indices)?;
+    if fields_with_qualified.is_empty() {
         return plan_err!("Invalid qualifier {qualifier}");
     }
-    let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
-            // We can use the functional dependencies as is, since it only stores indices:
+
+    let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
+    let qualified_dfschema =
+        DFSchema::try_from_qualified_schema(qualifier, &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
@@ -459,7 +460,10 @@ pub fn expand_qualified_wildcard(
     // Add each excluded `Column` to columns_to_skip
     let mut columns_to_skip = HashSet::new();
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(&qualified_schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(
+        &qualified_dfschema,
+        columns_to_skip,
+    ))
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
