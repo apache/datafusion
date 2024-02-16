@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanPropertiesCache};
-use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
+use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -175,27 +175,8 @@ impl DisplayAs for StreamingTableExec {
                     write!(f, ", infinite_source=true")?;
                 }
 
-                let orderings = &self.projected_output_ordering;
-                if let Some(ordering) = orderings.first() {
-                    if !ordering.is_empty() {
-                        let start = if orderings.len() == 1 {
-                            ", output_ordering="
-                        } else {
-                            ", output_orderings=["
-                        };
-                        write!(f, "{}", start)?;
-                        for (idx, ordering) in
-                            orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
-                        {
-                            match idx {
-                                0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
-                                _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
-                            }
-                        }
-                        let end = if orderings.len() == 1 { "" } else { "]" };
-                        write!(f, "{}", end)?;
-                    }
-                }
+                display_orderings(f, &self.projected_output_ordering)?;
+
                 Ok(())
             }
         }

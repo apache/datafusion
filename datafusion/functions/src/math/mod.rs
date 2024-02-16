@@ -15,23 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+//! "core" DataFusion functions
 
-/// Currently supported types by the nullif function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-pub static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
+mod nans;
+
+// create  UDFs
+make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
+
+// Export the functions out of this package, both as expr_fn as well as a list of functions
+export_functions!(
+    (isnan, num, "returns true if a given number is +NaN or -NaN otherwise returns false")
+);
+

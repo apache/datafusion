@@ -1840,8 +1840,9 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+statement error DataFusion error: Failed to coerce arguments for NULLIF
 SELECT nullif(1);
+
 
 # error message for wrong function signature (Exact: exact number of args of an exact type)
 statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
