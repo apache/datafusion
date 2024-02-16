@@ -630,6 +630,7 @@ mod tests {
         TreeNodeVisitor,
     };
     use crate::Result;
+    use std::fmt::Display;
 
     struct TestTreeNode<T> {
         children: Vec<TestTreeNode<T>>,
@@ -708,7 +709,7 @@ mod tests {
         ]
     }
 
-    fn f_down_jump_visits<'a>() -> Vec<&'a str> {
+    fn f_down_jump_on_e_visits<'a>() -> Vec<&'a str> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -724,7 +725,7 @@ mod tests {
         ]
     }
 
-    fn f_up_jump_visits<'a>() -> Vec<&'a str> {
+    fn f_up_jump_on_a_visits<'a>() -> Vec<&'a str> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -746,35 +747,78 @@ mod tests {
         ]
     }
 
+    type TestVisitorF<T> = Box<dyn FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion>>;
+
+    struct TestVisitor<T: Display> {
+        visits: Vec<String>,
+        fd: TestVisitorF<T>,
+        fu: TestVisitorF<T>,
+    }
+
+    impl<T: Display> TestVisitor<T> {
+        fn new(fd: TestVisitorF<T>, fu: TestVisitorF<T>) -> Self {
+            Self {
+                visits: vec![],
+                fd,
+                fu,
+            }
+        }
+    }
+
+    impl<T: Display> TreeNodeVisitor for TestVisitor<T> {
+        type Node = TestTreeNode<T>;
+
+        fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+            self.visits.push(format!("f_down({})", node.data));
+            (*self.fd)(node)
+        }
+
+        fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+            self.visits.push(format!("f_up({})", node.data));
+            (*self.fu)(node)
+        }
+    }
+
+    type TestRewriterF<T> =
+        Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
+
+    struct TestRewriter<T: Display> {
+        visits: Vec<String>,
+        fd: TestRewriterF<T>,
+        fu: TestRewriterF<T>,
+    }
+
+    impl<T: Display> TestRewriter<T> {
+        fn new(fd: TestRewriterF<T>, fu: TestRewriterF<T>) -> Self {
+            Self {
+                visits: vec![],
+                fd,
+                fu,
+            }
+        }
+    }
+
+    impl<T: Display> TreeNodeRewriter for TestRewriter<T> {
+        type Node = TestTreeNode<T>;
+
+        fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            self.visits.push(format!("f_down({})", node.data));
+            (*self.fd)(node)
+        }
+
+        fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+            self.visits.push(format!("f_up({})", node.data));
+            (*self.fu)(node)
+        }
+    }
+
     #[test]
     fn test_visit() -> Result<()> {
         let tree = new_test_tree();
-
-        struct TestVisitor {
-            pub visits: Vec<String>,
-        }
-
-        impl TestVisitor {
-            fn new() -> Self {
-                Self { visits: vec![] }
-            }
-        }
-
-        impl TreeNodeVisitor for TestVisitor {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(TreeNodeRecursion::Continue)
-            }
-
-            fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(TreeNodeRecursion::Continue)
-            }
-        }
-
-        let mut visitor = TestVisitor::new();
+        let mut visitor = TestVisitor::new(
+            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
+            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
+        );
         tree.visit(&mut visitor)?;
         assert_eq!(visitor.visits, all_visits());
 
@@ -784,42 +828,18 @@ mod tests {
     #[test]
     fn test_visit_f_down_jump() -> Result<()> {
         let tree = new_test_tree();
-
-        struct FDownJumpVisitor {
-            pub visits: Vec<String>,
-            jump_on: String,
-        }
-
-        impl FDownJumpVisitor {
-            fn new(jump_on: String) -> Self {
-                Self {
-                    visits: vec![],
-                    jump_on,
-                }
-            }
-        }
-
-        impl TreeNodeVisitor for FDownJumpVisitor {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(if node.data == self.jump_on {
+        let mut visitor = TestVisitor::new(
+            Box::new(|node| {
+                Ok(if node.data == "e" {
                     TreeNodeRecursion::Jump
                 } else {
                     TreeNodeRecursion::Continue
                 })
-            }
-
-            fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(TreeNodeRecursion::Continue)
-            }
-        }
-
-        let mut visitor = FDownJumpVisitor::new("e".to_string());
+            }),
+            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
+        );
         tree.visit(&mut visitor)?;
-        assert_eq!(visitor.visits, f_down_jump_visits());
+        assert_eq!(visitor.visits, f_down_jump_on_e_visits());
 
         Ok(())
     }
@@ -827,42 +847,18 @@ mod tests {
     #[test]
     fn test_visit_f_up_jump() -> Result<()> {
         let tree = new_test_tree();
-
-        struct FUpJumpVisitor {
-            pub visits: Vec<String>,
-            jump_on: String,
-        }
-
-        impl FUpJumpVisitor {
-            fn new(jump_on: String) -> Self {
-                Self {
-                    visits: vec![],
-                    jump_on,
-                }
-            }
-        }
-
-        impl TreeNodeVisitor for FUpJumpVisitor {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(TreeNodeRecursion::Continue)
-            }
-
-            fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(if node.data == self.jump_on {
+        let mut visitor = TestVisitor::new(
+            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
+            Box::new(|node| {
+                Ok(if node.data == "a" {
                     TreeNodeRecursion::Jump
                 } else {
                     TreeNodeRecursion::Continue
                 })
-            }
-        }
-
-        let mut visitor = FUpJumpVisitor::new("a".to_string());
+            }),
+        );
         tree.visit(&mut visitor)?;
-        assert_eq!(visitor.visits, f_up_jump_visits());
+        assert_eq!(visitor.visits, f_up_jump_on_a_visits());
 
         Ok(())
     }
@@ -870,32 +866,10 @@ mod tests {
     #[test]
     fn test_rewrite() -> Result<()> {
         let tree = new_test_tree();
-
-        struct TestRewriter {
-            pub visits: Vec<String>,
-        }
-
-        impl TestRewriter {
-            fn new() -> Self {
-                Self { visits: vec![] }
-            }
-        }
-
-        impl TreeNodeRewriter for TestRewriter {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(Transformed::no(node))
-            }
-
-            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(Transformed::no(node))
-            }
-        }
-
-        let mut rewriter = TestRewriter::new();
+        let mut rewriter = TestRewriter::new(
+            Box::new(|node| Ok(Transformed::no(node))),
+            Box::new(|node| Ok(Transformed::no(node))),
+        );
         tree.rewrite(&mut rewriter)?;
         assert_eq!(rewriter.visits, all_visits());
 
@@ -905,42 +879,18 @@ mod tests {
     #[test]
     fn test_rewrite_f_down_jump() -> Result<()> {
         let tree = new_test_tree();
-
-        struct FDownJumpRewriter {
-            pub visits: Vec<String>,
-            jump_on: String,
-        }
-
-        impl FDownJumpRewriter {
-            fn new(jump_on: String) -> Self {
-                Self {
-                    visits: vec![],
-                    jump_on,
-                }
-            }
-        }
-
-        impl TreeNodeRewriter for FDownJumpRewriter {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(if node.data == self.jump_on {
+        let mut rewriter = TestRewriter::new(
+            Box::new(|node| {
+                Ok(if node.data == "e" {
                     Transformed::new(node, false, TreeNodeRecursion::Jump)
                 } else {
                     Transformed::no(node)
                 })
-            }
-
-            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(Transformed::no(node))
-            }
-        }
-
-        let mut rewriter = FDownJumpRewriter::new("e".to_string());
+            }),
+            Box::new(|node| Ok(Transformed::no(node))),
+        );
         tree.rewrite(&mut rewriter)?;
-        assert_eq!(rewriter.visits, f_down_jump_visits());
+        assert_eq!(rewriter.visits, f_down_jump_on_e_visits());
 
         Ok(())
     }
@@ -948,42 +898,18 @@ mod tests {
     #[test]
     fn test_rewrite_f_up_jump() -> Result<()> {
         let tree = new_test_tree();
-
-        struct FUpJumpRewriter {
-            pub visits: Vec<String>,
-            jump_on: String,
-        }
-
-        impl FUpJumpRewriter {
-            fn new(jump_on: String) -> Self {
-                Self {
-                    visits: vec![],
-                    jump_on,
-                }
-            }
-        }
-
-        impl TreeNodeRewriter for FUpJumpRewriter {
-            type Node = TestTreeNode<&'static str>;
-
-            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_down({})", node.data));
-                Ok(Transformed::no(node))
-            }
-
-            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                self.visits.push(format!("f_up({})", node.data));
-                Ok(if node.data == self.jump_on {
+        let mut rewriter = TestRewriter::new(
+            Box::new(|node| Ok(Transformed::no(node))),
+            Box::new(|node| {
+                Ok(if node.data == "a" {
                     Transformed::new(node, false, TreeNodeRecursion::Jump)
                 } else {
                     Transformed::no(node)
                 })
-            }
-        }
-
-        let mut rewriter = FUpJumpRewriter::new("a".to_string());
+            }),
+        );
         tree.rewrite(&mut rewriter)?;
-        assert_eq!(rewriter.visits, f_up_jump_visits());
+        assert_eq!(rewriter.visits, f_up_jump_on_a_visits());
 
         Ok(())
     }
