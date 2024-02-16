@@ -631,6 +631,7 @@ mod tests {
     };
     use crate::Result;
     use std::fmt::Display;
+    use std::sync::Mutex;
 
     struct TestTreeNode<T> {
         children: Vec<TestTreeNode<T>>,
@@ -749,13 +750,13 @@ mod tests {
 
     type TestVisitorF<T> = Box<dyn FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion>>;
 
-    struct TestVisitor<T: Display> {
+    struct TestVisitor<T> {
         visits: Vec<String>,
         fd: TestVisitorF<T>,
         fu: TestVisitorF<T>,
     }
 
-    impl<T: Display> TestVisitor<T> {
+    impl<T> TestVisitor<T> {
         fn new(fd: TestVisitorF<T>, fu: TestVisitorF<T>) -> Self {
             Self {
                 visits: vec![],
@@ -782,13 +783,13 @@ mod tests {
     type TestRewriterF<T> =
         Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
 
-    struct TestRewriter<T: Display> {
+    struct TestRewriter<T> {
         visits: Vec<String>,
         fd: TestRewriterF<T>,
         fu: TestRewriterF<T>,
     }
 
-    impl<T: Display> TestRewriter<T> {
+    impl<T> TestRewriter<T> {
         fn new(fd: TestRewriterF<T>, fu: TestRewriterF<T>) -> Self {
             Self {
                 visits: vec![],
@@ -910,6 +911,82 @@ mod tests {
         );
         tree.rewrite(&mut rewriter)?;
         assert_eq!(rewriter.visits, f_up_jump_on_a_visits());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_transform() -> Result<()> {
+        let tree = new_test_tree();
+        // TreeNode::transform() is not useful for mutable shared object between `f_down`
+        // and `f_up` closures, so we need a trick to test it.
+        let visits = Mutex::new(vec![]);
+        tree.transform(
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_down({})", node.data));
+                Ok(Transformed::no(node))
+            },
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_up({})", node.data));
+                Ok(Transformed::no(node))
+            },
+        )?;
+        assert_eq!(visits.into_inner().unwrap(), all_visits());
+        Ok(())
+    }
+
+    #[test]
+    fn test_transform_f_down_jump() -> Result<()> {
+        let tree = new_test_tree();
+        // TreeNode::transform() is not useful for mutable shared object between `f_down`
+        // and `f_up` closures, so we need a trick to test it.
+        let visits = Mutex::new(vec![]);
+        tree.transform(
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_down({})", node.data));
+                Ok(if node.data == "e" {
+                    Transformed::new(node, false, TreeNodeRecursion::Jump)
+                } else {
+                    Transformed::no(node)
+                })
+            },
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_up({})", node.data));
+                Ok(Transformed::no(node))
+            },
+        )?;
+        assert_eq!(visits.into_inner().unwrap(), f_down_jump_on_e_visits());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_transform_f_up_jump() -> Result<()> {
+        let tree = new_test_tree();
+        // TreeNode::transform() is not useful for mutable shared object between `f_down`
+        // and `f_up` closures, so we need a trick to test it.
+        let visits = Mutex::new(vec![]);
+        tree.transform(
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_down({})", node.data));
+                Ok(Transformed::no(node))
+            },
+            &mut |node| {
+                let mut mut_visits = visits.lock().unwrap();
+                mut_visits.push(format!("f_up({})", node.data));
+                Ok(if node.data == "a" {
+                    Transformed::new(node, false, TreeNodeRecursion::Jump)
+                } else {
+                    Transformed::no(node)
+                })
+            },
+        )?;
+        assert_eq!(visits.into_inner().unwrap(), f_up_jump_on_a_visits());
 
         Ok(())
     }
