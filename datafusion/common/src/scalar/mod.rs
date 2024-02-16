@@ -2137,7 +2137,7 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
-    /// Example 1: Array
+    /// Example 1: Array (ScalarValue::Int32)
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
@@ -2167,7 +2167,7 @@ impl ScalarValue {
     /// assert_eq!(scalar_vec, expected);
     /// ```
     ///
-    /// Example 2: Nested array
+    /// Example 2: Nested array (ScalarValue::List)
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
