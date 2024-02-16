@@ -494,7 +494,9 @@ where
             let num_values = offsets.len() - 1;
             single_null_buffer(num_values, null_index)
         });
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+        // SAFETY: the offsets were constructed correctly in `insert_if_new` --
+        // monotonically increasing, overflows were checked.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
         let values = buffer.finish();
 
         match output_type {
