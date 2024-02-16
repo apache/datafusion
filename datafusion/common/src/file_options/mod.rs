@@ -97,9 +97,9 @@ impl StatementOptions {
         maybe_option.map(|(_, v)| v)
     }
 
-    /// Finds partition_by option if exists and parses into a Vec<String>,
-    /// if option doesn't exist, returns empty vec![].
-    /// E.g. (partition_by 'colA, colB, colC') -> vec!['colA','colB','colC']
+    /// Finds partition_by option if exists and parses into a `Vec<String>`.
+    /// If option doesn't exist, returns empty `vec![]`.
+    /// E.g. (partition_by 'colA, colB, colC') -> `vec!['colA','colB','colC']`
     pub fn take_partition_by(&mut self) -> Vec<String> {
         let partition_by = self.take_str_option("partition_by");
         match partition_by {
