@@ -52,7 +52,6 @@ use datafusion_physical_expr::{
     Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
@@ -121,9 +120,6 @@ pub fn remove_unnecessary_projections(
             try_swapping_with_output_req(projection, output_req)?
         } else if input.is::<CoalescePartitionsExec>() {
             try_swapping_with_coalesce_partitions(projection)?
-        } else if let Some(coalesce_batches) = input.downcast_ref::<CoalesceBatchesExec>()
-        {
-            try_swapping_with_coalesce_batches(projection, coalesce_batches)?
         } else if let Some(filter) = input.downcast_ref::<FilterExec>() {
             try_swapping_with_filter(projection, filter)?
         } else if let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
@@ -381,26 +377,6 @@ fn try_swapping_with_coalesce_partitions(
     // CoalescePartitionsExec always has a single child, so zero indexing is safe.
     make_with_child(projection, &projection.input().children()[0])
         .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
-}
-
-/// Tries to swap `projection` with its input, which is known to be a
-/// [`CoalesceBatchesExec`]. If possible, performs the swap and returns
-/// [`CoalesceBatchesExec`] as the top plan. Otherwise, returns `None`.
-fn try_swapping_with_coalesce_batches(
-    projection: &ProjectionExec,
-    coalesce_batches: &CoalesceBatchesExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-    // CoalesceBatchesExec always has a single child, so zero indexing is safe.
-    make_with_child(projection, &projection.input().children()[0]).map(|e| {
-        Some(Arc::new(CoalesceBatchesExec::new(
-            e,
-            coalesce_batches.target_batch_size(),
-        )) as _)
-    })
 }
 
 /// Tries to swap `projection` with its input (`filter`). If possible, performs
