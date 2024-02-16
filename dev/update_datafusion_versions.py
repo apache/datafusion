@@ -60,6 +60,15 @@ def update_workspace_version(new_version: str):
     print('workspace package', pkg)
     pkg['version'] = new_version
 
+    doc = tomlkit.parse(data)
+
+    for crate in crates.keys():
+        df_dep = doc.get('workspace').get('dependencies', {}).get(crate)
+        # skip crates that pin datafusion using git hash
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dependency in {cargo_toml}')
+            df_dep['version'] = new_version
+
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
 
