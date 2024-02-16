@@ -30,7 +30,7 @@ use arrow::{
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
 use datafusion_common::{not_impl_err, Result};
 pub use datafusion_expr::AggregateUDF;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
 use std::sync::Arc;
@@ -40,6 +40,7 @@ use std::sync::Arc;
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -53,6 +54,7 @@ pub fn create_aggregate_expr(
         args: input_phy_exprs.to_vec(),
         data_type: fun.return_type(&input_exprs_types)?,
         name: name.into(),
+        ordering_req: ordering_req.to_vec(),
     }))
 }
 
@@ -64,6 +66,7 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
+    ordering_req: LexOrdering,
 }
 
 impl AggregateFunctionExpr {
@@ -174,6 +177,10 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.fun.create_groups_accumulator()
+    }
+
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
     }
 }
 

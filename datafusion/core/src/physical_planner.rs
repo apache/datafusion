@@ -246,7 +246,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             filter,
             order_by,
-            null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)
@@ -258,11 +257,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                         "aggregate expression with filter is not supported"
                     );
                 }
-                if order_by.is_some() {
-                    return exec_err!(
-                        "aggregate expression with order_by is not supported"
-                    );
-                }
+
                 let names = args
                     .iter()
                     .map(|e| create_physical_name(e, false))
@@ -1709,13 +1704,16 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     (agg_expr, filter, order_by)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
+                    let ordering_reqs: Vec<PhysicalSortExpr> =
+                        order_by.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
                         &args,
+                        &ordering_reqs,
                         physical_input_schema,
                         name,
-                    );
-                    (agg_expr?, filter, order_by)
+                    )?;
+                    (agg_expr, filter, order_by)
                 }
                 AggregateFunctionDefinition::Name(_) => {
                     return internal_err!(

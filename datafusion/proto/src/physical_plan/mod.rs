@@ -473,7 +473,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
                                             let agg_udf = registry.udaf(udaf_name)?;
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, &physical_schema, name)
+                                            // TODO: Ordering not supported for UDAF here
+                                            let ordering_req = &[];
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, ordering_req, &physical_schema, name)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
