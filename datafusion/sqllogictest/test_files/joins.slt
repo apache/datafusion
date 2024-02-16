@@ -1451,8 +1451,8 @@ Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int, join_t2.t2_id, join_
 ----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 ----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t1.t1_id + Int64(11)@3, CAST(join_t2.t2_id AS Int64)@3)], projection=[t1_id@0, t1_name@1, t1_int@2, t2_id@4, t2_name@5, t2_int@6]
 ------CoalescePartitionsExec
 --------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
@@ -1477,8 +1477,8 @@ Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int, join_t2.t2_id, join_
 ----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 ----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(join_t1.t1_id + Int64(11)@3, CAST(join_t2.t2_id AS Int64)@3)], projection=[t1_id@0, t1_name@1, t1_int@2, t2_id@4, t2_name@5, t2_int@6]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([join_t1.t1_id + Int64(11)@3], 2), input_partitions=2
@@ -1508,8 +1508,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t2.t2_id + UInt32(1)@1, join_t1.t1_id + UInt32(12)@2)], projection=[t2_id@0, t1_id@2, t1_name@3]
 ------CoalescePartitionsExec
 --------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as join_t2.t2_id + UInt32(1)]
@@ -1534,8 +1534,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(join_t2.t2_id + UInt32(1)@1, join_t1.t1_id + UInt32(12)@2)], projection=[t2_id@0, t1_id@2, t1_name@3]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([join_t2.t2_id + UInt32(1)@1], 2), input_partitions=2
@@ -1566,8 +1566,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)], projection=[t2_id@0, t1_id@1, t1_name@2]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 ------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
@@ -1590,8 +1590,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)], projection=[t2_id@0, t1_id@1, t1_name@2]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
@@ -1621,8 +1621,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t2.t2_id - UInt32(11)@1, t1_id@0)], projection=[t2_id@0, t1_id@2, t1_name@3]
 ------CoalescePartitionsExec
 --------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
@@ -1647,8 +1647,8 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 physical_plan
-CoalesceBatchesExec: target_batch_size=2
---ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(join_t2.t2_id - UInt32(11)@1, t1_id@0)], projection=[t2_id@0, t1_id@2, t1_name@3]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([join_t2.t2_id - UInt32(11)@1], 2), input_partitions=2
@@ -2033,8 +2033,8 @@ NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------MemoryExec: partitions=1, partition_sizes=[1]
 --CoalescePartitionsExec
-----CoalesceBatchesExec: target_batch_size=2
-------ProjectionExec: expr=[t2_id@0 as t2_id]
+----ProjectionExec: expr=[t2_id@0 as t2_id]
+------CoalesceBatchesExec: target_batch_size=2
 --------FilterExec: t2_int@1 > 1
 ----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------------MemoryExec: partitions=1, partition_sizes=[1]

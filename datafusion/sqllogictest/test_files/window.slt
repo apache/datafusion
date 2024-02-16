@@ -1735,7 +1735,7 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Projection:
+------Projection: 
 --------Sort: aggregate_test_100.c1 ASC NULLS LAST
 ----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 ------------Projection: aggregate_test_100.c1
@@ -1752,8 +1752,8 @@ ProjectionExec: expr=[COUNT(*)@0 as global_count]
 --------------CoalesceBatchesExec: target_batch_size=4096
 ----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
---------------------CoalesceBatchesExec: target_batch_size=4096
-----------------------ProjectionExec: expr=[c1@0 as c1]
+--------------------ProjectionExec: expr=[c1@0 as c1]
+----------------------CoalesceBatchesExec: target_batch_size=4096
 ------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
 --------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
