@@ -2137,15 +2137,11 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
-    /// Example
+    /// Example 1: Array
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::utils::array_into_list_array;
-    /// use std::sync::Arc;
-    ///
-    /// # Example 1: Array
     ///
     /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -2169,8 +2165,15 @@ impl ScalarValue {
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
+    /// ```
     ///
     /// Example 2: Nested array
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::utils::array_into_list_array;
+    /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///    Some(vec![Some(1), Some(2), Some(3)]),
