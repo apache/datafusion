@@ -321,7 +321,7 @@ mod tests {
             }
         }
 
-        let schema = Arc::new(MemorySchemaProvider::new()) as _;
+        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
         let catalog = Arc::new(TestProvider {});
 
         match catalog.register_schema("foo", schema) {
@@ -353,7 +353,7 @@ mod tests {
         let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
 
         let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
-        cat.register_schema("foo", schema.clone()).unwrap();
+        cat.register_schema("foo", schema).unwrap();
 
         assert!(cat.deregister_schema("foo", false).unwrap().is_some());
     }
