@@ -155,6 +155,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         let array = &states[0];
 
+        assert_eq!(array.len(), 1, "state array should only include 1 row!");
         // Unwrap outer ListArray then do update batch
         let inner_array = array.as_list::<i32>().value(0);
         self.update_batch(&[inner_array])

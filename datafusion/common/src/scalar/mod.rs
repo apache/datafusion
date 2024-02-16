@@ -2145,11 +2145,15 @@ impl ScalarValue {
     /// use datafusion_common::utils::array_into_list_array;
     /// use std::sync::Arc;
     ///
+    /// # Example 1: Array
+    ///
+    /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///    Some(vec![Some(1), Some(2), Some(3)]),
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
     ///
+    /// // Convert the array into Scalar Values for each row
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let expected = vec![
@@ -2166,12 +2170,17 @@ impl ScalarValue {
     ///
     /// assert_eq!(scalar_vec, expected);
     ///
+    /// Example 2: Nested array
+    ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///    Some(vec![Some(1), Some(2), Some(3)]),
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
+    ///
+    /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
     /// let list_arr = array_into_list_array(Arc::new(list_arr));
     ///
+    /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
