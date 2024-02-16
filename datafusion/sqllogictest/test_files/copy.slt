@@ -80,6 +80,35 @@ select * from validate_partitioned_parquet_a_x order by column1;
 ----
 1
 
+statement ok
+create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
+
+query TTT
+insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
+----
+3
+
+query T
+select "'test'" from test
+----
+a
+b
+c
+
+# Note to place a single ' inside of a literal string escape by putting two ''
+query TTT
+copy test to 'test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV 
+LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
+
+# This triggers a panic (index out of bounds)
+#query
+#select * from validate_partitioned_escape_quote;
+
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
 ----

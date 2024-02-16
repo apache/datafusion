@@ -103,10 +103,21 @@ impl StatementOptions {
     pub fn take_partition_by(&mut self) -> Vec<String> {
         let partition_by = self.take_str_option("partition_by");
         match partition_by {
-            Some(part_cols) => part_cols
-                .split(',')
-                .map(|s| s.trim().replace('\'', ""))
-                .collect::<Vec<_>>(),
+            Some(part_cols) => {
+                let dequoted = part_cols
+                    .chars()
+                    .enumerate()
+                    .filter(|(idx, c)| {
+                        !((*idx == 0 || *idx == part_cols.len() - 1)
+                            && (*c == '\'' || *c == '"'))
+                    })
+                    .map(|(_idx, c)| c)
+                    .collect::<String>();
+                dequoted
+                    .split(',')
+                    .map(|s| s.trim().replace("''", "'"))
+                    .collect::<Vec<_>>()
+            }
             None => vec![],
         }
     }
