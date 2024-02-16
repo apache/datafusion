@@ -42,6 +42,16 @@ select * from validate_partitioned_parquet order by col1, col2;
 1 Foo
 2 Bar
 
+# validate partition paths were actually generated
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table1/col2=Bar';
+
+query I
+select * from validate_partitioned_parquet_bar order by col1;
+----
+2
+
 # Copy to directory as partitioned files
 query ITT
 COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
@@ -61,7 +71,14 @@ select * from validate_partitioned_parquet2 order by column1,column2,column3;
 2 b y
 3 c z
 
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table2/column2=a/column3=x';
 
+query I
+select * from validate_partitioned_parquet_a_x order by column1;
+----
+1
 
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
