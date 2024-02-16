@@ -132,7 +132,9 @@ pub enum ArrayFunctionSignature {
     /// The first argument should be non-list or list, and the second argument should be List/LargeList.
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
+    /// Specialized Signature for Array functions of the form (List/LargeList, Index)
     ArrayAndIndex,
+    /// Specialized Signature for Array functions of the form (List/LargeList, Element, [Index])
     ArrayAndElementAndOptionalIndex,
 }
 
