@@ -78,6 +78,26 @@ pub fn project_schema(
     Ok(schema)
 }
 
+/// Checks if the given projection is valid for the given schema.
+pub fn can_project(schema: &SchemaRef, projection: Option<&Vec<usize>>) -> Result<()> {
+    match projection {
+        Some(columns) => 
+		{
+			if columns.iter().max().map_or(false, |&i| i >= schema.fields().len()) {
+				Err(arrow_schema::ArrowError::SchemaError(format!(
+					"project index {} out of bounds, max field {}",
+					columns.iter().max().unwrap(),
+					schema.fields().len()
+				))
+				.into())
+			} else {
+				Ok(())
+			}
+		}
+        None => Ok(()),
+    }
+}
+
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns

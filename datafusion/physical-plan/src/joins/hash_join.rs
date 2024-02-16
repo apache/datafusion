@@ -282,7 +282,7 @@ pub struct HashJoinExec {
     pub filter: Option<JoinFilter>,
     /// How the join is performed (`OUTER`, `INNER`, etc)
     pub join_type: JoinType,
-    /// The output schema for the join
+    /// The schema after join
     schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
@@ -294,6 +294,8 @@ pub struct HashJoinExec {
     pub mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// The indices of the columns in the output schema
+    pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Null matching behavior: If `null_equals_null` is true, rows that have
@@ -314,6 +316,7 @@ impl HashJoinExec {
         on: JoinOn,
         filter: Option<JoinFilter>,
         join_type: &JoinType,
+        projection: Option<Vec<usize>>,
         partition_mode: PartitionMode,
         null_equals_null: bool,
     ) -> Result<Self> {
@@ -340,13 +343,16 @@ impl HashJoinExec {
             Some(Self::probe_side()),
         );
 
+        let schema = Arc::new(schema);
+        datafusion_common::utils::can_project(&schema, projection.as_ref())?;
+
         Ok(HashJoinExec {
             left,
             right,
             on,
             filter,
             join_type: *join_type,
-            schema: Arc::new(schema),
+            schema,
             left_fut: Default::default(),
             random_state,
             mode: partition_mode,
@@ -354,6 +360,7 @@ impl HashJoinExec {
             column_indices,
             null_equals_null,
             output_order,
+            projection,
         })
     }
 
@@ -410,27 +417,35 @@ impl HashJoinExec {
     }
 
     /// project the output of the join
+    /// For more info, search `try_embed_to_hash_join` in codes
     pub fn with_projection(&self, projection: &Vec<usize>) -> Result<Self> {
-        let new_schema = project_schema(&self.schema, Some(projection))?;
-        let new_column_indices = projection
-            .iter()
-            .map(|i| self.column_indices[*i].clone())
-            .collect();
+        //  check if the projection is valid
+        datafusion_common::utils::can_project(&self.schema(), Some(projection))?;
+        let new_projection = match &self.projection {
+            Some(p) => projection.iter().map(|i| p[*i]).collect(),
+            None => projection.clone(),
+        };
         Ok(Self {
             left: self.left.clone(),
             right: self.right.clone(),
             on: self.on.clone(),
             filter: self.filter.clone(),
             join_type: self.join_type,
-            schema: new_schema,
+            schema: self.schema.clone(),
             left_fut: Default::default(),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
-            column_indices: new_column_indices,
+            column_indices: self.column_indices.clone(),
             null_equals_null: self.null_equals_null,
             output_order: self.output_order.clone(),
+            projection: Some(new_projection),
         })
+    }
+
+    /// return whether the join contains a projection
+    pub fn contain_projection(&self) -> bool {
+        self.projection.is_some()
     }
 }
 
@@ -442,40 +457,17 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
-                // If output schema is less than the schema of the join, then it means that projection is applied.
-                let display_projections = if self.schema.fields.len()
-                    != build_join_schema(
-                        &self.left.schema(),
-                        &self.right.schema(),
-                        &self.join_type,
-                    )
-                    .0
-                    .fields
-                    .len()
-                {
+                let display_projections = if self.contain_projection() {
                     format!(
                         ", projection=[{}]",
-                        self.schema
-                            .fields
+                        self.projection
+                            .as_ref()
+                            .unwrap()
                             .iter()
-                            .zip(self.column_indices.iter())
-                            .map(|(f, index)| format!(
+                            .map(|index| format!(
                                 "{}@{}",
-                                f.name(),
-                                // Adjust index for right side
-                                index.index
-                                    + match index.side {
-                                        JoinSide::Left => 0,
-                                        JoinSide::Right => match self.join_type {
-                                            JoinType::Inner
-                                            | JoinType::Left
-                                            | JoinType::Full
-                                            | JoinType::Right => {
-                                                self.left.schema().fields.len()
-                                            }
-                                            _ => 0,
-                                        },
-                                    }
+                                self.schema.fields().get(*index).unwrap().name(),
+                                index
                             ))
                             .collect::<Vec<_>>()
                             .join(", ")
@@ -505,7 +497,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        project_schema(&self.schema, self.projection.as_ref()).unwrap()
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -640,6 +632,7 @@ impl ExecutionPlan for HashJoinExec {
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
+            self.projection.clone(),
             self.mode,
             self.null_equals_null,
         )?))
@@ -710,6 +703,15 @@ impl ExecutionPlan for HashJoinExec {
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
 
+        // update column indices to reflect the projection
+        let column_indices_after_projection = match &self.projection {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
             on_left,
@@ -717,7 +719,7 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             right: right_stream,
-            column_indices: self.column_indices.clone(),
+            column_indices: column_indices_after_projection,
             random_state: self.random_state.clone(),
             join_metrics,
             null_equals_null: self.null_equals_null,
@@ -1535,6 +1537,7 @@ mod tests {
             on,
             None,
             join_type,
+            None,
             PartitionMode::CollectLeft,
             null_equals_null,
         )
@@ -1554,6 +1557,7 @@ mod tests {
             on,
             Some(filter),
             join_type,
+            None,
             PartitionMode::CollectLeft,
             null_equals_null,
         )
@@ -1601,6 +1605,7 @@ mod tests {
             on,
             None,
             join_type,
+            None,
             PartitionMode::Partitioned,
             null_equals_null,
         )?;
@@ -3600,6 +3605,7 @@ mod tests {
                 on.clone(),
                 None,
                 &join_type,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )?;

@@ -52,6 +52,7 @@ use datafusion_physical_expr::{
     Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
@@ -120,6 +121,9 @@ pub fn remove_unnecessary_projections(
             try_swapping_with_output_req(projection, output_req)?
         } else if input.is::<CoalescePartitionsExec>() {
             try_swapping_with_coalesce_partitions(projection)?
+        } else if let Some(coalesce_batches) = input.downcast_ref::<CoalesceBatchesExec>()
+        {
+            try_swapping_with_coalesce_batches(projection, coalesce_batches)?
         } else if let Some(filter) = input.downcast_ref::<FilterExec>() {
             try_swapping_with_filter(projection, filter)?
         } else if let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
@@ -379,6 +383,26 @@ fn try_swapping_with_coalesce_partitions(
         .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
 }
 
+/// Tries to swap `projection` with its input, which is known to be a
+/// [`CoalesceBatchesExec`]. If possible, performs the swap and returns
+/// [`CoalesceBatchesExec`] as the top plan. Otherwise, returns `None`.
+fn try_swapping_with_coalesce_batches(
+    projection: &ProjectionExec,
+    coalesce_batches: &CoalesceBatchesExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // If the projection does not narrow the the schema, we should not try to push it down:
+    if projection.expr().len() >= projection.input().schema().fields().len() {
+        return Ok(None);
+    }
+    // CoalesceBatchesExec always has a single child, so zero indexing is safe.
+    make_with_child(projection, &projection.input().children()[0]).map(|e| {
+        Some(Arc::new(CoalesceBatchesExec::new(
+            e,
+            coalesce_batches.target_batch_size(),
+        )) as _)
+    })
+}
+
 /// Tries to swap `projection` with its input (`filter`). If possible, performs
 /// the swap and returns [`FilterExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_filter(
@@ -530,7 +554,7 @@ fn try_pushdown_through_union(
 }
 
 /// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
-/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column).
+/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unecessary output creation.
 fn try_embed_to_hash_join(
     projection: &ProjectionExec,
     hash_join: &HashJoinExec,
@@ -583,7 +607,7 @@ fn try_embed_to_hash_join(
 fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
     // Since there are some expressions like `a + 1`, so we need to traverse the expr tree.
     struct ColumnVisitor {
-        // Todo: should we use structure that preserves insertion order here, like indexmap?
+        // TODO: should we use structure that preserves insertion order here, like indexmap?
         pub column_indices: std::collections::BTreeSet<usize>,
     }
     impl TreeNodeVisitor for ColumnVisitor {
@@ -617,6 +641,11 @@ fn try_pushdown_through_hash_join(
     projection: &ProjectionExec,
     hash_join: &HashJoinExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+    if hash_join.contain_projection() {
+        return Ok(None);
+    }
+
     // Convert projected expressions to columns. We can not proceed if this is
     // not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
@@ -674,6 +703,7 @@ fn try_pushdown_through_hash_join(
         new_on,
         new_filter,
         hash_join.join_type(),
+		hash_join.projection.clone(),
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
     )?)))
@@ -2382,6 +2412,7 @@ mod tests {
                 ]),
             )),
             &JoinType::Inner,
+			None,
             PartitionMode::Auto,
             true,
         )?);
