@@ -37,10 +37,10 @@ CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
 
 query I?
-select * from validate_partitioned_parquet;
+select * from validate_partitioned_parquet order by col1, col2;
 ----
-2 Bar
 1 Foo
+2 Bar
 
 # Copy to directory as partitioned files
 query ITT
@@ -55,11 +55,11 @@ CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET
 LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
 
 query I??
-select * from validate_partitioned_parquet2;
+select * from validate_partitioned_parquet2 order by column1,column2,column3;
 ----
-3 c z
 1 a x
 2 b y
+3 c z
 
 
 

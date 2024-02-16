@@ -32,7 +32,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 
 use datafusion_execution::TaskContext;
 
@@ -329,12 +329,10 @@ fn compute_partition_keys_by_row<'a>(
         let mut partition_values = vec![];
 
         let dtype = schema.field_with_name(col)?.data_type();
-        let col_array =
-            rb.column_by_name(col)
-                .ok_or(DataFusionError::Execution(format!(
+        let col_array = rb.column_by_name(col).ok_or(exec_datafusion_err!(
             "PartitionBy Column {} does not exist in source data! Got schema {schema}.",
-            col,
-        )))?;
+            col
+        ))?;
 
         match dtype {
             DataType::Utf8 => {
@@ -347,12 +345,12 @@ fn compute_partition_keys_by_row<'a>(
                 downcast_dictionary_array!(
                     col_array =>  {
                         let array = col_array.downcast_dict::<StringArray>()
-                            .ok_or(DataFusionError::Execution(format!("it is not yet supported to write to hive partitions with datatype {}",
-                            dtype)))?;
+                            .ok_or(exec_datafusion_err!("it is not yet supported to write to hive partitions with datatype {}",
+                            dtype))?;
 
                         for val in array.values() {
                             partition_values.push(
-                                val.ok_or(DataFusionError::Execution(format!("Cannot partition by null value for column {}", col)))?
+                                val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?
                             );
                         }
                     },
