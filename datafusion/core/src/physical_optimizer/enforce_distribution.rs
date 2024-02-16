@@ -296,7 +296,7 @@ fn adjust_input_keys_ordering(
                         new_conditions.0,
                         filter.clone(),
                         join_type,
-						// TODO: although projection is not used in the join here, because project pushdow is the last rule. Maybe we need to handle it later. Same as filter.
+                        // TODO: although projection is not used in the join here, because project pushdow is the last rule. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
                         *null_equals_null,

@@ -589,7 +589,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     on,
                     filter,
                     &join_type.into(),
-					None,
+                    None,
                     partition_mode,
                     hashjoin.null_equals_null,
                 )?))

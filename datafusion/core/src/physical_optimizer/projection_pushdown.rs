@@ -703,7 +703,7 @@ fn try_pushdown_through_hash_join(
         new_on,
         new_filter,
         hash_join.join_type(),
-		hash_join.projection.clone(),
+        hash_join.projection.clone(),
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
     )?)))
@@ -2412,7 +2412,7 @@ mod tests {
                 ]),
             )),
             &JoinType::Inner,
-			None,
+            None,
             PartitionMode::Auto,
             true,
         )?);

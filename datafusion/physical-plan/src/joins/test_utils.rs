@@ -142,7 +142,7 @@ pub async fn partitioned_hash_join_with_filter(
         on,
         filter,
         join_type,
-		None,
+        None,
         PartitionMode::Partitioned,
         null_equals_null,
     )?);

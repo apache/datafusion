@@ -139,16 +139,22 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
-fn swap_join_projection(left_schema_len: usize, right_schema_len: usize, projection: Option<&Vec<usize>>) -> Option<Vec<usize>> {
-	projection.map(|p| {
-		p.iter().map(|i| {
-			if *i < left_schema_len {
-				*i + right_schema_len
-			} else {
-				*i - left_schema_len
-			}
-		}).collect()
-	})
+fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<usize>> {
+    projection.map(|p| {
+        p.iter()
+            .map(|i| {
+                if *i < left_schema_len {
+                    *i + right_schema_len
+                } else {
+                    *i - left_schema_len
+                }
+            })
+            .collect()
+    })
 }
 
 /// This function swaps the inputs of the given join operator.
@@ -168,7 +174,11 @@ fn swap_hash_join(
             .collect(),
         swap_join_filter(hash_join.filter()),
         &swap_join_type(*hash_join.join_type()),
-		swap_join_projection(left.schema().fields().len(), right.schema().fields().len(), hash_join.projection.as_ref()),
+        swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            hash_join.projection.as_ref(),
+        ),
         partition_mode,
         hash_join.null_equals_null(),
     )?;

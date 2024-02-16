@@ -1443,7 +1443,7 @@ mod tests {
                 vec![(Arc::new(left_col.clone()), Arc::new(right_col.clone()))],
                 None,
                 &JoinType::Inner,
-				None,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )

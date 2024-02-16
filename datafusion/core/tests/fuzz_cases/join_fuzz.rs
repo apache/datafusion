@@ -153,7 +153,7 @@ async fn run_join_test(
                 on_columns.clone(),
                 None,
                 &join_type,
-				None,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )
