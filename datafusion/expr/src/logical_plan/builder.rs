@@ -2102,10 +2102,11 @@ mod tests {
     fn test_change_redundant_column() -> Result<()> {
         let t1_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
         let t2_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t2_field_3 = DFField::new_unqualified("a", DataType::Int32, false);
         let t1_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
         let t2_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
 
-        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2];
+        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
         let remove_redundant = change_redundant_column(field_vec);
 
         assert_eq!(
@@ -2114,7 +2115,8 @@ mod tests {
                 DFField::new_unqualified("a", DataType::Int32, false),
                 DFField::new_unqualified("a:1", DataType::Int32, false),
                 DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("b:1", DataType::Int32, false)
+                DFField::new_unqualified("b:1", DataType::Int32, false),
+                DFField::new_unqualified("a:2", DataType::Int32, false),
             ]
         );
         Ok(())

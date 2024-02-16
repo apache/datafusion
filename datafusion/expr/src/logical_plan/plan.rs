@@ -1894,9 +1894,7 @@ impl SubqueryAlias {
         let alias = alias.into();
         let fields = change_redundant_column(plan.schema().fields().clone());
         let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data)
-            .unwrap()
-            .into();
+        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
