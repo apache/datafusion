@@ -40,7 +40,8 @@ query IIIIII
 select * from (t1 cross join t2) as t cross join t3;
 -------
 ----
-5 6 1 2 3 4
+1 2 3 4 5 6
+
 
 
 query IIIIIIII
@@ -54,10 +55,10 @@ query IIIIIIIIIIII
 select * from (t1 cross join t2) as t cross join (t2 cross join t3) cross join (t1 cross join t3) as tt
 --------
 ----
-1 2 5 6 1 2 3 4 3 4 5 6
+1 2 3 4 3 4 5 6 1 2 5 6
 
 query IIIIIIIIIIIIIIII
 select * from (t1 cross join t2) as t cross join (t2 cross join t3) cross join (t1 cross join t3) as tt cross join (t2 cross join t3) as ttt;
 --------
 ----
-1 2 5 6 1 2 3 4 3 4 5 6 3 4 5 6
+1 2 3 4 3 4 5 6 1 2 5 6 3 4 5 6
