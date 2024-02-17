@@ -34,7 +34,7 @@
 //! [protocol buffers]: https://developers.google.com/protocol-buffers
 //! [prost]: https://docs.rs/prost/latest/prost/
 //!
-//! ## See Also
+//! # See Also
 //!
 //! The binary format created by this crate supports the full range of DataFusion
 //! plans, but is DataFusion specific. See [datafusion-substrait] for a crate
