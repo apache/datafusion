@@ -329,11 +329,11 @@ pub(crate) fn calc_requirements<
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
-/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// This function calculates the indices such that when partition by expressions reordered with the indices
 /// resulting expressions define a preset for existing ordering.
-// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
-// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
-// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
+/// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used,
+/// this vector will be [1, 0]. It means that when we iterate b, a columns with the order [1, 0]
+/// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
