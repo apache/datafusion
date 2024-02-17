@@ -2618,6 +2618,16 @@ SELECT array_position(arrow_cast([1, 1, 100, 1, 1], 'LargeList(Int32)'), 100)
 ----
 3
 
+query I
+SELECT array_position([1, 2, 3], 'foo')
+----
+NULL
+
+query I
+SELECT array_position([1, 2, 3], 'foo', 2)
+----
+NULL
+
 # list_position scalar function #5 (function alias `array_position`)
 query III
 select list_position(['h', 'e', 'l', 'l', 'o'], 'l'), list_position([1, 2, 3, 4, 5], 5), list_position([1, 1, 1], 1);
