@@ -36,7 +36,7 @@ use crate::{
     PhysicalSortRequirement, ScalarFunctionExpr,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
@@ -462,32 +462,6 @@ impl EquivalenceProperties {
                         } else {
                             sort_expr.clone()
                         }
-                    } else if let Some(scalar_func_expr) =
-                        r_expr.as_any().downcast_ref::<ScalarFunctionExpr>()
-                    {
-                        //println!("monotonicity is {:?}", scalar_func_expr.monotonicity());
-                        let mut result = sort_expr.clone();
-                        if let Some(v) = scalar_func_expr.monotonicity() {
-                            if v == &[Some(true)] {
-                                if let Some(arg) = scalar_func_expr.args().first() {
-                                    //println!("arg is {:?}", arg);
-                                    if arg.eq(&sort_expr.expr)
-                                        || arg.as_any().downcast_ref::<CastExpr>().map_or(
-                                            false,
-                                            |cast_expr| {
-                                                cast_expr.expr.eq(&sort_expr.expr)
-                                            },
-                                        )
-                                    {
-                                        result = PhysicalSortExpr {
-                                            expr: r_expr,
-                                            options: sort_expr.options,
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                        result
                     } else {
                         sort_expr.clone()
                     }
