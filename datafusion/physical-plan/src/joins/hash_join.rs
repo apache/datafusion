@@ -65,8 +65,10 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExprRef};
+use datafusion_physical_expr::equivalence::{
+    join_equivalence_properties, ProjectionMapping,
+};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -426,7 +428,7 @@ impl HashJoinExec {
             Some(p) => projection.iter().map(|i| p[*i]).collect(),
             None => projection.clone(),
         };
-        Ok(Self {
+        let mut new_exec = Self {
             left: self.left.clone(),
             right: self.right.clone(),
             on: self.on.clone(),
@@ -441,7 +443,12 @@ impl HashJoinExec {
             null_equals_null: self.null_equals_null,
             output_order: self.output_order.clone(),
             projection: Some(new_projection),
-        })
+        };
+        new_exec.output_order = new_exec
+            .equivalence_properties()
+            .oeq_class()
+            .output_ordering();
+        Ok(new_exec)
     }
 
     /// return whether the join contains a projection
@@ -490,6 +497,26 @@ impl DisplayAs for HashJoinExec {
             }
         }
     }
+}
+
+// TODO I don't find a utils file to locate this function
+pub fn project_index_to_exprs(
+    projection_index: &[usize],
+    schema: &SchemaRef,
+) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
+    projection_index
+        .iter()
+        .map(|index| {
+            let field = schema.field(*index);
+            (
+                Arc::new(datafusion_physical_expr::expressions::Column::new(
+                    field.name(),
+                    *index,
+                )) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
@@ -608,15 +635,29 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
+        let join_schema = self.schema.clone();
+        let equivalence_properties = join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
             &self.join_type,
-            self.schema(),
+            join_schema.clone(),
             &self.maintains_input_order(),
             Some(Self::probe_side()),
             self.on(),
-        )
+        );
+        // build equivalence properties with old schema and projection
+        match &self.projection {
+            Some(projection) => {
+                let projection_exprs =
+                    project_index_to_exprs(projection, &join_schema.clone());
+                // construct a map from the input expressions to the output expression of the Projection
+                let projection_mapping =
+                    ProjectionMapping::try_new(&projection_exprs, &join_schema.clone())
+                        .unwrap();
+                equivalence_properties.project(&projection_mapping, self.schema())
+            }
+            None => equivalence_properties,
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -740,6 +781,7 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+        // TODO to update with column statistics
         estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),
