@@ -108,7 +108,7 @@ mod test {
         let session_context =
             Arc::new(SessionContext::new_with_config_rt(session_config, rt));
 
-        let statement = DFParser::parse_sql(&sql).unwrap().pop_back().unwrap();
+        let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
 
         let logical_plan = session_context
             .state()
