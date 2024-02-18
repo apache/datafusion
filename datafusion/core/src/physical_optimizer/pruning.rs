@@ -313,7 +313,6 @@ pub trait PruningStatistics {
 /// * `false`: there are no rows that could possibly match the predicate,
 ///            **PRUNES** the container
 ///
-/// TODO chunchun: add x_row_count explanation and example
 /// For example, given a column `x`, the `x_min` and `x_max` and `x_null_count`
 /// represent the minimum and maximum values, and the null count of column `x`,
 /// provided by the `PruningStatistics`. Here are some examples of the rewritten
@@ -336,7 +335,7 @@ pub trait PruningStatistics {
 /// ------------------ | --------------------
 /// `x = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END`
 /// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
-/// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max END`
+/// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
 /// `x IS NULL`  | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_null_count > 0 END`
 ///
 /// ## Predicate Evaluation
@@ -351,26 +350,42 @@ pub trait PruningStatistics {
 /// container that this expression evaluates to `false`, it rules out those
 /// containers.
 ///
-/// TODO chunchun: add example for row_counts
 ///
-/// For example, given the predicate, `x = 5 AND y = 10`, if we know `x` is
-/// between `1 and 100` and we know that `y` is between `4` and `7`, the input
-/// statistics might look like
+/// ### Example 1
+/// Given the predicate, `x = 5 AND y = 10`, if we know that for a given container, `x` is
+/// between `1 and 100` and we know that `y` is between `4` and `7`, we know nothing about
+/// the null count and row count of `x` and `y`, the input statistics might look like:
 ///
 /// Column   | Value
 /// -------- | -----
 /// `x_min`  | `1`
 /// `x_max`  | `100`
+/// `x_null_count` | `null`
+/// `x_row_count`  | `null`
 /// `y_min`  | `4`
 /// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
 ///
 /// The rewritten predicate would look like
 ///
-/// `x_min <= 5 AND 5 <= x_max AND  y_min <= 10 AND 10 <= y_max`
+/// ```sql
+/// CASE
+///     WHEN x_null_count = x_row_count THEN false
+///     ELSE x_min <= 5 AND 5 <= x_max
+/// END
+/// AND
+/// CASE
+///     WHEN y_null_count = y_row_count THEN false
+///     ELSE y_min <= 10 AND 10 <= y_max
+/// END
+/// ```
 ///
-/// When these values are substituted in to the rewritten predicate and
+/// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
+/// * `CASE WHEN null = null THEN false ELSE 1 <= 5 AND 5 <= 100 END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
+/// * `null = null` is `null` which is false, so the `CASE` expression will use the `ELSE` clause
 /// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
 /// * `true AND true AND true AND false`
 /// * `false`
@@ -386,6 +401,50 @@ pub trait PruningStatistics {
 /// predicate *might* evaluate to `true`, and the only way to find out is to do
 /// more analysis, for example by actually reading the data and evaluating the
 /// predicate row by row.
+///
+/// ### Example 2
+/// Given the same predicate, `x = 5 AND y = 10`, if we know that for another given container,
+/// `x_min` is NULL and `x_max` is NULL, `x_null_count` is `100` and `x_row_count` is `100`;
+/// we know that `y` is between `4` and `7`, but we know nothing about the null count and row
+/// count of `y`. The input statistics might look like:
+///
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `null`
+/// `x_max`  | `null`
+/// `x_null_count` | `100`
+/// `x_row_count`  | `100`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
+///
+/// The rewritten predicate would look like the same as example 1:
+///
+/// ```sql
+/// CASE
+///   WHEN x_null_count = x_row_count THEN false
+///   ELSE x_min <= 5 AND 5 <= x_max
+/// END
+/// AND
+/// CASE
+///   WHEN y_null_count = y_row_count THEN false
+///  ELSE y_min <= 10 AND 10 <= y_max
+/// END
+/// ```
+///
+/// When these statistics values are substituted in to the rewritten predicate and
+/// simplified, the result is `false`:
+///
+/// * `CASE WHEN 100 = 100 THEN false ELSE null <= 5 AND 5 <= null END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
+/// * Since `100 = 100` is `true`, the `CASE` expression will use the `THEN` clause, i.e. `false`
+/// * The other `CASE` expression will use the `ELSE` clause, i.e. `4 <= 10 AND 10 <= 7`
+/// * `false AND true`
+/// * `false`
+///
+/// Returning `false` means the container can be pruned, which matches the
+/// intuition that  `x = 5 AND y = 10` can’t be true for all values in `x`
+/// are known to be NULL.
 ///
 /// # Related Work
 ///
@@ -999,7 +1058,6 @@ fn rewrite_expr_to_prunable(
     scalar_expr: &PhysicalExprRef,
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
-    // TODO chunchun: add rewrote for col is all NULL
     if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
@@ -2491,10 +2549,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO chunchun: add test for two different columns
-    // e.g. c1 = 3 and c2 = 4
-    //      cast(c1) = 3 and cast(c2) = 4
-
     #[test]
     fn row_group_predicate_cast() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
@@ -2503,6 +2557,7 @@ mod tests {
                 ELSE CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) \
             END";
 
+        // test cast(c1 as int64) = 1
         // test column on the left
         let expr = cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(1))));
         let predicate_expr =
