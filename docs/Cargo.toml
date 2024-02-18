@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "datafusion-docs-tests"
-description = "DataFusion Documentation Tests"
-publish = false
-version = { workspace = true }
-edition = { workspace = true }
-readme = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
 authors = { workspace = true }
+description = "DataFusion Documentation Tests"
+edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+name = "datafusion-docs-tests"
+publish = false
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
 datafusion = { path = "../datafusion/core", version = "36.0.0", default-features = false }

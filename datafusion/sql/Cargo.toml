@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-name = "datafusion-sql"
+authors = { workspace = true }
 description = "DataFusion SQL Query Planner"
-keywords = ["datafusion", "sql", "parser", "planner"]
-readme = "README.md"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
+keywords = ["datafusion", "sql", "parser", "planner"]
 license = { workspace = true }
-authors = { workspace = true }
+name = "datafusion-sql"
+readme = "README.md"
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [lib]
 name = "datafusion_sql"

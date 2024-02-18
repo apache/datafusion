@@ -16,16 +16,16 @@
 # under the License.
 
 [package]
-name = "datafusion-proto"
+authors = { workspace = true }
 description = "Protobuf serialization of DataFusion logical plan expressions"
-keywords = ["arrow", "query", "sql"]
-readme = "README.md"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
+keywords = ["arrow", "query", "sql"]
 license = { workspace = true }
-authors = { workspace = true }
+name = "datafusion-proto"
+readme = "README.md"
+repository = { workspace = true }
+version = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.72"
 

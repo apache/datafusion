@@ -16,16 +16,16 @@
 # under the License.
 
 [package]
-name = "datafusion-wasmtest"
+authors = { workspace = true }
 description = "Test library to compile datafusion crates to wasm"
-readme = "README.md"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
 license = { workspace = true }
-authors = { workspace = true }
+name = "datafusion-wasmtest"
+readme = "README.md"
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [lib]
 crate-type = ["cdylib", "rlib"]

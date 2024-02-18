@@ -16,18 +16,18 @@
 # under the License.
 
 [package]
-name = "datafusion-examples"
+authors = { workspace = true }
 description = "DataFusion usage examples"
-keywords = ["arrow", "query", "sql"]
-publish = false
-readme = "README.md"
-version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-repository = { workspace = true }
+keywords = ["arrow", "query", "sql"]
 license = { workspace = true }
-authors = { workspace = true }
+name = "datafusion-examples"
+publish = false
+readme = "README.md"
+repository = { workspace = true }
 rust-version = { workspace = true }
+version = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true }
