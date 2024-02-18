@@ -294,6 +294,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
     comparison_binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| bool_numeric_coercision(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -301,6 +302,15 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
+}
+
+fn bool_numeric_coercision(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Boolean, _) if is_numeric(rhs_type) => Some(Boolean),
+        (_, Boolean) if is_numeric(lhs_type) => Some(Boolean),
+        _ => None,
+    }
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -630,7 +640,11 @@ pub fn json_type() -> DataType {
     DataType::Struct(json_struct)
 }
 
-pub fn get_arrow_return_type(left: &DataType, right: &DataType, arrow_type: &Operator) -> Result<DataType> {
+pub fn get_arrow_return_type(
+    left: &DataType,
+    right: &DataType,
+    arrow_type: &Operator,
+) -> Result<DataType> {
     if left != &json_type() {
         Err(DataFusionError::Plan(format!(
             "Cannot use arrow access operator on non-json {left}!"
@@ -643,7 +657,7 @@ pub fn get_arrow_return_type(left: &DataType, right: &DataType, arrow_type: &Ope
         match arrow_type {
             Operator::ArrowAccess => Ok(json_type()),
             Operator::LongArrow => Ok(DataType::Utf8),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -1420,10 +1434,12 @@ mod tests {
             DataType::Utf8,
             false,
         )]));
-        let result_type = get_result_type(&input_json, &Operator::ArrowAccess, &DataType::Int32)?;
+        let result_type =
+            get_result_type(&input_json, &Operator::ArrowAccess, &DataType::Int32)?;
         assert_eq!(result_type, json_type());
 
-        let result_type = get_result_type(&input_json, &Operator::LongArrow, &DataType::Int32)?;
+        let result_type =
+            get_result_type(&input_json, &Operator::LongArrow, &DataType::Int32)?;
         assert_eq!(result_type, DataType::Utf8);
         Ok(())
     }
