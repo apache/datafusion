@@ -28,7 +28,8 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
-    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+    build_join_schema, Cast, Expr, ExprSchemable, TableProviderFilterPushDown,
+    TableSource,
 };
 use crate::{
     expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, LogicalPlanBuilder, Operator,
@@ -51,6 +52,7 @@ use datafusion_common::{
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
+use arrow::compute::can_cast_types;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -1818,16 +1820,23 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+    pub fn try_new(mut predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
             if predicate_type != DataType::Boolean {
-                return plan_err!(
-                    "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
-                );
+                if can_cast_types(&predicate_type, &DataType::Boolean) {
+                    predicate = Expr::Cast(Cast {
+                        expr: Box::new(predicate),
+                        data_type: DataType::Boolean,
+                    });
+                } else {
+                    return plan_err!(
+                        "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
+                    );
+                }
             }
         }
 
