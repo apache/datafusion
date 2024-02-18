@@ -232,12 +232,6 @@ async fn simple_udaf_order() -> Result<()> {
     let provider = MemTable::try_new(Arc::new(schema.clone()), vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(provider))?;
 
-    // let expected_result = ctx
-    //     .sql("SELECT FIRST_VALUE(a order by a desc) FROM t group by b order by b")
-    //     .await?
-    //     .collect()
-    //     .await?;
-
     fn create_accumulator(
         data_type: &DataType,
         order_by: Vec<Vec<Expr>>,
@@ -299,8 +293,7 @@ async fn simple_udaf_order() -> Result<()> {
         vec![DataType::Int32],
         Arc::new(DataType::Int32),
         Volatility::Immutable,
-        // Arc::new(|d| create_accumulator(d, None, &dfs, &p, &schema)),
-        Arc::new(|d, order_by, schema| create_accumulator(d, order_by, schema)),
+        Arc::new(create_accumulator),
         Arc::new(vec![DataType::Int32, DataType::Int32, DataType::Boolean]),
         order_by,
         schema,

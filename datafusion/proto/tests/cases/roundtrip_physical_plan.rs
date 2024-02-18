@@ -425,6 +425,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
         &udaf,
         &[col("b", &schema)?],
+        &[],
         &schema,
         "example_agg",
     )?];
