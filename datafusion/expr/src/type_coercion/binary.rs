@@ -78,8 +78,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 ))
             }),
         Operator::And | Operator::Or => match (lhs, rhs) {
-            // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Int64, DataType::Int64) |
+            (DataType::Boolean, DataType::Int64) |
+            (DataType::Int64, DataType::Boolean) |
             (DataType::Boolean, DataType::Boolean)
             | (DataType::Null, DataType::Null)
             | (DataType::Boolean, DataType::Null)
