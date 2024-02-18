@@ -276,7 +276,6 @@ async fn simple_udaf_order() -> Result<()> {
             ordering_types.as_slice(),
             ordering_req,
         )?;
-        // let acc = FirstValueAccumulator::try_new(data_type, &[], vec![])?;
         Ok(Box::new(acc))
     }
 

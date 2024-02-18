@@ -92,7 +92,7 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            // TODO: Ordering not supported for Window UDFs
+            // TODO: Ordering not supported for Window UDFs yet
             let ordering_req = &[];
             let aggregate = udaf::create_aggregate_expr(
                 fun.as_ref(),

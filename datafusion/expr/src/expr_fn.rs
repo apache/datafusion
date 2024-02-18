@@ -1181,27 +1181,6 @@ impl SimpleOrderedAggregateUDF {
             schema,
         }
     }
-
-    pub fn new_with_signature(
-        name: impl Into<String>,
-        signature: Signature,
-        return_type: DataType,
-        accumulator: AccumulatorFactoryFunctionWithOrdering,
-        state_type: Vec<DataType>,
-        ordering_req: Vec<Vec<Expr>>,
-        schema: Schema,
-    ) -> Self {
-        let name = name.into();
-        Self {
-            name,
-            signature,
-            return_type,
-            accumulator,
-            state_type,
-            ordering_req,
-            schema,
-        }
-    }
 }
 
 impl AggregateUDFImpl for SimpleOrderedAggregateUDF {
