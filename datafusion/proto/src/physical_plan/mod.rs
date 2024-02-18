@@ -583,13 +583,24 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
                     protobuf::PartitionMode::Auto => PartitionMode::Auto,
                 };
+                let projection = if !hashjoin.projection.is_empty() {
+                    Some(
+                        hashjoin
+                            .projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
                     filter,
                     &join_type.into(),
-                    None,
+                    projection,
                     partition_mode,
                     hashjoin.null_equals_null,
                 )?))
@@ -1153,38 +1164,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
         }
 
         if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
-            // rewrite hashjoin with projection to a projection node with a hashjoin node as input
-            if let Some(projection) = &exec.projection {
-                let projection_expr = projection
-                    .iter()
-                    .zip(exec.schema().fields().iter())
-                    .map(|(i, field)| {
-                        (
-                            Arc::new(datafusion::physical_plan::expressions::Column::new(
-                                field.name(),
-                                *i,
-                            )) as _,
-                            field.name().to_owned(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let join_without_projection = Arc::new(HashJoinExec::try_new(
-                    exec.left.clone(),
-                    exec.right.clone(),
-                    exec.on.clone(),
-                    exec.filter.clone(),
-                    exec.join_type(),
-                    None,
-                    *exec.partition_mode(),
-                    exec.null_equals_null,
-                )?) as _;
-                let projection_exec =
-                    ProjectionExec::try_new(projection_expr, join_without_projection)?;
-                return protobuf::PhysicalPlanNode::try_from_physical_plan(
-                    Arc::new(projection_exec) as _,
-                    extension_codec,
-                );
-            }
             let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
                 exec.left().to_owned(),
                 extension_codec,
@@ -1247,6 +1226,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
                         filter,
+                        projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
+                            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                        }),
                     },
                 ))),
             });

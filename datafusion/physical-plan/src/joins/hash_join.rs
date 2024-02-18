@@ -347,9 +347,8 @@ impl HashJoinExec {
         );
 
         let schema = Arc::new(schema);
-        datafusion_common::utils::can_project(&schema, projection.as_ref())?;
 
-        Ok(HashJoinExec {
+        let mut exec = HashJoinExec {
             left,
             right,
             on,
@@ -363,8 +362,10 @@ impl HashJoinExec {
             column_indices,
             null_equals_null,
             output_order,
-            projection,
-        })
+            projection: None,
+        };
+        exec.project(projection)?;
+        Ok(exec)
     }
 
     /// left (build) side which gets hashed
@@ -419,15 +420,23 @@ impl HashJoinExec {
         JoinSide::Right
     }
 
+    fn project(&mut self, projection: Option<Vec<usize>>) -> Result<()> {
+        //  check if the projection is valid
+        datafusion_common::utils::can_project(&self.schema(), projection.as_ref())?;
+        if let Some(projection) = projection {
+            self.projection = match &self.projection {
+                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
+                None => Some(projection),
+            };
+            self.output_order =
+                self.equivalence_properties().oeq_class().output_ordering();
+        }
+        Ok(())
+    }
+
     /// project the output of the join
     /// For more info, search `try_embed_to_hash_join` in codes
-    pub fn with_projection(&self, projection: &Vec<usize>) -> Result<Self> {
-        //  check if the projection is valid
-        datafusion_common::utils::can_project(&self.schema(), Some(projection))?;
-        let new_projection = match &self.projection {
-            Some(p) => projection.iter().map(|i| p[*i]).collect(),
-            None => projection.clone(),
-        };
+    pub fn with_projection(&self, projection: &[usize]) -> Result<Self> {
         let mut new_exec = Self {
             left: self.left.clone(),
             right: self.right.clone(),
@@ -442,12 +451,9 @@ impl HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equals_null: self.null_equals_null,
             output_order: self.output_order.clone(),
-            projection: Some(new_projection),
+            projection: self.projection.clone(),
         };
-        new_exec.output_order = new_exec
-            .equivalence_properties()
-            .oeq_class()
-            .output_ordering();
+        new_exec.project(Some(projection.to_owned()))?;
         Ok(new_exec)
     }
 
