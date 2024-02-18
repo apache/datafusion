@@ -18,10 +18,8 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
-use std::sync::Arc;
-
 use crate::type_coercion::binary::comparison_coercion;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 
@@ -257,11 +255,7 @@ impl ArrayFunctionSignature {
                     Ok(vec![vec![array_type]])
                 }
                 DataType::Null => Ok(vec![vec![array_type.clone()]]),
-                _ => Ok(vec![vec![DataType::List(Arc::new(Field::new(
-                    "item",
-                    array_type.to_owned(),
-                    true,
-                )))]]),
+                _ => Ok(vec![vec![]]),
             }
         }
         match self {
