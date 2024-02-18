@@ -33,9 +33,8 @@
 use crate::execution_props::ExecutionProps;
 use crate::sort_properties::SortProperties;
 use crate::{
-    array_expressions, conditional_expressions, datetime_expressions,
-    expressions::nullif_func, math_expressions, string_expressions, struct_expressions,
-    PhysicalExpr, ScalarFunctionExpr,
+    array_expressions, conditional_expressions, datetime_expressions, math_expressions,
+    string_expressions, struct_expressions, PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -282,9 +281,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Gcd => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::gcd)(args))
         }
-        BuiltinScalarFunction::Isnan => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::isnan)(args))
-        }
         BuiltinScalarFunction::Iszero => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::iszero)(args))
         }
@@ -411,9 +407,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_slice)(args)
         }),
-        BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_to_string)(args)
-        }),
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
         }),
@@ -519,6 +512,7 @@ pub fn create_physical_fun(
             ))
         }
         BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
+        BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(datetime_expressions::to_timestamp_invoke)
         }
@@ -595,7 +589,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
-        BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {

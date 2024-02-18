@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
+use crate::builder::change_redundant_column;
 use crate::dml::CopyOptions;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
@@ -1891,7 +1892,9 @@ impl SubqueryAlias {
         alias: impl Into<OwnedTableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let schema: Schema = plan.schema().as_ref().clone().into();
+        let fields = change_redundant_column(plan.schema().fields().clone());
+        let meta_data = plan.schema().as_ref().metadata().clone();
+        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2181,6 +2184,7 @@ impl TableScan {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
+
         Ok(Self {
             table_name,
             source: table_source,

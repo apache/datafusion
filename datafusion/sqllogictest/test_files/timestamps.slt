@@ -2565,3 +2565,116 @@ select make_date(2024, 1, null);
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_date(2024, 1, '');
+
+
+##########
+## to_char tests
+##########
+
+statement ok
+create table formats (
+    dates date,
+    times time,
+    timestamps timestamp,
+    date_format varchar,
+    time_format varchar,
+    timestamp_format varchar)
+as values
+    ('2000-01-01'::date, '23:45:01'::time, '2024-01-01 06:00:00'::timestamp, '%d:%m:%Y', '%H-%M-%S', '%d:%m:%Y %H-%M-%S'),
+    ('2003-04-05'::date, '04:56:32'::time, '2025-01-01 23:59:58'::timestamp, '%d:%m:%Y', '%H::%M::%S', '%d:%m:%Y %H-%M-%S');
+
+
+query T
+select to_char(dates, date_format) from formats;
+----
+01:01:2000
+05:04:2003
+
+query T
+select date_format(dates, date_format) from formats;
+----
+01:01:2000
+05:04:2003
+
+query T
+select to_char(times, time_format) from formats;
+----
+23-45-01
+04::56::32
+
+query T
+select to_char(timestamps, date_format) from formats;
+----
+01:01:2024
+01:01:2025
+
+query T
+select to_char(timestamps, timestamp_format) from formats;
+----
+01:01:2024 06-00-00
+01:01:2025 23-59-58
+
+query T
+select to_char('2000-02-03'::date, '%Y:%d:%m');
+----
+2000:03:02
+
+query T
+select to_char(arrow_cast(12345::int, 'Time32(Second)'), '%H-%M-%S')
+----
+03-25-45
+
+query T
+select to_char(arrow_cast(12344567::int, 'Time32(Millisecond)'), '%H-%M-%S %f')
+----
+03-25-44 567000000
+
+query T
+select to_char(arrow_cast(12344567000, 'Time64(Microsecond)'), '%H-%M-%S %f')
+----
+03-25-44 567000000
+
+query T
+select to_char(arrow_cast(12344567890000, 'Time64(Nanosecond)'), '%H-%M-%S %f')
+----
+03-25-44 567890000
+
+query T
+select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)'), '%d-%m-%Y %H-%M-%S')
+----
+03-08-2023 14-38-50
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), 'pretty');
+----
+1 days 10 hours 17 mins 36 secs
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), 'iso8601');
+----
+PT123456S
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), null);
+----
+PT123456S
+
+query error DataFusion error: Execution error: Cast error: Format error
+SELECT to_char(timestamps, '%X%K') from formats;
+
+query error DataFusion error: Execution error: Cast error: Format error
+SELECT to_char('2000-02-03'::date, '%X%K');
+
+query T
+SELECT to_char(timestamps, null) from formats;
+----
+2024-01-01T06:00:00Z
+2025-01-01T23:59:58Z
+
+query T
+SELECT to_char(null, '%d-%m-%Y');
+----
+(empty)
+
+statement ok
+drop table formats;

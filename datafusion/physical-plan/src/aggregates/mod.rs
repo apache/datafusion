@@ -507,6 +507,9 @@ impl AggregateExec {
         }
         true
     }
+    pub fn input_order_mode(&self) -> &InputOrderMode {
+        &self.input_order_mode
+    }
 }
 
 impl DisplayAs for AggregateExec {

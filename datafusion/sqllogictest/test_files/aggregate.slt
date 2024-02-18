@@ -3179,3 +3179,23 @@ NULL
 statement ok
 DROP TABLE t;
 
+
+# Test for the case when the column name is ambiguous
+statement ok
+CREATE TABLE t(a BIGINT) AS VALUES(1), (2), (3);
+
+# The column name referenced by GROUP-BY is ambiguous, prefer the column in base plan
+query I
+SELECT 0 as "t.a" FROM t GROUP BY t.a;
+----
+0
+0
+0
+
+# The column name referenced by HAVING is ambiguous, prefer the column in the base plan
+query I
+SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
+----
+
+statement ok
+DROP TABLE t;

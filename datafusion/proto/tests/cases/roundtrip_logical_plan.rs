@@ -21,7 +21,6 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
-use arrow::array::{BooleanArray, Int32Array};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -42,6 +41,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_common::{FileType, Result};
@@ -567,13 +567,15 @@ async fn roundtrip_expr_api() -> Result<()> {
     let table = ctx.table("t1").await?;
     let schema = table.schema().clone();
 
+    // list of expressions to round trip
+    let expr_list = vec![
+        encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
+        decode(lit("1234"), lit("hex")),
+        array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+    ];
+
     // ensure expressions created with the expr api can be round tripped
-    let plan = table
-        .select(vec![
-            encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
-            decode(lit("1234"), lit("hex")),
-        ])?
-        .into_optimized_plan()?;
+    let plan = table.select(expr_list)?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
@@ -930,17 +932,17 @@ fn round_trip_scalar_values() {
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
         ScalarValue::LargeBinary(None),
-        ScalarValue::from((
-            vec![
+        ScalarStructBuilder::new()
+            .with_scalar(
                 Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
                 Field::new("b", DataType::Boolean, false),
-            ]
-            .into(),
-            vec![
-                Arc::new(Int32Array::from(vec![Some(23)])) as ArrayRef,
-                Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
-            ],
-        )),
+                ScalarValue::from(false),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),

@@ -107,3 +107,7 @@ datafusion/sqllogictests/test_files/tpch/data/*
 
 # Scratch temp dir for sqllogictests
 datafusion/sqllogictest/test_files/scratch*
+
+# rat
+filtered_rat.txt
+rat.txt

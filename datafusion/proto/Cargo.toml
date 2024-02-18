@@ -44,7 +44,7 @@ parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { path = "../core", version = "35.0.0" }
+datafusion = { path = "../core", version = "36.0.0" }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 object_store = { workspace = true }
@@ -56,4 +56,4 @@ serde_json = { workspace = true, optional = true }
 [dev-dependencies]
 doc-comment = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }
-tokio = { version = "1.18", features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
