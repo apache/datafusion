@@ -22,6 +22,5 @@
 # rerun 'cargo tomlfmt -p path/to/Cargo.toml' without '-d' to fix
 # the formatting automatically.
 set -ex
-for toml in $(find . -mindepth 2 -name 'Cargo.toml'); do
-	cargo tomlfmt -d -p $toml
+taplo format
 done
