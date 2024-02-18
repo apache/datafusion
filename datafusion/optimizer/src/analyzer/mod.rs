@@ -29,12 +29,12 @@ use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::wasm::Instant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
-use instant::Instant;
 use log::debug;
 use std::sync::Arc;
 

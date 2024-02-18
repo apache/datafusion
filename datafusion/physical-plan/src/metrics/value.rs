@@ -27,11 +27,9 @@ use std::{
     time::Duration,
 };
 
-use instant::Instant;
-
-use parking_lot::Mutex;
-
 use chrono::{DateTime, Utc};
+use datafusion_common::wasm::Instant;
+use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows
 ///

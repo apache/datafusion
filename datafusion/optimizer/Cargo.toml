@@ -46,7 +46,6 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
-instant = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 regex-syntax = "0.8.0"

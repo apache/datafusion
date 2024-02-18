@@ -20,8 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use instant::Instant;
-
 use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use super::{DisplayAs, Distribution, SendableRecordBatchStream};
@@ -30,6 +28,7 @@ use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::wasm::Instant;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 

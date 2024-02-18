@@ -21,7 +21,6 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
-use instant::Instant;
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
@@ -40,6 +39,7 @@ use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::wasm::Instant;
 use datafusion_common::ScalarValue;
 
 use futures::future::BoxFuture;
