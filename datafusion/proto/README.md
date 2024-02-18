@@ -21,10 +21,9 @@
 
 This crate contains code to convert Apache Arrow [DataFusion] plans to and from
 bytes, which can be useful for sending plans over the network, for example
-when building a distributed query engine. 
+when building a distributed query engine.
 
 See [API Docs] for details and examples.
 
 [datafusion]: https://arrow.apache.org/datafusion
-[API Docs]: http://docs.rs/datafusion-substrait/latest/datafusion-substrait
-
+[api docs]: http://docs.rs/datafusion-substrait/latest/datafusion-substrait
