@@ -23,9 +23,9 @@ use std::any::Any;
 use arrow::compute::cast;
 
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue, ExprSchema, plan_err};
 
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub(super) struct ArrowCastFunc {
@@ -59,6 +59,21 @@ impl ScalarUDFImpl for ArrowCastFunc {
         parse_data_type(&arg_types[1].to_string())
     }
 
+    fn return_type_from_exprs(&self, args: &[Expr], _schema: &dyn ExprSchema) -> Result<DataType> {
+        if args.len() != 2 {
+            return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
+        }
+        let arg1 = args.get(1);
+
+        match arg1 {
+            Some(Expr::Literal(ScalarValue::Utf8(arg1))) => {
+                let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+                Ok(data_type)
+            }
+            _ => plan_err!("arrow_cast requires its second argument to be a constant string, got {:?}",arg1.unwrap().to_string())
+        }
+    }
+
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         create_arrow_cast(args)
     }
@@ -88,7 +103,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
 /// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
 fn create_arrow_cast(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return internal_err!("arrow_cast needs 2 arguments, {} provided", args.len());
+        return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
     let arg1 = &args[1];
     let arg0 = &args[0];
@@ -96,16 +111,19 @@ fn create_arrow_cast(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match (arg0, arg1) {
         (ColumnarValue::Scalar(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
             let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
-            let val0 =  arg0.cast_to(&data_type).unwrap();
-            Ok(ColumnarValue::Scalar(val0))
+            let val0 = match arg0.cast_to(&data_type) {
+                Ok(val0) => Ok(ColumnarValue::Scalar(val0)),
+                Err(error) => plan_err!("{:?}",error.to_string()),
+            };
+            val0
         }
         (ColumnarValue::Array(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
             let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
             let val0 = cast(&arg0,&data_type)?;
             Ok(ColumnarValue::Array(val0))
         }
-        (ColumnarValue::Scalar(_arg0), ColumnarValue::Scalar(arg1)) => internal_err!("arrow_cast requires its second argument to be a constant string, got {arg1}"),
-        _ => internal_err!("arrow_cast requires two scalar value as input. got {:?} and {:?}",arg0,arg1)
+        (ColumnarValue::Scalar(_arg0), ColumnarValue::Scalar(arg1)) => plan_err!("arrow_cast requires its second argument to be a constant string, got {arg1}"),
+        _ => plan_err!("arrow_cast requires two scalar value as input. got {:?} and {:?}",arg0,arg1)
     }
 }
 

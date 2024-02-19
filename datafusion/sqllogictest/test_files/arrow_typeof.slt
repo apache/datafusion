@@ -95,7 +95,7 @@ SELECT arrow_cast('1', 'Int16')
 query error Error during planning: arrow_cast needs 2 arguments, 1 provided
 SELECT arrow_cast('1')
 
-query error Error during planning: arrow_cast requires its second argument to be a constant string, got Int64\(43\)
+query error Error during planning: arrow_cast requires its second argument to be a constant string, got "Int64\(43\)"
 SELECT arrow_cast('1', 43)
 
 query error Error unrecognized word: unknown
@@ -315,7 +315,7 @@ select arrow_cast(interval '30 minutes', 'Duration(Second)');
 ----
 0 days 0 hours 30 mins 0 secs
 
-query error DataFusion error: Error during planning: Cannot automatically convert Utf8 to Duration\(Second\)
+query error DataFusion error: Error during planning: "Arrow error: Cast error: Casting from Utf8 to Duration\(Second\) not supported"
 select arrow_cast('30 minutes', 'Duration(Second)');
 
 
@@ -336,7 +336,7 @@ select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some(
 ----
 2000-01-01T00:00:00+08:00
 
-statement error Arrow error: Parser error: Invalid timezone "\+25:00": '\+25:00' is not a valid timezone
+statement error DataFusion error: Error during planning: "Arrow error: Parser error: Invalid timezone \\"\+25:00\\": '\+25:00' is not a valid timezone"
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');
 
 
@@ -405,7 +405,7 @@ select arrow_cast([1], 'FixedSizeList(1, Int64)');
 ----
 [1]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast to FixedSizeList\(4\): value at index 0 has length 3
+query error DataFusion error: Error during planning: "Arrow error: Cast error: Cannot cast to FixedSizeList\(4\): value at index 0 has length 3"
 select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(4, Int64)');
 
 query ?
