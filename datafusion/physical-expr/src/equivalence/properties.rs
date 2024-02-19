@@ -18,9 +18,8 @@
 use crate::expressions::CastExpr;
 use arrow_schema::SchemaRef;
 use datafusion_common::{JoinSide, JoinType, Result};
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -543,7 +542,7 @@ impl EquivalenceProperties {
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        let mut dependency_map = HashMap::new();
+        let mut dependency_map = IndexMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
                 let target_sort_expr =
@@ -569,7 +568,7 @@ impl EquivalenceProperties {
                         .entry(sort_expr.clone())
                         .or_insert_with(|| DependencyNode {
                             target_sort_expr: target_sort_expr.clone(),
-                            dependencies: HashSet::new(),
+                            dependencies: IndexSet::new(),
                         })
                         .insert_dependency(dependency);
                 }
@@ -961,7 +960,7 @@ fn referred_dependencies(
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Dependencies> {
     // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
-    let mut expr_to_sort_exprs = HashMap::<ExprWrapper, Dependencies>::new();
+    let mut expr_to_sort_exprs = IndexMap::<ExprWrapper, Dependencies>::new();
     for sort_expr in dependency_map
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
@@ -1119,8 +1118,8 @@ impl DependencyNode {
     }
 }
 
-type DependencyMap = HashMap<PhysicalSortExpr, DependencyNode>;
-type Dependencies = HashSet<PhysicalSortExpr>;
+type DependencyMap = IndexMap<PhysicalSortExpr, DependencyNode>;
+type Dependencies = IndexSet<PhysicalSortExpr>;
 
 /// This function recursively analyzes the dependencies of the given sort
 /// expression within the given dependency map to construct lexicographical
