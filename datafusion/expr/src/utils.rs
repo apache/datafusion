@@ -1255,7 +1255,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
@@ -1263,7 +1263,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
@@ -1271,7 +1271,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1279,7 +1279,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1302,7 +1302,7 @@ mod tests {
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(Some(false)),
-            None
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
@@ -1310,7 +1310,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
@@ -1318,7 +1318,7 @@ mod tests {
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(Some(false)),
-            None
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1326,7 +1326,7 @@ mod tests {
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
             WindowFrame::new(Some(false)),
-            None
+            None,
         ));
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
@@ -1361,7 +1361,7 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
                 ],
                 WindowFrame::new(Some(false)),
-                None
+                None,
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1373,7 +1373,7 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
                 ],
                 WindowFrame::new(Some(false)),
-                None
+                None,
             )),
         ];
         let expected = vec![

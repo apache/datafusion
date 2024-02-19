@@ -39,7 +39,7 @@ pub struct WindowShift {
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
     default_value: Option<ScalarValue>,
-    ignore_nulls: bool
+    ignore_nulls: bool,
 }
 
 impl WindowShift {
@@ -61,7 +61,7 @@ pub fn lead(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
-    ignore_nulls: bool
+    ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
         name,
@@ -69,7 +69,7 @@ pub fn lead(
         shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
         expr,
         default_value,
-        ignore_nulls
+        ignore_nulls,
     }
 }
 
@@ -80,7 +80,7 @@ pub fn lag(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
-    ignore_nulls: bool
+    ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
         name,
@@ -88,7 +88,7 @@ pub fn lag(
         shift_offset: shift_offset.unwrap_or(1),
         expr,
         default_value,
-        ignore_nulls
+        ignore_nulls,
     }
 }
 
@@ -115,6 +115,8 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
+            ignore_nulls: self.ignore_nulls,
+            non_nulls_idx: -1,
         }))
     }
 
@@ -125,7 +127,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: -self.shift_offset,
             expr: self.expr.clone(),
             default_value: self.default_value.clone(),
-            ignore_nulls: self.ignore_nulls
+            ignore_nulls: self.ignore_nulls,
         }))
     }
 }
@@ -134,6 +136,9 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool,
+    // Last known index for not null value
+    non_nulls_idx: i64,
 }
 
 fn create_empty_array(
@@ -210,17 +215,34 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         values: &[ArrayRef],
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
+        // TODO: try to get rid of i64 usize conversion
+        // TODO: do not recalc default value every call
+        // TODO: lead mode
         let array = &values[0];
         let dtype = array.data_type();
+        let len = array.len() as i64;
         // LAG mode
-        let idx = if self.shift_offset > 0 {
+        let mut idx = if self.is_causal() {
             range.end as i64 - self.shift_offset - 1
         } else {
             // LEAD mode
             range.start as i64 - self.shift_offset
         };
 
-        if idx < 0 || idx as usize >= array.len() {
+        // Support LAG only for now, as LEAD requires some refactoring first
+        if self.ignore_nulls && self.is_causal() {
+            if idx >= 0 && idx < len && array.is_valid(idx as usize) {
+                self.non_nulls_idx = idx;
+            } else {
+                idx = self.non_nulls_idx
+            }
+        }
+
+        // Set the default value if
+        // - index is out of window bounds
+        // OR
+        // - ignore nulls mode and current value is null and is within window bounds
+        if idx < 0 || idx >= len || (self.ignore_nulls && array.is_null(idx as usize)) {
             get_default_value(self.default_value.as_ref(), dtype)
         } else {
             ScalarValue::try_from_array(array, idx as usize)
@@ -285,6 +307,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 None,
+                false,
             ),
             [
                 Some(-2),
@@ -307,6 +330,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 None,
+                false,
             ),
             [
                 None,
@@ -329,6 +353,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 Some(ScalarValue::Int32(Some(100))),
+                false,
             ),
             [
                 Some(100),

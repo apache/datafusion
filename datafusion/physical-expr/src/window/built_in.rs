@@ -190,6 +190,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 _ => unreachable!(),
             };
             let state = &mut window_state.state;
+            //dbg!(&state);
 
             let batch_ref = &partition_batch_state.record_batch;
             let mut values = self.evaluate_args(batch_ref)?;

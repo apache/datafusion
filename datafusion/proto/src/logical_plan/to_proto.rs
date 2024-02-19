@@ -607,7 +607,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref order_by,
                 ref window_frame,
                 // TODO: support null treatment in proto
-                null_treatment: _
+                null_treatment: _,
             }) => {
                 let window_function = match fun {
                     WindowFunctionDefinition::AggregateFunction(fun) => {
@@ -653,7 +653,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     window_function: Some(window_function),
                     partition_by,
                     order_by,
-                    window_frame
+                    window_frame,
                 });
                 Self {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),

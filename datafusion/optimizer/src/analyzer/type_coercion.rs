@@ -392,7 +392,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 partition_by,
                 order_by,
                 window_frame,
-                null_treatment
+                null_treatment,
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
@@ -415,7 +415,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     partition_by,
                     order_by,
                     window_frame,
-                    null_treatment
+                    null_treatment,
                 ));
                 Ok(expr)
             }

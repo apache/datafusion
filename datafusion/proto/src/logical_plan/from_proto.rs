@@ -1152,7 +1152,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
-                        None
+                        None,
                     )))
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
@@ -1168,7 +1168,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
-                        None
+                        None,
                     )))
                 }
             }

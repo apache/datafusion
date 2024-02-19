@@ -200,7 +200,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             partition_by,
                             order_by,
                             window_frame,
-                            null_treatment
+                            null_treatment,
                         ))
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
@@ -209,7 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         partition_by,
                         order_by,
                         window_frame,
-                        null_treatment
+                        null_treatment,
                     )),
                 };
                 return Ok(expr);

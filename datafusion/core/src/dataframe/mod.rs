@@ -1681,7 +1681,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
-            None
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2900,24 +2900,6 @@ mod tests {
         assert!(matches!(
             physical_plan.output_partitioning(),
             Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
-        Ok(())
-    }
-
-    #[tokio::test] 
-    async fn test_() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let sql = "select last_value(a) ignore nulls over (partition by id order by id) x from (select 1 id, null a union all select 1 id, 'b' a union all select 1 id, null)";
-        let actual = 
-            ctx
-            .sql(sql)
-            .await?
-            .collect()
-            .await?;
-
-        
-        datafusion_common::assert_batches_eq!(vec![""], &actual);
-
         Ok(())
     }
 

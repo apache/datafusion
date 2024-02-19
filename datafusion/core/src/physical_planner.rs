@@ -1582,7 +1582,7 @@ pub fn create_window_expr_with_name(
             partition_by,
             order_by,
             window_frame,
-            null_treatment
+            null_treatment,
         }) => {
             let args = args
                 .iter()
@@ -1607,7 +1607,9 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment.unwrap_or(sqlparser::ast::NullTreatment::RespectNulls) == NullTreatment::IgnoreNulls;
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
@@ -1616,7 +1618,7 @@ pub fn create_window_expr_with_name(
                 &order_by,
                 window_frame,
                 physical_input_schema,
-                ignore_nulls
+                ignore_nulls,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
