@@ -2327,8 +2327,11 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_udf(pow.clone());
 
-        assert!(ctx.deregister_udf("pow").is_some());
-        assert!(ctx.deregister_udf("pow").is_none());
+        assert!(ctx.udfs().contains("pow"));
+
+        ctx.deregister_udf("pow");
+
+        assert!(!ctx.udfs().contains("pow"));
 
         Ok(())
     }
