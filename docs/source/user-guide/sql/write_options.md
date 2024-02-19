@@ -68,11 +68,10 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 
 The following special options are specific to the `COPY` command.
 
-| Option | Description                                                                                                                                                                         | Default Value |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| FORMAT | Specifies the file format COPY query will write out. If there're more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |
-| PARTITION_BY | Specifies the columns that the output files should be partitioned by into separate hive-style directories. Value should be a comma separated string literal, e.g. 'col1,col2' | N/A           |
-
+| Option       | Description                                                                                                                                                                         | Default Value |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| FORMAT       | Specifies the file format COPY query will write out. If there're more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |
+| PARTITION_BY | Specifies the columns that the output files should be partitioned by into separate hive-style directories. Value should be a comma separated string literal, e.g. 'col1,col2'       | N/A           |
 
 ### JSON Format Specific Options
 
