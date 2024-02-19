@@ -175,8 +175,12 @@ impl ArrayFunctionSignature {
             };
 
             // We follow Postgres on `array_append(Null, T)`, which is not valid.
-            if array_type.eq(&DataType::Null) && !allow_null_coercion {
-                return Ok(vec![vec![]]);
+            if array_type.eq(&DataType::Null) {
+                if allow_null_coercion {
+                    return Ok(vec![vec![array_type.clone(), elem_type.clone()]]);
+                } else {
+                    return Ok(vec![vec![]]);
+                }
             }
 
             // We need to find the coerced base type, mainly for cases like:
@@ -191,20 +195,21 @@ impl ArrayFunctionSignature {
                 )
             })?;
 
-            let array_type = datafusion_common::utils::coerced_type_with_base_type_only(
-                array_type,
-                &new_base_type,
-            );
+            let new_array_type =
+                datafusion_common::utils::coerced_type_with_base_type_only(
+                    array_type,
+                    &new_base_type,
+                );
 
-            match array_type {
+            match new_array_type {
                 DataType::List(ref field)
                 | DataType::LargeList(ref field)
                 | DataType::FixedSizeList(ref field, _) => {
-                    let elem_type = field.data_type();
+                    let new_elem_type = field.data_type();
                     if is_append {
-                        Ok(vec![vec![array_type.clone(), elem_type.clone()]])
+                        Ok(vec![vec![new_array_type.clone(), new_elem_type.clone()]])
                     } else {
-                        Ok(vec![vec![elem_type.to_owned(), array_type.clone()]])
+                        Ok(vec![vec![new_elem_type.to_owned(), new_array_type.clone()]])
                     }
                 }
                 _ => Ok(vec![vec![]]),

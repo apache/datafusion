@@ -954,7 +954,7 @@ impl BuiltinScalarFunction {
                 Signature::any(2, self.volatility())
             }
             BuiltinScalarFunction::ArrayHas => {
-                Signature::array_and_element(false, self.volatility())
+                Signature::array_and_element(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
@@ -969,18 +969,18 @@ impl BuiltinScalarFunction {
                 Signature::array_and_element_and_optional_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayPositions => {
-                Signature::array_and_element(false, self.volatility())
+                Signature::array_and_element(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayPrepend => {
                 Signature::element_and_array(false, self.volatility())
             }
             BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => {
-                Signature::array_and_element(false, self.volatility())
+                Signature::array_and_element(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveAll => {
-                Signature::array_and_element(false, self.volatility())
+                Signature::array_and_element(true, self.volatility())
             }
             BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),

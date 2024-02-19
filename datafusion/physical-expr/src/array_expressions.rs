@@ -86,7 +86,9 @@ fn compare_element_to_list(
     row_index: usize,
     eq: bool,
 ) -> Result<BooleanArray> {
-    if list_array_row.data_type() != element_array.data_type() {
+    if list_array_row.data_type() != element_array.data_type()
+        && !element_array.data_type().is_null()
+    {
         return exec_err!(
             "compare_element_to_list received incompatible types: '{:?}' and '{:?}'.",
             list_array_row.data_type(),
@@ -1481,6 +1483,10 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
             check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)
         }
+        DataType::Null => Ok(new_null_array(
+            &DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
+            1,
+        )),
         array_type => {
             exec_err!("array_positions does not support type '{array_type:?}'.")
         }
@@ -1613,6 +1619,10 @@ fn array_remove_internal(
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
 ) -> Result<ArrayRef> {
+    if array.data_type().is_null() {
+        return Ok(array.clone());
+    }
+
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
@@ -2287,6 +2297,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
         }
+        DataType::Null => Ok(new_null_array(&DataType::Boolean, 1)),
         _ => exec_err!("array_has does not support type '{array_type:?}'."),
     }
 }
