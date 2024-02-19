@@ -710,18 +710,28 @@ mod tests {
         ]
     }
 
-    fn down_visits<'a>() -> Vec<&'a str> {
-        all_visits()
-            .into_iter()
-            .filter(|v| v.starts_with("f_down"))
-            .collect()
-    }
-
-    fn up_visits<'a>() -> Vec<&'a str> {
-        all_visits()
-            .into_iter()
-            .filter(|v| v.starts_with("f_up"))
-            .collect()
+    fn f_down_jump_on_a_visits<'a>() -> Vec<&'a str> {
+        vec![
+            "f_down(j)",
+            "f_down(i)",
+            "f_down(f)",
+            "f_down(e)",
+            "f_down(c)",
+            "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
+            "f_down(a)",
+            "f_up(d)",
+            "f_up(c)",
+            "f_up(e)",
+            "f_down(g)",
+            "f_down(h)",
+            "f_up(h)",
+            "f_up(g)",
+            "f_up(f)",
+            "f_up(i)",
+            "f_up(j)",
+        ]
     }
 
     fn f_down_jump_on_e_visits<'a>() -> Vec<&'a str> {
@@ -738,13 +748,6 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
-    }
-
-    fn f_down_jump_on_e_down_visits<'a>() -> Vec<&'a str> {
-        f_down_jump_on_e_visits()
-            .into_iter()
-            .filter(|v| v.starts_with("f_down"))
-            .collect()
     }
 
     fn f_up_jump_on_a_visits<'a>() -> Vec<&'a str> {
@@ -769,8 +772,40 @@ mod tests {
         ]
     }
 
-    fn f_up_jump_on_a_up_visits<'a>() -> Vec<&'a str> {
-        f_up_jump_on_a_visits()
+    fn f_up_jump_on_e_visits<'a>() -> Vec<&'a str> {
+        vec![
+            "f_down(j)",
+            "f_down(i)",
+            "f_down(f)",
+            "f_down(e)",
+            "f_down(c)",
+            "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
+            "f_up(d)",
+            "f_up(c)",
+            "f_up(e)",
+            "f_down(g)",
+            "f_down(h)",
+            "f_up(h)",
+            "f_up(g)",
+            "f_up(f)",
+            "f_up(i)",
+            "f_up(j)",
+        ]
+    }
+
+    fn down_visits(visits: Vec<&str>) -> Vec<&str> {
+        visits
+            .into_iter()
+            .filter(|v| v.starts_with("f_down"))
+            .collect()
+    }
+
+    fn up_visits(visits: Vec<&str>) -> Vec<&str> {
+        visits
             .into_iter()
             .filter(|v| v.starts_with("f_up"))
             .collect()
@@ -840,6 +875,12 @@ mod tests {
 
     visit_test!(test_visit, visit_continue, visit_continue, all_visits());
     visit_test!(
+        test_visit_f_down_jump_on_a,
+        visit_jump_on("a"),
+        visit_continue,
+        f_down_jump_on_a_visits()
+    );
+    visit_test!(
         test_visit_f_down_jump_on_e,
         visit_jump_on("e"),
         visit_continue,
@@ -850,6 +891,12 @@ mod tests {
         visit_continue,
         visit_jump_on("a"),
         f_up_jump_on_a_visits()
+    );
+    visit_test!(
+        test_visit_f_up_jump_on_e,
+        visit_continue,
+        visit_jump_on("e"),
+        f_up_jump_on_e_visits()
     );
 
     macro_rules! test_apply {
@@ -869,11 +916,16 @@ mod tests {
         };
     }
 
-    test_apply!(test_apply, visit_continue, down_visits());
+    test_apply!(test_apply, visit_continue, down_visits(all_visits()));
+    test_apply!(
+        test_apply_f_down_jump_on_a,
+        visit_jump_on("a"),
+        down_visits(f_down_jump_on_a_visits())
+    );
     test_apply!(
         test_apply_f_down_jump_on_e,
         visit_jump_on("e"),
-        f_down_jump_on_e_down_visits()
+        down_visits(f_down_jump_on_e_visits())
     );
 
     type TestRewriterF<T> =
@@ -948,6 +1000,12 @@ mod tests {
         all_visits()
     );
     rewrite_test!(
+        test_rewrite_f_down_jump_on_a,
+        transform_jump_on("a"),
+        transform_continue,
+        f_down_jump_on_a_visits()
+    );
+    rewrite_test!(
         test_rewrite_f_down_jump_on_e,
         transform_jump_on("e"),
         transform_continue,
@@ -958,6 +1016,12 @@ mod tests {
         transform_continue,
         transform_jump_on("a"),
         f_up_jump_on_a_visits()
+    );
+    rewrite_test!(
+        test_rewrite_f_up_jump_on_e,
+        transform_continue,
+        transform_jump_on("e"),
+        f_up_jump_on_e_visits()
     );
 
     macro_rules! transform_test {
@@ -994,6 +1058,12 @@ mod tests {
         all_visits()
     );
     transform_test!(
+        test_transform_f_down_jump_on_a,
+        transform_jump_on("a"),
+        transform_continue,
+        f_down_jump_on_a_visits()
+    );
+    transform_test!(
         test_transform_f_down_jump_on_e,
         transform_jump_on("e"),
         transform_continue,
@@ -1004,6 +1074,12 @@ mod tests {
         transform_continue,
         transform_jump_on("a"),
         f_up_jump_on_a_visits()
+    );
+    transform_test!(
+        test_transform_f_up_jump_on_e,
+        transform_continue,
+        transform_jump_on("e"),
+        f_up_jump_on_e_visits()
     );
 
     macro_rules! transform_down_test {
@@ -1023,11 +1099,20 @@ mod tests {
         };
     }
 
-    transform_down_test!(test_transform_down, transform_continue, down_visits());
+    transform_down_test!(
+        test_transform_down,
+        transform_continue,
+        down_visits(all_visits())
+    );
+    transform_down_test!(
+        test_transform_down_f_down_jump_on_a,
+        transform_jump_on("a"),
+        down_visits(f_down_jump_on_a_visits())
+    );
     transform_down_test!(
         test_transform_down_f_down_jump_on_e,
         transform_jump_on("e"),
-        f_down_jump_on_e_down_visits()
+        down_visits(f_down_jump_on_e_visits())
     );
 
     macro_rules! transform_up_test {
@@ -1047,10 +1132,19 @@ mod tests {
         };
     }
 
-    transform_up_test!(test_transform_up, transform_continue, up_visits());
+    transform_up_test!(
+        test_transform_up,
+        transform_continue,
+        up_visits(all_visits())
+    );
     transform_up_test!(
         test_transform_up_f_up_jump_on_a,
         transform_jump_on("a"),
-        f_up_jump_on_a_up_visits()
+        up_visits(f_up_jump_on_a_visits())
+    );
+    transform_up_test!(
+        test_transform_up_f_up_jump_on_e,
+        transform_jump_on("e"),
+        up_visits(f_up_jump_on_e_visits())
     );
 }
