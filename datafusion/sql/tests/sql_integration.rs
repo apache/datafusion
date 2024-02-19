@@ -4423,6 +4423,31 @@ fn test_field_not_found_window_function() {
     quick_test(qualified_sql, expected);
 }
 
+#[test]
+fn test_parse_escaped_string_literal_value() {
+    let sql = r"SELECT length('\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let expected =
+        "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\000') AS len";
+    assert_eq!(
+        logical_plan(sql).unwrap_err().strip_backtrace(),
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+    )
+}
+
 fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {

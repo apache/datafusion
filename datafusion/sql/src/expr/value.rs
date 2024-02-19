@@ -52,6 +52,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Invalid HexStringLiteral '{s}'")
                 }
             }
+            Value::EscapedStringLiteral(s) => Ok(lit(s)),
             _ => plan_err!("Unsupported Value '{value:?}'"),
         }
     }
