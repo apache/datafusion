@@ -33,7 +33,7 @@ use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement, ScalarFunctionExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow_schema::SortOptions;
