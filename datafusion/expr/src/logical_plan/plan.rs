@@ -615,12 +615,13 @@ impl LogicalPlan {
                 input: _,
                 output_url,
                 file_format,
+                partition_by,
                 copy_options,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
-
+                partition_by: partition_by.clone(),
                 copy_options: copy_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
@@ -1551,6 +1552,7 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
+                        partition_by: _,
                         copy_options,
                     }) => {
                         let op_str = match copy_options {

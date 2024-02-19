@@ -73,6 +73,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::PARQUET,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
