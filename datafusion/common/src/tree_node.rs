@@ -387,6 +387,7 @@ pub enum TreeNodeRecursion {
     Stop,
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Transformed<T> {
     pub data: T,
     pub transformed: bool,
@@ -631,8 +632,8 @@ mod tests {
     };
     use crate::Result;
     use std::fmt::Display;
-    use std::sync::Mutex;
 
+    #[derive(PartialEq, Debug)]
     struct TestTreeNode<T> {
         children: Vec<TestTreeNode<T>>,
         data: T,
@@ -672,20 +673,20 @@ mod tests {
         }
     }
 
-    fn new_test_tree<'a>() -> TestTreeNode<&'a str> {
-        let node_a = TestTreeNode::new(vec![], "a");
-        let node_b = TestTreeNode::new(vec![], "b");
-        let node_d = TestTreeNode::new(vec![node_a], "d");
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "c");
-        let node_e = TestTreeNode::new(vec![node_c], "e");
-        let node_h = TestTreeNode::new(vec![], "h");
-        let node_g = TestTreeNode::new(vec![node_h], "g");
-        let node_f = TestTreeNode::new(vec![node_e, node_g], "f");
-        let node_i = TestTreeNode::new(vec![node_f], "i");
-        TestTreeNode::new(vec![node_i], "j")
+    fn test_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
+        TestTreeNode::new(vec![node_i], "j".to_string())
     }
 
-    fn all_visits<'a>() -> Vec<&'a str> {
+    fn all_visits() -> Vec<String> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -708,9 +709,53 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
-    fn f_down_jump_on_a_visits<'a>() -> Vec<&'a str> {
+    fn transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
+        let node_c =
+            TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
+        let node_f =
+            TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(f_down(i))".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
+    }
+
+    fn transformed_down_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn transformed_up_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
+    }
+
+    fn f_down_jump_on_a_visits() -> Vec<String> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -732,9 +777,40 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
-    fn f_down_jump_on_e_visits<'a>() -> Vec<&'a str> {
+    fn f_down_jump_on_a_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
+        let node_c =
+            TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
+        let node_f =
+            TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(f_down(i))".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
+    }
+
+    fn f_down_jump_on_a_transformed_down_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_down_jump_on_e_visits() -> Vec<String> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -748,9 +824,39 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
-    fn f_up_jump_on_a_visits<'a>() -> Vec<&'a str> {
+    fn f_down_jump_on_e_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
+        let node_f =
+            TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(f_down(i))".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
+    }
+
+    fn f_down_jump_on_e_transformed_down_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_up_jump_on_a_visits() -> Vec<String> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -770,9 +876,39 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
-    fn f_up_jump_on_e_visits<'a>() -> Vec<&'a str> {
+    fn f_up_jump_on_a_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
+        let node_f =
+            TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(f_down(i))".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
+    }
+
+    fn f_up_jump_on_a_transformed_up_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
+    }
+
+    fn f_up_jump_on_e_visits() -> Vec<String> {
         vec![
             "f_down(j)",
             "f_down(i)",
@@ -795,19 +931,32 @@ mod tests {
             "f_up(i)",
             "f_up(j)",
         ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
-    fn down_visits(visits: Vec<&str>) -> Vec<&str> {
+    fn f_up_jump_on_e_transformed_tree() -> TestTreeNode<String> {
+        transformed_tree()
+    }
+
+    fn f_up_jump_on_e_transformed_up_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
+    }
+
+    fn down_visits(visits: Vec<String>) -> Vec<String> {
         visits
             .into_iter()
             .filter(|v| v.starts_with("f_down"))
-            .collect()
-    }
-
-    fn up_visits(visits: Vec<&str>) -> Vec<&str> {
-        visits
-            .into_iter()
-            .filter(|v| v.starts_with("f_up"))
             .collect()
     }
 
@@ -860,13 +1009,13 @@ mod tests {
     }
 
     macro_rules! visit_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_VISITS:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
+                let tree = test_tree();
                 let mut visitor = TestVisitor::new(Box::new($F_DOWN), Box::new($F_UP));
                 tree.visit(&mut visitor)?;
-                assert_eq!(visitor.visits, $EXPECTED);
+                assert_eq!(visitor.visits, $EXPECTED_VISITS);
 
                 Ok(())
             }
@@ -876,40 +1025,40 @@ mod tests {
     visit_test!(test_visit, visit_continue, visit_continue, all_visits());
     visit_test!(
         test_visit_f_down_jump_on_a,
-        visit_jump_on("a"),
+        visit_jump_on("a".to_string()),
         visit_continue,
         f_down_jump_on_a_visits()
     );
     visit_test!(
         test_visit_f_down_jump_on_e,
-        visit_jump_on("e"),
+        visit_jump_on("e".to_string()),
         visit_continue,
         f_down_jump_on_e_visits()
     );
     visit_test!(
         test_visit_f_up_jump_on_a,
         visit_continue,
-        visit_jump_on("a"),
+        visit_jump_on("a".to_string()),
         f_up_jump_on_a_visits()
     );
     visit_test!(
         test_visit_f_up_jump_on_e,
         visit_continue,
-        visit_jump_on("e"),
+        visit_jump_on("e".to_string()),
         f_up_jump_on_e_visits()
     );
 
     macro_rules! test_apply {
-        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F:expr, $EXPECTED_VISITS:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
+                let tree = test_tree();
                 let mut visits = vec![];
                 tree.apply(&mut |node| {
                     visits.push(format!("f_down({})", node.data));
                     $F(node)
                 })?;
-                assert_eq!(visits, $EXPECTED);
+                assert_eq!(visits, $EXPECTED_VISITS);
 
                 Ok(())
             }
@@ -919,12 +1068,12 @@ mod tests {
     test_apply!(test_apply, visit_continue, down_visits(all_visits()));
     test_apply!(
         test_apply_f_down_jump_on_a,
-        visit_jump_on("a"),
+        visit_jump_on("a".to_string()),
         down_visits(f_down_jump_on_a_visits())
     );
     test_apply!(
         test_apply_f_down_jump_on_e,
-        visit_jump_on("e"),
+        visit_jump_on("e".to_string()),
         down_visits(f_down_jump_on_e_visits())
     );
 
@@ -932,18 +1081,13 @@ mod tests {
         Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
 
     struct TestRewriter<T> {
-        visits: Vec<String>,
         f_down: TestRewriterF<T>,
         f_up: TestRewriterF<T>,
     }
 
     impl<T> TestRewriter<T> {
         fn new(f_down: TestRewriterF<T>, f_up: TestRewriterF<T>) -> Self {
-            Self {
-                visits: vec![],
-                f_down,
-                f_up,
-            }
+            Self { f_down, f_up }
         }
     }
 
@@ -951,42 +1095,49 @@ mod tests {
         type Node = TestTreeNode<T>;
 
         fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-            self.visits.push(format!("f_down({})", node.data));
             (*self.f_down)(node)
         }
 
         fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-            self.visits.push(format!("f_up({})", node.data));
             (*self.f_up)(node)
         }
     }
 
-    fn transform_continue<T>(
-        node: TestTreeNode<T>,
-    ) -> Result<Transformed<TestTreeNode<T>>> {
-        Ok(Transformed::no(node))
+    fn transform_yes(
+        f: String,
+    ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
+    {
+        move |node| {
+            Ok(Transformed::yes(TestTreeNode::new(
+                node.children,
+                format!("{}({})", f, node.data),
+            )))
+        }
     }
 
-    fn transform_jump_on<T: PartialEq>(
-        data: T,
-    ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
+    fn transform_jump_on(
+        f: String,
+        data: String,
+    ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
+    {
         move |node| {
+            let new_node =
+                TestTreeNode::new(node.children, format!("{}({})", f, node.data));
             Ok(if node.data == data {
-                Transformed::new(node, false, TreeNodeRecursion::Jump)
+                Transformed::new(new_node, true, TreeNodeRecursion::Jump)
             } else {
-                Transformed::no(node)
+                Transformed::yes(new_node)
             })
         }
     }
 
     macro_rules! rewrite_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_TREE:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
+                let tree = test_tree();
                 let mut rewriter = TestRewriter::new(Box::new($F_DOWN), Box::new($F_UP));
-                tree.rewrite(&mut rewriter)?;
-                assert_eq!(rewriter.visits, $EXPECTED);
+                assert_eq!(tree.rewrite(&mut rewriter)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -995,56 +1146,41 @@ mod tests {
 
     rewrite_test!(
         test_rewrite,
-        transform_continue,
-        transform_continue,
-        all_visits()
+        transform_yes("f_down".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_down_jump_on_a,
-        transform_jump_on("a"),
-        transform_continue,
-        f_down_jump_on_a_visits()
+        transform_jump_on("f_down".to_string(), "a".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(f_down_jump_on_a_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_down_jump_on_e,
-        transform_jump_on("e"),
-        transform_continue,
-        f_down_jump_on_e_visits()
+        transform_jump_on("f_down".to_string(), "e".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(f_down_jump_on_e_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_up_jump_on_a,
-        transform_continue,
-        transform_jump_on("a"),
-        f_up_jump_on_a_visits()
+        transform_yes("f_down".to_string()),
+        transform_jump_on("f_up".to_string(), "f_down(a)".to_string()),
+        Transformed::yes(f_up_jump_on_a_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_up_jump_on_e,
-        transform_continue,
-        transform_jump_on("e"),
-        f_up_jump_on_e_visits()
+        transform_yes("f_down".to_string()),
+        transform_jump_on("f_up".to_string(), "f_down(e)".to_string()),
+        Transformed::yes(f_up_jump_on_e_transformed_tree())
     );
 
     macro_rules! transform_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_TREE:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
-                // TreeNode::transform() is not useful when there is a mutable object shared
-                // between `f_down` and `f_up` closures, so we need a trick to test it.
-                let visits = Mutex::new(vec![]);
-                tree.transform(
-                    &mut |node| {
-                        let mut mut_visits = visits.lock().unwrap();
-                        mut_visits.push(format!("f_down({})", node.data));
-                        $F_DOWN(node)
-                    },
-                    &mut |node| {
-                        let mut mut_visits = visits.lock().unwrap();
-                        mut_visits.push(format!("f_up({})", node.data));
-                        $F_UP(node)
-                    },
-                )?;
-                assert_eq!(visits.into_inner().unwrap(), $EXPECTED);
+                let tree = test_tree();
+                assert_eq!(tree.transform(&mut $F_DOWN, &mut $F_UP,)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1053,46 +1189,41 @@ mod tests {
 
     transform_test!(
         test_transform,
-        transform_continue,
-        transform_continue,
-        all_visits()
+        transform_yes("f_down".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(transformed_tree())
     );
     transform_test!(
         test_transform_f_down_jump_on_a,
-        transform_jump_on("a"),
-        transform_continue,
-        f_down_jump_on_a_visits()
+        transform_jump_on("f_down".to_string(), "a".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(f_down_jump_on_a_transformed_tree())
     );
     transform_test!(
         test_transform_f_down_jump_on_e,
-        transform_jump_on("e"),
-        transform_continue,
-        f_down_jump_on_e_visits()
+        transform_jump_on("f_down".to_string(), "e".to_string()),
+        transform_yes("f_up".to_string()),
+        Transformed::yes(f_down_jump_on_e_transformed_tree())
     );
     transform_test!(
         test_transform_f_up_jump_on_a,
-        transform_continue,
-        transform_jump_on("a"),
-        f_up_jump_on_a_visits()
+        transform_yes("f_down".to_string()),
+        transform_jump_on("f_up".to_string(), "f_down(a)".to_string()),
+        Transformed::yes(f_up_jump_on_a_transformed_tree())
     );
     transform_test!(
         test_transform_f_up_jump_on_e,
-        transform_continue,
-        transform_jump_on("e"),
-        f_up_jump_on_e_visits()
+        transform_yes("f_down".to_string()),
+        transform_jump_on("f_up".to_string(), "f_down(e)".to_string()),
+        Transformed::yes(f_up_jump_on_e_transformed_tree())
     );
 
     macro_rules! transform_down_test {
-        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
-                let mut visits = vec![];
-                tree.transform_down_mut(&mut |node| {
-                    visits.push(format!("f_down({})", node.data));
-                    $F(node)
-                })?;
-                assert_eq!(visits, $EXPECTED);
+                let tree = test_tree();
+                assert_eq!(tree.transform_down_mut(&mut $F)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1101,31 +1232,26 @@ mod tests {
 
     transform_down_test!(
         test_transform_down,
-        transform_continue,
-        down_visits(all_visits())
+        transform_yes("f_down".to_string()),
+        Transformed::yes(transformed_down_tree())
     );
     transform_down_test!(
         test_transform_down_f_down_jump_on_a,
-        transform_jump_on("a"),
-        down_visits(f_down_jump_on_a_visits())
+        transform_jump_on("f_down".to_string(), "a".to_string()),
+        Transformed::yes(f_down_jump_on_a_transformed_down_tree())
     );
     transform_down_test!(
         test_transform_down_f_down_jump_on_e,
-        transform_jump_on("e"),
-        down_visits(f_down_jump_on_e_visits())
+        transform_jump_on("f_down".to_string(), "e".to_string()),
+        Transformed::yes(f_down_jump_on_e_transformed_down_tree())
     );
 
     macro_rules! transform_up_test {
-        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+        ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
             #[test]
             fn $NAME() -> Result<()> {
-                let tree = new_test_tree();
-                let mut visits = vec![];
-                tree.transform_up_mut(&mut |node| {
-                    visits.push(format!("f_up({})", node.data));
-                    $F(node)
-                })?;
-                assert_eq!(visits, $EXPECTED);
+                let tree = test_tree();
+                assert_eq!(tree.transform_up_mut(&mut $F)?, $EXPECTED_TREE);
 
                 Ok(())
             }
@@ -1134,17 +1260,17 @@ mod tests {
 
     transform_up_test!(
         test_transform_up,
-        transform_continue,
-        up_visits(all_visits())
+        transform_yes("f_up".to_string()),
+        Transformed::yes(transformed_up_tree())
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_a,
-        transform_jump_on("a"),
-        up_visits(f_up_jump_on_a_visits())
+        transform_jump_on("f_up".to_string(), "a".to_string()),
+        Transformed::yes(f_up_jump_on_a_transformed_up_tree())
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_e,
-        transform_jump_on("e"),
-        up_visits(f_up_jump_on_e_visits())
+        transform_jump_on("f_up".to_string(), "e".to_string()),
+        Transformed::yes(f_up_jump_on_e_transformed_up_tree())
     );
 }
