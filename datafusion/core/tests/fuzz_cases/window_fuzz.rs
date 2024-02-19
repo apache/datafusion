@@ -281,7 +281,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &orderby_exprs,
                     Arc::new(window_frame),
                     schema.as_ref(),
-                    false
+                    false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
@@ -643,7 +643,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
-                false
+                false,
             )
             .unwrap()],
             exec1,
@@ -666,7 +666,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
-                false
+                false,
             )
             .unwrap()],
             exec2,
