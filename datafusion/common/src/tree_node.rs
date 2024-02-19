@@ -987,11 +987,12 @@ mod tests {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn visit_jump_on<T: PartialEq>(
-        data: T,
+    fn visit_jump_on<T: PartialEq, U: Into<T>>(
+        data: U,
     ) -> impl FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion> {
+        let d = data.into();
         move |node| {
-            Ok(if node.data == data {
+            Ok(if node.data == d {
                 TreeNodeRecursion::Jump
             } else {
                 TreeNodeRecursion::Continue
@@ -1016,26 +1017,26 @@ mod tests {
     visit_test!(test_visit, visit_continue, visit_continue, all_visits());
     visit_test!(
         test_visit_f_down_jump_on_a,
-        visit_jump_on("a".to_string()),
+        visit_jump_on("a"),
         visit_continue,
         f_down_jump_on_a_visits()
     );
     visit_test!(
         test_visit_f_down_jump_on_e,
-        visit_jump_on("e".to_string()),
+        visit_jump_on("e"),
         visit_continue,
         f_down_jump_on_e_visits()
     );
     visit_test!(
         test_visit_f_up_jump_on_a,
         visit_continue,
-        visit_jump_on("a".to_string()),
+        visit_jump_on("a"),
         f_up_jump_on_a_visits()
     );
     visit_test!(
         test_visit_f_up_jump_on_e,
         visit_continue,
-        visit_jump_on("e".to_string()),
+        visit_jump_on("e"),
         f_up_jump_on_e_visits()
     );
 
@@ -1059,12 +1060,12 @@ mod tests {
     test_apply!(test_apply, visit_continue, down_visits(all_visits()));
     test_apply!(
         test_apply_f_down_jump_on_a,
-        visit_jump_on("a".to_string()),
+        visit_jump_on("a"),
         down_visits(f_down_jump_on_a_visits())
     );
     test_apply!(
         test_apply_f_down_jump_on_e,
-        visit_jump_on("e".to_string()),
+        visit_jump_on("e"),
         down_visits(f_down_jump_on_e_visits())
     );
 
@@ -1094,8 +1095,8 @@ mod tests {
         }
     }
 
-    fn transform_yes(
-        f: String,
+    fn transform_yes<P: Display>(
+        f: P,
     ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
     {
         move |node| {
@@ -1106,15 +1107,16 @@ mod tests {
         }
     }
 
-    fn transform_jump_on(
-        f: String,
-        data: String,
+    fn transform_jump_on<P: Display, U: Into<String>>(
+        f: P,
+        data: U,
     ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
     {
+        let d = data.into();
         move |node| {
             let new_node =
                 TestTreeNode::new(node.children, format!("{}({})", f, node.data));
-            Ok(if node.data == data {
+            Ok(if node.data == d {
                 Transformed::new(new_node, true, TreeNodeRecursion::Jump)
             } else {
                 Transformed::yes(new_node)
@@ -1137,32 +1139,32 @@ mod tests {
 
     rewrite_test!(
         test_rewrite,
-        transform_yes("f_down".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_yes("f_down"),
+        transform_yes("f_up"),
         Transformed::yes(transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_down_jump_on_a,
-        transform_jump_on("f_down".to_string(), "a".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_jump_on("f_down", "a"),
+        transform_yes("f_up"),
         Transformed::yes(f_down_jump_on_a_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_down_jump_on_e,
-        transform_jump_on("f_down".to_string(), "e".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_jump_on("f_down", "e"),
+        transform_yes("f_up"),
         Transformed::yes(f_down_jump_on_e_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_up_jump_on_a,
-        transform_yes("f_down".to_string()),
-        transform_jump_on("f_up".to_string(), "f_down(a)".to_string()),
+        transform_yes("f_down"),
+        transform_jump_on("f_up", "f_down(a)"),
         Transformed::yes(f_up_jump_on_a_transformed_tree())
     );
     rewrite_test!(
         test_rewrite_f_up_jump_on_e,
-        transform_yes("f_down".to_string()),
-        transform_jump_on("f_up".to_string(), "f_down(e)".to_string()),
+        transform_yes("f_down"),
+        transform_jump_on("f_up", "f_down(e)"),
         Transformed::yes(f_up_jump_on_e_transformed_tree())
     );
 
@@ -1180,32 +1182,32 @@ mod tests {
 
     transform_test!(
         test_transform,
-        transform_yes("f_down".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_yes("f_down"),
+        transform_yes("f_up"),
         Transformed::yes(transformed_tree())
     );
     transform_test!(
         test_transform_f_down_jump_on_a,
-        transform_jump_on("f_down".to_string(), "a".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_jump_on("f_down", "a"),
+        transform_yes("f_up"),
         Transformed::yes(f_down_jump_on_a_transformed_tree())
     );
     transform_test!(
         test_transform_f_down_jump_on_e,
-        transform_jump_on("f_down".to_string(), "e".to_string()),
-        transform_yes("f_up".to_string()),
+        transform_jump_on("f_down", "e"),
+        transform_yes("f_up"),
         Transformed::yes(f_down_jump_on_e_transformed_tree())
     );
     transform_test!(
         test_transform_f_up_jump_on_a,
-        transform_yes("f_down".to_string()),
-        transform_jump_on("f_up".to_string(), "f_down(a)".to_string()),
+        transform_yes("f_down"),
+        transform_jump_on("f_up", "f_down(a)"),
         Transformed::yes(f_up_jump_on_a_transformed_tree())
     );
     transform_test!(
         test_transform_f_up_jump_on_e,
-        transform_yes("f_down".to_string()),
-        transform_jump_on("f_up".to_string(), "f_down(e)".to_string()),
+        transform_yes("f_down"),
+        transform_jump_on("f_up", "f_down(e)"),
         Transformed::yes(f_up_jump_on_e_transformed_tree())
     );
 
@@ -1223,17 +1225,17 @@ mod tests {
 
     transform_down_test!(
         test_transform_down,
-        transform_yes("f_down".to_string()),
+        transform_yes("f_down"),
         Transformed::yes(transformed_down_tree())
     );
     transform_down_test!(
         test_transform_down_f_down_jump_on_a,
-        transform_jump_on("f_down".to_string(), "a".to_string()),
+        transform_jump_on("f_down", "a"),
         Transformed::yes(f_down_jump_on_a_transformed_down_tree())
     );
     transform_down_test!(
         test_transform_down_f_down_jump_on_e,
-        transform_jump_on("f_down".to_string(), "e".to_string()),
+        transform_jump_on("f_down", "e"),
         Transformed::yes(f_down_jump_on_e_transformed_down_tree())
     );
 
@@ -1251,17 +1253,17 @@ mod tests {
 
     transform_up_test!(
         test_transform_up,
-        transform_yes("f_up".to_string()),
+        transform_yes("f_up"),
         Transformed::yes(transformed_up_tree())
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_a,
-        transform_jump_on("f_up".to_string(), "a".to_string()),
+        transform_jump_on("f_up", "a"),
         Transformed::yes(f_up_jump_on_a_transformed_up_tree())
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_e,
-        transform_jump_on("f_up".to_string(), "e".to_string()),
+        transform_jump_on("f_up", "e"),
         Transformed::yes(f_up_jump_on_e_transformed_up_tree())
     );
 }
