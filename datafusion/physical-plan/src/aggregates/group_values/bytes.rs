@@ -112,7 +112,6 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);
-                group_indexes.windows(2).all(|w| w[0] + 1 == w[1]);
 
                 emit_group_values
             }
