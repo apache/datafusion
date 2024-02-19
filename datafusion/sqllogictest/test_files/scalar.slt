@@ -575,6 +575,12 @@ select log(null, null) a, log(null) b;
 ----
 NULL NULL
 
+# log scalar fraction
+query RR rowsort
+select log(2, 2.0/3) a, log(10, 2.0/3) b;
+----
+-0.584962500721 -0.176091259056
+
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
@@ -614,6 +620,12 @@ select log10(null);
 ----
 NULL
 
+# log10 scalar fraction
+query R rowsort
+select log10(2.0/3);
+----
+-0.176091259056
+
 # log10 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
@@ -643,6 +655,12 @@ query R rowsort
 select log2(null);
 ----
 NULL
+
+# log2 scalar fraction
+query R rowsort
+select log2(2.0/3);
+----
+-0.584962500721
 
 # log2 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
