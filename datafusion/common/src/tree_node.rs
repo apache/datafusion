@@ -780,16 +780,16 @@ mod tests {
 
     struct TestVisitor<T> {
         visits: Vec<String>,
-        fd: TestVisitorF<T>,
-        fu: TestVisitorF<T>,
+        f_down: TestVisitorF<T>,
+        f_up: TestVisitorF<T>,
     }
 
     impl<T> TestVisitor<T> {
-        fn new(fd: TestVisitorF<T>, fu: TestVisitorF<T>) -> Self {
+        fn new(f_down: TestVisitorF<T>, f_up: TestVisitorF<T>) -> Self {
             Self {
                 visits: vec![],
-                fd,
-                fu,
+                f_down,
+                f_up,
             }
         }
     }
@@ -799,30 +799,98 @@ mod tests {
 
         fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
             self.visits.push(format!("f_down({})", node.data));
-            (*self.fd)(node)
+            (*self.f_down)(node)
         }
 
         fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
             self.visits.push(format!("f_up({})", node.data));
-            (*self.fu)(node)
+            (*self.f_up)(node)
         }
     }
+
+    fn visit_continue<T>(_: &TestTreeNode<T>) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn visit_jump_on<T: PartialEq>(
+        data: T,
+    ) -> impl FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion> {
+        move |node| {
+            Ok(if node.data == data {
+                TreeNodeRecursion::Jump
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        }
+    }
+
+    macro_rules! visit_test {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                let mut visitor = TestVisitor::new(Box::new($F_DOWN), Box::new($F_UP));
+                tree.visit(&mut visitor)?;
+                assert_eq!(visitor.visits, $EXPECTED);
+
+                Ok(())
+            }
+        };
+    }
+
+    visit_test!(test_visit, visit_continue, visit_continue, all_visits());
+    visit_test!(
+        test_visit_f_down_jump_on_e,
+        visit_jump_on("e"),
+        visit_continue,
+        f_down_jump_on_e_visits()
+    );
+    visit_test!(
+        test_visit_f_up_jump_on_a,
+        visit_continue,
+        visit_jump_on("a"),
+        f_up_jump_on_a_visits()
+    );
+
+    macro_rules! test_apply {
+        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                let mut visits = vec![];
+                tree.apply(&mut |node| {
+                    visits.push(format!("f_down({})", node.data));
+                    $F(node)
+                })?;
+                assert_eq!(visits, $EXPECTED);
+
+                Ok(())
+            }
+        };
+    }
+
+    test_apply!(test_apply, visit_continue, down_visits());
+    test_apply!(
+        test_apply_f_down_jump_on_e,
+        visit_jump_on("e"),
+        f_down_jump_on_e_down_visits()
+    );
 
     type TestRewriterF<T> =
         Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
 
     struct TestRewriter<T> {
         visits: Vec<String>,
-        fd: TestRewriterF<T>,
-        fu: TestRewriterF<T>,
+        f_down: TestRewriterF<T>,
+        f_up: TestRewriterF<T>,
     }
 
     impl<T> TestRewriter<T> {
-        fn new(fd: TestRewriterF<T>, fu: TestRewriterF<T>) -> Self {
+        fn new(f_down: TestRewriterF<T>, f_up: TestRewriterF<T>) -> Self {
             Self {
                 visits: vec![],
-                fd,
-                fu,
+                f_down,
+                f_up,
             }
         }
     }
@@ -832,281 +900,157 @@ mod tests {
 
         fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
             self.visits.push(format!("f_down({})", node.data));
-            (*self.fd)(node)
+            (*self.f_down)(node)
         }
 
         fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
             self.visits.push(format!("f_up({})", node.data));
-            (*self.fu)(node)
+            (*self.f_up)(node)
         }
     }
 
-    #[test]
-    fn test_visit() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visitor = TestVisitor::new(
-            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
-            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
-        );
-        tree.visit(&mut visitor)?;
-        assert_eq!(visitor.visits, all_visits());
-
-        Ok(())
+    fn transform_continue<T>(
+        node: TestTreeNode<T>,
+    ) -> Result<Transformed<TestTreeNode<T>>> {
+        Ok(Transformed::no(node))
     }
 
-    #[test]
-    fn test_visit_f_down_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visitor = TestVisitor::new(
-            Box::new(|node| {
-                Ok(if node.data == "e" {
-                    TreeNodeRecursion::Jump
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            }),
-            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
-        );
-        tree.visit(&mut visitor)?;
-        assert_eq!(visitor.visits, f_down_jump_on_e_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_visit_f_up_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visitor = TestVisitor::new(
-            Box::new(|_| Ok(TreeNodeRecursion::Continue)),
-            Box::new(|node| {
-                Ok(if node.data == "a" {
-                    TreeNodeRecursion::Jump
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            }),
-        );
-        tree.visit(&mut visitor)?;
-        assert_eq!(visitor.visits, f_up_jump_on_a_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_apply() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.apply(&mut |node| {
-            visits.push(format!("f_down({})", node.data));
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        assert_eq!(visits, down_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_apply_f_down_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.apply(&mut |node| {
-            visits.push(format!("f_down({})", node.data));
-            Ok(if node.data == "e" {
-                TreeNodeRecursion::Jump
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        assert_eq!(visits, f_down_jump_on_e_down_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_rewrite() -> Result<()> {
-        let tree = new_test_tree();
-        let mut rewriter = TestRewriter::new(
-            Box::new(|node| Ok(Transformed::no(node))),
-            Box::new(|node| Ok(Transformed::no(node))),
-        );
-        tree.rewrite(&mut rewriter)?;
-        assert_eq!(rewriter.visits, all_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_rewrite_f_down_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut rewriter = TestRewriter::new(
-            Box::new(|node| {
-                Ok(if node.data == "e" {
-                    Transformed::new(node, false, TreeNodeRecursion::Jump)
-                } else {
-                    Transformed::no(node)
-                })
-            }),
-            Box::new(|node| Ok(Transformed::no(node))),
-        );
-        tree.rewrite(&mut rewriter)?;
-        assert_eq!(rewriter.visits, f_down_jump_on_e_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_rewrite_f_up_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut rewriter = TestRewriter::new(
-            Box::new(|node| Ok(Transformed::no(node))),
-            Box::new(|node| {
-                Ok(if node.data == "a" {
-                    Transformed::new(node, false, TreeNodeRecursion::Jump)
-                } else {
-                    Transformed::no(node)
-                })
-            }),
-        );
-        tree.rewrite(&mut rewriter)?;
-        assert_eq!(rewriter.visits, f_up_jump_on_a_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_transform() -> Result<()> {
-        let tree = new_test_tree();
-        // TreeNode::transform() is not useful when there is a mutable object shared
-        // between `f_down` and `f_up` closures, so we need a trick to test it.
-        let visits = Mutex::new(vec![]);
-        tree.transform(
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_down({})", node.data));
-                Ok(Transformed::no(node))
-            },
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_up({})", node.data));
-                Ok(Transformed::no(node))
-            },
-        )?;
-        assert_eq!(visits.into_inner().unwrap(), all_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_transform_f_down_jump() -> Result<()> {
-        let tree = new_test_tree();
-        // TreeNode::transform() is not useful when there is a mutable object shared
-        // between `f_down` and `f_up` closures, so we need a trick to test it.
-        let visits = Mutex::new(vec![]);
-        tree.transform(
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_down({})", node.data));
-                Ok(if node.data == "e" {
-                    Transformed::new(node, false, TreeNodeRecursion::Jump)
-                } else {
-                    Transformed::no(node)
-                })
-            },
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_up({})", node.data));
-                Ok(Transformed::no(node))
-            },
-        )?;
-        assert_eq!(visits.into_inner().unwrap(), f_down_jump_on_e_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_transform_f_up_jump() -> Result<()> {
-        let tree = new_test_tree();
-        // TreeNode::transform() is not useful when there is a mutable object shared
-        // between `f_down` and `f_up` closures, so we need a trick to test it.
-        let visits = Mutex::new(vec![]);
-        tree.transform(
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_down({})", node.data));
-                Ok(Transformed::no(node))
-            },
-            &mut |node| {
-                let mut mut_visits = visits.lock().unwrap();
-                mut_visits.push(format!("f_up({})", node.data));
-                Ok(if node.data == "a" {
-                    Transformed::new(node, false, TreeNodeRecursion::Jump)
-                } else {
-                    Transformed::no(node)
-                })
-            },
-        )?;
-        assert_eq!(visits.into_inner().unwrap(), f_up_jump_on_a_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_transform_down() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.transform_down_mut(&mut |node| {
-            visits.push(format!("f_down({})", node.data));
-            Ok(Transformed::no(node))
-        })?;
-        assert_eq!(visits, down_visits());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_transform_down_f_down_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.transform_down_mut(&mut |node| {
-            visits.push(format!("f_down({})", node.data));
-            Ok(if node.data == "e" {
+    fn transform_jump_on<T: PartialEq>(
+        data: T,
+    ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
+        move |node| {
+            Ok(if node.data == data {
                 Transformed::new(node, false, TreeNodeRecursion::Jump)
             } else {
                 Transformed::no(node)
             })
-        })?;
-        assert_eq!(visits, f_down_jump_on_e_down_visits());
-
-        Ok(())
+        }
     }
 
-    #[test]
-    fn test_transform_up() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.transform_up_mut(&mut |node| {
-            visits.push(format!("f_up({})", node.data));
-            Ok(Transformed::no(node))
-        })?;
-        assert_eq!(visits, up_visits());
+    macro_rules! rewrite_test {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                let mut rewriter = TestRewriter::new(Box::new($F_DOWN), Box::new($F_UP));
+                tree.rewrite(&mut rewriter)?;
+                assert_eq!(rewriter.visits, $EXPECTED);
 
-        Ok(())
+                Ok(())
+            }
+        };
     }
 
-    #[test]
-    fn test_transform_up_f_up_jump() -> Result<()> {
-        let tree = new_test_tree();
-        let mut visits = vec![];
-        tree.transform_up_mut(&mut |node| {
-            visits.push(format!("f_up({})", node.data));
-            Ok(if node.data == "a" {
-                Transformed::new(node, false, TreeNodeRecursion::Jump)
-            } else {
-                Transformed::no(node)
-            })
-        })?;
-        assert_eq!(visits, f_up_jump_on_a_up_visits());
+    rewrite_test!(
+        test_rewrite,
+        transform_continue,
+        transform_continue,
+        all_visits()
+    );
+    rewrite_test!(
+        test_rewrite_f_down_jump_on_e,
+        transform_jump_on("e"),
+        transform_continue,
+        f_down_jump_on_e_visits()
+    );
+    rewrite_test!(
+        test_rewrite_f_up_jump_on_a,
+        transform_continue,
+        transform_jump_on("a"),
+        f_up_jump_on_a_visits()
+    );
 
-        Ok(())
+    macro_rules! transform_test {
+        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                // TreeNode::transform() is not useful when there is a mutable object shared
+                // between `f_down` and `f_up` closures, so we need a trick to test it.
+                let visits = Mutex::new(vec![]);
+                tree.transform(
+                    &mut |node| {
+                        let mut mut_visits = visits.lock().unwrap();
+                        mut_visits.push(format!("f_down({})", node.data));
+                        $F_DOWN(node)
+                    },
+                    &mut |node| {
+                        let mut mut_visits = visits.lock().unwrap();
+                        mut_visits.push(format!("f_up({})", node.data));
+                        $F_UP(node)
+                    },
+                )?;
+                assert_eq!(visits.into_inner().unwrap(), $EXPECTED);
+
+                Ok(())
+            }
+        };
     }
+
+    transform_test!(
+        test_transform,
+        transform_continue,
+        transform_continue,
+        all_visits()
+    );
+    transform_test!(
+        test_transform_f_down_jump_on_e,
+        transform_jump_on("e"),
+        transform_continue,
+        f_down_jump_on_e_visits()
+    );
+    transform_test!(
+        test_transform_f_up_jump_on_a,
+        transform_continue,
+        transform_jump_on("a"),
+        f_up_jump_on_a_visits()
+    );
+
+    macro_rules! transform_down_test {
+        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                let mut visits = vec![];
+                tree.transform_down_mut(&mut |node| {
+                    visits.push(format!("f_down({})", node.data));
+                    $F(node)
+                })?;
+                assert_eq!(visits, $EXPECTED);
+
+                Ok(())
+            }
+        };
+    }
+
+    transform_down_test!(test_transform_down, transform_continue, down_visits());
+    transform_down_test!(
+        test_transform_down_f_down_jump_on_e,
+        transform_jump_on("e"),
+        f_down_jump_on_e_down_visits()
+    );
+
+    macro_rules! transform_up_test {
+        ($NAME:ident, $F:expr, $EXPECTED:expr) => {
+            #[test]
+            fn $NAME() -> Result<()> {
+                let tree = new_test_tree();
+                let mut visits = vec![];
+                tree.transform_up_mut(&mut |node| {
+                    visits.push(format!("f_up({})", node.data));
+                    $F(node)
+                })?;
+                assert_eq!(visits, $EXPECTED);
+
+                Ok(())
+            }
+        };
+    }
+
+    transform_up_test!(test_transform_up, transform_continue, up_visits());
+    transform_up_test!(
+        test_transform_up_f_up_jump_on_a,
+        transform_jump_on("a"),
+        f_up_jump_on_a_up_visits()
+    );
 }
