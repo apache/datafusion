@@ -17,7 +17,7 @@
 
 //! FunctionRegistry trait
 
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -44,7 +44,9 @@ pub trait FunctionRegistry {
     ///
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
-    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>>;
+    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        not_impl_err!("Registering ScalarUDF")
+    }
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
     ///
@@ -53,14 +55,17 @@ pub trait FunctionRegistry {
     fn register_udaf(
         &mut self,
         _udaf: Arc<AggregateUDF>,
-    ) -> Result<Option<Arc<AggregateUDF>>>;
-
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Registering AggregateUDF")
+    }
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///
     /// Returns an error (the default) if the function can not be registered,
     /// for example if the registry is read only.
-    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>>;
+    fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        not_impl_err!("Registering WindowUDF")
+    }
 }
 
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
