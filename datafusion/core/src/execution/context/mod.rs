@@ -848,16 +848,19 @@ impl SessionContext {
         self.state.write().register_udwf(Arc::new(f)).ok();
     }
 
+    /// Deregisters a UDF within this context.
     pub fn deregister_udf(&self, name: &str) {
-        self.state.write().deregister_udf(name);
+        self.state.write().deregister_udf(name).ok();
     }
 
+    /// Deregisters a UDAF within this context.
     pub fn deregister_udaf(&self, name: &str) {
-        self.state.write().deregister_udaf(name);
+        self.state.write().deregister_udaf(name).ok();
     }
 
+    /// Deregisters a UDTF within this context.
     pub fn deregister_udwf(&self, name: &str) {
-        self.state.write().deregister_udwf(name);
+        self.state.write().deregister_udwf(name).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -2184,6 +2187,16 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Weak;
     use tempfile::TempDir;
+    use datafusion_expr::ColumnarValue;
+    use datafusion_expr::expr_fn::create_udf;
+    use datafusion_common::cast::as_float64_array;
+    use crate::{
+        arrow::{
+            array::{ArrayRef, Float64Array},
+            datatypes::DataType,
+        },
+        logical_expr::Volatility,
+    };
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
@@ -2273,6 +2286,49 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn register_deregister_udf() -> Result<()> {
+        let pow = Arc::new(|args: &[ColumnarValue]| {
+            assert_eq!(args.len(), 2);
+    
+            let args = ColumnarValue::values_to_arrays(args)?;
+    
+            let base = as_float64_array(&args[0]).expect("cast failed");
+            let exponent = as_float64_array(&args[1]).expect("cast failed");
+    
+            assert_eq!(exponent.len(), base.len());
+    
+            let array = base
+                .iter()
+                .zip(exponent.iter())
+                .map(|(base, exponent)| {
+                    match (base, exponent) {
+                        (Some(base), Some(exponent)) => Some(base.powf(exponent)),
+                        _ => None,
+                    }
+                })
+                .collect::<Float64Array>();
+    
+            Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+        });
+
+        let pow = create_udf(
+            "pow",
+            vec![DataType::Float64, DataType::Float64],
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            pow,
+        );
+
+        let ctx = SessionContext::new();
+        ctx.register_udf(pow.clone());
+
+        assert!(ctx.deregister_udf("pow").is_some());
+        assert!(ctx.deregister_udf("pow").is_none());
 
         Ok(())
     }
