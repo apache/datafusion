@@ -56,3 +56,7 @@ keys = [
     "workspace.dependencies",
 ]
 formatting = { reorder_keys = true }
+
+[[rule]]
+keys = ["package"]
+formatting = { reorder_keys = false }
