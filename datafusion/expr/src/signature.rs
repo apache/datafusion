@@ -159,6 +159,37 @@ impl ArrayFunctionSignature {
         &self,
         current_types: &[DataType],
     ) -> Result<Vec<Vec<DataType>>> {
+        fn array_element_and_optional_index(
+            current_types: &[DataType],
+        ) -> Result<Vec<Vec<DataType>>> {
+            // make sure there's 2 or 3 arguments
+            if !(current_types.len() == 2 || current_types.len() == 3) {
+                return Ok(vec![vec![]]);
+            }
+
+            let first_two_types = &current_types[0..2];
+            let mut valid_types =
+                array_append_or_prepend_valid_types(first_two_types, true, true)?;
+
+            // Early return if there are only 2 arguments
+            if current_types.len() == 2 {
+                return Ok(valid_types);
+            }
+
+            let valid_types_with_index = valid_types
+                .iter()
+                .map(|t| {
+                    let mut t = t.clone();
+                    t.push(DataType::Int64);
+                    t
+                })
+                .collect::<Vec<_>>();
+
+            valid_types.extend(valid_types_with_index);
+
+            Ok(valid_types)
+        }
+
         fn array_append_or_prepend_valid_types(
             current_types: &[DataType],
             is_append: bool,
@@ -272,6 +303,9 @@ impl ArrayFunctionSignature {
             }
             ArrayFunctionSignature::ArrayAndIndex(allow_null) => {
                 array_and_index(current_types, *allow_null)
+            }
+            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
+                array_element_and_optional_index(current_types)
             }
             ArrayFunctionSignature::Array(allow_null) => {
                 array(current_types, *allow_null)
