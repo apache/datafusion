@@ -3199,7 +3199,7 @@ SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
 
 # Test issue: https://github.com/apache/arrow-datafusion/issues/9161
 query I rowsort
-select cast(a as int) from t group by t.a;
+SELECT CAST(a AS INT) FROM t GROUP BY t.a;
 ----
 1
 2
