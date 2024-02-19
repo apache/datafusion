@@ -64,11 +64,23 @@ physical_plan
 ProjectionExec: expr=[c_customer_sk@0 as c_customer_sk_big, c_current_cdemo_sk@1 as c_current_cdemo_sk]
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c_customer_sk, c_current_cdemo_sk], output_ordering=[c_customer_sk@0 DESC, c_current_cdemo_sk@1 DESC], has_header=false
 
-# test for cast different type
-query error DataFusion error: This feature is not implemented: Unsupported SQL type Custom\(ObjectName\(\[Ident \{ value: "UTF8", quote_style: None \}\]\), \[\]\)
+
+# test for cast Utf8
+query TT
 EXPLAIN
 SELECT 
-    CAST(c_customer_sk AS UTF8) AS c_customer_sk_big,
+    CAST(c_customer_sk AS STRING) AS c_customer_sk_big,
     c_current_cdemo_sk
 FROM delta_encoding_required_column
 ORDER BY c_customer_sk_big DESC, c_current_cdemo_sk DESC;
+----
+logical_plan
+Sort: c_customer_sk_big DESC NULLS FIRST, delta_encoding_required_column.c_current_cdemo_sk DESC NULLS FIRST
+--Projection: CAST(delta_encoding_required_column.c_customer_sk AS Utf8) AS c_customer_sk_big, delta_encoding_required_column.c_current_cdemo_sk
+----TableScan: delta_encoding_required_column projection=[c_customer_sk, c_current_cdemo_sk]
+physical_plan
+SortPreservingMergeExec: [c_customer_sk_big@0 DESC,c_current_cdemo_sk@1 DESC]
+--SortExec: expr=[c_customer_sk_big@0 DESC,c_current_cdemo_sk@1 DESC]
+----ProjectionExec: expr=[CAST(c_customer_sk@0 AS Utf8) as c_customer_sk_big, c_current_cdemo_sk@1 as c_current_cdemo_sk]
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c_customer_sk, c_current_cdemo_sk], output_ordering=[c_customer_sk@0 DESC, c_current_cdemo_sk@1 DESC], has_header=false

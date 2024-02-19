@@ -426,6 +426,7 @@ impl EquivalenceProperties {
         }
         (!meet.is_empty()).then_some(meet)
     }
+
     /// we substitute the ordering according to input expression type, this is a simplified version
     /// In this case, we just substitute when the expression satisfy the following confition
     /// I. just have one column and is a CAST expression
@@ -435,6 +436,7 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         matching_exprs: Arc<Vec<&Arc<dyn PhysicalExpr>>>,
         sort_expr: &[PhysicalSortExpr],
+        schema: SchemaRef,
     ) -> Vec<PhysicalSortExpr> {
         sort_expr
             .iter()
@@ -454,7 +456,11 @@ impl EquivalenceProperties {
                     let r_expr = referring_exprs[0].clone();
                     if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
                         // we need to know whether the Cast Expr matches or not
-                        if cast_expr.expr.eq(&sort_expr.expr) {
+                        let expr_type =
+                            sort_expr.expr.data_type(schema.as_ref()).unwrap();
+                        if cast_expr.expr.eq(&sort_expr.expr)
+                            && cast_expr.is_bigger_cast(expr_type)
+                        {
                             PhysicalSortExpr {
                                 expr: r_expr.clone(),
                                 options: sort_expr.options,
@@ -480,6 +486,7 @@ impl EquivalenceProperties {
         &mut self,
         exprs: &[(Arc<dyn PhysicalExpr>, String)],
         mapping: &ProjectionMapping,
+        schema: SchemaRef,
     ) {
         let matching_exprs: Arc<Vec<_>> = Arc::new(
             exprs
@@ -488,17 +495,18 @@ impl EquivalenceProperties {
                 .map(|(source, _)| source)
                 .collect(),
         );
-        //println!("matching_expr is {:?}", matching_exprs);
-        //println!("self.ordering is {:?}", self.oeq_class);
         let orderings = std::mem::take(&mut self.oeq_class.orderings);
         let new_order = orderings
             .into_iter()
             .map(move |order| {
-                Self::substitute_ordering_component(matching_exprs.clone(), &order)
+                Self::substitute_ordering_component(
+                    matching_exprs.clone(),
+                    &order,
+                    schema.clone(),
+                )
             })
             .collect();
         self.oeq_class = OrderingEquivalenceClass::new(new_order);
-        //println!("######## the oeq_class si {:?}", self.oeq_class.orderings);
     }
     /// Projects argument `expr` according to `projection_mapping`, taking
     /// equivalences into account.

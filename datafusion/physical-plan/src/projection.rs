@@ -70,7 +70,6 @@ impl ProjectionExec {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let input_schema = input.schema();
-
         let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
@@ -94,10 +93,11 @@ impl ProjectionExec {
 
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
-        //println!("projection_mapping is {:?}", projection_mapping);
+
         let mut input_eqs = input.equivalence_properties();
-        input_eqs.substitute_oeq_class(&expr, &projection_mapping);
-        //println!("input_eqs is {:?}", input_eqs);
+
+        input_eqs.substitute_oeq_class(&expr, &projection_mapping, input_schema.clone());
+
         let project_eqs = input_eqs.project(&projection_mapping, schema.clone());
         let output_ordering = project_eqs.oeq_class().output_ordering();
 
@@ -204,7 +204,11 @@ impl ExecutionPlan for ProjectionExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         let mut equi_properties = self.input.equivalence_properties();
-        equi_properties.substitute_oeq_class(&self.expr, &self.projection_mapping);
+        equi_properties.substitute_oeq_class(
+            &self.expr,
+            &self.projection_mapping,
+            self.input.schema().clone(),
+        );
         equi_properties.project(&self.projection_mapping, self.schema())
     }
 
