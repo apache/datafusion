@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:1.72 as builder
+FROM rust:1.72-bullseye as builder
 
 COPY . /usr/src/arrow-datafusion
 COPY ./datafusion /usr/src/arrow-datafusion/datafusion
