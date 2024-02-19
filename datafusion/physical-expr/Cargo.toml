@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-physical-expr"
 description = "Physical expression implementation for DataFusion query engine"
+keywords = ["arrow", "query", "sql"]
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-keywords = ["arrow", "query", "sql"]
-license = { workspace = true }
-name = "datafusion-physical-expr"
-readme = "README.md"
 repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 rust-version = { workspace = true }
-version = { workspace = true }
 
 [lib]
 name = "datafusion_physical_expr"
@@ -34,11 +34,7 @@ path = "src/lib.rs"
 
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
-default = [
-    "crypto_expressions",
-    "regex_expressions",
-    "unicode_expressions",
-    "encoding_expressions",
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "encoding_expressions",
 ]
 encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]

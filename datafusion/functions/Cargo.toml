@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-functions"
 description = "Function packages for the DataFusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-keywords = ["datafusion", "logical", "plan", "expressions"]
-license = { workspace = true }
-name = "datafusion-functions"
-readme = "README.md"
 repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 rust-version = { workspace = true }
-version = { workspace = true }
 
 [features]
 # enable core functions
@@ -37,6 +37,7 @@ default = ["core_expressions", "encoding_expressions", "math_expressions"]
 encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
+
 
 [lib]
 name = "datafusion_functions"

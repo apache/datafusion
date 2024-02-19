@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-expr"
 description = "Logical plan and expression representation for DataFusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-keywords = ["datafusion", "logical", "plan", "expressions"]
-license = { workspace = true }
-name = "datafusion-expr"
-readme = "README.md"
 repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 rust-version = { workspace = true }
-version = { workspace = true }
 
 [lib]
 name = "datafusion_expr"

@@ -16,15 +16,15 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-substrait"
 description = "DataFusion Substrait Producer and Consumer"
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-license = { workspace = true }
-name = "datafusion-substrait"
-readme = "README.md"
 repository = { workspace = true }
-version = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.72"
 

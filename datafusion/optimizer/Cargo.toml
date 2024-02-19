@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
+keywords = [ "datafusion", "query", "optimizer" ]
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-keywords = ["datafusion", "query", "optimizer"]
-license = { workspace = true }
-name = "datafusion-optimizer"
-readme = "README.md"
 repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 rust-version = { workspace = true }
-version = { workspace = true }
 
 [lib]
 name = "datafusion_optimizer"

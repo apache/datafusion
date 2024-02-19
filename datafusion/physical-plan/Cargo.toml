@@ -16,17 +16,17 @@
 # under the License.
 
 [package]
-authors = { workspace = true }
+name = "datafusion-physical-plan"
 description = "Physical (ExecutionPlan) implementations for DataFusion query engine"
+keywords = ["arrow", "query", "sql"]
+readme = "README.md"
+version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
-keywords = ["arrow", "query", "sql"]
-license = { workspace = true }
-name = "datafusion-physical-plan"
-readme = "README.md"
 repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 rust-version = { workspace = true }
-version = { workspace = true }
 
 [lib]
 name = "datafusion_physical_plan"
