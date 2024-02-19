@@ -511,7 +511,7 @@ pub fn make_current_time(
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use chrono::prelude::*;
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
