@@ -941,16 +941,7 @@ mod tests {
     }
 
     fn f_up_jump_on_e_transformed_up_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
-        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
-        let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
-        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
-        let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
-        TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
+        transformed_up_tree()
     }
 
     fn down_visits(visits: Vec<String>) -> Vec<String> {
