@@ -17,18 +17,16 @@
 
 //! Encoding expressions
 
-use arrow::{
-    datatypes::DataType,
-};
+use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, DataFusionError};
-use datafusion_expr::{ColumnarValue};
+use datafusion_expr::ColumnarValue;
 
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{ ScalarValue};
+use datafusion_common::ScalarValue;
 
 #[derive(Debug)]
 pub(super) struct NullIfFunc {
