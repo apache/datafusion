@@ -47,7 +47,6 @@ pub trait FunctionRegistry {
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
     }
-
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
     ///
@@ -59,7 +58,6 @@ pub trait FunctionRegistry {
     ) -> Result<Option<Arc<AggregateUDF>>> {
         not_impl_err!("Registering AggregateUDF")
     }
-
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///
@@ -133,5 +131,14 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
+    }
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.udafs.insert(udaf.name().into(), udaf))
+    }
+    fn register_udwf(&mut self, udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.udwfs.insert(udaf.name().into(), udaf))
     }
 }
