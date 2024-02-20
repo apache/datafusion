@@ -132,7 +132,7 @@ impl ParquetExec {
                     }
                 }
             })
-            .filter(|p| !p.allways_true());
+            .filter(|p| !p.always_true());
 
         let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
             match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
