@@ -26,4 +26,4 @@ when building a distributed query engine.
 See [API Docs] for details and examples.
 
 [datafusion]: https://arrow.apache.org/datafusion
-[api docs]: http://docs.rs/datafusion-substrait/latest/datafusion-substrait
+[api docs]: http://docs.rs/datafusion-proto/latest
