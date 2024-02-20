@@ -43,7 +43,15 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["array_expressions", "crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
+default = [
+    "array_expressions",
+    "crypto_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "unicode_expressions",
+    "compression",
+    "parquet",
+]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
@@ -52,7 +60,11 @@ parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
 serde = ["arrow-schema/serde"]
-unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusion-optimizer/unicode_expressions", "datafusion-sql/unicode_expressions"]
+unicode_expressions = [
+    "datafusion-physical-expr/unicode_expressions",
+    "datafusion-optimizer/unicode_expressions",
+    "datafusion-sql/unicode_expressions",
+]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -61,7 +73,14 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
-async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
+async-compression = { version = "0.4.0", features = [
+    "bzip2",
+    "gzip",
+    "xz",
+    "zstd",
+    "futures-io",
+    "tokio",
+], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
