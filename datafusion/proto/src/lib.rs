@@ -34,6 +34,12 @@
 //! [protocol buffers]: https://developers.google.com/protocol-buffers
 //! [prost]: https://docs.rs/prost/latest/prost/
 //!
+//! # Version Compatibility
+//!
+//! The serialized form are not guaranteed to be compatible across
+//! DataFusion versions. A plan serialized with one version of DataFusion
+//! may not be able to deserialized with a different version. 
+//!
 //! # See Also
 //!
 //! The binary format created by this crate supports the full range of DataFusion
