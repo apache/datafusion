@@ -41,7 +41,7 @@ use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
-    exec_err, ScalarValue,
+    exec_err, not_impl_err, ScalarValue,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -104,7 +104,7 @@ where
                     &[a.as_ref()], op, name
                 )?)))
             }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+            other => not_impl_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
@@ -115,7 +115,7 @@ where
                 let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+            other => not_impl_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -335,7 +335,7 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!(
+            not_impl_err!(
                 "instr was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
             )
         }
@@ -412,7 +412,7 @@ fn general_trim<T: OffsetSizeTrait>(
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!(
+            not_impl_err!(
             "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
         )
         }
@@ -543,7 +543,7 @@ where
                 } else if let Some(value_isize) = value.to_isize() {
                     Ok(Some(format!("{value_isize:x}")))
                 } else {
-                    exec_err!("Unsupported data type {integer:?} for function to_hex")
+                    not_impl_err!("Unsupported data type {integer:?} for function to_hex")
                 }
             } else {
                 Ok(None)
@@ -656,7 +656,9 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!("overlay was called with {other} arguments. It requires 3 or 4.")
+            not_impl_err!(
+                "overlay was called with {other} arguments. It requires 3 or 4."
+            )
         }
     }
 }
@@ -700,7 +702,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!(
+            not_impl_err!(
                 "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
             )
         }

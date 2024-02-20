@@ -4217,7 +4217,7 @@ NULL 10
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
-query error Execution error: array_dims does not support type 'Int64'
+query error DataFusion error: This feature is not implemented: array_dims does not support type 'Int64'
 select array_dims(1);
 
 # array_dims scalar function

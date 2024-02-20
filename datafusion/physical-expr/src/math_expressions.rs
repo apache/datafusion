@@ -48,7 +48,7 @@ macro_rules! downcast_compute_op {
                     arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
                 Ok(Arc::new(res))
             }
-            _ => exec_err!("Invalid data type for {}", $NAME),
+            _ => not_impl_err!("Invalid data type for {}", $NAME),
         }
     }};
 }
@@ -66,7 +66,11 @@ macro_rules! unary_primitive_array_op {
                     Ok(ColumnarValue::Array(result?))
                 }
                 other => {
-                    exec_err!("Unsupported data type {:?} for function {}", other, $NAME)
+                    not_impl_err!(
+                        "Unsupported data type {:?} for function {}",
+                        other,
+                        $NAME
+                    )
                 }
             },
             ColumnarValue::Scalar(a) => match a {
@@ -76,7 +80,7 @@ macro_rules! unary_primitive_array_op {
                 ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Float64(a.map(|x| x.$FUNC())),
                 )),
-                _ => exec_err!(
+                _ => not_impl_err!(
                     "Unsupported data type {:?} for function {}",
                     ($VALUE).data_type(),
                     $NAME
@@ -194,7 +198,7 @@ pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { |value: i64| { (1..=value).product() } }
         )) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function factorial."),
+        other => not_impl_err!("Unsupported data type {other:?} for function factorial."),
     }
 }
 
@@ -241,7 +245,7 @@ pub fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_gcd }
         )) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function gcd"),
+        other => not_impl_err!("Unsupported data type {other:?} for function gcd"),
     }
 }
 
@@ -267,7 +271,7 @@ pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_lcm }
         )) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function lcm"),
+        other => not_impl_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
 
@@ -312,7 +316,7 @@ pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             )) as ArrayRef)
         }
 
-        other => exec_err!("Unsupported data type {other:?} for function nanvl"),
+        other => not_impl_err!("Unsupported data type {other:?} for function nanvl"),
     }
 }
 
@@ -335,7 +339,7 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::is_nan }
         )) as ArrayRef),
 
-        other => exec_err!("Unsupported data type {other:?} for function isnan"),
+        other => not_impl_err!("Unsupported data type {other:?} for function isnan"),
     }
 }
 
@@ -358,7 +362,7 @@ pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
             { |x: f32| { x == 0_f32 } }
         )) as ArrayRef),
 
-        other => exec_err!("Unsupported data type {other:?} for function iszero"),
+        other => not_impl_err!("Unsupported data type {other:?} for function iszero"),
     }
 }
 
@@ -471,7 +475,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         },
 
-        other => exec_err!("Unsupported data type {other:?} for function round"),
+        other => not_impl_err!("Unsupported data type {other:?} for function round"),
     }
 }
 
@@ -496,7 +500,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             { i64::pow }
         )) as ArrayRef),
 
-        other => exec_err!("Unsupported data type {other:?} for function power"),
+        other => not_impl_err!("Unsupported data type {other:?} for function power"),
     }
 }
 
@@ -521,7 +525,7 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::atan2 }
         )) as ArrayRef),
 
-        other => exec_err!("Unsupported data type {other:?} for function atan2"),
+        other => not_impl_err!("Unsupported data type {other:?} for function atan2"),
     }
 }
 
@@ -575,7 +579,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
             _ => exec_err!("log function requires a scalar or array for base"),
         },
 
-        other => exec_err!("Unsupported data type {other:?} for function log"),
+        other => not_impl_err!("Unsupported data type {other:?} for function log"),
     }
 }
 
@@ -596,7 +600,7 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
             { compute_cot32 }
         )) as ArrayRef),
 
-        other => exec_err!("Unsupported data type {other:?} for function cot"),
+        other => not_impl_err!("Unsupported data type {other:?} for function cot"),
     }
 }
 
@@ -659,7 +663,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
             )) as ArrayRef),
             _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
-        other => exec_err!("Unsupported data type {other:?} for function trunc"),
+        other => not_impl_err!("Unsupported data type {other:?} for function trunc"),
     }
 }
 

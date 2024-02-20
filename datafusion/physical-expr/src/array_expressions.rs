@@ -433,7 +433,7 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&args[1])?;
             general_array_element::<i64>(array, indexes)
         }
-        _ => exec_err!(
+        _ => not_impl_err!(
             "array_element does not support type: {:?}",
             args[0].data_type()
         ),
@@ -513,7 +513,7 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result))
         }
         (dt1, dt2) => {
-            internal_err!("array_except got unexpected types: {dt1:?} and {dt2:?}")
+            not_impl_err!("array_except got unexpected types: {dt1:?} and {dt2:?}")
         }
     }
 }
@@ -561,7 +561,7 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
             let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
-        _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
+        _ => not_impl_err!("array_slice does not support type: {:?}", array_data_type),
     }
 }
 
@@ -791,7 +791,7 @@ pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_front_list::<i64>(array)
         }
-        _ => exec_err!(
+        _ => not_impl_err!(
             "array_pop_front does not support type: {:?}",
             array_data_type
         ),
@@ -814,7 +814,7 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_back_list::<i64>(array)
         }
-        _ => exec_err!(
+        _ => not_impl_err!(
             "array_pop_back does not support type: {:?}",
             array_data_type
         ),
@@ -1226,7 +1226,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_type {
         DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
         DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
+        _ => not_impl_err!("array_empty does not support type '{array_type:?}'."),
     }
 }
 
@@ -1393,7 +1393,9 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::List(_) => general_position_dispatch::<i32>(args),
         DataType::LargeList(_) => general_position_dispatch::<i64>(args),
-        array_type => exec_err!("array_position does not support type '{array_type:?}'."),
+        array_type => {
+            not_impl_err!("array_position does not support type '{array_type:?}'.")
+        }
     }
 }
 fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -1479,7 +1481,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_positions::<i64>(arr, element)
         }
         array_type => {
-            exec_err!("array_positions does not support type '{array_type:?}'.")
+            not_impl_err!("array_positions does not support type '{array_type:?}'.")
         }
     }
 }
@@ -1620,7 +1622,7 @@ fn array_remove_internal(
             general_remove::<i64>(list_array, element_array, arr_n)
         }
         array_type => {
-            exec_err!("array_remove_all does not support type '{array_type:?}'.")
+            not_impl_err!("array_remove_all does not support type '{array_type:?}'.")
         }
     }
 }
@@ -1780,7 +1782,9 @@ pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
         }
-        array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
+        array_type => {
+            not_impl_err!("array_replace does not support type '{array_type:?}'.")
+        }
     }
 }
 
@@ -1802,7 +1806,7 @@ pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
         }
         array_type => {
-            exec_err!("array_replace_n does not support type '{array_type:?}'.")
+            not_impl_err!("array_replace_n does not support type '{array_type:?}'.")
         }
     }
 }
@@ -1825,7 +1829,7 @@ pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
         }
         array_type => {
-            exec_err!("array_replace_all does not support type '{array_type:?}'.")
+            not_impl_err!("array_replace_all does not support type '{array_type:?}'.")
         }
     }
 }
@@ -2013,7 +2017,7 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
             generic_list_cardinality::<i64>(list_array)
         }
         other => {
-            exec_err!("cardinality does not support type '{:?}'", other)
+            not_impl_err!("cardinality does not support type '{:?}'", other)
         }
     }
 }
@@ -2095,7 +2099,7 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::Null => Ok(args[0].clone()),
         _ => {
-            exec_err!("flatten does not support type '{array_type:?}'")
+            not_impl_err!("flatten does not support type '{array_type:?}'")
         }
     }
 
@@ -2129,7 +2133,9 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
+        array_type => {
+            not_impl_err!("array_length does not support type '{array_type:?}'")
+        }
     }
 }
 
@@ -2155,7 +2161,7 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect::<Result<Vec<_>>>()?
         }
         array_type => {
-            return exec_err!("array_dims does not support type '{array_type:?}'");
+            return not_impl_err!("array_dims does not support type '{array_type:?}'");
         }
     };
 
@@ -2285,7 +2291,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
         }
-        _ => exec_err!("array_has does not support type '{array_type:?}'."),
+        _ => not_impl_err!("array_has does not support type '{array_type:?}'."),
     }
 }
 
@@ -2304,7 +2310,7 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
         }
-        _ => exec_err!("array_has_any does not support type '{array_type:?}'."),
+        _ => not_impl_err!("array_has_any does not support type '{array_type:?}'."),
     }
 }
 
@@ -2323,7 +2329,7 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
         }
-        _ => exec_err!("array_has_all does not support type '{array_type:?}'."),
+        _ => not_impl_err!("array_has_all does not support type '{array_type:?}'."),
     }
 }
 
@@ -2474,7 +2480,9 @@ pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_array_distinct(array, field)
         }
-        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
+        array_type => {
+            not_impl_err!("array_distinct does not support type '{array_type:?}'")
+        }
     }
 }
 
@@ -2500,7 +2508,9 @@ pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }
-        array_type => exec_err!("array_resize does not support type '{array_type:?}'."),
+        array_type => {
+            not_impl_err!("array_resize does not support type '{array_type:?}'.")
+        }
     }
 }
 
@@ -2588,7 +2598,9 @@ pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
             general_array_reverse::<i64>(array, field)
         }
         DataType::Null => Ok(arg[0].clone()),
-        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+        array_type => {
+            not_impl_err!("array_reverse does not support type '{array_type:?}'.")
+        }
     }
 }
 

@@ -33,7 +33,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    exec_err, DataFusionError, Result,
+    exec_err, not_impl_err, DataFusionError, Result,
 };
 
 /// Returns number of characters in the string.
@@ -180,7 +180,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => exec_err!(
+        other => not_impl_err!(
             "lpad was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -314,7 +314,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => exec_err!(
+        other => not_impl_err!(
             "rpad was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -409,7 +409,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
+            not_impl_err!("substr was called with {other} arguments. It requires 2 or 3.")
         }
     }
 }

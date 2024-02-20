@@ -218,7 +218,7 @@ where
             }
             ColumnarValue::Scalar(s) => match s {
                 ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
-                other => exec_err!(
+                other => not_impl_err!(
                     "Unexpected scalar type encountered '{other}' for function '{name}'"
                 ),
             },
@@ -285,14 +285,14 @@ where
             DataType::Utf8 | DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
             ))),
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+            other => not_impl_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
                 let result = a.as_ref().map(|x| (op)(x)).transpose()?;
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+            other => not_impl_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -322,13 +322,13 @@ where
                                 DataType::Utf8 | DataType::LargeUtf8 => {
                                     // all good
                                 },
-                                other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                                other => return not_impl_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
                             },
                         ColumnarValue::Scalar(arg) => { match arg.data_type() {
                             DataType::Utf8 | DataType::LargeUtf8 => {
                                 // all good
                             },
-                            other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                            other => return not_impl_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
                         }}
                     }
                 }
@@ -338,7 +338,7 @@ where
                 )))
             }
             other => {
-                exec_err!("Unsupported data type {other:?} for function {name}")
+                not_impl_err!("Unsupported data type {other:?} for function {name}")
             }
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
@@ -369,10 +369,10 @@ where
                                         }
                                     }
                                 } else {
-                                    return exec_err!("Unsupported data type {s:?} for function {name}, arg # {pos}");
+                                    return not_impl_err!("Unsupported data type {s:?} for function {name}, arg # {pos}");
                                 }
                             } else {
-                                return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
+                                return not_impl_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
                             }
                         }
                     }
@@ -386,7 +386,7 @@ where
                 }
             }
             other => {
-                exec_err!("Unsupported data type {other:?} for function {name}")
+                not_impl_err!("Unsupported data type {other:?} for function {name}")
             }
         },
     }
@@ -596,7 +596,7 @@ pub fn to_char(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         ColumnarValue::Array(_) => _to_char_array(args),
         _ => {
-            exec_err!(
+            not_impl_err!(
                 "Format for `to_char` must be non-null Utf8, received {:?}",
                 args[1].data_type()
             )
@@ -627,7 +627,7 @@ fn _build_format_options<'a>(
             },
         ),
         other => {
-            return Err(exec_err!(
+            return Err(not_impl_err!(
                 "to_char only supports date, time, timestamp and duration data types, received {other:?}"
             ));
         }
@@ -1414,7 +1414,7 @@ macro_rules! extract_date_part {
                         .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
             },
-            datatype => exec_err!("Extract does not support datatype {:?}", datatype),
+            datatype => not_impl_err!("Extract does not support datatype {:?}", datatype),
         }
     };
 }
@@ -1555,7 +1555,7 @@ fn validate_to_timestamp_data_types(
                 // all good
             }
             _ => {
-                return Some(exec_err!(
+                return Some(not_impl_err!(
                     "{name} function unsupported data type at index {}: {}",
                     idx + 1,
                     a.data_type()
@@ -1596,7 +1596,7 @@ pub fn to_timestamp_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ),
         DataType::Utf8 => to_timestamp(args),
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function to_timestamp",
                 other
             )
@@ -1632,7 +1632,7 @@ pub fn to_timestamp_millis_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
         ),
         DataType::Utf8 => to_timestamp_millis(args),
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function to_timestamp_millis",
                 other
             )
@@ -1668,7 +1668,7 @@ pub fn to_timestamp_micros_invoke(args: &[ColumnarValue]) -> Result<ColumnarValu
         ),
         DataType::Utf8 => to_timestamp_micros(args),
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function to_timestamp_micros",
                 other
             )
@@ -1704,7 +1704,7 @@ pub fn to_timestamp_nanos_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue
         ),
         DataType::Utf8 => to_timestamp_nanos(args),
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function to_timestamp_nanos",
                 other
             )
@@ -1739,7 +1739,7 @@ pub fn to_timestamp_seconds_invoke(args: &[ColumnarValue]) -> Result<ColumnarVal
         }
         DataType::Utf8 => to_timestamp_seconds(args),
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function to_timestamp_seconds",
                 other
             )
@@ -1761,7 +1761,7 @@ pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
         }
         other => {
-            exec_err!(
+            not_impl_err!(
                 "Unsupported data type {:?} for function from_unixtime",
                 other
             )
@@ -2607,7 +2607,7 @@ mod tests {
         let int64array = ColumnarValue::Array(Arc::new(builder.finish()));
 
         let expected_err =
-            "Execution error: Unsupported data type Int64 for function to_timestamp";
+            "This feature is not implemented: Unsupported data type Int64 for function to_timestamp";
         match to_timestamp(&[int64array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -2633,7 +2633,7 @@ mod tests {
         ];
 
         let expected_err =
-            "Execution error: Unsupported data type Int64 for function to_timestamp";
+            "This feature is not implemented: Unsupported data type Int64 for function to_timestamp";
         match to_timestamp(&int64array) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -3336,7 +3336,7 @@ mod tests {
         ]);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
-            "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
+            "This feature is not implemented: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
         );
     }
 }
