@@ -918,6 +918,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         file_format: FileType::from_str(&copy.file_type)?,
+                        partition_by: vec![],
                         copy_options,
                     },
                 ))
@@ -1641,6 +1642,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 output_url,
                 file_format,
                 copy_options,
+                partition_by: _,
             }) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     input,

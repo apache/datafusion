@@ -21,7 +21,6 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
-use arrow::array::{BooleanArray, Int32Array};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -42,6 +41,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_common::{FileType, Result};
@@ -324,6 +324,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
+        partition_by: vec![],
         copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
@@ -354,6 +355,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
+        partition_by: vec![],
         copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
@@ -402,6 +404,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         file_format: FileType::ARROW,
+        partition_by: vec![],
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
             ArrowWriterOptions::new(),
         ))),
@@ -447,6 +450,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
+        partition_by: vec![],
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
@@ -932,17 +936,17 @@ fn round_trip_scalar_values() {
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
         ScalarValue::LargeBinary(None),
-        ScalarValue::from((
-            vec![
+        ScalarStructBuilder::new()
+            .with_scalar(
                 Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
                 Field::new("b", DataType::Boolean, false),
-            ]
-            .into(),
-            vec![
-                Arc::new(Int32Array::from(vec![Some(23)])) as ArrayRef,
-                Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
-            ],
-        )),
+                ScalarValue::from(false),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),

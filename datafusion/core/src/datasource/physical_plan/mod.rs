@@ -59,7 +59,7 @@ use crate::{
         listing::{FileRange, PartitionedFile},
         object_store::ObjectStoreUrl,
     },
-    physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
+    physical_plan::display::{display_orderings, ProjectSchemaDisplay},
 };
 
 use arrow::{
@@ -129,26 +129,7 @@ impl DisplayAs for FileScanConfig {
             write!(f, ", limit={limit}")?;
         }
 
-        if let Some(ordering) = orderings.first() {
-            if !ordering.is_empty() {
-                let start = if orderings.len() == 1 {
-                    ", output_ordering="
-                } else {
-                    ", output_orderings=["
-                };
-                write!(f, "{}", start)?;
-                for (idx, ordering) in
-                    orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
-                {
-                    match idx {
-                        0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
-                        _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
-                    }
-                }
-                let end = if orderings.len() == 1 { "" } else { "]" };
-                write!(f, "{}", end)?;
-            }
-        }
+        display_orderings(f, &orderings)?;
 
         Ok(())
     }

@@ -3582,7 +3582,7 @@ SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 ------CoalesceBatchesExec: target_batch_size=4096
 --------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
 ----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST]
+------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]]
 
 # CTAS with NTILE function
 statement ok

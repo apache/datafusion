@@ -91,7 +91,7 @@ pub enum TypeSignature {
     /// DataFusion attempts to coerce all argument types to match the first argument's type
     ///
     /// # Examples
-    /// Given types in signature should be coericible to the same final type.
+    /// Given types in signature should be coercible to the same final type.
     /// A function such as `make_array` is `VariadicEqual`.
     ///
     /// `make_array(i32, i64) -> make_array(i64, i64)`
@@ -132,7 +132,10 @@ pub enum ArrayFunctionSignature {
     /// The first argument should be non-list or list, and the second argument should be List/LargeList.
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
+    /// Specialized Signature for Array functions of the form (List/LargeList, Index)
     ArrayAndIndex,
+    /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
+    ArrayAndElementAndOptionalIndex,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -140,6 +143,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
                 write!(f, "array, element")
+            }
+            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
+                write!(f, "array, element, [index]")
             }
             ArrayFunctionSignature::ElementAndArray => {
                 write!(f, "element, array")
@@ -288,6 +294,15 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndElement,
+            ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for Array functions with an optional index
+    pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
             ),
             volatility,
         }
