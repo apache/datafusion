@@ -1118,6 +1118,11 @@ impl DependencyNode {
     }
 }
 
+// Using `IndexMap` and `IndexSet` makes sure to generate consistent results across different executions for the same query.
+// We could have used `HashSet`, `HashMap` in place of them without any loss of functionality.
+// As an example, if existing orderings are `[a ASC, b ASC]`, `[c ASC]` for output ordering
+// both `[a ASC, b ASC, c ASC]` and `[c ASC, a ASC, b ASC]` are valid (e.g. concatenated version of the alternative orderings).
+// When using `HashSet`, `HashMap` it is not guaranteed to generate consistent result, among the possible 2 results in the example above.
 type DependencyMap = IndexMap<PhysicalSortExpr, DependencyNode>;
 type Dependencies = IndexSet<PhysicalSortExpr>;
 
