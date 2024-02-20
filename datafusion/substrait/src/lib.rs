@@ -33,6 +33,7 @@
 //! * Use DataFusion to run Substrait plans created by other systems (e.g. Apache Calcite)
 //! * Use DataFusion to create plans to run on other systems
 //! * Pass query plans over FFI boundaries, such as from Python to Rust
+//! * Pass query plans across node boundaries
 //!
 //! # See Also
 //!

@@ -38,7 +38,7 @@
 //!
 //! The serialized form are not guaranteed to be compatible across
 //! DataFusion versions. A plan serialized with one version of DataFusion
-//! may not be able to deserialized with a different version. 
+//! may not be able to deserialized with a different version.
 //!
 //! # See Also
 //!
