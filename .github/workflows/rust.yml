@@ -322,7 +322,7 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder
+        uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
