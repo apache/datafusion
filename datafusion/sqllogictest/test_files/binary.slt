@@ -216,6 +216,15 @@ SELECT largebinary FROM t ORDER BY largebinary;
 466f6f426172
 NULL
 
+# group by
+query I? rowsort
+SELECT COUNT(*), largebinary FROM t GROUP BY largebinary;
+----
+1 426172
+1 466f6f
+1 466f6f426172
+1 NULL
+
 # LIKE
 query ?
 SELECT binary FROM t where binary LIKE '%F%';

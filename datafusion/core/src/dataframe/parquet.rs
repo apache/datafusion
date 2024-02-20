@@ -32,6 +32,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -44,6 +45,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify parquet writing options here
     /// ).await?;
+    /// # fs::remove_file("output.parquet")?;
     /// # Ok(())
     /// # }
     /// ```

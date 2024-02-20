@@ -52,7 +52,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::cast::as_list_array;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 pub use struct_builder::ScalarStructBuilder;
@@ -2138,28 +2137,67 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
-    /// Example
+    /// Example 1: Array (ScalarValue::Int32)
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
     ///
+    /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    None,
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
     ///
+    /// // Convert the array into Scalar Values for each row
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let expected = vec![
-    ///   vec![
+    /// vec![
     ///     ScalarValue::Int32(Some(1)),
     ///     ScalarValue::Int32(Some(2)),
     ///     ScalarValue::Int32(Some(3)),
+    /// ],
+    /// vec![
+    ///    ScalarValue::Int32(Some(4)),
+    ///    ScalarValue::Int32(Some(5)),
+    /// ],
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
+    ///
+    /// Example 2: Nested array (ScalarValue::List)
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::utils::array_into_list_array;
+    /// use std::sync::Arc;
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
+    ///
+    /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
+    /// let list_arr = array_into_list_array(Arc::new(list_arr));
+    ///
+    /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    /// ]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(4), Some(5)]),
+    /// ]);
+    ///
+    /// let expected = vec![
+    ///   vec![
+    ///     ScalarValue::List(Arc::new(l1)),
+    ///     ScalarValue::List(Arc::new(l2)),
     ///   ],
-    ///   vec![],
-    ///   vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(5))]
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
@@ -2168,27 +2206,13 @@ impl ScalarValue {
         let mut scalars = Vec::with_capacity(array.len());
 
         for index in 0..array.len() {
-            let scalar_values = match array.data_type() {
-                DataType::List(_) => {
-                    let list_array = as_list_array(array);
-                    match list_array.is_null(index) {
-                        true => Vec::new(),
-                        false => {
-                            let nested_array = list_array.value(index);
-                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?
-                                .into_iter()
-                                .flatten()
-                                .collect()
-                        }
-                    }
-                }
-                _ => {
-                    let scalar = ScalarValue::try_from_array(array, index)?;
-                    vec![scalar]
-                }
-            };
+            let nested_array = array.as_list::<i32>().value(index);
+            let scalar_values = (0..nested_array.len())
+                .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                .collect::<Result<Vec<_>>>()?;
             scalars.push(scalar_values);
         }
+
         Ok(scalars)
     }
 

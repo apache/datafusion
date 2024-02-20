@@ -1147,6 +1147,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1159,6 +1160,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify CSV writing options here
     /// ).await?;
+    /// # fs::remove_file("output.csv")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1199,6 +1201,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1210,6 +1213,7 @@ impl DataFrame {
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
     /// ).await?;
+    /// # fs::remove_file("output.json")?;
     /// # Ok(())
     /// # }
     /// ```
