@@ -53,19 +53,38 @@ select * from validate_partitioned_parquet_bar order by col1;
 2
 
 # Copy to directory as partitioned files
-query TTT
-COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
-(format parquet, compression 'zstd(10)', partition_by 'column1, column3');
+query ITT
+COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
+(format parquet, compression 'zstd(10)', partition_by 'column2, column3');
 ----
 3
 
 # validate multiple partitioned parquet file output
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
-LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column1, column3);
+LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
+
+query I??
+select * from validate_partitioned_parquet2 order by column1,column2,column3;
+----
+1 a x
+2 b y
+3 c z
+
+# Copy to directory as partitioned files
+query TTT
+COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
+(format parquet, compression 'zstd(10)', partition_by 'column1, column3');
+----
+3
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table3/' PARTITIONED BY (column1, column3);
 
 query ?T?
-select column1, column2, column3 from validate_partitioned_parquet2 order by column1,column2,column3;
+select column1, column2, column3 from validate_partitioned_parquet3 order by column1,column2,column3;
 ----
 1 a x
 2 b y
@@ -73,7 +92,7 @@ select column1, column2, column3 from validate_partitioned_parquet2 order by col
 
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET 
-LOCATION 'test_files/scratch/copy/partitioned_table2/column1=1/column3=x';
+LOCATION 'test_files/scratch/copy/partitioned_table3/column1=1/column3=x';
 
 query T
 select * from validate_partitioned_parquet_a_x order by column2;
