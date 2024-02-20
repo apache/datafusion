@@ -71,6 +71,15 @@ select * from validate_partitioned_parquet2 order by column1,column2,column3;
 2 b y
 3 c z
 
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table2/column2=a/column3=x';
+
+query I
+select * from validate_partitioned_parquet_a_x order by column1;
+----
+1
+
 # Copy to directory as partitioned files
 query TTT
 COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
