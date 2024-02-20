@@ -371,7 +371,7 @@ pub trait TreeNodeRewriter: Sized {
 }
 
 /// Controls how [`TreeNode`] recursions should proceed.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TreeNodeRecursion {
     /// Continue recursion with the next node.
     Continue,
@@ -673,6 +673,19 @@ mod tests {
         }
     }
 
+    //       J
+    //       |
+    //       I
+    //       |
+    //       F
+    //     /   \
+    //    E     G
+    //    |     |
+    //    C     H
+    //  /   \
+    // B     D
+    //       |
+    //       A
     fn test_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new(vec![], "a".to_string());
         let node_b = TestTreeNode::new(vec![], "b".to_string());
@@ -686,6 +699,9 @@ mod tests {
         TestTreeNode::new(vec![node_i], "j".to_string())
     }
 
+    // Continue on all nodes
+
+    // Expected visits in a combined traversal
     fn all_visits() -> Vec<String> {
         vec![
             "f_down(j)",
@@ -714,6 +730,7 @@ mod tests {
         .collect()
     }
 
+    // Expected transformed tree after a combined traversal
     fn transformed_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
         let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
@@ -729,6 +746,7 @@ mod tests {
         TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
     }
 
+    // Expected transformed tree after a top-down traversal
     fn transformed_down_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
         let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
@@ -742,6 +760,7 @@ mod tests {
         TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
     }
 
+    // Expected transformed tree after a bottom-up traversal
     fn transformed_up_tree() -> TestTreeNode<String> {
         let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
         let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
@@ -754,6 +773,8 @@ mod tests {
         let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
         TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
     }
+
+    // f_down Jump on A node
 
     fn f_down_jump_on_a_visits() -> Vec<String> {
         vec![
@@ -810,6 +831,8 @@ mod tests {
         TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
     }
 
+    // f_down Jump on E node
+
     fn f_down_jump_on_e_visits() -> Vec<String> {
         vec![
             "f_down(j)",
@@ -855,6 +878,8 @@ mod tests {
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
         TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
     }
+
+    // f_up Jump on A node
 
     fn f_up_jump_on_a_visits() -> Vec<String> {
         vec![
@@ -908,6 +933,8 @@ mod tests {
         TestTreeNode::new(vec![node_i], "f_up(j)".to_string())
     }
 
+    // f_up Jump on E node
+
     fn f_up_jump_on_e_visits() -> Vec<String> {
         vec![
             "f_down(j)",
@@ -942,6 +969,182 @@ mod tests {
 
     fn f_up_jump_on_e_transformed_up_tree() -> TestTreeNode<String> {
         transformed_up_tree()
+    }
+
+    // f_down Stop on A node
+
+    fn f_down_stop_on_a_visits() -> Vec<String> {
+        vec![
+            "f_down(j)",
+            "f_down(i)",
+            "f_down(f)",
+            "f_down(e)",
+            "f_down(c)",
+            "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
+            "f_down(a)",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn f_down_stop_on_a_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_down_stop_on_a_transformed_down_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    // f_down Stop on E node
+
+    fn f_down_stop_on_e_visits() -> Vec<String> {
+        vec!["f_down(j)", "f_down(i)", "f_down(f)", "f_down(e)"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    fn f_down_stop_on_e_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_down_stop_on_e_transformed_down_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "a".to_string());
+        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    // f_up Stop on A node
+
+    fn f_up_stop_on_a_visits() -> Vec<String> {
+        vec![
+            "f_down(j)",
+            "f_down(i)",
+            "f_down(f)",
+            "f_down(e)",
+            "f_down(c)",
+            "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn f_up_stop_on_a_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_up_stop_on_a_transformed_up_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
+        TestTreeNode::new(vec![node_i], "j".to_string())
+    }
+
+    // f_up Stop on E node
+
+    fn f_up_stop_on_e_visits() -> Vec<String> {
+        vec![
+            "f_down(j)",
+            "f_down(i)",
+            "f_down(f)",
+            "f_down(e)",
+            "f_down(c)",
+            "f_down(b)",
+            "f_up(b)",
+            "f_down(d)",
+            "f_down(a)",
+            "f_up(a)",
+            "f_up(d)",
+            "f_up(c)",
+            "f_up(e)",
+        ]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    fn f_up_stop_on_e_transformed_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
+        let node_c =
+            TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
+        TestTreeNode::new(vec![node_i], "f_down(j)".to_string())
+    }
+
+    fn f_up_stop_on_e_transformed_up_tree() -> TestTreeNode<String> {
+        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
+        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
+        let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
+        let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
+        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
+        let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
+        let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
+        TestTreeNode::new(vec![node_i], "j".to_string())
     }
 
     fn down_visits(visits: Vec<String>) -> Vec<String> {
@@ -987,13 +1190,14 @@ mod tests {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn visit_jump_on<T: PartialEq, U: Into<T>>(
-        data: U,
+    fn visit_event_on<T: PartialEq, D: Into<T>>(
+        data: D,
+        event: TreeNodeRecursion,
     ) -> impl FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion> {
         let d = data.into();
         move |node| {
             Ok(if node.data == d {
-                TreeNodeRecursion::Jump
+                event
             } else {
                 TreeNodeRecursion::Continue
             })
@@ -1014,32 +1218,6 @@ mod tests {
         };
     }
 
-    visit_test!(test_visit, visit_continue, visit_continue, all_visits());
-    visit_test!(
-        test_visit_f_down_jump_on_a,
-        visit_jump_on("a"),
-        visit_continue,
-        f_down_jump_on_a_visits()
-    );
-    visit_test!(
-        test_visit_f_down_jump_on_e,
-        visit_jump_on("e"),
-        visit_continue,
-        f_down_jump_on_e_visits()
-    );
-    visit_test!(
-        test_visit_f_up_jump_on_a,
-        visit_continue,
-        visit_jump_on("a"),
-        f_up_jump_on_a_visits()
-    );
-    visit_test!(
-        test_visit_f_up_jump_on_e,
-        visit_continue,
-        visit_jump_on("e"),
-        f_up_jump_on_e_visits()
-    );
-
     macro_rules! test_apply {
         ($NAME:ident, $F:expr, $EXPECTED_VISITS:expr) => {
             #[test]
@@ -1056,18 +1234,6 @@ mod tests {
             }
         };
     }
-
-    test_apply!(test_apply, visit_continue, down_visits(all_visits()));
-    test_apply!(
-        test_apply_f_down_jump_on_a,
-        visit_jump_on("a"),
-        down_visits(f_down_jump_on_a_visits())
-    );
-    test_apply!(
-        test_apply_f_down_jump_on_e,
-        visit_jump_on("e"),
-        down_visits(f_down_jump_on_e_visits())
-    );
 
     type TestRewriterF<T> =
         Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
@@ -1095,29 +1261,34 @@ mod tests {
         }
     }
 
-    fn transform_yes<P: Display>(
-        f: P,
-    ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
-    {
+    fn transform_yes<N: Display, T: Display + From<String>>(
+        transformation_name: N,
+    ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
         move |node| {
             Ok(Transformed::yes(TestTreeNode::new(
                 node.children,
-                format!("{}({})", f, node.data),
+                format!("{}({})", transformation_name, node.data).into(),
             )))
         }
     }
 
-    fn transform_jump_on<P: Display, U: Into<String>>(
-        f: P,
-        data: U,
-    ) -> impl FnMut(TestTreeNode<String>) -> Result<Transformed<TestTreeNode<String>>>
-    {
+    fn transform_and_event_on<
+        N: Display,
+        T: PartialEq + Display + From<String>,
+        D: Into<T>,
+    >(
+        transformation_name: N,
+        data: D,
+        event: TreeNodeRecursion,
+    ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
         let d = data.into();
         move |node| {
-            let new_node =
-                TestTreeNode::new(node.children, format!("{}({})", f, node.data));
+            let new_node = TestTreeNode::new(
+                node.children,
+                format!("{}({})", transformation_name, node.data).into(),
+            );
             Ok(if node.data == d {
-                Transformed::new(new_node, true, TreeNodeRecursion::Jump)
+                Transformed::new(new_node, true, event)
             } else {
                 Transformed::yes(new_node)
             })
@@ -1137,37 +1308,6 @@ mod tests {
         };
     }
 
-    rewrite_test!(
-        test_rewrite,
-        transform_yes("f_down"),
-        transform_yes("f_up"),
-        Transformed::yes(transformed_tree())
-    );
-    rewrite_test!(
-        test_rewrite_f_down_jump_on_a,
-        transform_jump_on("f_down", "a"),
-        transform_yes("f_up"),
-        Transformed::yes(f_down_jump_on_a_transformed_tree())
-    );
-    rewrite_test!(
-        test_rewrite_f_down_jump_on_e,
-        transform_jump_on("f_down", "e"),
-        transform_yes("f_up"),
-        Transformed::yes(f_down_jump_on_e_transformed_tree())
-    );
-    rewrite_test!(
-        test_rewrite_f_up_jump_on_a,
-        transform_yes("f_down"),
-        transform_jump_on("f_up", "f_down(a)"),
-        Transformed::yes(f_up_jump_on_a_transformed_tree())
-    );
-    rewrite_test!(
-        test_rewrite_f_up_jump_on_e,
-        transform_yes("f_down"),
-        transform_jump_on("f_up", "f_down(e)"),
-        Transformed::yes(f_up_jump_on_e_transformed_tree())
-    );
-
     macro_rules! transform_test {
         ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_TREE:expr) => {
             #[test]
@@ -1179,37 +1319,6 @@ mod tests {
             }
         };
     }
-
-    transform_test!(
-        test_transform,
-        transform_yes("f_down"),
-        transform_yes("f_up"),
-        Transformed::yes(transformed_tree())
-    );
-    transform_test!(
-        test_transform_f_down_jump_on_a,
-        transform_jump_on("f_down", "a"),
-        transform_yes("f_up"),
-        Transformed::yes(f_down_jump_on_a_transformed_tree())
-    );
-    transform_test!(
-        test_transform_f_down_jump_on_e,
-        transform_jump_on("f_down", "e"),
-        transform_yes("f_up"),
-        Transformed::yes(f_down_jump_on_e_transformed_tree())
-    );
-    transform_test!(
-        test_transform_f_up_jump_on_a,
-        transform_yes("f_down"),
-        transform_jump_on("f_up", "f_down(a)"),
-        Transformed::yes(f_up_jump_on_a_transformed_tree())
-    );
-    transform_test!(
-        test_transform_f_up_jump_on_e,
-        transform_yes("f_down"),
-        transform_jump_on("f_up", "f_down(e)"),
-        Transformed::yes(f_up_jump_on_e_transformed_tree())
-    );
 
     macro_rules! transform_down_test {
         ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
@@ -1223,22 +1332,6 @@ mod tests {
         };
     }
 
-    transform_down_test!(
-        test_transform_down,
-        transform_yes("f_down"),
-        Transformed::yes(transformed_down_tree())
-    );
-    transform_down_test!(
-        test_transform_down_f_down_jump_on_a,
-        transform_jump_on("f_down", "a"),
-        Transformed::yes(f_down_jump_on_a_transformed_down_tree())
-    );
-    transform_down_test!(
-        test_transform_down_f_down_jump_on_e,
-        transform_jump_on("f_down", "e"),
-        Transformed::yes(f_down_jump_on_e_transformed_down_tree())
-    );
-
     macro_rules! transform_up_test {
         ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
             #[test]
@@ -1251,6 +1344,254 @@ mod tests {
         };
     }
 
+    visit_test!(test_visit, visit_continue, visit_continue, all_visits());
+    visit_test!(
+        test_visit_f_down_jump_on_a,
+        visit_event_on("a", TreeNodeRecursion::Jump),
+        visit_continue,
+        f_down_jump_on_a_visits()
+    );
+    visit_test!(
+        test_visit_f_down_jump_on_e,
+        visit_event_on("e", TreeNodeRecursion::Jump),
+        visit_continue,
+        f_down_jump_on_e_visits()
+    );
+    visit_test!(
+        test_visit_f_up_jump_on_a,
+        visit_continue,
+        visit_event_on("a", TreeNodeRecursion::Jump),
+        f_up_jump_on_a_visits()
+    );
+    visit_test!(
+        test_visit_f_up_jump_on_e,
+        visit_continue,
+        visit_event_on("e", TreeNodeRecursion::Jump),
+        f_up_jump_on_e_visits()
+    );
+    visit_test!(
+        test_visit_f_down_stop_on_a,
+        visit_event_on("a", TreeNodeRecursion::Stop),
+        visit_continue,
+        f_down_stop_on_a_visits()
+    );
+    visit_test!(
+        test_visit_f_down_stop_on_e,
+        visit_event_on("e", TreeNodeRecursion::Stop),
+        visit_continue,
+        f_down_stop_on_e_visits()
+    );
+    visit_test!(
+        test_visit_f_up_stop_on_a,
+        visit_continue,
+        visit_event_on("a", TreeNodeRecursion::Stop),
+        f_up_stop_on_a_visits()
+    );
+    visit_test!(
+        test_visit_f_up_stop_on_e,
+        visit_continue,
+        visit_event_on("e", TreeNodeRecursion::Stop),
+        f_up_stop_on_e_visits()
+    );
+
+    test_apply!(test_apply, visit_continue, down_visits(all_visits()));
+    test_apply!(
+        test_apply_f_down_jump_on_a,
+        visit_event_on("a", TreeNodeRecursion::Jump),
+        down_visits(f_down_jump_on_a_visits())
+    );
+    test_apply!(
+        test_apply_f_down_jump_on_e,
+        visit_event_on("e", TreeNodeRecursion::Jump),
+        down_visits(f_down_jump_on_e_visits())
+    );
+    test_apply!(
+        test_apply_f_down_stop_on_a,
+        visit_event_on("a", TreeNodeRecursion::Stop),
+        down_visits(f_down_stop_on_a_visits())
+    );
+    test_apply!(
+        test_apply_f_down_stop_on_e,
+        visit_event_on("e", TreeNodeRecursion::Stop),
+        down_visits(f_down_stop_on_e_visits())
+    );
+
+    rewrite_test!(
+        test_rewrite,
+        transform_yes("f_down"),
+        transform_yes("f_up"),
+        Transformed::yes(transformed_tree())
+    );
+    rewrite_test!(
+        test_rewrite_f_down_jump_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Jump),
+        transform_yes("f_up"),
+        Transformed::yes(f_down_jump_on_a_transformed_tree())
+    );
+    rewrite_test!(
+        test_rewrite_f_down_jump_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Jump),
+        transform_yes("f_up"),
+        Transformed::yes(f_down_jump_on_e_transformed_tree())
+    );
+    rewrite_test!(
+        test_rewrite_f_up_jump_on_a,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(a)", TreeNodeRecursion::Jump),
+        Transformed::yes(f_up_jump_on_a_transformed_tree())
+    );
+    rewrite_test!(
+        test_rewrite_f_up_jump_on_e,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(e)", TreeNodeRecursion::Jump),
+        Transformed::yes(f_up_jump_on_e_transformed_tree())
+    );
+    rewrite_test!(
+        test_rewrite_f_down_stop_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Stop),
+        transform_yes("f_up"),
+        Transformed::new(
+            f_down_stop_on_a_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    rewrite_test!(
+        test_rewrite_f_down_stop_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Stop),
+        transform_yes("f_up"),
+        Transformed::new(
+            f_down_stop_on_e_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    rewrite_test!(
+        test_rewrite_f_up_stop_on_a,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(a)", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_a_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    rewrite_test!(
+        test_rewrite_f_up_stop_on_e,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(e)", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_e_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+
+    transform_test!(
+        test_transform,
+        transform_yes("f_down"),
+        transform_yes("f_up"),
+        Transformed::yes(transformed_tree())
+    );
+    transform_test!(
+        test_transform_f_down_jump_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Jump),
+        transform_yes("f_up"),
+        Transformed::yes(f_down_jump_on_a_transformed_tree())
+    );
+    transform_test!(
+        test_transform_f_down_jump_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Jump),
+        transform_yes("f_up"),
+        Transformed::yes(f_down_jump_on_e_transformed_tree())
+    );
+    transform_test!(
+        test_transform_f_up_jump_on_a,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(a)", TreeNodeRecursion::Jump),
+        Transformed::yes(f_up_jump_on_a_transformed_tree())
+    );
+    transform_test!(
+        test_transform_f_up_jump_on_e,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(e)", TreeNodeRecursion::Jump),
+        Transformed::yes(f_up_jump_on_e_transformed_tree())
+    );
+    transform_test!(
+        test_transform_f_down_stop_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Stop),
+        transform_yes("f_up"),
+        Transformed::new(
+            f_down_stop_on_a_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    transform_test!(
+        test_transform_f_down_stop_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Stop),
+        transform_yes("f_up"),
+        Transformed::new(
+            f_down_stop_on_e_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    transform_test!(
+        test_transform_f_up_stop_on_a,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(a)", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_a_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    transform_test!(
+        test_transform_f_up_stop_on_e,
+        transform_yes("f_down"),
+        transform_and_event_on("f_up", "f_down(e)", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_e_transformed_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+
+    transform_down_test!(
+        test_transform_down,
+        transform_yes("f_down"),
+        Transformed::yes(transformed_down_tree())
+    );
+    transform_down_test!(
+        test_transform_down_f_down_jump_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Jump),
+        Transformed::yes(f_down_jump_on_a_transformed_down_tree())
+    );
+    transform_down_test!(
+        test_transform_down_f_down_jump_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Jump),
+        Transformed::yes(f_down_jump_on_e_transformed_down_tree())
+    );
+    transform_down_test!(
+        test_transform_down_f_down_stop_on_a,
+        transform_and_event_on("f_down", "a", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_down_stop_on_a_transformed_down_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    transform_down_test!(
+        test_transform_down_f_down_stop_on_e,
+        transform_and_event_on("f_down", "e", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_down_stop_on_e_transformed_down_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+
     transform_up_test!(
         test_transform_up,
         transform_yes("f_up"),
@@ -1258,12 +1599,30 @@ mod tests {
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_a,
-        transform_jump_on("f_up", "a"),
+        transform_and_event_on("f_up", "a", TreeNodeRecursion::Jump),
         Transformed::yes(f_up_jump_on_a_transformed_up_tree())
     );
     transform_up_test!(
         test_transform_up_f_up_jump_on_e,
-        transform_jump_on("f_up", "e"),
+        transform_and_event_on("f_up", "e", TreeNodeRecursion::Jump),
         Transformed::yes(f_up_jump_on_e_transformed_up_tree())
+    );
+    transform_up_test!(
+        test_transform_up_f_up_stop_on_a,
+        transform_and_event_on("f_up", "a", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_a_transformed_up_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
+    );
+    transform_up_test!(
+        test_transform_up_f_up_stop_on_e,
+        transform_and_event_on("f_up", "e", TreeNodeRecursion::Stop),
+        Transformed::new(
+            f_up_stop_on_e_transformed_up_tree(),
+            true,
+            TreeNodeRecursion::Stop
+        )
     );
 }
