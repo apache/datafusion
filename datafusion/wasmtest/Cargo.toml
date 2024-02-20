@@ -37,13 +37,13 @@ crate-type = ["cdylib", "rlib"]
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
-datafusion = { path = "../core", default-features = false }
+datafusion = { workspace = true }
 
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-optimizer = { workspace = true }
-datafusion-physical-expr = { workspace = true }
+datafusion-optimizer = { workspace = true, default-features = true }
+datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 

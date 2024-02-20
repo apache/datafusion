@@ -65,14 +65,14 @@ bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
 dashmap = "5.4.0"
-datafusion = { path = "datafusion/core", version = "36.0.0" }
-datafusion-common = { path = "datafusion/common", version = "36.0.0" }
+datafusion = { path = "datafusion/core", version = "36.0.0", default-features = false }
+datafusion-common = { path = "datafusion/common", version = "36.0.0", default-features = false }
 datafusion-execution = { path = "datafusion/execution", version = "36.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "36.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "36.0.0" }
 datafusion-functions-array = { path = "datafusion/functions-array", version = "36.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "36.0.0" }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "36.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "36.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "36.0.0", default-features = false }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "36.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "36.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "36.0.0" }
@@ -81,7 +81,7 @@ datafusion-substrait = { path = "datafusion/substrait", version = "36.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = "2.2.1"
+half = { version = "2.2.1", default-features = false }
 indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
