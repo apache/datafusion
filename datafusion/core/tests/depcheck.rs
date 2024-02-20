@@ -37,8 +37,8 @@ fn test_deps() -> Result<(), Box<dyn std::error::Error>> {
     {
         let deps: Vec<String> = resolve
             .deps(package_id)
-            .filter(|(a, _)| a.name().starts_with("datafusion"))
-            .map(|(a, _)| a.name().to_string())
+            .filter(|(package_id, _)| package_id.name().starts_with("datafusion"))
+            .map(|(package_id, _)| package_id.name().to_string())
             .collect();
         package_deps.insert(package_id.name().to_string(), deps);
     }
@@ -70,8 +70,8 @@ fn check_circular_deps(
         return;
     }
     seen.insert(current_dep.to_string());
-    if let Some(x) = package_deps.get(current_dep) {
-        for dep in x {
+    if let Some(deps) = package_deps.get(current_dep) {
+        for dep in deps {
             check_circular_deps(root_package, dep, package_deps, seen);
         }
     }
