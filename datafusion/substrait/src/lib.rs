@@ -17,8 +17,9 @@
 
 //! Serialize / Deserialize DataFusion Plans to [Substrait.io]
 //!
-//! This crate provides support for serializing and deserializing DataFusion plans
-//! to and from the generated types in [substrait::proto] from the [substrait] crate.
+//! This crate provides support for serializing and deserializing both DataFusion
+//! [`LogicalPlan`] and [`ExecutionPlan`] to and from the generated types in
+//! [substrait::proto] from the [substrait] crate.
 //!
 //! [Substrait.io] provides a cross-language serialization format for relational
 //! algebra (e.g. query plans and expressions), based on protocol buffers.
@@ -29,7 +30,7 @@
 //! [`ExecutionPlan`]: datafusion::physical_plan::ExecutionPlan
 //!
 //! Potential uses of this crate:
-//! * Use DataFusion run Substrait plans created by other systems (e.g. Apache Calcite)
+//! * Use DataFusion to run Substrait plans created by other systems (e.g. Apache Calcite)
 //! * Use DataFusion to create plans to run on other systems
 //! * Pass query plans over FFI boundaries, such as from Python to Rust
 //!
@@ -42,8 +43,8 @@
 //! [datafusion-proto]: https://docs.rs/datafusion-proto/latest/datafusion_proto
 //!
 //! Note that generated types  such as [`substrait::proto::Plan`] and
-//! [`substrait::proto::Rel`] can be serialized / deserialized to bytes, json and
-//! other formats using [prost] and the rest of the rust protobuf ecosystem.
+//! [`substrait::proto::Rel`] can be serialized / deserialized to bytes, JSON and
+//! other formats using [prost] and the rest of the Rust protobuf ecosystem.
 //!
 //! # Example: Serializing [`LogicalPlan`]s
 //! ```
