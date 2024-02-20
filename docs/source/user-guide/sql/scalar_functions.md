@@ -569,6 +569,7 @@ trunc(numeric_expression[, decimal_places])
 
 - [coalesce](#coalesce)
 - [nullif](#nullif)
+- [nvl/ifnull](#nvl/ifnull)
 
 ### `coalesce`
 
@@ -601,6 +602,21 @@ nullif(expression1, expression2)
 - **expression1**: Expression to compare and return if equal to expression2.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression2**: Expression to compare to expression1.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl/ifnull`
+
+Returns _expression2_ if _expression1_ is NULL; otherwise it returns _expression1_.
+
+```
+nullif(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: return if expression1 not is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is NULL.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## String Functions
