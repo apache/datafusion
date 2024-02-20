@@ -78,7 +78,6 @@ uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.5"
-datafusion = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
