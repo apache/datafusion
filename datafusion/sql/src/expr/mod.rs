@@ -207,16 +207,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     match &expr {
                         Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
                             let mut new_args = agg_func.args.clone();
-                            new_args.push(index.clone()); 
+                            new_args.push(index.clone());
                             (Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new(
                                 datafusion_expr::AggregateFunction::NthValue,
-                                new_args, 
+                                new_args,
                                 agg_func.distinct,
                                 agg_func.filter.clone(),
                                 agg_func.order_by.clone(),
                             )), true)
                         },
-                        _ => (expr, false), 
+                        _ => (expr, false),
                     }
                 }
                 let expr =
@@ -224,8 +224,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if indexes.len() > 1 {
                     return self.plan_indexed(expr, indexes, schema, planner_context);
                 }
-                let (new_expr, changed) =
-                    simplify_array_index_expr(expr, self.sql_expr_to_logical_expr(indexes[0].clone(), schema, planner_context)?);
+                let (new_expr, changed) = simplify_array_index_expr(
+                    expr,
+                    self.sql_expr_to_logical_expr(
+                        indexes[0].clone(),
+                        schema,
+                        planner_context,
+                    )?,
+                );
+
                 if changed {
                     Ok(new_expr)
                 } else {
