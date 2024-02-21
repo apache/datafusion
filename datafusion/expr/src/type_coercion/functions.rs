@@ -562,8 +562,6 @@ mod tests {
             assert_eq!(out, Some(type_into.clone()));
         }
 
-        let invalid_cases = vec![DataType::Int32, DataType::Boolean];
-
         Ok(())
     }
 }
