@@ -665,10 +665,10 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// LEVENSHTEIN('kitten', 'sitting') = 3
 pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return exec_err!(
             "levenshtein function requires two arguments, got {}",
             args.len()
-        )));
+        );
     }
     let str1_array = as_generic_string_array::<T>(&args[0])?;
     let str2_array = as_generic_string_array::<T>(&args[1])?;

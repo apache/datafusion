@@ -888,9 +888,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function_inner(string_expressions::overlay::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function overlay",
-            ))),
+            other => exec_err!("Unsupported data type {other:?} for function overlay"),
         }),
         BuiltinScalarFunction::Levenshtein => {
             Arc::new(|args| match args[0].data_type() {
@@ -900,9 +898,9 @@ pub fn create_physical_fun(
                 DataType::LargeUtf8 => make_scalar_function_inner(
                     string_expressions::levenshtein::<i64>,
                 )(args),
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function levenshtein",
-                ))),
+                other => {
+                    exec_err!("Unsupported data type {other:?} for function levenshtein")
+                }
             })
         }
         BuiltinScalarFunction::SubstrIndex => {
@@ -923,9 +921,9 @@ pub fn create_physical_fun(
                     );
                     make_scalar_function_inner(func)(args)
                 }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function substr_index",
-                ))),
+                other => {
+                    exec_err!("Unsupported data type {other:?} for function substr_index")
+                }
             })
         }
         BuiltinScalarFunction::FindInSet => Arc::new(|args| match args[0].data_type() {
@@ -945,9 +943,9 @@ pub fn create_physical_fun(
                 );
                 make_scalar_function_inner(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function find_in_set",
-            ))),
+            other => {
+                exec_err!("Unsupported data type {other:?} for function find_in_set")
+            }
         }),
     })
 }
