@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
+use crate::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -372,10 +374,16 @@ fn coerced_from<'a>(
         List(_) if matches!(type_from, FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
-        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.
+        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         List(_) | LargeList(_)
             if datafusion_common::utils::base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
+        {
+            Some(type_into.clone())
+        }
+        FixedSizeList(_, size)
+            if *size == FIXED_SIZE_LIST_WILDCARD
+                && list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
         }
@@ -408,8 +416,10 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
 
     #[test]
     fn test_maybe_data_types() {
@@ -482,6 +492,76 @@ mod tests {
         let valid_types = get_valid_types(&signature, &args)?;
         assert_eq!(valid_types.len(), 1);
         assert_eq!(valid_types[0], args);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fixed_list_wildcard_coerce() -> Result<()> {
+        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let type_into = DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD);
+        let cases = vec![
+            DataType::FixedSizeList(inner.clone(), 2),
+            DataType::FixedSizeList(inner.clone(), 3),
+            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
+            DataType::List(inner.clone()),
+        ];
+        for case in cases {
+            let out = coerced_from(&type_into, &case);
+            assert_eq!(out, Some(type_into.clone()));
+        }
+
+        let nested_inner = Arc::new(Field::new(
+            "item",
+            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
+            false,
+        ));
+
+        let invalid_cases = vec![
+            DataType::Int32,
+            DataType::Boolean,
+            DataType::FixedSizeList(nested_inner.clone(), 1),
+            DataType::List(nested_inner.clone()),
+        ];
+
+        for case in invalid_cases {
+            let out = coerced_from(&type_into, &case);
+            assert_eq!(out, None);
+        }
+        let type_into_nested = DataType::FixedSizeList(nested_inner.clone(), FIXED_SIZE_LIST_WILDCARD);
+        let type_from_nested = DataType::List(nested_inner.clone());
+        let out = coerced_from(&type_into_nested, &type_from_nested);
+        assert_eq!(out, Some(type_into_nested));
+        
+        Ok(())
+    }
+    #[test]
+    fn test_fixed_list_no_wildcard_coerce() -> Result<()> {
+        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let type_into = DataType::FixedSizeList(inner.clone(), 1);
+        let invalid_cases = vec![
+            DataType::FixedSizeList(inner.clone(), 2),
+            DataType::FixedSizeList(inner.clone(), 3),
+            DataType::FixedSizeList(inner.clone(), 4),
+        ];
+        for case in invalid_cases {
+            let out = coerced_from(&type_into, &case);
+            assert_eq!(out, None);
+        }
+
+        let cases = vec![
+            DataType::FixedSizeList(inner.clone(), 1),
+            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
+            DataType::List(inner.clone()),
+        ];
+
+        for case in cases {
+            let out = coerced_from(&type_into, &case);
+
+            assert_eq!(out, Some(type_into.clone()));
+        }
+
+        let invalid_cases = vec![DataType::Int32, DataType::Boolean];
 
         Ok(())
     }
