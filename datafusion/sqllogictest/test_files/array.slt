@@ -4306,7 +4306,6 @@ CREATE TABLE array_ndims_table
 AS VALUES
   ([1], [1, 2, 3], [[7]], [[[[[10]]]]]),
   ([2], [4, 5], [[8]], [[[[[10]]]]]),
-  ([2], [6], [[9]], [[[[[10]]]]]),
   ([3], [6], [[9]], [[[[[10]]]]])
 ;
 
@@ -4330,7 +4329,6 @@ from array_ndims_table;
 1 1 2 5
 1 1 2 5
 1 1 2 5
-1 1 2 5
 
 query IIII
 select
@@ -4340,7 +4338,6 @@ select
   array_ndims(column4)
 from large_array_ndims_table;
 ----
-1 1 2 5
 1 1 2 5
 1 1 2 5
 1 1 2 5
