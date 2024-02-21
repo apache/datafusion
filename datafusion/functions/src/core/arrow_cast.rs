@@ -109,15 +109,15 @@ fn create_arrow_cast(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arg0 = &args[0];
 
     match (arg0, arg1) {
-        (ColumnarValue::Scalar(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
-            let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+        (ColumnarValue::Scalar(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(Some(arg1)))) =>{
+            let data_type = parse_data_type(arg1)?;
             match arg0.cast_to(&data_type) {
                 Ok(val0) => Ok(ColumnarValue::Scalar(val0)),
                 Err(error) => plan_err!("{:?}",error.to_string()),
             }
         }
-        (ColumnarValue::Array(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
-            let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+        (ColumnarValue::Array(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(Some(arg1)))) =>{
+            let data_type = parse_data_type( arg1)?;
             match cast(&arg0,&data_type) {
                 Ok(val0) => Ok(ColumnarValue::Array(val0)),
                 Err(error) => plan_err!("{:?}",error.to_string()),
