@@ -19,16 +19,65 @@
 //! casting to arbitrary arrow types (rather than SQL types)
 
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
+use std::any::Any;
+use arrow::compute::cast;
 
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion_common::{
-    plan_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue, ExprSchema, plan_err};
 
-use datafusion_common::plan_err;
-use datafusion_expr::{Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
-pub const ARROW_CAST_NAME: &str = "arrow_cast";
+#[derive(Debug)]
+pub(super) struct ArrowCastFunc {
+    signature: Signature,
+}
+
+impl ArrowCastFunc {
+    pub fn new() -> Self{
+        Self {
+            signature:
+            Signature::any(2, Volatility::Immutable)
+        }
+    }
+
+}
+
+impl ScalarUDFImpl for ArrowCastFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "arrow_cast"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        parse_data_type(&arg_types[1].to_string())
+    }
+
+    fn return_type_from_exprs(&self, args: &[Expr], _schema: &dyn ExprSchema) -> Result<DataType> {
+        if args.len() != 2 {
+            return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
+        }
+        let arg1 = args.get(1);
+
+        match arg1 {
+            Some(Expr::Literal(ScalarValue::Utf8(arg1))) => {
+                let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+                Ok(data_type)
+            }
+            _ => plan_err!("arrow_cast requires its second argument to be a constant string, got {:?}",arg1.unwrap().to_string())
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        create_arrow_cast(args)
+    }
+}
 
 /// Create an [`Expr`] that evaluates the `arrow_cast` function
 ///
@@ -52,26 +101,31 @@ pub const ARROW_CAST_NAME: &str = "arrow_cast";
 /// select arrow_cast(column_x, 'Float64')
 /// ```
 /// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
-pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr> {
+fn create_arrow_cast(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
-    let arg1 = args.pop().unwrap();
-    let arg0 = args.pop().unwrap();
+    let arg1 = &args[1];
+    let arg0 = &args[0];
 
-    // arg1 must be a string
-    let data_type_string = if let Expr::Literal(ScalarValue::Utf8(Some(v))) = arg1 {
-        v
-    } else {
-        return plan_err!(
-            "arrow_cast requires its second argument to be a constant string, got {arg1}"
-        );
-    };
-
-    // do the actual lookup to the appropriate data type
-    let data_type = parse_data_type(&data_type_string)?;
-
-    arg0.cast_to(&data_type, schema)
+    match (arg0, arg1) {
+        (ColumnarValue::Scalar(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
+            let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+            match arg0.cast_to(&data_type) {
+                Ok(val0) => Ok(ColumnarValue::Scalar(val0)),
+                Err(error) => plan_err!("{:?}",error.to_string()),
+            }
+        }
+        (ColumnarValue::Array(arg0),ColumnarValue::Scalar(ScalarValue::Utf8(arg1))) =>{
+            let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+            match cast(&arg0,&data_type) {
+                Ok(val0) => Ok(ColumnarValue::Array(val0)),
+                Err(error) => plan_err!("{:?}",error.to_string()),
+            }
+        }
+        (ColumnarValue::Scalar(_arg0), ColumnarValue::Scalar(arg1)) => plan_err!("arrow_cast requires its second argument to be a constant string, got {arg1}"),
+        _ => plan_err!("arrow_cast requires two scalar value as input. got {:?} and {:?}",arg0,arg1)
+    }
 }
 
 /// Parses `str` into a `DataType`.
@@ -80,22 +134,8 @@ pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr>
 /// impl, and maintains the invariant that
 /// `parse_data_type(data_type.to_string()) == data_type`
 ///
-/// Example:
-/// ```
-/// # use datafusion_sql::parse_data_type;
-/// # use arrow_schema::DataType;
-/// let display_value = "Int32";
-///
-/// // "Int32" is the Display value of `DataType`
-/// assert_eq!(display_value, &format!("{}", DataType::Int32));
-///
-/// // parse_data_type coverts "Int32" back to `DataType`:
-/// let data_type = parse_data_type(display_value).unwrap();
-/// assert_eq!(data_type, DataType::Int32);
-/// ```
-///
 /// Remove if added to arrow: <https://github.com/apache/arrow-rs/issues/3821>
-pub fn parse_data_type(val: &str) -> Result<DataType> {
+fn parse_data_type(val: &str) -> Result<DataType> {
     Parser::new(val).parse()
 }
 
@@ -647,6 +687,7 @@ impl Display for Token {
 
 #[cfg(test)]
 mod test {
+    use arrow::array::{ArrayRef, Int64Array, Int8Array};
     use arrow_schema::{IntervalUnit, TimeUnit};
 
     use super::*;
@@ -846,5 +887,30 @@ mod test {
             }
             println!(" Ok");
         }
+    }
+
+    #[test]
+    fn test_arrow_cast_scalar() -> Result<()>{
+        let input_arg0 = ColumnarValue::Scalar(ScalarValue::Int8(Some(100i8)));
+        let input_arg1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some("Int64".to_string())));
+        let result = create_arrow_cast(&[input_arg0,input_arg1])?;
+        let result = result.into_array(1).expect("Failed to cast values");
+        let expected = Arc::new(Int64Array::from(vec![100])) as ArrayRef;
+        assert_eq!(expected.as_ref(),result.as_ref());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_arrow_cast_array() -> Result<()>{
+        let input_arg0 = ColumnarValue::Array(Arc::new(Int8Array::from(vec![100,101,102])) as ArrayRef);
+        let input_arg1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some("Int64".to_string())));
+        let result = create_arrow_cast(&[input_arg0,input_arg1])?;
+        let result = result.into_array(1).expect("Failed to cast values");
+        let expected = Arc::new(Int64Array::from(vec![100,101,102])) as ArrayRef;
+
+        assert_eq!(expected.as_ref(),result.as_ref());
+
+        Ok(())
     }
 }

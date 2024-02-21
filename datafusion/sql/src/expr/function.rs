@@ -32,8 +32,6 @@ use sqlparser::ast::{
 };
 use std::str::FromStr;
 
-use super::arrow_cast::ARROW_CAST_NAME;
-
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -234,12 +232,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fun, args, distinct, filter, order_by,
                 )));
             };
-
-            // Special case arrow_cast (as its type is dependent on its argument value)
-            if name == ARROW_CAST_NAME {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
-                return super::arrow_cast::create_arrow_cast(args, schema);
-            }
         }
 
         // Could not find the relevant function, so return an error
