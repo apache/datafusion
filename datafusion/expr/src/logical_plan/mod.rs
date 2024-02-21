@@ -40,8 +40,8 @@ pub use plan::{
     TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart,
+    CreateFunction, OperateFunctionArg, SetVariable, Statement, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
 };
 
 pub use display::display_schema;

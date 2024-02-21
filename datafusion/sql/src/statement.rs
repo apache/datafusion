@@ -43,12 +43,12 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
-    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
-    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    WriteOp,
+    CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateMemoryTable,
+    CreateView, DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView,
+    EmptyRelation, Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
+    OperateFunctionArg, PlanType, Prepare, SetVariable, Statement as PlanStatement,
+    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -626,8 +626,63 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
+            Statement::CreateFunction {
+                or_replace,
+                temporary,
+                name,
+                args,
+                return_type,
+                params,
+            } => {
+                let return_type = match return_type {
+                    Some(t) => Some(self.convert_data_type(&t)?),
+                    None => None,
+                };
 
-            _ => not_impl_err!("Unsupported SQL statement: {sql:?}"),
+                let args = match args {
+                    Some(a) => {
+                        let a = a
+                            .into_iter()
+                            .map(|a| {
+                                let data_type = self.convert_data_type(&a.data_type)?;
+                                Ok(OperateFunctionArg {
+                                    mode: a.mode,
+                                    name: a.name,
+                                    default_expr: a.default_expr,
+                                    data_type,
+                                })
+                            })
+                            .collect::<Result<Vec<OperateFunctionArg>>>();
+                        Some(a?)
+                    }
+                    None => None,
+                };
+
+                // Not sure if this is correct way to generate name
+                // postgresql function definition may have schema part as well
+                // datafusion at the moment does lookup based on given string
+                // `schema_name.function_name` will work even if there is no `schema_name`
+                let name: String = name
+                    .0
+                    .into_iter()
+                    .map(|i| i.value)
+                    .collect::<Vec<String>>()
+                    .join(".");
+                let statement = PlanStatement::CreateFunction(CreateFunction {
+                    or_replace,
+                    temporary,
+                    name,
+                    return_type,
+                    args,
+                    params,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                });
+
+                Ok(LogicalPlan::Statement(statement))
+            }
+            _ => {
+                not_impl_err!("Unsupported SQL statement: {sql:?}")
+            }
         }
     }
 

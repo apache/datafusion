@@ -45,7 +45,7 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    CreateFunction, Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -493,6 +493,19 @@ impl SessionContext {
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
+            }
+
+            LogicalPlan::Statement(Statement::CreateFunction(stmt)) => {
+                let function_factory = self.state.read().function_factory.clone();
+
+                match function_factory {
+                    Some(f) => f.create(self.state.clone(), stmt).await?,
+                    None => Err(DataFusionError::Configuration(
+                        "Function factory has not been configured".into(),
+                    ))?,
+                };
+
+                self.return_empty_dataframe()
             }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
@@ -1261,7 +1274,22 @@ impl QueryPlanner for DefaultQueryPlanner {
             .await
     }
 }
-
+/// Crates and registers a function from [CreateFunction] statement
+#[async_trait]
+pub trait FunctionFactory: Sync + Send {
+    // TODO: I don't like having RwLock Leaking here, who ever implements it
+    //       has to depend ot `parking_lot`. I'f we expose &mut SessionState it
+    //       may keep lock of too long.
+    //
+    //       Not sure if there is better approach.
+    //
+    /// Crates and registers a function from [CreateFunction] statement
+    async fn create(
+        &self,
+        state: Arc<RwLock<SessionState>>,
+        statement: CreateFunction,
+    ) -> Result<()>;
+}
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
 ///
@@ -1306,6 +1334,9 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+    // TODO: I don't like having `function_factory` here but i see no better place for
+    //       it. Moving it somewhere else may introduce circular dependency,
+    function_factory: Option<Arc<dyn FunctionFactory>>,
 }
 
 impl Debug for SessionState {
@@ -1392,6 +1423,7 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
+            function_factory: None,
         };
 
         // register built in functions
@@ -1565,6 +1597,16 @@ impl SessionState {
         optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
         self.physical_optimizers.rules.push(optimizer_rule);
+        self
+    }
+
+    /// Set create function handler
+    // TODO: Add more details to method docs
+    pub fn with_function_factory(
+        mut self,
+        create_function_hook: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.function_factory = Some(create_function_hook);
         self
     }
 

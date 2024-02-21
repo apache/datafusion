@@ -17,7 +17,9 @@
 
 use std::fmt::{self, Display};
 
+use arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
+use sqlparser::ast::{ArgMode, CreateFunctionBody, Expr, Ident};
 
 /// Various types of Statements.
 ///
@@ -34,6 +36,8 @@ pub enum Statement {
     TransactionEnd(TransactionEnd),
     /// Set a Variable
     SetVariable(SetVariable),
+
+    CreateFunction(CreateFunction),
 }
 
 impl Statement {
@@ -43,6 +47,7 @@ impl Statement {
             Statement::TransactionStart(TransactionStart { schema, .. }) => schema,
             Statement::TransactionEnd(TransactionEnd { schema, .. }) => schema,
             Statement::SetVariable(SetVariable { schema, .. }) => schema,
+            Statement::CreateFunction(CreateFunction { schema, .. }) => schema,
         }
     }
 
@@ -53,6 +58,7 @@ impl Statement {
             Statement::TransactionStart(_) => "TransactionStart",
             Statement::TransactionEnd(_) => "TransactionEnd",
             Statement::SetVariable(_) => "SetVariable",
+            Statement::CreateFunction(_) => "CreateFunction",
         }
     }
 
@@ -84,6 +90,9 @@ impl Statement {
                         variable, value, ..
                     }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
+                    }
+                    Statement::CreateFunction(CreateFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
                     }
                 }
             }
@@ -147,4 +156,26 @@ pub struct SetVariable {
     pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateFunction {
+    // TODO: There is open question should we expose sqlparser types or redefine them here?
+    //       At the moment it make more sense to expose sqlparser types and leave
+    //       user to convert them as needed
+    pub or_replace: bool,
+    pub temporary: bool,
+    pub name: String,
+    pub args: Option<Vec<OperateFunctionArg>>,
+    pub return_type: Option<DataType>,
+    pub params: CreateFunctionBody,
+    //pub body: String,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct OperateFunctionArg {
+    pub mode: Option<ArgMode>,
+    pub name: Option<Ident>,
+    pub data_type: DataType,
+    pub default_expr: Option<Expr>,
 }
