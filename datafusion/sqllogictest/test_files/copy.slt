@@ -106,6 +106,7 @@ CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV
 LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
 
 # This triggers a panic (index out of bounds)
+# https://github.com/apache/arrow-datafusion/issues/9269
 #query
 #select * from validate_partitioned_escape_quote;
 
