@@ -66,8 +66,8 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let arg1 = args.get(1);
 
         match arg1 {
-            Some(Expr::Literal(ScalarValue::Utf8(arg1))) => {
-                let data_type = parse_data_type( arg1.clone().unwrap().as_str())?;
+            Some(Expr::Literal(ScalarValue::Utf8(Some(arg1)))) => {
+                let data_type = parse_data_type(arg1)?;
                 Ok(data_type)
             }
             _ => plan_err!("arrow_cast requires its second argument to be a constant string, got {:?}",arg1.unwrap().to_string())
