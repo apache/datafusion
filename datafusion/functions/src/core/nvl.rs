@@ -19,8 +19,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, DataFusionError};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, is_not_null};
-use arrow::array::{Array, BooleanArray};
+use arrow::compute::is_not_null;
+use arrow::array::Array;
 
 #[derive(Debug)]
 pub(super) struct NVLFunc {
@@ -31,7 +31,7 @@ pub(super) struct NVLFunc {
 /// Currently supported types by the nvl/ifnull function.
 /// The order of these types correspond to the order on which coercion applies
 /// This should thus be from least informative to most informative
-pub static SUPPORTED_NVL_TYPES: &[DataType] = &[
+static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Boolean,
     DataType::UInt8,
     DataType::UInt16,
@@ -96,40 +96,27 @@ fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             args.len()
         );
     }
-    let (lhs, rhs) = (&args[0], &args[1]);
-    match (lhs, rhs) {
+    let (lhs_array, rhs_array) = match (&args[0], &args[1]) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
-            let size = lhs.len();
-            let mut current_value = rhs.to_array_of_size(size)?;
-            let remainder = BooleanArray::from(vec![true; size]);
-            let to_apply = and(&remainder, &is_not_null(lhs.as_ref())?)?;
-            current_value = zip(&to_apply, lhs, &current_value)?;
-            Ok(ColumnarValue::Array(current_value))
+            (lhs.clone(), rhs.to_array_of_size(lhs.len())?)
         }
         (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => {
-            let size = lhs.len();
-            // start with nulls as default output
-            let remainder = BooleanArray::from(vec![true; size]);
-            let to_apply = and(&remainder, &is_not_null(lhs.as_ref())?)?;
-            let current_value = zip(&to_apply, lhs, &rhs)?;
-            Ok(ColumnarValue::Array(current_value))
+            (lhs.clone(), rhs.clone())
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
-            let size = rhs.len();
-            let mut current_value = lhs.to_array_of_size(size)?;
-            let remainder = BooleanArray::from(vec![true; size]);
-            let to_apply = and(&remainder, &is_not_null(current_value.as_ref())?)?;
-            current_value = zip(&to_apply, &current_value, &rhs)?;
-            Ok(ColumnarValue::Array(current_value))
+            (lhs.to_array_of_size(rhs.len())?, rhs.clone())
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
             let mut current_value = lhs;
             if lhs.is_null() {
                 current_value = rhs;
             }
-            Ok(ColumnarValue::Scalar(current_value.clone()))
+            return Ok(ColumnarValue::Scalar(current_value.clone()));
         }
-    }
+    };
+    let to_apply = is_not_null(&lhs_array)?;
+    let value = zip(&to_apply, &lhs_array, &rhs_array)?;
+    Ok(ColumnarValue::Array(value))
 }
 
 #[cfg(test)]
