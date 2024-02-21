@@ -914,18 +914,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None => return Err(proto_error("CopyTo missing CopyOptions")),
                 };
 
-                let table_partition_cols = copy
-                    .partition_by
-                    .iter()
-                    .map(|col| col.clone())
-                    .collect::<Vec<_>>();
-
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         file_format: FileType::from_str(&copy.file_type)?,
-                        partition_by: table_partition_cols,
+                        partition_by: copy.partition_by.clone(),
                         copy_options,
                     },
                 ))
