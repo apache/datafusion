@@ -203,6 +203,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::ArrayIndex { obj, indexes } => {
+                fn is_unsupported(expr: &SQLExpr) -> bool {
+                    matches!(expr, SQLExpr::JsonAccess { .. })
+                }
                 fn simplify_array_index_expr(expr: Expr, index: Expr) -> (Expr, bool) {
                     match &expr {
                         Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
@@ -221,7 +224,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let expr =
                     self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                if indexes.len() > 1 {
+                if indexes.len() > 1 || is_unsupported(&indexes[0]) {
                     return self.plan_indexed(expr, indexes, schema, planner_context);
                 }
                 let (new_expr, changed) = simplify_array_index_expr(
