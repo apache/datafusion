@@ -609,7 +609,7 @@ nullif(expression1, expression2)
 Returns _expression2_ if _expression1_ is NULL; otherwise it returns _expression1_.
 
 ```
-nullif(expression1, expression2)
+nvl(expression1, expression2)
 ```
 
 #### Arguments
