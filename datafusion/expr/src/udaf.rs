@@ -153,9 +153,7 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
-    /// Return an accumulator the given aggregate, given
-    /// its return datatype.
-    // pub fn accumulator(&self, return_type: &DataType, sort_exprs: Vec<Expr>, schema: Option<Schema>) -> Result<Box<dyn Accumulator>> {
+    /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
         let sort_exprs = self.inner.sort_exprs();
         let schema = self.inner.schema();
