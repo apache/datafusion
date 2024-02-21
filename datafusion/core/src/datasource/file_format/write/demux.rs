@@ -391,21 +391,23 @@ fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
     partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
-    let end_idx = parted_batch.num_columns() - partition_by.len();
-    let non_part_cols = &parted_batch.columns()[..end_idx];
-
     let partition_names: Vec<_> = partition_by.iter().map(|(s, _)| s).collect();
-    let non_part_schema = Schema::new(
-        parted_batch
-            .schema()
-            .fields()
-            .iter()
-            .filter(|f| !partition_names.contains(&f.name()))
-            .map(|f| (**f).clone())
-            .collect::<Vec<_>>(),
-    );
+    let (non_part_cols, non_part_fields): (Vec<_>, Vec<_>) = parted_batch
+        .columns()
+        .iter()
+        .zip(parted_batch.schema().fields())
+        .filter_map(|(a, f)| {
+            if !partition_names.contains(&f.name()) {
+                Some((a.clone(), (**f).clone()))
+            } else {
+                None
+            }
+        })
+        .unzip();
+
+    let non_part_schema = Schema::new(non_part_fields);
     let final_batch_to_send =
-        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols.into())?;
+        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols)?;
 
     Ok(final_batch_to_send)
 }
