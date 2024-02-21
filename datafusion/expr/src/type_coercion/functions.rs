@@ -528,11 +528,12 @@ mod tests {
             let out = coerced_from(&type_into, &case);
             assert_eq!(out, None);
         }
-        let type_into_nested = DataType::FixedSizeList(nested_inner.clone(), FIXED_SIZE_LIST_WILDCARD);
+        let type_into_nested =
+            DataType::FixedSizeList(nested_inner.clone(), FIXED_SIZE_LIST_WILDCARD);
         let type_from_nested = DataType::List(nested_inner.clone());
         let out = coerced_from(&type_into_nested, &type_from_nested);
         assert_eq!(out, Some(type_into_nested));
-        
+
         Ok(())
     }
     #[test]
