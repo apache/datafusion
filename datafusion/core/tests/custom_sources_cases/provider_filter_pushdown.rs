@@ -27,15 +27,14 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr::{BinaryExpr, Cast};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use async_trait::async_trait;
 
@@ -68,15 +67,13 @@ impl CustomPlan {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            // Execution Mode
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }

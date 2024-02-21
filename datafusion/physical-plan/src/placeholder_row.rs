@@ -60,7 +60,7 @@ impl PlaceholderRowExec {
     /// Create a new PlaceholderRowExecPlaceholderRowExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
-        // When changing partitions, output partitions should change also.
+        // Update output partitioning when updating partitions:
         let output_partitioning = self.output_partitioning_helper();
         self.cache = self.cache.with_partitioning(output_partitioning);
         self
@@ -94,16 +94,14 @@ impl PlaceholderRowExec {
     }
 
     fn with_cache(mut self) -> Self {
+        // Get output partitioning:
         let output_partitioning = self.output_partitioning_helper();
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(output_partitioning);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
+        self.cache = self
+            .cache
+            .with_partitioning(output_partitioning)
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        self.cache = new_cache;
         self
     }
 }
@@ -180,8 +178,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::with_new_children_if_necessary;
-    use crate::{common, test};
+    use crate::{common, test, with_new_children_if_necessary};
 
     #[test]
     fn with_new_children() -> Result<()> {

@@ -90,6 +90,7 @@ pub struct UnionExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -112,7 +113,7 @@ impl UnionExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         // TODO: In some cases, we should be able to preserve some equivalence
         //       classes and constants. Add support for such cases.
         let children_eqs = self
@@ -150,8 +151,7 @@ impl UnionExec {
         // entries (implicitly) and return:
         eq_properties.add_new_orderings(meets);
 
-        // Output Partitioning
-        // Output the combination of all output partitions of the inputs if the Union is not partition aware
+        // Calculate output partitioning; i.e. sum output partitions of the inputs.
         let num_partitions = self
             .inputs
             .iter()
@@ -159,11 +159,10 @@ impl UnionExec {
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
 
-        // Execution Mode
-        let exec_mode = exec_mode_flatten(self.inputs.iter());
+        // Determine execution mode:
+        let mode = exec_mode_flatten(self.inputs.iter());
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }
@@ -317,6 +316,7 @@ pub struct InterleaveExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -345,17 +345,16 @@ impl InterleaveExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-
-        // Output Partitioning
+        // Get output partitioning:
         let output_partitioning = self.inputs[0].output_partitioning().clone();
-        new_cache = new_cache.with_partitioning(output_partitioning);
+        // Determine execution mode:
+        let mode = exec_mode_flatten(self.inputs.iter());
 
-        // Execution Mode
-        let exec_mode = exec_mode_flatten(self.inputs.iter());
-        new_cache = new_cache.with_exec_mode(exec_mode);
+        self.cache = self
+            .cache
+            .with_partitioning(output_partitioning)
+            .with_exec_mode(mode);
 
-        self.cache = new_cache;
         self
     }
 }

@@ -122,25 +122,24 @@ impl StreamingTableExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         );
 
-        // Output Partitioning
+        // Get output partitioning:
         let output_partitioning =
             Partitioning::UnknownPartitioning(self.partitions.len());
 
-        // Execution Mode
-        let exec_mode = if self.infinite {
+        // Determine execution mode:
+        let mode = if self.infinite {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
         };
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

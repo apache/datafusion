@@ -34,8 +34,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    exec_mode_safe_flatten, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    exec_mode_flatten, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
+    ExecutionPlan, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -92,6 +92,7 @@ pub struct NestedLoopJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -144,7 +145,7 @@ impl NestedLoopJoinExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             self.left.equivalence_properties().clone(),
             self.right.equivalence_properties().clone(),
@@ -156,24 +157,26 @@ impl NestedLoopJoinExec {
             &[],
         );
 
-        // Output Partitioning
-        // the partition of output is determined by the rule of `required_input_distribution`
+        // Get output partitioning, which is determined by the rule of
+        // `required_input_distribution`:
         let output_partitioning = if self.join_type == JoinType::Full {
             self.left.output_partitioning().clone()
         } else {
             partitioned_join_output_partitioning(
                 self.join_type,
-                self.left.output_partitioning().clone(),
-                self.right.output_partitioning().clone(),
+                self.left.output_partitioning(),
+                self.right.output_partitioning(),
                 self.left.schema().fields.len(),
             )
         };
 
-        // Execution Mode
-        let exec_mode = exec_mode_safe_flatten([&self.left, &self.right]);
+        // Determine execution mode:
+        let mut mode = exec_mode_flatten([&self.left, &self.right]);
+        if mode.is_unbounded() {
+            mode = ExecutionMode::PipelineBreaking;
+        }
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

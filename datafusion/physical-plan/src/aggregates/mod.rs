@@ -506,22 +506,20 @@ impl AggregateExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Construct equivalence properties:
         let eq_properties = self
             .input
             .equivalence_properties()
             .project(&self.projection_mapping, self.schema());
 
-        // Output partitioning
+        // Get output partitioning:
         let mut output_partitioning = self.input.output_partitioning().clone();
         if self.mode.is_first_stage() {
             // First stage aggregation will not change the output partitioning,
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = self.input.equivalence_properties();
-            // First stage Aggregation will not change the output partitioning but need to respect the Alias
-            let input_partition = self.input.output_partitioning();
-            if let Partitioning::Hash(exprs, part) = input_partition {
+            if let Partitioning::Hash(exprs, part) = output_partitioning {
                 let normalized_exprs = exprs
                     .iter()
                     .map(|expr| {
@@ -532,24 +530,22 @@ impl AggregateExec {
                             })
                     })
                     .collect();
-                output_partitioning = Partitioning::Hash(normalized_exprs, *part);
+                output_partitioning = Partitioning::Hash(normalized_exprs, part);
             }
         }
 
-        // Unbounded Output
-        let mut unbounded_output = self.input.unbounded_output();
-        if self.input.unbounded_output() == ExecutionMode::Unbounded
+        // Determine execution mode:
+        let mut exec_mode = self.input.execution_mode();
+        if exec_mode == ExecutionMode::Unbounded
             && self.input_order_mode == InputOrderMode::Linear
         {
-            // Cannot run without breaking pipeline.
-            unbounded_output = ExecutionMode::PipelineBreaking;
+            // Cannot run without breaking the pipeline
+            exec_mode = ExecutionMode::PipelineBreaking;
         }
 
-        self.cache = PlanPropertiesCache::new(
-            eq_properties,
-            output_partitioning,
-            unbounded_output,
-        );
+        self.cache =
+            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+
         self
     }
 
@@ -1631,15 +1627,13 @@ mod tests {
         }
 
         fn with_cache(mut self) -> Self {
-            let mut new_cache = self.cache;
-            // Output Partitioning
-            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+            self.cache = self
+                .cache
+                // Output Partitioning
+                .with_partitioning(Partitioning::UnknownPartitioning(1))
+                // Execution Mode
+                .with_exec_mode(ExecutionMode::Bounded);
 
-            // Execution Mode
-            let exec_mode = ExecutionMode::Bounded;
-            new_cache = new_cache.with_exec_mode(exec_mode);
-
-            self.cache = new_cache;
             self
         }
     }

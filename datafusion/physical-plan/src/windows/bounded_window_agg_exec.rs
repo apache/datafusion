@@ -89,6 +89,7 @@ pub struct BoundedWindowAggExec {
     // `ordered_partition_by_indices` would be 0, 1.
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -183,7 +184,7 @@ impl BoundedWindowAggExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties =
             window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
 
@@ -192,14 +193,11 @@ impl BoundedWindowAggExec {
         // repartitioning.
         let output_partitioning = self.input.output_partitioning().clone();
 
-        // unbounded output
-        let unbounded_output = self.input.unbounded_output();
-
         // Construct properties cache
         self.cache = PlanPropertiesCache::new(
-            eq_properties,
-            output_partitioning,
-            unbounded_output,
+            eq_properties,               // Equivalence Properties
+            output_partitioning,         // Output Partitioning
+            self.input.execution_mode(), // Execution Mode
         );
         self
     }
@@ -1117,21 +1115,23 @@ fn get_aggregate_result_out_column(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::common::collect;
     use crate::memory::MemoryExec;
     use crate::windows::{BoundedWindowAggExec, InputOrderMode};
     use crate::{get_plan_string, ExecutionPlan};
+
     use arrow_array::RecordBatch;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::expressions::NthValue;
-    use datafusion_physical_expr::window::BuiltInWindowExpr;
-    use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
-    use std::sync::Arc;
+    use datafusion_physical_expr::expressions::{col, NthValue};
+    use datafusion_physical_expr::window::{
+        BuiltInWindowExpr, BuiltInWindowFunctionExpr,
+    };
 
     // Tests NTH_VALUE(negative index) with memoize feature.
     // To be able to trigger memoize feature for NTH_VALUE we need to

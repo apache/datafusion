@@ -23,29 +23,26 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
 
-use crate::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinHashMap,
-    JoinHashMapOffset, JoinHashMapType,
-};
-use crate::{
-    coalesce_partitions::CoalescePartitionsExec,
-    exec_mode_flatten,
-    hash_utils::create_hashes,
-    joins::utils::{
-        adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, partitioned_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn, StatefulStreamResult,
-    },
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-use crate::{handle_state, DisplayAs};
-
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
+};
+use crate::{
+    coalesce_partitions::CoalescePartitionsExec,
+    exec_mode_flatten, handle_state,
+    hash_utils::create_hashes,
+    joins::utils::{
+        adjust_indices_by_join_type, adjust_right_output_partitioning,
+        apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+        check_join_is_valid, estimate_join_statistics, get_final_indices_from_bit_map,
+        need_produce_result_in_final, partitioned_join_output_partitioning,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
+        JoinHashMapType, JoinOn, StatefulStreamResult,
+    },
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
+    Partitioning, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::array::{
@@ -299,6 +296,7 @@ pub struct HashJoinExec {
     /// Otherwise, rows that have `null`s in the join columns will not be
     /// matched and thus will not appear in the output.
     pub null_equals_null: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -405,7 +403,7 @@ impl HashJoinExec {
         let left = &self.left;
         let right = &self.right;
         let schema = self.schema();
-        // Equivalence properties
+        // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
@@ -416,12 +414,12 @@ impl HashJoinExec {
             &self.on,
         );
 
-        // Output partitioning
+        // Get output partitioning:
         let left_columns_len = left.schema().fields.len();
         let output_partitioning = match self.mode {
             PartitionMode::CollectLeft => match self.join_type {
                 JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
-                    right.output_partitioning().clone(),
+                    right.output_partitioning(),
                     left_columns_len,
                 ),
                 JoinType::RightSemi | JoinType::RightAnti => {
@@ -436,8 +434,8 @@ impl HashJoinExec {
             },
             PartitionMode::Partitioned => partitioned_join_output_partitioning(
                 self.join_type,
-                left.output_partitioning().clone(),
-                right.output_partitioning().clone(),
+                left.output_partitioning(),
+                right.output_partitioning(),
                 left_columns_len,
             ),
             PartitionMode::Auto => Partitioning::UnknownPartitioning(
@@ -445,13 +443,11 @@ impl HashJoinExec {
             ),
         };
 
-        // Unbounded output
-        let left_unbounded = left.unbounded_output().is_unbounded();
-        let right_unbounded = right.unbounded_output().is_unbounded();
-        // If left is unbounded, or right is unbounded with JoinType::Right,
-        // JoinType::Full, JoinType::RightAnti types.
-        let breaking = left_unbounded
-            || (right_unbounded
+        // Determine execution mode by checking whether this join is pipeline
+        // breaking. This happens when the left side is unbounded, or the right
+        // side is unbounded with `Right`, `Full` or `RightAnti` join types.
+        let pipeline_breaking = left.execution_mode().is_unbounded()
+            || (right.execution_mode().is_unbounded()
                 && matches!(
                     self.join_type,
                     JoinType::Left
@@ -460,14 +456,13 @@ impl HashJoinExec {
                         | JoinType::LeftSemi
                 ));
 
-        let exec_mode = if breaking {
+        let mode = if pipeline_breaking {
             ExecutionMode::PipelineBreaking
         } else {
             exec_mode_flatten([left, right])
         };
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

@@ -21,13 +21,12 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::metrics::BaselineMetrics;
 use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     work_table::{WorkTable, WorkTableExec},
-    ExecutionMode, SendableRecordBatchStream, Statistics,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use super::{PlanPropertiesCache, RecordBatchStream};
+use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -36,8 +35,6 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Partitioning;
 use futures::{ready, Stream, StreamExt};
-
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Recursive query execution plan.
 ///
@@ -68,6 +65,7 @@ pub struct RecursiveQueryExec {
     is_distinct: bool,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -97,15 +95,11 @@ impl RecursiveQueryExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+        self.cache = self
+            .cache
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }
@@ -144,12 +138,13 @@ impl ExecutionPlan for RecursiveQueryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RecursiveQueryExec::try_new(
+        RecursiveQueryExec::try_new(
             self.name.clone(),
             children[0].clone(),
             children[1].clone(),
             self.is_distinct,
-        )?))
+        )
+        .map(|e| Arc::new(e) as _)
     }
 
     fn execute(

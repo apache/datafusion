@@ -71,9 +71,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 use futures::Stream;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -191,6 +191,7 @@ pub struct SymmetricHashJoinExec {
     pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -253,7 +254,7 @@ impl SymmetricHashJoinExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             self.left.equivalence_properties().clone(),
             self.right.equivalence_properties().clone(),
@@ -265,20 +266,19 @@ impl SymmetricHashJoinExec {
             self.on(),
         );
 
-        // Output Partitioning
+        // Get output partitioning:
         let left_columns_len = self.left.schema().fields.len();
         let output_partitioning = partitioned_join_output_partitioning(
             self.join_type,
-            self.left.output_partitioning().clone(),
-            self.right.output_partitioning().clone(),
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
             left_columns_len,
         );
 
-        // Execution Mode
-        let exec_mode = exec_mode_flatten([&self.left, &self.right]);
+        // Determine execution mode:
+        let mode = exec_mode_flatten([&self.left, &self.right]);
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 
@@ -1328,11 +1328,11 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
 
-    use datafusion_common::ScalarValue;
     use once_cell::sync::Lazy;
     use rstest::*;
 

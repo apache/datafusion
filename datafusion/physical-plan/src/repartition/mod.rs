@@ -24,36 +24,34 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
+use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
+use crate::common::transpose;
+use crate::hash_utils::create_hashes;
+use crate::metrics::BaselineMetrics;
+use crate::repartition::distributor_channels::{
+    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+};
+use crate::sorts::streaming_merge;
+use crate::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PlanPropertiesCache, Statistics,
+};
+
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
-
-use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
-
-use crate::common::transpose;
-use crate::hash_utils::create_hashes;
-use crate::metrics::BaselineMetrics;
-use crate::repartition::distributor_channels::{channels, partition_aware_channels};
-use crate::sorts::streaming_merge;
-use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PlanPropertiesCache, Statistics,
-};
-
-use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
-use super::expressions::PhysicalSortExpr;
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
-
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 mod distributor_channels;
 
@@ -297,19 +295,16 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-
     /// Partitioning scheme to use
     partitioning: Partitioning,
-
     /// Inner state that is initialized when the first output stream is created.
     state: Arc<Mutex<RepartitionExecState>>,
-
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -625,19 +620,17 @@ impl RepartitionExec {
     fn with_cache(mut self) -> Self {
         // Equivalence Properties
         let mut eq_properties = self.input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class.
+        // If the ordering is lost, reset the ordering equivalence class:
         if !self.maintains_input_order()[0] {
             eq_properties.clear_orderings();
         }
 
-        // Output Partitioning
-        let output_partitioning = self.partitioning.clone();
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,               // Equivalence Properties
+            self.partitioning.clone(),   // Output Partitioning
+            self.input.execution_mode(), // Execution Mode
+        );
 
-        // Execution Mode
-        let exec_mode = self.input.unbounded_output();
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 

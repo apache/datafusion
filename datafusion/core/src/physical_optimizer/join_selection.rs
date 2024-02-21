@@ -38,8 +38,7 @@ use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, JoinSide};
-use datafusion_common::{DataFusionError, JoinType};
+use datafusion_common::{internal_err, DataFusionError, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -465,8 +464,8 @@ fn hash_join_convert_symmetric_subrule(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        let left_unbounded = hash_join.left.unbounded_output().is_unbounded();
-        let right_unbounded = hash_join.right.unbounded_output().is_unbounded();
+        let left_unbounded = hash_join.left.execution_mode().is_unbounded();
+        let right_unbounded = hash_join.right.execution_mode().is_unbounded();
         // Process only if both left and right sides are unbounded.
         if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
@@ -595,10 +594,8 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        let left_unbounded = hash_join.left.unbounded_output().is_unbounded();
-        let right_unbounded = hash_join.right.unbounded_output().is_unbounded();
-        if left_unbounded
-            && !right_unbounded
+        if hash_join.left.execution_mode().is_unbounded()
+            && !hash_join.right.execution_mode().is_unbounded()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -1779,12 +1776,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if left.unbounded_output().is_unbounded() {
+                    if left.execution_mode().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if right.unbounded_output().is_unbounded() {
+                    if right.execution_mode().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

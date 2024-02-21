@@ -38,15 +38,14 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
+        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+        PlanPropertiesCache, SendableRecordBatchStream, Statistics,
     },
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -64,7 +63,7 @@ use parquet::schema::types::ColumnDescriptor;
 use tokio::task::JoinSet;
 
 mod metrics;
-pub mod page_filter;
+mod page_filter;
 mod row_filter;
 mod row_groups;
 mod statistics;
@@ -273,14 +272,11 @@ impl ParquetExec {
             &self.projected_output_ordering,
         );
 
-        // Output Partitioning
-        let output_partitioning = self.output_partitioning_helper();
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            self.output_partitioning_helper(), // Output Partitioning
+            ExecutionMode::Bounded,            // Execution Mode
+        );
         self
     }
 
@@ -776,6 +772,8 @@ pub(crate) fn parquet_to_arrow_decimal_type(
 #[cfg(test)]
 mod tests {
     // See also `parquet_exec` integration test
+    use std::fs::{self, File};
+    use std::io::Write;
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
@@ -793,28 +791,25 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::Schema;
-    use arrow::record_batch::RecordBatch;
-    use arrow::{
-        array::{Int64Array, Int8Array, StringArray},
-        datatypes::{DataType, Field, SchemaBuilder},
+
+    use arrow::array::{
+        ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        StructArray,
     };
-    use arrow_array::{Date64Array, StructArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder};
+    use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use chrono::{TimeZone, Utc};
-    use datafusion_common::{assert_contains, ToDFSchema};
-    use datafusion_common::{FileType, GetExt, ScalarValue};
+    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
+
+    use chrono::{TimeZone, Utc};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
     use parquet::arrow::ArrowWriter;
-    use std::fs::{self, File};
-    use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
 

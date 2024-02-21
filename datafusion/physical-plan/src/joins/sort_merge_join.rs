@@ -43,8 +43,7 @@ use crate::{
 };
 
 use arrow::array::*;
-use arrow::compute;
-use arrow::compute::{concat_batches, take, SortOptions};
+use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -84,6 +83,7 @@ pub struct SortMergeJoinExec {
     pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -202,7 +202,7 @@ impl SortMergeJoinExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             self.left.equivalence_properties().clone(),
             self.right.equivalence_properties().clone(),
@@ -213,20 +213,19 @@ impl SortMergeJoinExec {
             self.on(),
         );
 
-        // Output Partitioning
+        // Get output partitioning:
         let left_columns_len = self.left.schema().fields.len();
         let output_partitioning = partitioned_join_output_partitioning(
             self.join_type,
-            self.left.output_partitioning().clone(),
-            self.right.output_partitioning().clone(),
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
             left_columns_len,
         );
 
-        // Execution Mode
-        let exec_mode = exec_mode_flatten([&self.left, &self.right]);
+        // Determine execution mode:
+        let mode = exec_mode_flatten([&self.left, &self.right]);
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

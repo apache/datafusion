@@ -26,14 +26,13 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream, Statistics,
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
+        Partitioning, PlanPropertiesCache, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
 };
 use datafusion_common::{project_schema, stats::Precision};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use async_trait::async_trait;
 
@@ -63,15 +62,13 @@ impl StatisticsValidation {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(2));
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(Partitioning::UnknownPartitioning(2))
+            // Execution Mode
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }

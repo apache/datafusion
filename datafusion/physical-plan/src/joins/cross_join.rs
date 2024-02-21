@@ -23,13 +23,14 @@ use std::{any::Any, sync::Arc, task::Poll};
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
+use crate::coalesce_batches::concat_batches;
+use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
+    ExecutionPlan, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
-use crate::{DisplayAs, ExecutionMode};
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -99,8 +100,9 @@ impl CrossJoinExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        // TODO: Check equivalence properties of crossjoin, for some cases it may preserve ordering.
+        // Calculate equivalence properties
+        // TODO: Check equivalence properties of cross join, it may preserve
+        //       ordering in some cases.
         let eq_properties = join_equivalence_properties(
             self.left.equivalence_properties().clone(),
             self.right.equivalence_properties().clone(),
@@ -111,25 +113,22 @@ impl CrossJoinExec {
             &[],
         );
 
-        // Output Partitioning
-        // TODO optimize CrossJoin implementation to generate M * N partitions
-        let left_columns_len = self.left.schema().fields.len();
+        // Get output partitioning:
+        // TODO: Optimize the cross join implementation to generate M * N
+        //       partitions.
         let output_partitioning = adjust_right_output_partitioning(
-            self.right.output_partitioning().clone(),
-            left_columns_len,
+            self.right.output_partitioning(),
+            self.left.schema().fields.len(),
         );
 
-        // Execution Mode
-        let left_unbounded = self.left.unbounded_output();
-        let right_unbounded = self.right.unbounded_output();
-        let exec_mode = match (left_unbounded, right_unbounded) {
+        // Determine the execution mode:
+        let mode = match (self.left.execution_mode(), self.right.execution_mode()) {
             (ExecutionMode::Bounded, ExecutionMode::Bounded) => ExecutionMode::Bounded,
-            // If any of the inputs is unbounded, cross join break pipeline.
+            // If any of the inputs is unbounded, cross join breaks the pipeline.
             (_, _) => ExecutionMode::PipelineBreaking,
         };
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

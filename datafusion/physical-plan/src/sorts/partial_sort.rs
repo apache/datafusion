@@ -57,16 +57,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::compute::concat_batches;
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use futures::{ready, Stream, StreamExt};
-use log::trace;
-
-use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::Result;
-use datafusion_execution::{RecordBatchStream, TaskContext};
-
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
@@ -74,6 +64,16 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanPropertiesCache, SendableRecordBatchStream, Statistics,
 };
+
+use arrow::compute::concat_batches;
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::Result;
+use datafusion_execution::{RecordBatchStream, TaskContext};
+
+use futures::{ready, Stream, StreamExt};
+use log::trace;
 
 /// Partial Sort execution plan.
 #[derive(Debug, Clone)]
@@ -92,6 +92,7 @@ pub struct PartialSortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -161,26 +162,25 @@ impl PartialSortExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        // Reset the ordering equivalence class with the new ordering:
+        // Calculate equivalence properties; i.e. reset the ordering equivalence
+        // class with the new ordering:
         let eq_properties = self
             .input
             .equivalence_properties()
             .clone()
             .with_reorder(self.expr.to_vec());
 
-        // Output Partitioning
+        // Get output partitioning:
         let output_partitioning = if self.preserve_partitioning {
             self.input.output_partitioning().clone()
         } else {
             Partitioning::UnknownPartitioning(1)
         };
 
-        // Execution Mode
-        let exec_mode = self.input.unbounded_output();
+        // Determine execution mode:
+        let mode = self.input.execution_mode();
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

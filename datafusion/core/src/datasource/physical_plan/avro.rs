@@ -24,14 +24,13 @@ use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -73,16 +72,13 @@ impl AvroExec {
             self.schema(),
             &self.projected_output_ordering,
         );
+        let n_partitions = self.base_config.file_groups.len();
 
-        // Output Partitioning
-        let output_partitioning =
-            Partitioning::UnknownPartitioning(self.base_config.file_groups.len());
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
+            ExecutionMode::Bounded,                          // Execution Mode
+        );
         self
     }
 }
@@ -168,6 +164,7 @@ mod private {
     use crate::datasource::avro_to_arrow::Reader as AvroReader;
     use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
+
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};

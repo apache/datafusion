@@ -1976,31 +1976,35 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::convert::TryFrom;
+    use std::fmt::{self, Debug};
+    use std::ops::{BitAnd, Not};
+
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::{expressions, DisplayFormatType, Partitioning};
-    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
+    use crate::physical_plan::{
+        expressions, DisplayAs, DisplayFormatType, ExecutionMode, Partitioning,
+        PlanPropertiesCache, SendableRecordBatchStream,
+    };
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
+
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_contains, TableReference};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_common::{
+        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
-    use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
-    use fmt::Debug;
-    use std::collections::HashMap;
-    use std::convert::TryFrom;
-    use std::ops::{BitAnd, Not};
-    use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2572,16 +2576,13 @@ mod tests {
         }
 
         fn with_cache(mut self) -> Self {
-            let mut new_cache = self.cache;
-            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+            self.cache = self
+                .cache
+                // Output Partitioning
+                .with_partitioning(Partitioning::UnknownPartitioning(1))
+                // Execution Mode
+                .with_exec_mode(ExecutionMode::Bounded);
 
-            // Output Partitioning
-            new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
-
-            // Execution Mode
-            new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
-
-            self.cache = new_cache;
             self
         }
     }

@@ -35,22 +35,18 @@ use crate::{
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
+use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
-use arrow::datatypes::SchemaBuilder;
+use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::{
-    array::ArrayRef,
-    datatypes::{Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
 
-use futures::stream::Stream;
-use futures::{ready, StreamExt};
+use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
 #[derive(Debug)]
@@ -68,6 +64,7 @@ pub struct WindowAggExec {
     /// Partition by indices that defines preset for existing ordering
     // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -121,30 +118,25 @@ impl WindowAggExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Calculate equivalence properties:
         let eq_properties =
             window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
 
-        // output partitioning
-        // because we can have repartitioning using the partition keys
-        // this would be either 1 or more than 1 depending on the presense of
-        // repartitioning
+        // Get output partitioning:
+        // Because we can have repartitioning using the partition keys this
+        // would be either 1 or more than 1 depending on the presense of repartitioning.
         let output_partitioning = self.input.output_partitioning().clone();
 
-        // unbounded output
-        let unbounded_output = match self.input.unbounded_output() {
+        // Determine execution mode:
+        let mode = match self.input.execution_mode() {
             ExecutionMode::Bounded => ExecutionMode::Bounded,
             ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
                 ExecutionMode::PipelineBreaking
             }
         };
 
-        // Construct properties cache
-        self.cache = PlanPropertiesCache::new(
-            eq_properties,
-            output_partitioning,
-            unbounded_output,
-        );
+        // Construct properties cache:
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
         self
     }
 }

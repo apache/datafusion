@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::FileGroupPartitioner;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
@@ -41,8 +42,6 @@ use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
-
-use super::FileGroupPartitioner;
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
@@ -89,14 +88,11 @@ impl ArrowExec {
             &self.projected_output_ordering,
         );
 
-        // Output Partitioning
-        let output_partitioning = self.output_partitioning_helper();
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            self.output_partitioning_helper(), // Output Partitioning
+            ExecutionMode::Bounded,            // Execution Mode
+        );
         self
     }
 

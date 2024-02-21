@@ -59,19 +59,16 @@ impl CoalescePartitionsExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
+        // Coalescing partitions loses existing orderings:
         let mut eq_properties = self.input.equivalence_properties().clone();
-        // Coalesce partitions loses existing orderings.
         eq_properties.clear_orderings();
 
-        // Output Partitioning
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,                        // Equivalence Properties
+            Partitioning::UnknownPartitioning(1), // Output Partitioning
+            self.input.execution_mode(),          // Execution Mode
+        );
 
-        // Execution Mode
-        let exec_mode = self.input.unbounded_output();
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 }

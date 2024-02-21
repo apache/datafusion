@@ -192,7 +192,7 @@ impl MemoryExec {
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
         self.sort_information = sort_information;
 
-        // With updated sort information, we need to update equivalence properties also.
+        // We need to update equivalence properties when updating sort information.
         let eq_properties = self.equivalent_properties_helper();
         self.cache = self.cache.with_eq_properties(eq_properties);
         self.with_cache()
@@ -207,18 +207,12 @@ impl MemoryExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        let eq_properties = self.equivalent_properties_helper();
+        self.cache = PlanPropertiesCache::new(
+            self.equivalent_properties_helper(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(self.partitions.len()), // Output Partitioning
+            ExecutionMode::Bounded,                                   // Execution Mode
+        );
 
-        // Output Partitioning
-        let output_partitioning =
-            Partitioning::UnknownPartitioning(self.partitions.len());
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 }

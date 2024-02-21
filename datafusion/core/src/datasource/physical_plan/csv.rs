@@ -32,18 +32,17 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use bytes::{Buf, Bytes};
-use datafusion_common::config::ConfigOptions;
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -128,14 +127,11 @@ impl CsvExec {
             &self.projected_output_ordering,
         );
 
-        // Output Partitioning
-        let output_partitioning = self.output_partitioning_helper();
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            self.output_partitioning_helper(), // Output Partitioning
+            ExecutionMode::Bounded,            // Execution Mode
+        );
         self
     }
 

@@ -61,6 +61,7 @@ pub struct ProjectionExec {
     projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -119,13 +120,12 @@ impl ProjectionExec {
 
     fn with_cache(mut self) -> Self {
         let input = &self.input;
-        // Equivalence properties
+        // Calculate equivalence properties:
         let input_eq_properties = input.equivalence_properties();
         let eq_properties =
             input_eq_properties.project(&self.projection_mapping, self.schema.clone());
 
-        // output partitioning
-        // Output partition need to respect the alias
+        // Calculate output partitioning, which needs to respect aliases:
         let input_partition = input.output_partitioning();
         let output_partitioning = if let Partitioning::Hash(exprs, part) = input_partition
         {
@@ -144,16 +144,12 @@ impl ProjectionExec {
             input_partition.clone()
         };
 
-        // unbounded output
-        let unbounded_output = input.unbounded_output();
-
-        // Construct cache
-        let cache = PlanPropertiesCache::new(
+        self.cache = PlanPropertiesCache::new(
             eq_properties,
             output_partitioning,
-            unbounded_output,
+            input.execution_mode(),
         );
-        self.cache = cache;
+
         self
     }
 }

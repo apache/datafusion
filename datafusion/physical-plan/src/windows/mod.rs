@@ -48,11 +48,10 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-pub use window_agg_exec::WindowAggExec;
-
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
@@ -415,7 +414,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = input.unbounded_output().is_unbounded();
+    let is_unbounded = input.execution_mode().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:

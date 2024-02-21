@@ -19,6 +19,7 @@
 //! type, conceptually is like joining each row with all the values in the list column.
 use std::{any::Any, sync::Arc};
 
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, PlanPropertiesCache};
 use crate::{
     expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, PhysicalExpr,
@@ -26,23 +27,20 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, LargeListArray, ListArray,
-    PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, GenericListArray,
+    LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels;
 use arrow::datatypes::{
     ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_array::{GenericListArray, OffsetSizeTrait};
 use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use log::trace;
-
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 
 /// Unnest the given column by joining the row with each value in the
 /// nested type.
@@ -60,6 +58,7 @@ pub struct UnnestExec {
     options: UnnestOptions,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -84,14 +83,13 @@ impl UnnestExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(self.input.output_partitioning().clone());
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(self.input.output_partitioning().clone())
+            // Execution Mode
+            .with_exec_mode(self.input.execution_mode());
 
-        // Execution Mode
-        new_cache = new_cache.with_exec_mode(self.input.unbounded_output());
-
-        self.cache = new_cache;
         self
     }
 }

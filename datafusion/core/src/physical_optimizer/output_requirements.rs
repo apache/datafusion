@@ -114,17 +114,11 @@ impl OutputRequirementExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        let eq_properties = self.input.equivalence_properties().clone();
-
-        // Output Partitioning
-        let output_partitioning = self.input.output_partitioning().clone();
-
-        // Execution Mode
-        let exec_mode = self.input.unbounded_output();
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            self.input.equivalence_properties().clone(), // Equivalence Properties
+            self.input.output_partitioning().clone(),    // Output Partitioning
+            self.input.execution_mode(),                 // Execution Mode
+        );
         self
     }
 }

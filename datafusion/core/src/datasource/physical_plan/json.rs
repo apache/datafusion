@@ -32,8 +32,8 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::json::ReaderBuilder;
@@ -42,10 +42,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 use futures::{ready, StreamExt, TryStreamExt};
-use object_store::{self, GetOptions};
-use object_store::{GetResultPayload, ObjectStore};
+use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
@@ -97,14 +95,11 @@ impl NdJsonExec {
             &self.projected_output_ordering,
         );
 
-        // Output Partitioning
-        let output_partitioning = self.output_partitioning_helper();
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            self.output_partitioning_helper(), // Output Partitioning
+            ExecutionMode::Bounded,            // Execution Mode
+        );
         self
     }
 
@@ -378,11 +373,10 @@ pub async fn plan_to_json(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Array;
-    use arrow::datatypes::{Field, SchemaBuilder};
-    use futures::StreamExt;
-    use object_store::local::LocalFileSystem;
+    use std::fs;
+    use std::path::Path;
 
+    use super::*;
     use crate::assert_batches_eq;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::file_compression_type::FileTypeExt;
@@ -390,19 +384,22 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
-    use crate::prelude::NdJsonReadOptions;
-    use crate::prelude::*;
+    use crate::prelude::{
+        CsvReadOptions, NdJsonReadOptions, SessionConfig, SessionContext,
+    };
     use crate::test::partitioned_file_groups;
+
+    use arrow::array::Array;
+    use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::FileType;
+
+    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
+    use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs;
-    use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
-
-    use super::*;
 
     const TEST_DATA_BASE: &str = "tests/data";
 

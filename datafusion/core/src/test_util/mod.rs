@@ -29,17 +29,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tempfile::TempDir;
-
 use crate::dataframe::DataFrame;
 use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::stream::{StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
 
@@ -50,15 +49,12 @@ use datafusion_expr::{CreateExternalTable, Expr, TableType};
 
 use async_trait::async_trait;
 use futures::Stream;
+use tempfile::TempDir;
 
 // backwards compatibility
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
-
-use crate::datasource::stream::{StreamConfig, StreamTable};
-pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -253,21 +249,17 @@ impl UnboundedExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-
-        // Output Partitioning
-        new_cache = new_cache
-            .with_partitioning(Partitioning::UnknownPartitioning(self.partitions));
-
-        // Execution Mode
-        let exec_mode = if self.batch_produce.is_none() {
+        let mode = if self.batch_produce.is_none() {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
         };
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(Partitioning::UnknownPartitioning(self.partitions))
+            // Execution Mode
+            .with_exec_mode(mode);
         self
     }
 }

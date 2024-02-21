@@ -369,6 +369,7 @@ pub struct StatisticsExec {
     schema: Arc<Schema>,
     cache: PlanPropertiesCache,
 }
+
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
@@ -385,15 +386,13 @@ impl StatisticsExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(Partitioning::UnknownPartitioning(2))
+            // Execution Mode
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(2));
-
-        // Execution Mode
-        new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
-
-        self.cache = new_cache;
         self
     }
 }

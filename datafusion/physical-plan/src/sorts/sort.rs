@@ -676,6 +676,7 @@ pub struct SortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -767,31 +768,31 @@ impl SortExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        // Reset the ordering equivalence class with the new ordering:
+        // Calculate equivalence properties; i.e. reset the ordering equivalence
+        // class with the new ordering:
         let eq_properties = self
             .input
             .equivalence_properties()
             .clone()
             .with_reorder(self.expr.to_vec());
 
-        // Output Partitioning
+        // Get output partitioning:
         let output_partitioning = if self.preserve_partitioning {
             self.input.output_partitioning().clone()
         } else {
             Partitioning::UnknownPartitioning(1)
         };
 
-        // Execution Mode
-        let exec_mode = match self.input.unbounded_output() {
+        // Determine execution mode:
+        let mode = match self.input.execution_mode() {
             ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
                 ExecutionMode::PipelineBreaking
             }
             ExecutionMode::Bounded => ExecutionMode::Bounded,
         };
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
+        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
+
         self
     }
 }

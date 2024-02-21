@@ -41,6 +41,7 @@ pub struct ValuesExec {
     schema: SchemaRef,
     /// The data
     data: Vec<RecordBatch>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -127,15 +128,11 @@ impl ValuesExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+        self.cache = self
+            .cache
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }
@@ -172,10 +169,8 @@ impl ExecutionPlan for ValuesExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ValuesExec::try_new_from_batches(
-            self.schema.clone(),
-            self.data.clone(),
-        )?))
+        ValuesExec::try_new_from_batches(self.schema.clone(), self.data.clone())
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(

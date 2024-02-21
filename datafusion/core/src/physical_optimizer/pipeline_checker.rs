@@ -28,7 +28,7 @@ use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError};
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 
@@ -50,9 +50,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan =
-            plan.transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))?;
-        Ok(plan)
+        plan.transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))
     }
 
     fn name(&self) -> &str {
@@ -78,11 +76,11 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    if !input.unbounded_output().pipeline_friendly() {
-        Err(plan_datafusion_err!(
+    if !input.execution_mode().pipeline_friendly() {
+        plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input
-        ))
+        )
     } else {
         Ok(Transformed::No(input))
     }

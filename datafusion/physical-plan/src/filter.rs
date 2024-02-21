@@ -116,9 +116,9 @@ impl FilterExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
+        // to construct the equivalence properties:
+        let stats = self.statistics().unwrap();
         let mut eq_properties = self.input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
@@ -126,21 +126,20 @@ impl FilterExec {
             let rhs_expr = Arc::new(rhs.clone()) as _;
             eq_properties.add_equal_conditions(&lhs_expr, &rhs_expr)
         }
-        // Add the columns that have only one value (singleton) after filtering to constants.
+        // Add the columns that have only one viable value (singleton) after
+        // filtering to constants.
         let constants = collect_columns(self.predicate())
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _);
         eq_properties = eq_properties.add_constants(constants);
 
-        // Output Partitioning
-        let output_partitioning = self.input.output_partitioning().clone();
+        self.cache = PlanPropertiesCache::new(
+            eq_properties,
+            self.input.output_partitioning().clone(), // Output Partitioning
+            self.input.execution_mode(),              // Execution Mode
+        );
 
-        // Execution Mode
-        let exec_mode = self.input.unbounded_output();
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 }

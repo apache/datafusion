@@ -58,8 +58,7 @@ impl EmptyExec {
     /// Create a new EmptyExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
-        // Changing partitions may invalidate output partitioning.
-        // Update it also.
+        // Changing partitions may invalidate output partitioning, so update it:
         let output_partitioning = self.output_partitioning_helper();
         self.cache = self.cache.with_partitioning(output_partitioning);
         self
@@ -74,17 +73,15 @@ impl EmptyExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Output Partitioning
         let output_partitioning = self.output_partitioning_helper();
 
-        let mut new_cache = self.cache;
-        new_cache = new_cache.with_partitioning(output_partitioning);
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(output_partitioning)
+            // Execution Mode
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }

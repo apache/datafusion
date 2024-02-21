@@ -20,21 +20,20 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::Partitioning;
-
+use super::{
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    SendableRecordBatchStream, Statistics,
+};
 use crate::memory::MemoryStream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanPropertiesCache,
 };
 
-use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    SendableRecordBatchStream, Statistics,
-};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::Partitioning;
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
@@ -85,6 +84,7 @@ pub struct WorkTableExec {
     work_table: Arc<WorkTable>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanPropertiesCache,
 }
 
@@ -113,14 +113,11 @@ impl WorkTableExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+        self.cache = self
+            .cache
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
-
-        self.cache = new_cache;
         self
     }
 }

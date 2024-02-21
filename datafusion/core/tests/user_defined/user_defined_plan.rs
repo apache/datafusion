@@ -70,7 +70,7 @@ use arrow::{
 };
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
-    common::{internal_err, DFSchemaRef},
+    common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -82,14 +82,13 @@ use datafusion::{
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
-        DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-        RecordBatchStream, SendableRecordBatchStream, Statistics,
+        DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
+        Partitioning, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+        Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
-use datafusion_common::arrow_datafusion_err;
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -422,15 +421,13 @@ impl TopKExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
-        // Output Partitioning
-        new_cache = new_cache.with_partitioning(Partitioning::UnknownPartitioning(1));
+        self.cache = self
+            .cache
+            // Output Partitioning
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            // Execution Mode
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-        new_cache = new_cache.with_exec_mode(exec_mode);
-
-        self.cache = new_cache;
         self
     }
 }

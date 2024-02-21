@@ -31,7 +31,7 @@ use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-    PlanPropertiesCache, SendableRecordBatchStream,
+    Partitioning, PlanPropertiesCache, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
@@ -209,17 +209,11 @@ impl CustomExec {
     }
 
     fn with_cache(mut self) -> Self {
-        let mut new_cache = self.cache;
+        self.cache = self
+            .cache
+            .with_partitioning(Partitioning::UnknownPartitioning(1))
+            .with_exec_mode(ExecutionMode::Bounded);
 
-        // Output Partitioning
-        let output_partitioning =
-            datafusion::physical_plan::Partitioning::UnknownPartitioning(1);
-        new_cache = new_cache.with_partitioning(output_partitioning);
-
-        // Execution Mode
-        new_cache = new_cache.with_exec_mode(ExecutionMode::Bounded);
-
-        self.cache = new_cache;
         self
     }
 }

@@ -84,17 +84,12 @@ impl GlobalLimitExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        let eq_properties = self.input.equivalence_properties().clone();
+        self.cache = PlanPropertiesCache::new(
+            self.input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),        // Output Partitioning
+            ExecutionMode::Bounded,                      // Execution Mode
+        );
 
-        // Output Partitioning
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 }
@@ -302,17 +297,12 @@ impl LocalLimitExec {
     }
 
     fn with_cache(mut self) -> Self {
-        // Equivalence Properties
-        let eq_properties = self.input.equivalence_properties().clone();
+        self.cache = PlanPropertiesCache::new(
+            self.input.equivalence_properties().clone(), // Equivalence Properties
+            self.input.output_partitioning().clone(),    // Output Partitioning
+            ExecutionMode::Bounded,                      // Execution Mode
+        );
 
-        // Output Partitioning
-        let output_partitioning = self.input.output_partitioning().clone();
-
-        // Execution Mode
-        let exec_mode = ExecutionMode::Bounded;
-
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
         self
     }
 }
