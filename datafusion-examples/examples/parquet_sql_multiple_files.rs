@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        // This is a hack for this example since `testdata` contains many different parquet different files,
+        // This is a hack for this example since `test_data` contains many different parquet different files,
         // in practice use FileType::PARQUET.get_ext().
         .with_file_extension("alltypes_plain.parquet");
 
