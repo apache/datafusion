@@ -373,7 +373,7 @@ impl ExternalSorter {
     }
 
     /// Writes any `in_memory_batches` to a spill file and clears
-    /// the batches. The contents of the spil file are sorted.
+    /// the batches. The contents of the spill file are sorted.
     ///
     /// Returns the amount of memory freed.
     async fn spill(&mut self) -> Result<usize> {
@@ -726,7 +726,7 @@ impl SortExec {
     /// Specify the partitioning behavior of this sort exec
     ///
     /// If `preserve_partitioning` is true, sorts each partition
-    /// individually, producing one sorted strema for each input partition.
+    /// individually, producing one sorted stream for each input partition.
     ///
     /// If `preserve_partitioning` is false, sorts and merges all
     /// input partitions producing a single, sorted partition.
