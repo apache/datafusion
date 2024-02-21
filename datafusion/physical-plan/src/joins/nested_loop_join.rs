@@ -157,8 +157,7 @@ impl NestedLoopJoinExec {
             &[],
         );
 
-        // Get output partitioning, which is determined by the rule of
-        // `required_input_distribution`:
+        // Get output partitioning,
         let output_partitioning = if self.join_type == JoinType::Full {
             self.left.output_partitioning().clone()
         } else {

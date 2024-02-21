@@ -445,7 +445,7 @@ impl HashJoinExec {
 
         // Determine execution mode by checking whether this join is pipeline
         // breaking. This happens when the left side is unbounded, or the right
-        // side is unbounded with `Right`, `Full` or `RightAnti` join types.
+        // side is unbounded with `Left`, `Full`, `LeftAnti` or `LeftSemi` join types.
         let pipeline_breaking = left.execution_mode().is_unbounded()
             || (right.execution_mode().is_unbounded()
                 && matches!(
