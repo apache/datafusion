@@ -17,8 +17,7 @@
 
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch,
-    UInt8Array,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
 };
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
@@ -557,7 +556,7 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(Simplified::Rewritten(casted_expr))
     }
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Ok(args.get(0).unwrap().clone())
+        Ok(args.first().unwrap().clone())
     }
 }
 
