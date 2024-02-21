@@ -462,6 +462,7 @@
 <span class="p">(</span><span class="n">format</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span>
 <span class="n">compression</span><span class="w"> </span><span class="n">snappy</span><span class="p">,</span>
 <span class="s1">&#39;compression::col1&#39;</span><span class="w"> </span><span class="s1">&#39;zstd(5)&#39;</span><span class="p">,</span>
+<span class="n">partition_by</span><span class="w"> </span><span class="s1">&#39;column3, column4&#39;</span>
 <span class="p">)</span>
 </pre></div>
 </div>
@@ -482,6 +483,10 @@
 <tbody>
 <tr class="row-even"><td><p>FORMAT</p></td>
 <td><p>Specifies the file format COPY query will write out. If there’re more than one output file or the format cannot be inferred from the file extension, then FORMAT must be specified.</p></td>
+<td><p>N/A</p></td>
+</tr>
+<tr class="row-odd"><td><p>PARTITION_BY</p></td>
+<td><p>Specifies the columns that the output files should be partitioned by into separate hive-style directories. Value should be a comma separated string literal, e.g. ‘col1,col2’</p></td>
 <td><p>N/A</p></td>
 </tr>
 </tbody>
