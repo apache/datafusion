@@ -2186,7 +2186,6 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
     }
-
     match args[0].data_type() {
         DataType::List(_) => {
             let array = as_list_array(&args[0])?;
@@ -2196,7 +2195,7 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_list_ndims::<i64>(array)
         }
-        _ => Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef),
+        array_type => exec_err!("array_ndims does not support type {array_type:?}"),
     }
 }
 
