@@ -16,7 +16,10 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, RecordBatch, UInt8Array};
+use arrow_array::{
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch,
+    UInt8Array,
+};
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
@@ -26,12 +29,15 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
 };
+use datafusion_common::{DFField, DFSchema};
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
-    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Simplified, Volatility,
 };
+
 use rand::{thread_rng, Rng};
 use std::any::Any;
+use std::collections::HashMap;
 use std::iter;
 use std::sync::Arc;
 
@@ -510,6 +516,81 @@ async fn deregister_udf() -> Result<()> {
     ctx.deregister_udf("random_udf");
 
     assert!(!ctx.udfs().contains("random_udf"));
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct CastToI64UDF {
+    signature: Signature,
+}
+
+impl CastToI64UDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for CastToI64UDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "cast_to_i64"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+    // Wrap with Expr::Cast() to Int64
+    fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
+        let dfs = DFSchema::new_with_metadata(
+            vec![DFField::new(Some("t"), "x", DataType::Float32, true)],
+            HashMap::default(),
+        )?;
+        let e = args[0].clone();
+        let casted_expr = e.cast_to(&DataType::Int64, &dfs)?;
+        Ok(Simplified::Rewritten(casted_expr))
+    }
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        Ok(args.get(0).unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, false)]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]))],
+    )?;
+
+    ctx.register_batch("t", batch)?;
+
+    let cast_to_i64_udf = ScalarUDF::from(CastToI64UDF::new());
+    ctx.register_udf(cast_to_i64_udf);
+
+    let result = plan_and_collect(&ctx, "SELECT cast_to_i64(x) FROM t").await?;
+
+    assert_batches_eq!(
+        &[
+            "+------------------+",
+            "| cast_to_i64(t.x) |",
+            "+------------------+",
+            "| 1                |",
+            "| 2                |",
+            "| 3                |",
+            "+------------------+"
+        ],
+        &result
+    );
 
     Ok(())
 }

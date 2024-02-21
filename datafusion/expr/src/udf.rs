@@ -30,6 +30,15 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+/// Was the expression simplified?
+pub enum Simplified {
+    /// The function call was simplified to an entirely new Expr
+    Rewritten(Expr),
+    /// the function call could not be simplified, and the arguments
+    /// are return unmodified
+    Original(Vec<Expr>),
+}
+
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -159,6 +168,10 @@ impl ScalarUDF {
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema)
+    }
+
+    pub fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
+        self.inner.simplify(args)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -337,6 +350,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function specifies monotonicity behaviors for User defined scalar functions.
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         Ok(None)
+    }
+
+    fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
+        Ok(Simplified::Original(args))
     }
 }
 
