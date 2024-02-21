@@ -278,13 +278,6 @@ async fn simple_udaf_order() -> Result<()> {
         Ok(Box::new(acc))
     }
 
-    let order_by = Expr::Sort(Sort {
-        expr: Box::new(Expr::Column(Column::new(Some("t"), "a"))),
-        asc: false,
-        nulls_first: false,
-    });
-    let order_by = vec![order_by];
-
     // define a udaf, using a DataFusion's accumulator
     let my_first = create_udaf_with_ordering(
         "my_first",
@@ -293,8 +286,12 @@ async fn simple_udaf_order() -> Result<()> {
         Volatility::Immutable,
         Arc::new(create_accumulator),
         Arc::new(vec![DataType::Int32, DataType::Int32, DataType::Boolean]),
-        order_by,
-        schema,
+        vec![Expr::Sort(Sort {
+            expr: Box::new(Expr::Column(Column::new(Some("t"), "a"))),
+            asc: false,
+            nulls_first: false,
+        })],
+        Some(schema),
     );
 
     ctx.register_udaf(my_first);
@@ -791,7 +788,12 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         Ok(DataType::UInt64)
     }
 
-    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(
+        &self,
+        _arg: &DataType,
+        _sort_exprs: Vec<Expr>,
+        _schmea: Option<Schema>,
+    ) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");
     }

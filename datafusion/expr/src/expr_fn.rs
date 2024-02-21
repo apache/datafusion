@@ -1030,7 +1030,7 @@ pub fn create_udaf_with_ordering(
     accumulator: AccumulatorFactoryFunctionWithOrdering,
     state_type: Arc<Vec<DataType>>,
     ordering_req: Vec<Expr>,
-    schema: Schema,
+    schema: Option<Schema>,
 ) -> AggregateUDF {
     let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
     let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
@@ -1124,7 +1124,12 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         Ok(self.return_type.clone())
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn crate::Accumulator>> {
+    fn accumulator(
+        &self,
+        arg: &DataType,
+        sort_exprs: Vec<Expr>,
+        schema: Option<Schema>,
+    ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(arg)
     }
 
@@ -1142,7 +1147,7 @@ pub struct SimpleOrderedAggregateUDF {
     accumulator: AccumulatorFactoryFunctionWithOrdering,
     state_type: Vec<DataType>,
     ordering_req: Vec<Expr>,
-    schema: Schema,
+    schema: Option<Schema>,
 }
 
 impl Debug for SimpleOrderedAggregateUDF {
@@ -1167,7 +1172,7 @@ impl SimpleOrderedAggregateUDF {
         accumulator: AccumulatorFactoryFunctionWithOrdering,
         state_type: Vec<DataType>,
         ordering_req: Vec<Expr>,
-        schema: Schema,
+        schema: Option<Schema>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -1200,12 +1205,25 @@ impl AggregateUDFImpl for SimpleOrderedAggregateUDF {
         Ok(self.return_type.clone())
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(arg, self.ordering_req.clone(), Some(self.schema.clone()))
+    fn accumulator(
+        &self,
+        arg: &DataType,
+        sort_exprs: Vec<Expr>,
+        schema: Option<Schema>,
+    ) -> Result<Box<dyn crate::Accumulator>> {
+        (self.accumulator)(arg, sort_exprs, schema)
     }
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
         Ok(self.state_type.clone())
+    }
+
+    fn sort_exprs(&self) -> Vec<Expr> {
+        self.ordering_req.clone()
+    }
+
+    fn schema(&self) -> Option<Schema> {
+        self.schema.clone()
     }
 }
 

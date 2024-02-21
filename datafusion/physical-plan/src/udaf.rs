@@ -22,10 +22,7 @@ use fmt::Debug;
 use std::any::Any;
 use std::fmt;
 
-use arrow::{
-    datatypes::Field,
-    datatypes::{DataType, Schema},
-};
+use arrow::datatypes::{DataType, Field, Schema};
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
 use datafusion_common::{not_impl_err, Result};

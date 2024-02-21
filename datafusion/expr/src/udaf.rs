@@ -22,8 +22,8 @@ use crate::{Accumulator, Expr};
 use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
-use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, Result};
+use arrow::datatypes::{DataType, Schema};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -155,8 +155,11 @@ impl AggregateUDF {
 
     /// Return an accumulator the given aggregate, given
     /// its return datatype.
+    // pub fn accumulator(&self, return_type: &DataType, sort_exprs: Vec<Expr>, schema: Option<Schema>) -> Result<Box<dyn Accumulator>> {
     pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(return_type)
+        let sort_exprs = self.inner.sort_exprs();
+        let schema = self.inner.schema();
+        self.inner.accumulator(return_type, sort_exprs, schema)
     }
 
     /// Return the type of the intermediate state used by this aggregator, given
@@ -173,6 +176,10 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
+    }
+
+    pub fn sort_exprs() -> Vec<Expr> {
+        vec![]
     }
 }
 
@@ -256,7 +263,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>>;
+    fn accumulator(
+        &self,
+        arg: &DataType,
+        sort_exprs: Vec<Expr>,
+        schema: Option<Schema>,
+    ) -> Result<Box<dyn Accumulator>>;
 
     /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
     /// See [`Accumulator::state()`] for more details
@@ -276,6 +288,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
+
+    fn sort_exprs(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn schema(&self) -> Option<Schema> {
+        None
     }
 }
 
@@ -323,7 +343,12 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         Ok(res.as_ref().clone())
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(
+        &self,
+        arg: &DataType,
+        _sort_exprs: Vec<Expr>,
+        _schema: Option<Schema>,
+    ) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(arg)
     }
 
