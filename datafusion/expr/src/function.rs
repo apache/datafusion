@@ -41,13 +41,8 @@ pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
 /// Factory that returns an accumulator for the given aggregate, given
-/// its return datatype.
-pub type AccumulatorFactoryFunction =
-    Arc<dyn Fn(&DataType) -> Result<Box<dyn Accumulator>> + Send + Sync>;
-
-/// Factory that returns an accumulator for the given aggregate, given
-/// its return datatype, the ordering of the input arguments and the schema that are needed for ordering.
-pub type AccumulatorFactoryFunctionWithOrdering = Arc<
+/// its return datatype, the sorting expressions and the schema for ordering.
+pub type AccumulatorFactoryFunction = Arc<
     dyn Fn(&DataType, Vec<Expr>, Option<Schema>) -> Result<Box<dyn Accumulator>>
         + Send
         + Sync,

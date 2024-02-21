@@ -346,10 +346,10 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     fn accumulator(
         &self,
         arg: &DataType,
-        _sort_exprs: Vec<Expr>,
-        _schema: Option<Schema>,
+        sort_exprs: Vec<Expr>,
+        schema: Option<Schema>,
     ) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(arg)
+        (self.accumulator)(arg, sort_exprs, schema)
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
