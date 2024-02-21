@@ -90,3 +90,11 @@ ProjectionExec: expr=[a@0 as a, NTH_VALUE(multiple_ordered_table.c,Int64(1) + In
 ----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[NTH_VALUE(multiple_ordered_table.c,Int64(1) + Int64(100)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]], ordering_mode=Sorted
 ------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
+
+query II
+SELECT a, ARRAY_AGG(c ORDER BY c)[1] as result
+                        FROM multiple_ordered_table
+                        GROUP BY a;
+----
+0 0
+1 50
