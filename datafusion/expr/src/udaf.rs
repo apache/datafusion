@@ -264,7 +264,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
-    /// `[Self::create_groups_accumulator`] will be called.
+    /// `[Self::create_groups_accumulator]` will be called.
     fn groups_accumulator_supported(&self) -> bool {
         false
     }

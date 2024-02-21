@@ -234,41 +234,40 @@ async fn simple_udaf_order() -> Result<()> {
 
     fn create_accumulator(
         data_type: &DataType,
-        order_by: Vec<Vec<Expr>>,
-        schema: &Schema,
+        order_by: Vec<Expr>,
+        schema: Option<Schema>,
     ) -> Result<Box<dyn Accumulator>> {
+        // test with ordering so schema is required
+        let schema = schema.unwrap();
+
         let mut all_sort_orders = vec![];
 
-        assert_eq!(order_by.len(), 1);
-
-        for exprs in order_by {
-            // Construct PhysicalSortExpr objects from Expr objects:
-            let mut sort_exprs = vec![];
-            for expr in exprs {
-                if let Expr::Sort(sort) = expr {
-                    if let Expr::Column(col) = sort.expr.as_ref() {
-                        let name = &col.name;
-                        let e = expressions::col(name, schema)?;
-                        sort_exprs.push(PhysicalSortExpr {
-                            expr: e,
-                            options: SortOptions {
-                                descending: !sort.asc,
-                                nulls_first: sort.nulls_first,
-                            },
-                        });
-                    }
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = vec![];
+        for expr in order_by {
+            if let Expr::Sort(sort) = expr {
+                if let Expr::Column(col) = sort.expr.as_ref() {
+                    let name = &col.name;
+                    let e = expressions::col(name, &schema)?;
+                    sort_exprs.push(PhysicalSortExpr {
+                        expr: e,
+                        options: SortOptions {
+                            descending: !sort.asc,
+                            nulls_first: sort.nulls_first,
+                        },
+                    });
                 }
             }
-            if !sort_exprs.is_empty() {
-                all_sort_orders.extend(sort_exprs);
-            }
+        }
+        if !sort_exprs.is_empty() {
+            all_sort_orders.extend(sort_exprs);
         }
 
         let ordering_req = all_sort_orders;
 
         let ordering_types = ordering_req
             .iter()
-            .map(|e| e.expr.data_type(schema))
+            .map(|e| e.expr.data_type(&schema))
             .collect::<Result<Vec<_>>>()?;
 
         let acc = FirstValueAccumulator::try_new(
@@ -284,7 +283,7 @@ async fn simple_udaf_order() -> Result<()> {
         asc: false,
         nulls_first: false,
     });
-    let order_by = vec![vec![order_by]];
+    let order_by = vec![order_by];
 
     // define a udaf, using a DataFusion's accumulator
     let my_first = create_udaf_with_ordering(
