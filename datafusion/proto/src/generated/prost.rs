@@ -176,9 +176,7 @@ pub struct ListingTableScanNode {
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
-    pub file_format_type: ::core::option::Option<
-        listing_table_scan_node::FileFormatType,
-    >,
+    pub file_format_type: ::core::option::Option<listing_table_scan_node::FileFormatType>,
 }
 /// Nested message and enum types in `ListingTableScanNode`.
 pub mod listing_table_scan_node {
@@ -363,10 +361,8 @@ pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "15")]
     pub constraints: ::core::option::Option<Constraints>,
     #[prost(map = "string, message", tag = "16")]
-    pub column_defaults: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        LogicalExprNode,
-    >,
+    pub column_defaults:
+        ::std::collections::HashMap<::prost::alloc::string::String, LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1475,7 +1471,10 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
+    #[prost(
+        oneof = "plan_type::PlanTypeEnum",
+        tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10"
+    )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1541,9 +1540,8 @@ pub struct FullTableReference {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnedTableReference {
     #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
-    pub table_reference_enum: ::core::option::Option<
-        owned_table_reference::TableReferenceEnum,
-    >,
+    pub table_reference_enum:
+        ::core::option::Option<owned_table_reference::TableReferenceEnum>,
 }
 /// Nested message and enum types in `OwnedTableReference`.
 pub mod owned_table_reference {
@@ -1882,10 +1880,12 @@ pub struct PhysicalAggregateExprNode {
     pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
-    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
-    pub aggregate_function: ::core::option::Option<
-        physical_aggregate_expr_node::AggregateFunction,
-    >,
+    #[prost(
+        oneof = "physical_aggregate_expr_node::AggregateFunction",
+        tags = "1, 4"
+    )]
+    pub aggregate_function:
+        ::core::option::Option<physical_aggregate_expr_node::AggregateFunction>,
 }
 /// Nested message and enum types in `PhysicalAggregateExprNode`.
 pub mod physical_aggregate_expr_node {
@@ -1912,9 +1912,8 @@ pub struct PhysicalWindowExprNode {
     #[prost(string, tag = "8")]
     pub name: ::prost::alloc::string::String,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
-    pub window_function: ::core::option::Option<
-        physical_window_expr_node::WindowFunction,
-    >,
+    pub window_function:
+        ::core::option::Option<physical_window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `PhysicalWindowExprNode`.
 pub mod physical_window_expr_node {
@@ -2542,7 +2541,10 @@ pub struct ListRangeExpr {
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4")]
+    #[prost(
+        oneof = "physical_get_indexed_field_expr_node::Field",
+        tags = "2, 3, 4"
+    )]
     pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
 }
 /// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
@@ -2558,7 +2560,9 @@ pub mod physical_get_indexed_field_expr_node {
         ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinType {
     Inner = 0,
@@ -2602,7 +2606,9 @@ impl JoinType {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinConstraint {
     On = 0,
@@ -2628,7 +2634,9 @@ impl JoinConstraint {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum ScalarFunction {
     Abs = 0,
@@ -2686,10 +2694,10 @@ pub enum ScalarFunction {
     Strpos = 52,
     Substr = 53,
     ToHex = 54,
-    ToTimestamp = 55,
-    ToTimestampMillis = 56,
-    ToTimestampMicros = 57,
-    ToTimestampSeconds = 58,
+    /// 55 was ToTimestamp
+    /// 56 was ToTimestampMillis
+    /// 57 was ToTimestampMicros
+    /// 58 was ToTimestampSeconds
     Now = 59,
     Translate = 60,
     Trim = 61,
@@ -2747,7 +2755,7 @@ pub enum ScalarFunction {
     ArrayEmpty = 115,
     ArrayPopBack = 116,
     StringToArray = 117,
-    ToTimestampNanos = 118,
+    /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
@@ -2828,10 +2836,6 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::ToTimestamp => "ToTimestamp",
-            ScalarFunction::ToTimestampMillis => "ToTimestampMillis",
-            ScalarFunction::ToTimestampMicros => "ToTimestampMicros",
-            ScalarFunction::ToTimestampSeconds => "ToTimestampSeconds",
             ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
@@ -2887,7 +2891,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
-            ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
@@ -2965,10 +2968,6 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "ToTimestamp" => Some(Self::ToTimestamp),
-            "ToTimestampMillis" => Some(Self::ToTimestampMillis),
-            "ToTimestampMicros" => Some(Self::ToTimestampMicros),
-            "ToTimestampSeconds" => Some(Self::ToTimestampSeconds),
             "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
@@ -3024,7 +3023,6 @@ impl ScalarFunction {
             "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
-            "ToTimestampNanos" => Some(Self::ToTimestampNanos),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
@@ -3047,7 +3045,9 @@ impl ScalarFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum AggregateFunction {
     Min = 0,
@@ -3184,7 +3184,9 @@ impl AggregateFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
     RowNumber = 0,
@@ -3237,7 +3239,9 @@ impl BuiltInWindowFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
     Rows = 0,
@@ -3266,7 +3270,9 @@ impl WindowFrameUnits {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameBoundType {
     CurrentRow = 0,
@@ -3295,7 +3301,9 @@ impl WindowFrameBoundType {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum DateUnit {
     Day = 0,
@@ -3321,7 +3329,9 @@ impl DateUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum TimeUnit {
     Second = 0,
@@ -3353,7 +3363,9 @@ impl TimeUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum IntervalUnit {
     YearMonth = 0,
@@ -3382,7 +3394,9 @@ impl IntervalUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum UnionMode {
     Sparse = 0,
@@ -3408,7 +3422,9 @@ impl UnionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum CompressionTypeVariant {
     Gzip = 0,
@@ -3443,7 +3459,9 @@ impl CompressionTypeVariant {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum PartitionMode {
     CollectLeft = 0,
@@ -3472,7 +3490,9 @@ impl PartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum StreamPartitionMode {
     SinglePartition = 0,
@@ -3498,7 +3518,9 @@ impl StreamPartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum AggregateMode {
     Partial = 0,
@@ -3533,7 +3555,9 @@ impl AggregateMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinSide {
     LeftSide = 0,
@@ -3559,7 +3583,9 @@ impl JoinSide {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum PrecisionInfo {
     Exact = 0,

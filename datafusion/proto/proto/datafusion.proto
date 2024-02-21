@@ -320,13 +320,13 @@ message DistinctOnNode {
 }
 
 message CopyToNode {
-    LogicalPlanNode input = 1;
-    string output_url = 2;
-    oneof CopyOptions {
-        SQLOptions sql_options = 4;
-        FileTypeWriterOptions writer_options = 5;
-    }
-    string file_type = 6;
+  LogicalPlanNode input = 1;
+  string output_url = 2;
+  oneof CopyOptions {
+    SQLOptions sql_options = 4;
+    FileTypeWriterOptions writer_options = 5;
+  }
+  string file_type = 6;
 }
 
 message SQLOptions {
@@ -334,8 +334,8 @@ message SQLOptions {
 }
 
 message SQLOption {
-    string key = 1;
-    string value = 2;
+  string key = 1;
+  string value = 2;
 }
 
 message UnionNode {
@@ -599,10 +599,10 @@ enum ScalarFunction {
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
   Now = 59;
   Translate = 60;
   Trim = 61;
@@ -660,7 +660,7 @@ enum ScalarFunction {
   ArrayEmpty = 115;
   ArrayPopBack = 116;
   StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
@@ -1225,7 +1225,7 @@ message JsonWriterOptions {
 }
 
 message ParquetWriterOptions {
-    WriterProperties writer_properties = 1;
+  WriterProperties writer_properties = 1;
 }
 
 message CsvWriterOptions {

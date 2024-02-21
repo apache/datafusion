@@ -94,10 +94,14 @@ make_package!(
 
 make_package!(math, "math_expressions", "Mathematical functions.");
 
+make_package!(datetime, "datetime_expressions", "Date and time functions.");
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
+    #[cfg(feature = "datetime_expressions")]
+    pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
     #[cfg(feature = "math_expressions")]
