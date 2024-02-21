@@ -776,6 +776,7 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
+            BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
                 Ok(Timestamp(Nanosecond, Some("+00:00".into())))
             }

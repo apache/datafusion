@@ -24,7 +24,6 @@ use arrow_array::ArrayRef;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::datetime_expressions::to_timestamp;
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_timestamp_no_formats", |b| {
@@ -44,7 +43,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_timestamp(&[string_array.clone()])
+                super::to_timestamp().call(&[string_array.clone()])
                     .expect("to_timestamp should work on valid values"),
             )
         })

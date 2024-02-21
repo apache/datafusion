@@ -92,10 +92,6 @@ name = "make_date"
 
 [[bench]]
 harness = false
-name = "to_timestamp"
-
-[[bench]]
-harness = false
 name = "regexp"
 
 [[bench]]

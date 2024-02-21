@@ -37,20 +37,13 @@
 /// }
 /// ```
 macro_rules! export_functions {
-    ($(($FUNC:ident, $($arg:ident)*, $DOC:expr)),*) => {
+    ($(($FUNC:ident,  $($arg:ident)*, $DOC:expr)),*) => {
         pub mod expr_fn {
             $(
                 #[doc = $DOC]
-                if ${count($arg)} == 0 {
-                    /// Return $name(args)
-                    pub fn $FUNC(args: Vec<Expr>) -> datafusion_expr::Expr {
-                        super::$FUNC().call(args)
-                    }
-                } else {
-                    /// Return $name(arg)
-                    pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-                        super::$FUNC().call(vec![$($arg),*],)
-                    }
+                /// Return $name(arg)
+                pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+                    super::$FUNC().call(vec![$($arg),*],)
                 }
             )*
         }

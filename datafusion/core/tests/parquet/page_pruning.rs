@@ -267,7 +267,7 @@ async fn test_prune(
 async fn prune_timestamps_nanos() {
     test_prune(
         Scenario::Timestamps,
-        "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')",
+        "SELECT * FROM t where nanos < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Nanosecond, None)')",
         Some(0),
         Some(5),
         10,
@@ -284,7 +284,7 @@ async fn prune_timestamps_nanos() {
 async fn prune_timestamps_micros() {
     test_prune(
         Scenario::Timestamps,
-        "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
+        "SELECT * FROM t where micros < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Microsecond, None)')",
         Some(0),
         Some(5),
         10,
@@ -301,7 +301,7 @@ async fn prune_timestamps_micros() {
 async fn prune_timestamps_millis() {
     test_prune(
         Scenario::Timestamps,
-        "SELECT * FROM t where millis < to_timestamp_millis('2020-01-02 01:01:11Z')",
+        "SELECT * FROM t where millis < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Millisecond, None)')",
         Some(0),
         Some(5),
         10,
@@ -319,7 +319,7 @@ async fn prune_timestamps_millis() {
 async fn prune_timestamps_seconds() {
     test_prune(
         Scenario::Timestamps,
-        "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
+        "SELECT * FROM t where seconds < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Second, None)')",
         Some(0),
         Some(5),
         10,
@@ -728,7 +728,7 @@ async fn without_pushdown_filter() {
     let mut context = ContextWithParquet::new(Scenario::Timestamps, Page).await;
 
     let output2 = context
-        .query("SELECT * FROM t where nanos < to_timestamp('2023-01-02 01:01:11Z')")
+        .query("SELECT * FROM t where nanos < arrow_cast('2023-01-02T01:01:11', 'Timestamp(Nanosecond, None)')")
         .await;
 
     let bytes_scanned_without_filter = cast_count_metric(

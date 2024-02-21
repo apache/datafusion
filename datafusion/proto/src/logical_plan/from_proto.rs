@@ -550,11 +550,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
             ScalarFunction::ToChar => Self::ToChar,
-            ScalarFunction::ToTimestamp => Self::ToTimestamp,
-            ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
-            ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
-            ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
-            ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
@@ -1706,56 +1701,6 @@ pub fn parse_expr(
                         .collect::<std::result::Result<_, _>>()?;
                     Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
                         BuiltinScalarFunction::ToChar,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToTimestamp => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToTimestamp,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToTimestampMillis => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToTimestampMillis,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToTimestampMicros => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToTimestampMicros,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToTimestampNanos => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToTimestampNanos,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToTimestampSeconds => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToTimestampSeconds,
                         args,
                     )))
                 }

@@ -513,21 +513,6 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
-        BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(datetime_expressions::to_timestamp_invoke)
-        }
-        BuiltinScalarFunction::ToTimestampMillis => {
-            Arc::new(datetime_expressions::to_timestamp_millis_invoke)
-        }
-        BuiltinScalarFunction::ToTimestampMicros => {
-            Arc::new(datetime_expressions::to_timestamp_micros_invoke)
-        }
-        BuiltinScalarFunction::ToTimestampNanos => {
-            Arc::new(datetime_expressions::to_timestamp_nanos_invoke)
-        }
-        BuiltinScalarFunction::ToTimestampSeconds => {
-            Arc::new(datetime_expressions::to_timestamp_seconds_invoke)
-        }
         BuiltinScalarFunction::FromUnixtime => {
             Arc::new(datetime_expressions::from_unixtime_invoke)
         }
@@ -3074,7 +3059,6 @@ mod tests {
         // pick some arbitrary functions to test
         let funs = [
             BuiltinScalarFunction::Concat,
-            BuiltinScalarFunction::ToTimestamp,
             BuiltinScalarFunction::Abs,
             BuiltinScalarFunction::Repeat,
         ];

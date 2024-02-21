@@ -730,7 +730,7 @@ async fn parquet_explain_analyze() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
 
-    let sql = "EXPLAIN ANALYZE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > to_timestamp('2009-02-01T00:00:00'); ";
+    let sql = "EXPLAIN ANALYZE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > arrow_cast('2009-02-01T00:00:00', 'Timestamp(Second, None)');";
     let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
@@ -748,7 +748,7 @@ async fn parquet_explain_analyze_verbose() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
 
-    let sql = "EXPLAIN ANALYZE VERBOSE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > to_timestamp('2009-02-01T00:00:00'); ";
+    let sql = "EXPLAIN ANALYZE VERBOSE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > arrow_cast('2009-02-01T00:00:00', 'Timestamp(Second, None)');";
     let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
