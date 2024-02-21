@@ -71,6 +71,9 @@ pub struct DataFrameWriteOptions {
     /// Allows compression of CSV and JSON.
     /// Not supported for parquet.
     compression: CompressionTypeVariant,
+    /// Sets which columns should be used for hive-style partitioned writes by name.
+    /// Can be set to empty vec![] for non-partitioned writes.
+    partition_by: Vec<String>,
 }
 
 impl DataFrameWriteOptions {
@@ -80,6 +83,7 @@ impl DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
             compression: CompressionTypeVariant::UNCOMPRESSED,
+            partition_by: vec![],
         }
     }
     /// Set the overwrite option to true or false
@@ -97,6 +101,12 @@ impl DataFrameWriteOptions {
     /// Sets the compression type applied to the output file(s)
     pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Sets the partition_by columns for output partitioning
+    pub fn with_partition_by(mut self, partition_by: Vec<String>) -> Self {
+        self.partition_by = partition_by;
         self
     }
 }
@@ -1135,6 +1145,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1147,6 +1158,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify CSV writing options here
     /// ).await?;
+    /// # fs::remove_file("output.csv")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1174,6 +1186,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
@@ -1186,6 +1199,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1197,6 +1211,7 @@ impl DataFrame {
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
     /// ).await?;
+    /// # fs::remove_file("output.json")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1217,6 +1232,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
+            options.partition_by,
             copy_options,
         )?
         .build()?;

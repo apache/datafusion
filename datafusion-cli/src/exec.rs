@@ -227,7 +227,6 @@ async fn exec_and_print(
                 | LogicalPlan::DescribeTable(_)
                 | LogicalPlan::Analyze(_)
         );
-
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 

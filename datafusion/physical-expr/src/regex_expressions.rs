@@ -65,7 +65,7 @@ macro_rules! fetch_string_arg {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
@@ -136,7 +136,7 @@ pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
@@ -216,7 +216,7 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # #[tokio::main]

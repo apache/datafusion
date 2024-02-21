@@ -568,6 +568,7 @@ impl DefaultPhysicalPlanner {
                     output_url,
                     file_format,
                     copy_options,
+                    partition_by,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -585,13 +586,20 @@ impl DefaultPhysicalPlanner {
                         CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
                     };
 
+                    // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
+                    // from the schema of the RecordBatch being written. This allows COPY statements to specify only
+                    // the column name rather than column name + explicit data type.
+                    let table_partition_cols = partition_by.iter()
+                        .map(|s| (s.to_string(), arrow_schema::DataType::Null))
+                        .collect::<Vec<_>>();
+
                     // Set file sink related options
                     let config = FileSinkConfig {
                         object_store_url,
                         table_paths: vec![parsed_url],
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
-                        table_partition_cols: vec![],
+                        table_partition_cols,
                         overwrite: false,
                         file_type_writer_options
                     };

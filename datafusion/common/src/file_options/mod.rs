@@ -97,6 +97,31 @@ impl StatementOptions {
         maybe_option.map(|(_, v)| v)
     }
 
+    /// Finds partition_by option if exists and parses into a `Vec<String>`.
+    /// If option doesn't exist, returns empty `vec![]`.
+    /// E.g. (partition_by 'colA, colB, colC') -> `vec!['colA','colB','colC']`
+    pub fn take_partition_by(&mut self) -> Vec<String> {
+        let partition_by = self.take_str_option("partition_by");
+        match partition_by {
+            Some(part_cols) => {
+                let dequoted = part_cols
+                    .chars()
+                    .enumerate()
+                    .filter(|(idx, c)| {
+                        !((*idx == 0 || *idx == part_cols.len() - 1)
+                            && (*c == '\'' || *c == '"'))
+                    })
+                    .map(|(_idx, c)| c)
+                    .collect::<String>();
+                dequoted
+                    .split(',')
+                    .map(|s| s.trim().replace("''", "'"))
+                    .collect::<Vec<_>>()
+            }
+            None => vec![],
+        }
+    }
+
     /// Infers the file_type given a target and arbitrary options.
     /// If the options contain an explicit "format" option, that will be used.
     /// Otherwise, attempt to infer file_type from the extension of target.

@@ -105,7 +105,7 @@ impl ProjectionExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         };
-        Ok(projection.with_cache())
+        projection.with_cache()
     }
 
     /// The projection expressions stored as tuples of (expression, output column name)
@@ -118,10 +118,11 @@ impl ProjectionExec {
         &self.input
     }
 
-    fn with_cache(mut self) -> Self {
+    fn with_cache(mut self) -> Result<Self> {
         let input = &self.input;
         // Calculate equivalence properties:
-        let input_eq_properties = input.equivalence_properties();
+        let mut input_eq_properties = input.equivalence_properties().clone();
+        input_eq_properties.substitute_oeq_class(&self.projection_mapping)?;
         let eq_properties =
             input_eq_properties.project(&self.projection_mapping, self.schema.clone());
 
@@ -150,7 +151,7 @@ impl ProjectionExec {
             input.execution_mode(),
         );
 
-        self
+        Ok(self)
     }
 }
 

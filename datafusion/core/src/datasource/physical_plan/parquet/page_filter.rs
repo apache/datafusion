@@ -116,7 +116,7 @@ impl PagePruningPredicate {
             .filter_map(|predicate| {
                 match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
                     Ok(p)
-                        if (!p.allways_true())
+                        if (!p.always_true())
                             && (p.required_columns().n_columns() < 2) =>
                     {
                         Some(Ok(p))
