@@ -555,7 +555,9 @@ impl ScalarUDFImpl for CastToI64UDF {
         let casted_expr = e.cast_to(&DataType::Int64, &dfs)?;
         Ok(Simplified::Rewritten(casted_expr))
     }
+    // Casting should be done in `simplify`, so we just return the first argument
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        assert_eq!(args.len(), 1);
         Ok(args.first().unwrap().clone())
     }
 }

@@ -170,6 +170,9 @@ impl ScalarUDF {
         self.inner.return_type_from_exprs(args, schema)
     }
 
+    /// Do the function rewrite
+    ///
+    /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
         self.inner.simplify(args)
     }
@@ -352,6 +355,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(None)
     }
 
+    // Do the function rewrite
     fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
         Ok(Simplified::Original(args))
     }
