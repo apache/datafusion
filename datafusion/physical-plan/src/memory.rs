@@ -153,7 +153,7 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
+        let cache = Self::create_cache(projected_schema.clone(), &[], partitions);
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -161,8 +161,7 @@ impl MemoryExec {
             projection,
             sort_information: vec![],
             cache,
-        }
-        .with_cache())
+        })
     }
 
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
@@ -193,27 +192,29 @@ impl MemoryExec {
         self.sort_information = sort_information;
 
         // We need to update equivalence properties when updating sort information.
-        let eq_properties = self.equivalent_properties_helper();
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.sort_information,
+        );
         self.cache = self.cache.with_eq_properties(eq_properties);
-        self.with_cache()
+        self
     }
 
     pub fn original_schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 
-    fn equivalent_properties_helper(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(self.schema(), &self.sort_information)
-    }
-
-    fn with_cache(mut self) -> Self {
-        self.cache = PlanPropertiesCache::new(
-            self.equivalent_properties_helper(), // Equivalence Properties
-            Partitioning::UnknownPartitioning(self.partitions.len()), // Output Partitioning
-            ExecutionMode::Bounded,                                   // Execution Mode
-        );
-
-        self
+    fn create_cache(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        partitions: &[Vec<RecordBatch>],
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        PlanPropertiesCache::new(
+            eq_properties,                                       // Equivalence Properties
+            Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
+            ExecutionMode::Bounded,                              // Execution Mode
+        )
     }
 }
 

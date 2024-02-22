@@ -35,7 +35,9 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    Distribution, EquivalenceProperties, PhysicalSortRequirement,
+};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -104,7 +106,7 @@ impl FileSinkExec {
         sort_order: Option<Vec<PhysicalSortRequirement>>,
     ) -> Self {
         let count_schema = make_count_schema();
-        let cache = PlanPropertiesCache::new_default(count_schema);
+        let cache = Self::create_schema(&input, count_schema);
         Self {
             input,
             sink,
@@ -113,7 +115,6 @@ impl FileSinkExec {
             sort_order,
             cache,
         }
-        .with_cache()
     }
 
     fn execute_input_stream(
@@ -176,15 +177,16 @@ impl FileSinkExec {
         self.sink.metrics()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(self.input.execution_mode());
-
-        self
+    fn create_schema(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            input.execution_mode(),
+        )
     }
 }
 

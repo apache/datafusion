@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
@@ -91,7 +91,7 @@ pub struct WorkTableExec {
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
     pub fn new(name: String, schema: SchemaRef) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone());
         Self {
             name,
             schema,
@@ -99,7 +99,6 @@ impl WorkTableExec {
             work_table: Arc::new(WorkTable::new()),
             cache,
         }
-        .with_cache()
     }
 
     pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
@@ -112,13 +111,14 @@ impl WorkTableExec {
         }
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

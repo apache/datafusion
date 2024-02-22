@@ -1352,22 +1352,20 @@ pub(crate) mod tests {
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
         ) -> Self {
-            let cache = PlanPropertiesCache::new_default(input.schema());
+            let cache = Self::create_cache(&input);
             Self {
                 input,
                 expr: requirement,
                 cache,
             }
-            .with_cache()
         }
 
-        fn with_cache(mut self) -> Self {
-            self.cache = PlanPropertiesCache::new(
-                self.input.equivalence_properties().clone(), // Equivalence Properties
-                self.input.output_partitioning().clone(),    // Output Partitioning
-                self.input.execution_mode(),                 // Execution Mode
-            );
-            self
+        fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+            PlanPropertiesCache::new(
+                input.equivalence_properties().clone(), // Equivalence Properties
+                input.output_partitioning().clone(),    // Output Partitioning
+                input.execution_mode(),                 // Execution Mode
+            )
         }
     }
 

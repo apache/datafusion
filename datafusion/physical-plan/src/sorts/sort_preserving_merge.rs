@@ -80,7 +80,7 @@ pub struct SortPreservingMergeExec {
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let cache = Self::create_cache(&input);
         Self {
             input,
             expr,
@@ -88,7 +88,6 @@ impl SortPreservingMergeExec {
             fetch: None,
             cache,
         }
-        .with_cache()
     }
     /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
@@ -111,14 +110,12 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = PlanPropertiesCache::new(
-            self.input.equivalence_properties().clone(), // Equivalence Properties
-            Partitioning::UnknownPartitioning(1),        // Output Partitioning
-            self.input.execution_mode(),                 // Execution Mode
-        );
-
-        self
+    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+        PlanPropertiesCache::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            input.execution_mode(),                 // Execution Mode
+        )
     }
 }
 

@@ -2013,6 +2013,7 @@ mod tests {
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
+    use datafusion_physical_expr::EquivalenceProperties;
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2579,19 +2580,19 @@ mod tests {
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
-            let cache = PlanPropertiesCache::new_default(schema.clone());
-            Self { cache }.with_cache()
+            let cache = Self::create_cache(schema.clone());
+            Self { cache }
         }
 
-        fn with_cache(mut self) -> Self {
-            self.cache = self
-                .cache
+        fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+            let eq_properties = EquivalenceProperties::new(schema);
+            PlanPropertiesCache::new(
+                eq_properties,
                 // Output Partitioning
-                .with_partitioning(Partitioning::UnknownPartitioning(1))
+                Partitioning::UnknownPartitioning(1),
                 // Execution Mode
-                .with_exec_mode(ExecutionMode::Bounded);
-
-            self
+                ExecutionMode::Bounded,
+            )
         }
     }
 

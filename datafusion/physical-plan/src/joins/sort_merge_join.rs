@@ -33,7 +33,7 @@ use std::task::{Context, Poll};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    partitioned_join_output_partitioning, JoinFilter, JoinOn,
+    partitioned_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
@@ -137,7 +137,7 @@ impl SortMergeJoinExec {
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(&left, &right, schema.clone(), join_type, &on);
         Ok(Self {
             left,
             right,
@@ -151,8 +151,7 @@ impl SortMergeJoinExec {
             sort_options,
             null_equals_null,
             cache,
-        }
-        .with_cache())
+        })
     }
 
     /// Get probe side (e.g streaming side) information for this sort merge join.
@@ -201,32 +200,37 @@ impl SortMergeJoinExec {
         self.left.as_ref()
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        join_on: JoinOnRef,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
-            self.left.equivalence_properties().clone(),
-            self.right.equivalence_properties().clone(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            Some(Self::probe_side(&self.join_type)),
-            self.on(),
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &Self::maintains_input_order(join_type),
+            Some(Self::probe_side(&join_type)),
+            join_on,
         );
 
         // Get output partitioning:
-        let left_columns_len = self.left.schema().fields.len();
+        let left_columns_len = left.schema().fields.len();
         let output_partitioning = partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
+            join_type,
+            left.output_partitioning(),
+            right.output_partitioning(),
             left_columns_len,
         );
 
         // Determine execution mode:
-        let mode = exec_mode_flatten([&self.left, &self.right]);
+        let mode = exec_mode_flatten([left, right]);
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

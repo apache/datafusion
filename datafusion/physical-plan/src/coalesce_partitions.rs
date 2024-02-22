@@ -44,13 +44,12 @@ pub struct CoalescePartitionsExec {
 impl CoalescePartitionsExec {
     /// Create a new CoalescePartitionsExec
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let cache = Self::create_cache(&input);
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
 
     /// Input execution plan
@@ -58,18 +57,16 @@ impl CoalescePartitionsExec {
         &self.input
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
         // Coalescing partitions loses existing orderings:
-        let mut eq_properties = self.input.equivalence_properties().clone();
+        let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
 
-        self.cache = PlanPropertiesCache::new(
+        PlanPropertiesCache::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            self.input.execution_mode(),          // Execution Mode
-        );
-
-        self
+            input.execution_mode(),               // Execution Mode
+        )
     }
 }
 

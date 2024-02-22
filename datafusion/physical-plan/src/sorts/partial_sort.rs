@@ -71,6 +71,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::Result;
 use datafusion_execution::{RecordBatchStream, TaskContext};
+use datafusion_physical_expr::LexOrdering;
 
 use futures::{ready, Stream, StreamExt};
 use log::trace;
@@ -104,17 +105,17 @@ impl PartialSortExec {
         common_prefix_length: usize,
     ) -> Self {
         assert!(common_prefix_length > 0);
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let preserve_partitioning = false;
+        let cache = Self::create_cache(&input, expr.clone(), preserve_partitioning);
         Self {
             input,
             expr,
             common_prefix_length,
             metrics_set: ExecutionPlanMetricsSet::new(),
-            preserve_partitioning: false,
+            preserve_partitioning,
             fetch: None,
             cache,
         }
-        .with_cache()
     }
 
     /// Whether this `PartialSortExec` preserves partitioning of the children
@@ -131,6 +132,12 @@ impl PartialSortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
+        self.cache = self
+            .cache
+            .with_partitioning(Self::output_partitioning_helper(
+                &self.input,
+                self.preserve_partitioning,
+            ));
         self
     }
 
@@ -161,27 +168,38 @@ impl PartialSortExec {
         self.fetch
     }
 
-    fn with_cache(mut self) -> Self {
-        // Calculate equivalence properties; i.e. reset the ordering equivalence
-        // class with the new ordering:
-        let eq_properties = self
-            .input
-            .equivalence_properties()
-            .clone()
-            .with_reorder(self.expr.to_vec());
-
+    fn output_partitioning_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+    ) -> Partitioning {
         // Get output partitioning:
-        let output_partitioning = if self.preserve_partitioning {
-            self.input.output_partitioning().clone()
+        if preserve_partitioning {
+            input.output_partitioning().clone()
         } else {
             Partitioning::UnknownPartitioning(1)
-        };
+        }
+    }
+
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        sort_exprs: LexOrdering,
+        preserve_partitioning: bool,
+    ) -> PlanPropertiesCache {
+        // Calculate equivalence properties; i.e. reset the ordering equivalence
+        // class with the new ordering:
+        let eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .with_reorder(sort_exprs);
+
+        // Get output partitioning:
+        let output_partitioning =
+            Self::output_partitioning_helper(input, preserve_partitioning);
 
         // Determine execution mode:
-        let mode = self.input.execution_mode();
+        let mode = input.execution_mode();
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

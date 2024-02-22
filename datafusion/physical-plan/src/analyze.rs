@@ -29,6 +29,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::StreamExt;
 
@@ -55,7 +56,7 @@ impl AnalyzeExec {
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(&input, schema.clone());
         AnalyzeExec {
             verbose,
             show_statistics,
@@ -63,7 +64,6 @@ impl AnalyzeExec {
             schema,
             cache,
         }
-        .with_cache()
     }
 
     /// access to verbose
@@ -81,15 +81,14 @@ impl AnalyzeExec {
         &self.input
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(self.input.execution_mode());
-
-        self
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let output_partitioning = Partitioning::UnknownPartitioning(1);
+        let exec_mode = input.execution_mode();
+        PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode)
     }
 }
 

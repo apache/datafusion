@@ -37,6 +37,7 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -70,7 +71,7 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(&input, schema.clone());
         UnnestExec {
             input,
             schema,
@@ -79,18 +80,19 @@ impl UnnestExec {
             metrics: Default::default(),
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(self.input.output_partitioning().clone())
-            // Execution Mode
-            .with_exec_mode(self.input.execution_mode());
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            input.output_partitioning().clone(),
+            input.execution_mode(),
+        )
     }
 }
 

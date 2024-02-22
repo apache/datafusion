@@ -30,6 +30,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use log::trace;
 
@@ -46,20 +47,19 @@ pub struct EmptyExec {
 impl EmptyExec {
     /// Create a new EmptyExec
     pub fn new(schema: SchemaRef) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone(), 1);
         EmptyExec {
             schema,
             partitions: 1,
             cache,
         }
-        .with_cache()
     }
 
     /// Create a new EmptyExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
         // Changing partitions may invalidate output partitioning, so update it:
-        let output_partitioning = self.output_partitioning_helper();
+        let output_partitioning = Self::output_partitioning_helper(self.partitions);
         self.cache = self.cache.with_partitioning(output_partitioning);
         self
     }
@@ -68,21 +68,20 @@ impl EmptyExec {
         Ok(vec![])
     }
 
-    fn output_partitioning_helper(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions)
+    fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
+        Partitioning::UnknownPartitioning(n_partitions)
     }
 
-    fn with_cache(mut self) -> Self {
-        let output_partitioning = self.output_partitioning_helper();
-
-        self.cache = self
-            .cache
+    fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let output_partitioning = Self::output_partitioning_helper(n_partitions);
+        PlanPropertiesCache::new(
+            eq_properties,
             // Output Partitioning
-            .with_partitioning(output_partitioning)
+            output_partitioning,
             // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+            ExecutionMode::Bounded,
+        )
     }
 }
 

@@ -43,7 +43,7 @@ use crate::joins::stream_join_utils::{
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
     check_join_is_valid, partitioned_join_output_partitioning, ColumnIndex, JoinFilter,
-    JoinHashMapType, JoinOn, StatefulStreamResult,
+    JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
 };
 use crate::{
     exec_mode_flatten,
@@ -233,8 +233,8 @@ impl SymmetricHashJoinExec {
 
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-
-        let cache = PlanPropertiesCache::new_default(Arc::new(schema));
+        let schema = Arc::new(schema);
+        let cache = Self::create_cache(&left, &right, schema.clone(), *join_type, &on);
         Ok(SymmetricHashJoinExec {
             left,
             right,
@@ -249,37 +249,41 @@ impl SymmetricHashJoinExec {
             right_sort_exprs,
             mode,
             cache,
-        }
-        .with_cache())
+        })
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        join_on: JoinOnRef,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
-            self.left.equivalence_properties().clone(),
-            self.right.equivalence_properties().clone(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &[false, false],
             // Has alternating probe side
             None,
-            self.on(),
+            join_on,
         );
 
         // Get output partitioning:
-        let left_columns_len = self.left.schema().fields.len();
+        let left_columns_len = left.schema().fields.len();
         let output_partitioning = partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
+            join_type,
+            left.output_partitioning(),
+            right.output_partitioning(),
             left_columns_len,
         );
 
         // Determine execution mode:
-        let mode = exec_mode_flatten([&self.left, &self.right]);
+        let mode = exec_mode_flatten([left, right]);
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 
     /// left stream

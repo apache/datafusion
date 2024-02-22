@@ -42,7 +42,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, FileType, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, PlanPropertiesCache,
@@ -376,24 +376,23 @@ impl StatisticsExec {
             stats.column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
+        let cache = Self::create_cache(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanPropertiesCache::new(
+            eq_properties,
             // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(2))
+            Partitioning::UnknownPartitioning(2),
             // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+            ExecutionMode::Bounded,
+        )
     }
 }
 

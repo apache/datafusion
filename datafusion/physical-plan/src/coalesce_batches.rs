@@ -54,14 +54,13 @@ pub struct CoalesceBatchesExec {
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let cache = Self::create_cache(&input);
         Self {
             input,
             target_batch_size,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
 
     /// The input plan
@@ -74,16 +73,14 @@ impl CoalesceBatchesExec {
         self.target_batch_size
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
         // The coalesce batches operator does not make any changes to the
         // partitioning of its input.
-        self.cache = PlanPropertiesCache::new(
-            self.input.equivalence_properties().clone(), // Equivalence Properties
-            self.input.output_partitioning().clone(),    // Output Partitioning
-            self.input.execution_mode(),                 // Execution Mode
-        );
-
-        self
+        PlanPropertiesCache::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            input.output_partitioning().clone(),    // Output Partitioning
+            input.execution_mode(),                 // Execution Mode
+        )
     }
 }
 

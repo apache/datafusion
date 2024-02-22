@@ -33,6 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_common::{project_schema, stats::Precision};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 
@@ -52,24 +53,22 @@ impl StatisticsValidation {
             schema.fields().len(),
             "the column statistics vector length should be the number of fields"
         );
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone());
         Self {
             stats,
             schema,
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(2))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(2),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

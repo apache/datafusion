@@ -56,9 +56,6 @@ pub struct ProjectionExec {
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr that maps input to output
-    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -96,16 +93,14 @@ impl ProjectionExec {
 
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
-        let cache = PlanPropertiesCache::new_default(schema.clone());
-        let projection = Self {
+        let cache = Self::create_cache(&input, &projection_mapping, schema.clone())?;
+        Ok(Self {
             expr,
             schema,
             input,
-            projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        };
-        projection.with_cache()
+        })
     }
 
     /// The projection expressions stored as tuples of (expression, output column name)
@@ -118,13 +113,15 @@ impl ProjectionExec {
         &self.input
     }
 
-    fn with_cache(mut self) -> Result<Self> {
-        let input = &self.input;
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        projection_mapping: &ProjectionMapping,
+        schema: SchemaRef,
+    ) -> Result<PlanPropertiesCache> {
         // Calculate equivalence properties:
         let mut input_eq_properties = input.equivalence_properties().clone();
-        input_eq_properties.substitute_oeq_class(&self.projection_mapping)?;
-        let eq_properties =
-            input_eq_properties.project(&self.projection_mapping, self.schema.clone());
+        input_eq_properties.substitute_oeq_class(projection_mapping)?;
+        let eq_properties = input_eq_properties.project(projection_mapping, schema);
 
         // Calculate output partitioning, which needs to respect aliases:
         let input_partition = input.output_partitioning();
@@ -134,7 +131,7 @@ impl ProjectionExec {
                 .iter()
                 .map(|expr| {
                     input_eq_properties
-                        .project_expr(expr, &self.projection_mapping)
+                        .project_expr(expr, projection_mapping)
                         .unwrap_or_else(|| {
                             Arc::new(UnKnownColumn::new(&expr.to_string()))
                         })
@@ -145,13 +142,11 @@ impl ProjectionExec {
             input_partition.clone()
         };
 
-        self.cache = PlanPropertiesCache::new(
+        Ok(PlanPropertiesCache::new(
             eq_properties,
             output_partitioning,
             input.execution_mode(),
-        );
-
-        Ok(self)
+        ))
     }
 }
 

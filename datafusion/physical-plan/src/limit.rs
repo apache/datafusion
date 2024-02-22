@@ -57,7 +57,7 @@ pub struct GlobalLimitExec {
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let cache = Self::create_cache(&input);
         GlobalLimitExec {
             input,
             skip,
@@ -65,7 +65,6 @@ impl GlobalLimitExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
 
     /// Input execution plan
@@ -83,14 +82,12 @@ impl GlobalLimitExec {
         self.fetch
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = PlanPropertiesCache::new(
-            self.input.equivalence_properties().clone(), // Equivalence Properties
-            Partitioning::UnknownPartitioning(1),        // Output Partitioning
-            ExecutionMode::Bounded,                      // Execution Mode
-        );
-
-        self
+    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+        PlanPropertiesCache::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            ExecutionMode::Bounded,                 // Execution Mode
+        )
     }
 }
 
@@ -276,14 +273,13 @@ pub struct LocalLimitExec {
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
     pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let cache = Self::create_cache(&input);
         Self {
             input,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
 
     /// Input execution plan
@@ -296,14 +292,12 @@ impl LocalLimitExec {
         self.fetch
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = PlanPropertiesCache::new(
-            self.input.equivalence_properties().clone(), // Equivalence Properties
-            self.input.output_partitioning().clone(),    // Output Partitioning
-            ExecutionMode::Bounded,                      // Execution Mode
-        );
-
-        self
+    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+        PlanPropertiesCache::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            input.output_partitioning().clone(),    // Output Partitioning
+            ExecutionMode::Bounded,                 // Execution Mode
+        )
     }
 }
 

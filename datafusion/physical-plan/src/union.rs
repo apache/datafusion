@@ -98,13 +98,12 @@ impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        let cache = PlanPropertiesCache::new_default(schema);
+        let cache = Self::create_cache(&inputs, schema);
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
 
     /// Get inputs of the execution plan
@@ -112,16 +111,18 @@ impl UnionExec {
         &self.inputs
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        inputs: &[Arc<dyn ExecutionPlan>],
+        schema: SchemaRef,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
         // TODO: In some cases, we should be able to preserve some equivalence
         //       classes and constants. Add support for such cases.
-        let children_eqs = self
-            .inputs
+        let children_eqs = inputs
             .iter()
             .map(|child| child.equivalence_properties())
             .collect::<Vec<_>>();
-        let mut eq_properties = EquivalenceProperties::new(self.schema());
+        let mut eq_properties = EquivalenceProperties::new(schema);
         // Use the ordering equivalence class of the first child as the seed:
         let mut meets = children_eqs[0]
             .oeq_class()
@@ -152,18 +153,16 @@ impl UnionExec {
         eq_properties.add_new_orderings(meets);
 
         // Calculate output partitioning; i.e. sum output partitions of the inputs.
-        let num_partitions = self
-            .inputs
+        let num_partitions = inputs
             .iter()
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
 
         // Determine execution mode:
-        let mode = exec_mode_flatten(self.inputs.iter());
+        let mode = exec_mode_flatten(inputs.iter());
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -323,20 +322,17 @@ pub struct InterleaveExec {
 impl InterleaveExec {
     /// Create a new InterleaveExec
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        let schema = union_schema(&inputs);
-
         if !can_interleave(inputs.iter()) {
             return internal_err!(
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
         }
-        let cache = PlanPropertiesCache::new_default(schema);
+        let cache = Self::create_cache(&inputs);
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
-        .with_cache())
+        })
     }
 
     /// Get inputs of the execution plan
@@ -344,18 +340,15 @@ impl InterleaveExec {
         &self.inputs
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(inputs: &[Arc<dyn ExecutionPlan>]) -> PlanPropertiesCache {
+        let schema = union_schema(inputs);
+        let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
-        let output_partitioning = self.inputs[0].output_partitioning().clone();
+        let output_partitioning = inputs[0].output_partitioning().clone();
         // Determine execution mode:
-        let mode = exec_mode_flatten(self.inputs.iter());
+        let mode = exec_mode_flatten(inputs.iter());
 
-        self.cache = self
-            .cache
-            .with_partitioning(output_partitioning)
-            .with_exec_mode(mode);
-
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

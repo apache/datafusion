@@ -33,6 +33,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
 #[derive(Debug)]
@@ -113,13 +114,12 @@ impl ValuesExec {
             }
         }
 
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone());
         Ok(ValuesExec {
             schema,
             data: batches,
             cache,
-        }
-        .with_cache())
+        })
     }
 
     /// provides the data
@@ -127,13 +127,14 @@ impl ValuesExec {
         self.data.clone()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

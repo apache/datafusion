@@ -34,6 +34,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::Stream;
 use tokio::sync::Barrier;
@@ -132,14 +133,13 @@ impl MockExec {
     /// ensure any poll loops are correct. This behavior can be
     /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone());
         Self {
             data,
             schema,
             use_task: true,
             cache,
         }
-        .with_cache()
     }
 
     /// If `use_task` is true (the default) then the batches are sent
@@ -150,15 +150,14 @@ impl MockExec {
         self
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -290,14 +289,13 @@ impl BarrierExec {
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
         let barrier = Arc::new(Barrier::new(data.len() + 1));
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone(), &data);
         Self {
             data,
             schema,
             barrier,
             cache,
         }
-        .with_cache()
     }
 
     /// wait until all the input streams and this function is ready
@@ -307,15 +305,13 @@ impl BarrierExec {
         println!("BarrierExec::wait done waiting");
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(self.data.len()))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+    fn create_cache(schema: SchemaRef, data: &[Vec<RecordBatch>]) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(data.len()),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -412,19 +408,18 @@ impl ErrorExec {
             DataType::Int64,
             true,
         )]));
-        let cache = PlanPropertiesCache::new_default(schema.clone());
-        Self { cache }.with_cache()
+        let cache = Self::create_cache(schema.clone());
+        Self { cache }
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -486,24 +481,22 @@ impl StatisticsExec {
                 .column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
+        let cache = Self::create_cache(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(2))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(2),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -567,9 +560,6 @@ pub struct BlockingExec {
     /// Schema that is mocked by this plan.
     schema: SchemaRef,
 
-    /// Number of output partitions.
-    n_partitions: usize,
-
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
     cache: PlanPropertiesCache,
@@ -578,14 +568,12 @@ pub struct BlockingExec {
 impl BlockingExec {
     /// Create new [`BlockingExec`] with a give schema and number of partitions.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(schema.clone(), n_partitions);
         Self {
             schema,
-            n_partitions,
             refs: Default::default(),
             cache,
         }
-        .with_cache()
     }
 
     /// Weak pointer that can be used for ref-counting this execution plan and its streams.
@@ -597,15 +585,14 @@ impl BlockingExec {
         Arc::downgrade(&self.refs)
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(self.n_partitions))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -719,13 +706,13 @@ impl PanicExec {
     /// Create new [`PanicExec`] with a give schema and number of
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let batches_until_panics = vec![0; n_partitions];
+        let cache = Self::create_cache(schema.clone(), &batches_until_panics);
         Self {
             schema,
-            batches_until_panics: vec![0; n_partitions],
+            batches_until_panics,
             cache,
         }
-        .with_cache()
     }
 
     /// Set the number of batches prior to panic for a partition
@@ -734,17 +721,18 @@ impl PanicExec {
         self
     }
 
-    fn with_cache(mut self) -> Self {
-        let num_partitions = self.batches_until_panics.len();
+    fn create_cache(
+        schema: SchemaRef,
+        batches_until_panics: &[usize],
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let num_partitions = batches_until_panics.len();
 
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(num_partitions))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(num_partitions),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

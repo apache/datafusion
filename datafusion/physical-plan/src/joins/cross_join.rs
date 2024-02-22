@@ -27,9 +27,9 @@ use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    exec_mode_flatten, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionMode, ExecutionPlan, PlanPropertiesCache, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -77,7 +77,7 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns));
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let cache = Self::create_cache(&left, &right, schema.clone());
         CrossJoinExec {
             left,
             right,
@@ -86,7 +86,6 @@ impl CrossJoinExec {
             metrics: ExecutionPlanMetricsSet::default(),
             cache,
         }
-        .with_cache()
     }
 
     /// left (build) side which gets loaded in memory
@@ -99,15 +98,19 @@ impl CrossJoinExec {
         &self.right
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
         let eq_properties = join_equivalence_properties(
-            self.left.equivalence_properties().clone(),
-            self.right.equivalence_properties().clone(),
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
             &JoinType::Full,
-            self.schema(),
+            schema,
             &[false, false],
             None,
             &[],
@@ -117,19 +120,18 @@ impl CrossJoinExec {
         // TODO: Optimize the cross join implementation to generate M * N
         //       partitions.
         let output_partitioning = adjust_right_output_partitioning(
-            self.right.output_partitioning(),
-            self.left.schema().fields.len(),
+            right.output_partitioning(),
+            left.schema().fields.len(),
         );
 
         // Determine the execution mode:
-        let mode = match (self.left.execution_mode(), self.right.execution_mode()) {
-            (ExecutionMode::Bounded, ExecutionMode::Bounded) => ExecutionMode::Bounded,
+        let mut mode = exec_mode_flatten([left, right]);
+        if mode.is_unbounded() {
             // If any of the inputs is unbounded, cross join breaks the pipeline.
-            (_, _) => ExecutionMode::PipelineBreaking,
-        };
+            mode = ExecutionMode::PipelineBreaking;
+        }
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

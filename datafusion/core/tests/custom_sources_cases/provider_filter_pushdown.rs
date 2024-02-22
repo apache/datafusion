@@ -35,6 +35,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 
@@ -62,19 +63,17 @@ struct CustomPlan {
 
 impl CustomPlan {
     fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema);
-        Self { batches, cache }.with_cache()
+        let cache = Self::create_cache(schema);
+        Self { batches, cache }
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

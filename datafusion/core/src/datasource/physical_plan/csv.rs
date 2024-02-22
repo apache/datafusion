@@ -53,7 +53,6 @@ use tokio::task::JoinSet;
 pub struct CsvExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
     quote: u8,
@@ -77,11 +76,14 @@ impl CsvExec {
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = PlanPropertiesCache::new_default(projected_schema);
+        let cache = Self::create_cache(
+            projected_schema,
+            &projected_output_ordering,
+            &base_config,
+        );
         Self {
             base_config,
             projected_statistics,
-            projected_output_ordering,
             has_header,
             delimiter,
             quote,
@@ -90,7 +92,6 @@ impl CsvExec {
             file_compression_type,
             cache,
         }
-        .with_cache()
     }
 
     /// Ref to the base configs
@@ -116,29 +117,29 @@ impl CsvExec {
         self.escape
     }
 
-    fn output_partitioning_helper(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanPropertiesCache {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        );
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
-        self.cache = PlanPropertiesCache::new(
+        PlanPropertiesCache::new(
             eq_properties,
-            self.output_partitioning_helper(), // Output Partitioning
-            ExecutionMode::Bounded,            // Execution Mode
-        );
-        self
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            ExecutionMode::Bounded,                             // Execution Mode
+        )
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
         self.base_config.file_groups = file_groups;
         // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = self.output_partitioning_helper();
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
         self.cache = self.cache.with_partitioning(output_partitioning);
         self
     }

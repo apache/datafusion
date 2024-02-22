@@ -80,8 +80,8 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = PlanPropertiesCache::new_default(schema.clone());
-        let window = Self {
+        let cache = Self::create_cache(schema.clone(), &input, &window_expr);
+        Ok(Self {
             input,
             window_expr,
             schema,
@@ -89,8 +89,7 @@ impl WindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
             cache,
-        };
-        Ok(window.with_cache())
+        })
     }
 
     /// Window expressions
@@ -117,18 +116,21 @@ impl WindowAggExec {
         )
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        schema: SchemaRef,
+        input: &Arc<dyn ExecutionPlan>,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
-        let eq_properties =
-            window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
+        let eq_properties = window_equivalence_properties(&schema, input, window_expr);
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
         // would be either 1 or more than 1 depending on the presense of repartitioning.
-        let output_partitioning = self.input.output_partitioning().clone();
+        let output_partitioning = input.output_partitioning().clone();
 
         // Determine execution mode:
-        let mode = match self.input.execution_mode() {
+        let mode = match input.execution_mode() {
             ExecutionMode::Bounded => ExecutionMode::Bounded,
             ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
                 ExecutionMode::PipelineBreaking
@@ -136,8 +138,7 @@ impl WindowAggExec {
         };
 
         // Construct properties cache:
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

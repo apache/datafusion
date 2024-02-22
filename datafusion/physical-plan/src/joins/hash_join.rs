@@ -65,6 +65,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 
+use crate::joins::utils::JoinOnRef;
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -327,7 +328,14 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
+        let cache = Self::create_cache(
+            &left,
+            &right,
+            Arc::new(schema.clone()),
+            *join_type,
+            &on,
+            partition_mode,
+        );
 
         Ok(HashJoinExec {
             left,
@@ -343,8 +351,7 @@ impl HashJoinExec {
             column_indices,
             null_equals_null,
             cache,
-        }
-        .with_cache())
+        })
     }
 
     /// left (build) side which gets hashed
@@ -399,25 +406,29 @@ impl HashJoinExec {
         JoinSide::Right
     }
 
-    fn with_cache(mut self) -> Self {
-        let left = &self.left;
-        let right = &self.right;
-        let schema = self.schema();
+    fn create_cache(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        on: JoinOnRef,
+        mode: PartitionMode,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
-            &self.join_type,
+            &join_type,
             schema,
-            &Self::maintains_input_order(self.join_type),
+            &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
-            &self.on,
+            on,
         );
 
         // Get output partitioning:
         let left_columns_len = left.schema().fields.len();
-        let output_partitioning = match self.mode {
-            PartitionMode::CollectLeft => match self.join_type {
+        let output_partitioning = match mode {
+            PartitionMode::CollectLeft => match join_type {
                 JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
                     right.output_partitioning(),
                     left_columns_len,
@@ -433,7 +444,7 @@ impl HashJoinExec {
                 ),
             },
             PartitionMode::Partitioned => partitioned_join_output_partitioning(
-                self.join_type,
+                join_type,
                 left.output_partitioning(),
                 right.output_partitioning(),
                 left_columns_len,
@@ -449,7 +460,7 @@ impl HashJoinExec {
         let pipeline_breaking = left.execution_mode().is_unbounded()
             || (right.execution_mode().is_unbounded()
                 && matches!(
-                    self.join_type,
+                    join_type,
                     JoinType::Left
                         | JoinType::Full
                         | JoinType::LeftAnti
@@ -462,8 +473,7 @@ impl HashJoinExec {
             exec_mode_flatten([left, right])
         };
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

@@ -540,22 +540,6 @@ impl PlanPropertiesCache {
         }
     }
 
-    /// Construct a default `PlanPropertiesCache`, for a given schema.
-    pub fn new_default(schema: SchemaRef) -> PlanPropertiesCache {
-        // Default values are the most restrictive possible values.
-        let eq_properties = EquivalenceProperties::new(schema);
-        // Please note that this default is not safe, and should be overwritten.
-        let partitioning = Partitioning::UnknownPartitioning(0);
-        let exec_mode = ExecutionMode::PipelineBreaking;
-        let output_ordering = None;
-        Self {
-            eq_properties,
-            partitioning,
-            exec_mode,
-            output_ordering,
-        }
-    }
-
     /// Overwrite output partitioning with its new value.
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.partitioning = partitioning;

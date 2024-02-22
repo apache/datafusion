@@ -91,6 +91,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion_physical_expr::EquivalenceProperties;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -416,19 +417,18 @@ struct TopKExec {
 
 impl TopKExec {
     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
-        let cache = PlanPropertiesCache::new_default(input.schema());
-        Self { input, k, cache }.with_cache()
+        let cache = Self::create_cache(input.schema());
+        Self { input, k, cache }
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            // Execution Mode
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

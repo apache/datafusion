@@ -50,7 +50,11 @@ impl AvroExec {
     pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
+        let cache = Self::create_cache(
+            projected_schema.clone(),
+            &projected_output_ordering,
+            &base_config,
+        );
         Self {
             base_config,
             projected_schema,
@@ -59,27 +63,26 @@ impl AvroExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
-        .with_cache()
     }
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanPropertiesCache {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        );
-        let n_partitions = self.base_config.file_groups.len();
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let n_partitions = file_scan_config.file_groups.len();
 
-        self.cache = PlanPropertiesCache::new(
+        PlanPropertiesCache::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
             ExecutionMode::Bounded,                          // Execution Mode
-        );
-        self
+        )
     }
 }
 

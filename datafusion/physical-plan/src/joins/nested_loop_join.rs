@@ -109,19 +109,19 @@ impl NestedLoopJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
-        let cache = PlanPropertiesCache::new_default(Arc::new(schema.clone()));
+        let schema = Arc::new(schema);
+        let cache = Self::create_cache(&left, &right, schema.clone(), *join_type);
         Ok(NestedLoopJoinExec {
             left,
             right,
             filter,
             join_type: *join_type,
-            schema: Arc::new(schema),
+            schema,
             inner_table: Default::default(),
             column_indices,
             metrics: Default::default(),
             cache,
-        }
-        .with_cache())
+        })
     }
 
     /// left side
@@ -144,39 +144,43 @@ impl NestedLoopJoinExec {
         &self.join_type
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
-            self.left.equivalence_properties().clone(),
-            self.right.equivalence_properties().clone(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &[false, false],
             None,
             // No on columns in nested loop join
             &[],
         );
 
         // Get output partitioning,
-        let output_partitioning = if self.join_type == JoinType::Full {
-            self.left.output_partitioning().clone()
+        let output_partitioning = if join_type == JoinType::Full {
+            left.output_partitioning().clone()
         } else {
             partitioned_join_output_partitioning(
-                self.join_type,
-                self.left.output_partitioning(),
-                self.right.output_partitioning(),
-                self.left.schema().fields.len(),
+                join_type,
+                left.output_partitioning(),
+                right.output_partitioning(),
+                left.schema().fields.len(),
             )
         };
 
         // Determine execution mode:
-        let mut mode = exec_mode_flatten([&self.left, &self.right]);
+        let mut mode = exec_mode_flatten([left, right]);
         if mode.is_unbounded() {
             mode = ExecutionMode::PipelineBreaking;
         }
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

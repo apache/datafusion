@@ -55,6 +55,7 @@ use tempfile::TempDir;
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
+use datafusion_physical_expr::EquivalenceProperties;
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -226,7 +227,6 @@ impl TableProvider for TestTableProvider {
 pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
-    partitions: usize,
     cache: PlanPropertiesCache,
 }
 impl UnboundedExec {
@@ -238,29 +238,30 @@ impl UnboundedExec {
         batch: RecordBatch,
         partitions: usize,
     ) -> Self {
-        let cache = PlanPropertiesCache::new_default(batch.schema());
+        let cache = Self::create_cache(batch.schema(), batch_produce, partitions);
         Self {
             batch_produce,
             batch,
-            partitions,
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        let mode = if self.batch_produce.is_none() {
+    fn create_cache(
+        schema: SchemaRef,
+        batch_produce: Option<usize>,
+        n_partitions: usize,
+    ) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let mode = if batch_produce.is_none() {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
         };
-        self.cache = self
-            .cache
-            // Output Partitioning
-            .with_partitioning(Partitioning::UnknownPartitioning(self.partitions))
-            // Execution Mode
-            .with_exec_mode(mode);
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions),
+            mode,
+        )
     }
 }
 

@@ -33,7 +33,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+
 use futures::{ready, Stream, StreamExt};
 
 /// Recursive query execution plan.
@@ -81,7 +82,7 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, work_table.clone())?;
-        let cache = PlanPropertiesCache::new_default(static_term.schema());
+        let cache = Self::create_cache(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -90,17 +91,17 @@ impl RecursiveQueryExec {
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
-        .with_cache())
+        })
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            .with_exec_mode(ExecutionMode::Bounded);
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

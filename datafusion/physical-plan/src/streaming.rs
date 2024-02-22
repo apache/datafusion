@@ -85,16 +85,22 @@ impl StreamingTableExec {
             Some(p) => Arc::new(schema.project(p)?),
             None => schema,
         };
-        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
+        let projected_output_ordering =
+            projected_output_ordering.into_iter().collect::<Vec<_>>();
+        let cache = Self::create_cache(
+            projected_schema.clone(),
+            &projected_output_ordering,
+            &partitions,
+            infinite,
+        );
         Ok(Self {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
-            projected_output_ordering: projected_output_ordering.into_iter().collect(),
+            projected_output_ordering,
             infinite,
             cache,
-        }
-        .with_cache())
+        })
     }
 
     pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
@@ -121,26 +127,26 @@ impl StreamingTableExec {
         self.infinite
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        partitions: &[Arc<dyn PartitionStream>],
+        is_infinite: bool,
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        );
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
         // Get output partitioning:
-        let output_partitioning =
-            Partitioning::UnknownPartitioning(self.partitions.len());
+        let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
 
         // Determine execution mode:
-        let mode = if self.infinite {
+        let mode = if is_infinite {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
         };
 
-        self.cache = PlanPropertiesCache::new(eq_properties, output_partitioning, mode);
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
     }
 }
 

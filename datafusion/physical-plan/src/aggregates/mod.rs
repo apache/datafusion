@@ -260,9 +260,6 @@ pub struct AggregateExec {
     /// We need the input schema of partial aggregate to be able to deserialize aggregate
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
-    /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr that maps input to output
-    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
@@ -365,8 +362,14 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let cache = PlanPropertiesCache::new_default(schema.clone());
-        let aggregate = AggregateExec {
+        let cache = Self::create_cache(
+            &input,
+            schema.clone(),
+            &projection_mapping,
+            &mode,
+            &input_order_mode,
+        );
+        Ok(AggregateExec {
             mode,
             group_by,
             aggr_expr,
@@ -374,14 +377,12 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
-            projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
             input_order_mode,
             cache,
-        };
-        Ok(aggregate.with_cache())
+        })
     }
 
     /// Aggregation mode (full, partial)
@@ -505,26 +506,31 @@ impl AggregateExec {
         true
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        projection_mapping: &ProjectionMapping,
+        mode: &AggregateMode,
+        input_order_mode: &InputOrderMode,
+    ) -> PlanPropertiesCache {
         // Construct equivalence properties:
-        let eq_properties = self
-            .input
+        let eq_properties = input
             .equivalence_properties()
-            .project(&self.projection_mapping, self.schema());
+            .project(projection_mapping, schema);
 
         // Get output partitioning:
-        let mut output_partitioning = self.input.output_partitioning().clone();
-        if self.mode.is_first_stage() {
+        let mut output_partitioning = input.output_partitioning().clone();
+        if mode.is_first_stage() {
             // First stage aggregation will not change the output partitioning,
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
-            let input_eq_properties = self.input.equivalence_properties();
+            let input_eq_properties = input.equivalence_properties();
             if let Partitioning::Hash(exprs, part) = output_partitioning {
                 let normalized_exprs = exprs
                     .iter()
                     .map(|expr| {
                         input_eq_properties
-                            .project_expr(expr, &self.projection_mapping)
+                            .project_expr(expr, projection_mapping)
                             .unwrap_or_else(|| {
                                 Arc::new(UnKnownColumn::new(&expr.to_string()))
                             })
@@ -535,18 +541,15 @@ impl AggregateExec {
         }
 
         // Determine execution mode:
-        let mut exec_mode = self.input.execution_mode();
+        let mut exec_mode = input.execution_mode();
         if exec_mode == ExecutionMode::Unbounded
-            && self.input_order_mode == InputOrderMode::Linear
+            && *input_order_mode == InputOrderMode::Linear
         {
             // Cannot run without breaking the pipeline
             exec_mode = ExecutionMode::PipelineBreaking;
         }
 
-        self.cache =
-            PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode);
-
-        self
+        PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode)
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -1622,19 +1625,19 @@ mod tests {
     impl TestYieldingExec {
         fn new(yield_first: bool) -> Self {
             let schema = some_data().0;
-            let cache = PlanPropertiesCache::new_default(schema);
-            Self { yield_first, cache }.with_cache()
+            let cache = Self::create_cache(schema);
+            Self { yield_first, cache }
         }
 
-        fn with_cache(mut self) -> Self {
-            self.cache = self
-                .cache
+        fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+            let eq_properties = EquivalenceProperties::new(schema);
+            PlanPropertiesCache::new(
+                eq_properties,
                 // Output Partitioning
-                .with_partitioning(Partitioning::UnknownPartitioning(1))
+                Partitioning::UnknownPartitioning(1),
                 // Execution Mode
-                .with_exec_mode(ExecutionMode::Bounded);
-
-            self
+                ExecutionMode::Bounded,
+            )
         }
     }
 

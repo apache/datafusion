@@ -35,6 +35,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use tokio::time::timeout;
@@ -199,22 +200,21 @@ impl CustomExec {
         db: CustomDataSource,
     ) -> Self {
         let projected_schema = project_schema(&schema, projections).unwrap();
-        let cache = PlanPropertiesCache::new_default(projected_schema.clone());
+        let cache = Self::create_cache(projected_schema.clone());
         Self {
             db,
             projected_schema,
             cache,
         }
-        .with_cache()
     }
 
-    fn with_cache(mut self) -> Self {
-        self.cache = self
-            .cache
-            .with_partitioning(Partitioning::UnknownPartitioning(1))
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanPropertiesCache::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 

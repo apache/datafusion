@@ -121,8 +121,8 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
-        let cache = PlanPropertiesCache::new_default(schema.clone());
-        let window = Self {
+        let cache = Self::create_cache(&input, &schema, &window_expr);
+        Ok(Self {
             input,
             window_expr,
             schema,
@@ -131,8 +131,7 @@ impl BoundedWindowAggExec {
             input_order_mode,
             ordered_partition_by_indices,
             cache,
-        };
-        Ok(window.with_cache())
+        })
     }
 
     /// Window expressions
@@ -183,23 +182,25 @@ impl BoundedWindowAggExec {
         })
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: &SchemaRef,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> PlanPropertiesCache {
         // Calculate equivalence properties:
-        let eq_properties =
-            window_equivalence_properties(&self.schema, &self.input, &self.window_expr);
+        let eq_properties = window_equivalence_properties(schema, input, window_expr);
 
         // As we can have repartitioning using the partition keys, this can
         // be either one or more than one, depending on the presence of
         // repartitioning.
-        let output_partitioning = self.input.output_partitioning().clone();
+        let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache
-        self.cache = PlanPropertiesCache::new(
-            eq_properties,               // Equivalence Properties
-            output_partitioning,         // Output Partitioning
-            self.input.execution_mode(), // Execution Mode
-        );
-        self
+        PlanPropertiesCache::new(
+            eq_properties,          // Equivalence Properties
+            output_partitioning,    // Output Partitioning
+            input.execution_mode(), // Execution Mode
+        )
     }
 }
 

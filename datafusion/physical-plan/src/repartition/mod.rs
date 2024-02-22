@@ -44,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
@@ -436,12 +436,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        if self.preserve_order {
-            vec![true]
-        } else {
-            // We preserve ordering when input partitioning is 1
-            vec![self.input().output_partitioning().partition_count() <= 1]
-        }
+        Self::maintains_input_order_helper(self.input(), self.preserve_order)
     }
 
     fn execute(
@@ -602,7 +597,8 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
-        let cache = PlanPropertiesCache::new_default(input.schema());
+        let preserve_order = false;
+        let cache = Self::create_cache(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
             partitioning,
@@ -611,27 +607,49 @@ impl RepartitionExec {
                 abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
-            preserve_order: false,
+            preserve_order,
             cache,
-        }
-        .with_cache())
+        })
     }
 
-    fn with_cache(mut self) -> Self {
+    fn maintains_input_order_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> Vec<bool> {
+        if preserve_order {
+            vec![true]
+        } else {
+            // We preserve ordering when input partitioning is 1
+            vec![input.output_partitioning().partition_count() <= 1]
+        }
+    }
+
+    fn eq_properties_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> EquivalenceProperties {
         // Equivalence Properties
-        let mut eq_properties = self.input.equivalence_properties().clone();
+        let mut eq_properties = input.equivalence_properties().clone();
         // If the ordering is lost, reset the ordering equivalence class:
-        if !self.maintains_input_order()[0] {
+        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
             eq_properties.clear_orderings();
         }
+        eq_properties
+    }
 
-        self.cache = PlanPropertiesCache::new(
-            eq_properties,               // Equivalence Properties
-            self.partitioning.clone(),   // Output Partitioning
-            self.input.execution_mode(), // Execution Mode
-        );
+    fn create_cache(
+        input: &Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        preserve_order: bool,
+    ) -> PlanPropertiesCache {
+        // Equivalence Properties
+        let eq_properties = Self::eq_properties_helper(input, preserve_order);
 
-        self
+        PlanPropertiesCache::new(
+            eq_properties,          // Equivalence Properties
+            partitioning,           // Output Partitioning
+            input.execution_mode(), // Execution Mode
+        )
     }
 
     /// Specify if this reparititoning operation should preserve the order of
@@ -648,7 +666,9 @@ impl RepartitionExec {
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
-        self.with_cache()
+        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
+        self.cache = self.cache.with_eq_properties(eq_properties);
+        self
     }
 
     /// Return the sort expressions that are used to merge

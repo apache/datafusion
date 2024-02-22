@@ -32,6 +32,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use log::trace;
 
@@ -48,20 +49,20 @@ pub struct PlaceholderRowExec {
 impl PlaceholderRowExec {
     /// Create a new PlaceholderRowExec
     pub fn new(schema: SchemaRef) -> Self {
-        let cache = PlanPropertiesCache::new_default(schema.clone());
+        let partitions = 1;
+        let cache = Self::create_cache(schema.clone(), partitions);
         PlaceholderRowExec {
             schema,
-            partitions: 1,
+            partitions,
             cache,
         }
-        .with_cache()
     }
 
     /// Create a new PlaceholderRowExecPlaceholderRowExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
         // Update output partitioning when updating partitions:
-        let output_partitioning = self.output_partitioning_helper();
+        let output_partitioning = Self::output_partitioning_helper(self.partitions);
         self.cache = self.cache.with_partitioning(output_partitioning);
         self
     }
@@ -89,20 +90,20 @@ impl PlaceholderRowExec {
         })
     }
 
-    fn output_partitioning_helper(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions)
+    fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
+        Partitioning::UnknownPartitioning(n_partitions)
     }
 
-    fn with_cache(mut self) -> Self {
+    fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
+        let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
-        let output_partitioning = self.output_partitioning_helper();
+        let output_partitioning = Self::output_partitioning_helper(n_partitions);
 
-        self.cache = self
-            .cache
-            .with_partitioning(output_partitioning)
-            .with_exec_mode(ExecutionMode::Bounded);
-
-        self
+        PlanPropertiesCache::new(
+            eq_properties,
+            output_partitioning,
+            ExecutionMode::Bounded,
+        )
     }
 }
 
