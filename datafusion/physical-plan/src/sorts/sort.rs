@@ -56,7 +56,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
-use tokio::task;
+use tokio::task::JoinSet;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -604,8 +604,9 @@ async fn spill_sorted_batches(
     schema: SchemaRef,
 ) -> Result<()> {
     let path: PathBuf = path.into();
-    let handle = task::spawn_blocking(move || write_sorted(batches, path, schema));
-    match handle.await {
+    let mut task = JoinSet::new();
+    task.spawn_blocking(move || write_sorted(batches, path, schema));
+    match task.join_next().await.expect("always 1 task is present") {
         Ok(r) => r,
         Err(e) => exec_err!("Error occurred while spilling {e}"),
     }
