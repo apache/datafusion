@@ -74,7 +74,7 @@ struct RepartitionExecState {
     >,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<JoinSet<()>>,
+    abort_helper: Arc<Vec<JoinSet<()>>>,
 }
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
@@ -522,7 +522,7 @@ impl ExecutionPlan for RepartitionExec {
             }
 
             // launch one async task per *input* partition
-            let mut join_set = JoinSet::new();
+            let mut join_sets = Vec::with_capacity(num_input_partitions);
             for i in 0..num_input_partitions {
                 let txs: HashMap<_, _> = state
                     .channels
@@ -546,15 +546,19 @@ impl ExecutionPlan for RepartitionExec {
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                join_set.spawn(Self::wait_for_task(
+                //
+                // We have to use JoinSet per input partition to ensure the ordering.
+                let mut wait_for_task = JoinSet::new();
+                wait_for_task.spawn(Self::wait_for_task(
                     input_task,
                     txs.into_iter()
                         .map(|(partition, (tx, _reservation))| (partition, tx))
                         .collect(),
                 ));
+                join_sets.push(wait_for_task);
             }
 
-            state.abort_helper = Arc::new(join_set)
+            state.abort_helper = Arc::new(join_sets)
         }
 
         trace!(
@@ -637,7 +641,7 @@ impl RepartitionExec {
             partitioning,
             state: Arc::new(Mutex::new(RepartitionExecState {
                 channels: HashMap::new(),
-                abort_helper: Arc::new(JoinSet::new()),
+                abort_helper: Arc::new(Vec::new()),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order: false,
@@ -813,7 +817,7 @@ struct RepartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<JoinSet<()>>,
+    drop_helper: Arc<Vec<JoinSet<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -877,7 +881,7 @@ struct PerPartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<JoinSet<()>>,
+    drop_helper: Arc<Vec<JoinSet<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
