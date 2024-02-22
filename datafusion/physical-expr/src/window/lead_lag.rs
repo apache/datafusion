@@ -116,7 +116,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
             ignore_nulls: self.ignore_nulls,
-            non_nulls_idx: -1,
+            non_nulls_idx: vec![],
         }))
     }
 
@@ -137,8 +137,8 @@ pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: Option<ScalarValue>,
     ignore_nulls: bool,
-    // Last known index for not null value
-    non_nulls_idx: i64,
+    // Vector contains row indexes where original value is not NULL
+    non_nulls_idx: Vec<usize>,
 }
 
 fn create_empty_array(
@@ -216,8 +216,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
         // TODO: try to get rid of i64 usize conversion
-        // TODO: do not recalc default value every call
-        // TODO: lead mode
+        // TODO: do not recalculate default value every call
+        // TODO: support LEAD mode for IGNORE NULLS
         let array = &values[0];
         let dtype = array.data_type();
         let len = array.len() as i64;
@@ -229,12 +229,25 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             range.start as i64 - self.shift_offset
         };
 
-        // Support LAG only for now, as LEAD requires some refactoring first
+        // Support LAG only for now, as LEAD requires some brainstorm first
+        // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
+        // If current row index points to NULL value the row is NOT counted
         if self.ignore_nulls && self.is_causal() {
-            if idx >= 0 && idx < len && array.is_valid(idx as usize) {
-                self.non_nulls_idx = idx;
+            let prev_range_end = range.end - 1;
+            // Find a nonNULL row index that shifted by offset comparing to current row index
+            if self.shift_offset as usize <= self.non_nulls_idx.len() {
+                idx = *unsafe {
+                    self.non_nulls_idx.get_unchecked(
+                        self.non_nulls_idx.len() - self.shift_offset as usize,
+                    )
+                } as i64;
             } else {
-                idx = self.non_nulls_idx
+                idx = -1;
+            }
+
+            // Keep the vector of nonNULL row indexes
+            if prev_range_end < array.len() && array.is_valid(prev_range_end) {
+                self.non_nulls_idx.push(prev_range_end);
             }
         }
 

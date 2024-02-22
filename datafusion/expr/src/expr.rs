@@ -1783,16 +1783,18 @@ fn create_name(e: &Expr) -> Result<String> {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
 
-            if null_treatment.is_some() {
-                parts.push(format!("{}", null_treatment.unwrap()));
+            if let Some(nt) = null_treatment {
+                parts.push(format!("{}", nt));
             }
 
             if !partition_by.is_empty() {
                 parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
             }
+
             if !order_by.is_empty() {
                 parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
             }
+
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
         }

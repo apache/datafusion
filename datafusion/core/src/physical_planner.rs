@@ -754,6 +754,7 @@ impl DefaultPhysicalPlanner {
                     // If all window expressions can run with bounded memory,
                     // choose the bounded window variant:
                     Ok(if uses_bounded_memory {
+                        dbg!("Bounded");
                         Arc::new(BoundedWindowAggExec::try_new(
                             window_expr,
                             input_exec,
@@ -761,6 +762,7 @@ impl DefaultPhysicalPlanner {
                             InputOrderMode::Sorted,
                         )?)
                     } else {
+                        dbg!("Unbounded");
                         Arc::new(WindowAggExec::try_new(
                             window_expr,
                             input_exec,
