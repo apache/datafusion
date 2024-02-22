@@ -25,7 +25,9 @@ use arrow::array::Int64Array;
 use arrow::array::Int8Array;
 use arrow::datatypes::DataType;
 use datafusion_common::not_impl_err;
+use datafusion_common::plan_datafusion_err;
 use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_expr::utils;
 use datafusion_expr::ColumnarValue;
 
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -91,6 +93,16 @@ impl ScalarUDFImpl for AbsFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 1 {
+            return Err(plan_datafusion_err!(
+                "{}",
+                utils::generate_signature_error_msg(
+                    self.name(),
+                    self.signature().clone(),
+                    arg_types,
+                )
+            ));
+        }
         match arg_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             DataType::Float64 => Ok(DataType::Float64),
@@ -105,7 +117,7 @@ impl ScalarUDFImpl for AbsFunc {
             DataType::UInt64 => Ok(DataType::UInt64),
             DataType::Decimal128(precision, scale) => Ok(DataType::Decimal128(precision, scale)),
             DataType::Decimal256(precision, scale) => Ok(DataType::Decimal256(precision, scale)),
-            _ => internal_err!("Unsupported data type for abs function"),
+            _ => not_impl_err!("Unsupported data type {} for function abs", arg_types[0].to_string()),
         }
     }
 
