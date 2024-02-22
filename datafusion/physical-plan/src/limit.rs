@@ -506,13 +506,15 @@ impl LimitStream {
             //
             self.fetch -= batch.num_rows();
             Some(batch)
-        } else {
+        } else if batch.num_rows() >= self.fetch {
             let batch_rows = self.fetch;
             self.fetch = 0;
             self.input = None; // clear input so it can be dropped early
 
             // It is guaranteed that batch_rows is <= batch.num_rows
             Some(batch.slice(0, batch_rows))
+        } else {
+            unreachable!()
         }
     }
 }
