@@ -23,12 +23,14 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
+use arrow_array::Array;
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
 
@@ -118,7 +120,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
             ignore_nulls: self.ignore_nulls,
-            non_nulls_idx: vec![],
+            non_null_offsets: VecDeque::new(),
         }))
     }
 
@@ -139,8 +141,8 @@ pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: Option<ScalarValue>,
     ignore_nulls: bool,
-    // Vector contains row indexes where original value is not NULL
-    non_nulls_idx: Vec<usize>,
+    // VecDeque contains offset values that between non-null entries
+    non_null_offsets: VecDeque<usize>,
 }
 
 impl WindowShiftEvaluator {
@@ -203,8 +205,12 @@ fn shift_with_default_value(
 impl PartitionEvaluator for WindowShiftEvaluator {
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         if self.is_lag() {
-            let offset = self.shift_offset as usize;
-            let start = idx.saturating_sub(offset);
+            let start = if self.non_null_offsets.len() == self.shift_offset as usize {
+                let offset: usize = self.non_null_offsets.iter().sum();
+                idx.saturating_sub(offset + 1)
+            } else {
+                0
+            };
             let end = idx + 1;
             Ok(Range { start, end })
         } else {
@@ -242,18 +248,26 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
         // If current row index points to NULL value the row is NOT counted
         if self.ignore_nulls && self.is_lag() {
-            let prev_range_end = range.end - 1;
-            // Find a nonNULL row index that shifted by offset comparing to current row index
-            if self.shift_offset as usize <= self.non_nulls_idx.len() {
-                let non_null_idx = self.non_nulls_idx.len() - self.shift_offset as usize;
-                idx = self.non_nulls_idx[non_null_idx] as i64;
+            // Find the nonNULL row index that shifted by offset comparing to current row index
+            idx = if self.non_null_offsets.len() == self.shift_offset as usize {
+                let total_offset: usize = self.non_null_offsets.iter().sum();
+                (range.end - 1 - total_offset) as i64
             } else {
-                idx = -1;
-            }
+                -1
+            };
 
-            // Keep the vector of nonNULL row indexes
-            if prev_range_end < array.len() && array.is_valid(prev_range_end) {
-                self.non_nulls_idx.push(prev_range_end);
+            // Keep track of offset values between non-null entries
+            if array.is_valid(range.end - 1) {
+                // Non-null add new offset
+                self.non_null_offsets.push_back(1);
+                if self.non_null_offsets.len() > self.shift_offset as usize {
+                    // WE do not need to keep track of more than `lag number of offset` values.
+                    self.non_null_offsets.pop_front();
+                }
+            } else if !self.non_null_offsets.is_empty() {
+                // Entry is null, increment offset value of the last entry.
+                let end_idx = self.non_null_offsets.len() - 1;
+                self.non_null_offsets[end_idx] += 1;
             }
         } else if self.ignore_nulls && !self.is_lag() {
             // IGNORE NULLS and LEAD mode.

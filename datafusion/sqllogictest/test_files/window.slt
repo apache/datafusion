@@ -4176,3 +4176,36 @@ select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
        lead(a, 2, null) respect nulls over (order by id desc) as x4,
        lead(a, 2, 'def') respect nulls over (order by id desc) as x5
 from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+
+statement ok
+set datafusion.execution.batch_size = 1000;
+
+query I
+SELECT LAG(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78
+63
+3
+24
+14
+
+# result should be same with above, when lag algorithm work with pruned data.
+# decreasing batch size, causes data to be produced in smaller chunks at the source.
+# Hence sliding window algorithm is used during calculations.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query I
+SELECT LAG(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78
+63
+3
+24
+14
