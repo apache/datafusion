@@ -86,9 +86,7 @@ fn compare_element_to_list(
     row_index: usize,
     eq: bool,
 ) -> Result<BooleanArray> {
-    if list_array_row.data_type() != element_array.data_type()
-        && !element_array.data_type().is_null()
-    {
+    if list_array_row.data_type() != element_array.data_type() {
         return exec_err!(
             "compare_element_to_list received incompatible types: '{:?}' and '{:?}'.",
             list_array_row.data_type(),
@@ -435,7 +433,6 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indexes = as_int64_array(&args[1])?;
             general_array_element::<i64>(array, indexes)
         }
-        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_element does not support type: {:?}",
             args[0].data_type()
