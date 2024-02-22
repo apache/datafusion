@@ -1499,6 +1499,7 @@ pub(crate) mod tests {
             },
             None,
             None,
+            &Default::default(),
         ))
     }
 

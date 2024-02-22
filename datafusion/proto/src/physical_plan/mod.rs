@@ -210,7 +210,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )
                     })
                     .transpose()?;
-                Ok(Arc::new(ParquetExec::new(base_config, predicate, None)))
+                Ok(Arc::new(ParquetExec::new(
+                    base_config,
+                    predicate,
+                    None,
+                    &Default::default(),
+                )))
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(

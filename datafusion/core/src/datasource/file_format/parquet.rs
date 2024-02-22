@@ -266,6 +266,7 @@ impl FileFormat for ParquetFormat {
             conf,
             predicate,
             self.metadata_size_hint(state.config_options()),
+            &(state.config().options().execution.parquet),
         )))
     }
 

@@ -17,11 +17,6 @@
 
 //! Execution plan for reading Parquet files
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::Arc;
-
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -41,6 +36,11 @@ use crate::{
         Statistics,
     },
 };
+use datafusion_common::config::ParquetOptions;
+use std::any::Any;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
@@ -111,6 +111,7 @@ impl ParquetExec {
         base_config: FileScanConfig,
         predicate: Option<Arc<dyn PhysicalExpr>>,
         metadata_size_hint: Option<usize>,
+        config: &ParquetOptions,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
@@ -120,33 +121,41 @@ impl ParquetExec {
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let file_schema = &base_config.file_schema;
-        let pruning_predicate = predicate
-            .clone()
-            .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+        let pruning_predicate = if config.pruning {
+            predicate
+                .clone()
+                .and_then(|predicate_expr| {
+                    match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                        Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
+                        Err(e) => {
+                            debug!("Could not create pruning predicate for: {e}");
+                            predicate_creation_errors.add(1);
+                            None
+                        }
+                    }
+                })
+                .filter(|p| !p.always_true())
+        } else {
+            None
+        };
+
+        let page_pruning_predicate = if config.pruning {
+            predicate.as_ref().and_then(|predicate_expr| {
+                match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
-                        debug!("Could not create pruning predicate for: {e}");
+                        debug!(
+                            "Could not create page pruning predicate for '{:?}': {}",
+                            pruning_predicate, e
+                        );
                         predicate_creation_errors.add(1);
                         None
                     }
                 }
             })
-            .filter(|p| !p.always_true());
-
-        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
-            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
-                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                Err(e) => {
-                    debug!(
-                        "Could not create page pruning predicate for '{:?}': {}",
-                        pruning_predicate, e
-                    );
-                    predicate_creation_errors.add(1);
-                    None
-                }
-            }
-        });
+        } else {
+            None
+        };
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
@@ -904,6 +913,7 @@ mod tests {
                 },
                 predicate,
                 None,
+                &Default::default(),
             );
 
             if pushdown_predicate {
@@ -1560,6 +1570,7 @@ mod tests {
                 },
                 None,
                 None,
+                Default::default(),
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
@@ -1674,6 +1685,7 @@ mod tests {
             },
             None,
             None,
+            &(state.config().options().execution.parquet),
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
         assert_eq!(parquet_exec.schema().as_ref(), &expected_schema);
@@ -1737,6 +1749,7 @@ mod tests {
             },
             None,
             None,
+            &(state.config().options().execution.parquet),
         );
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;

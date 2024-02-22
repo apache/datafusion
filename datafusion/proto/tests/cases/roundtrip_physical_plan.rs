@@ -560,6 +560,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         scan_config,
         Some(predicate),
         None,
+        Default::default(),
     )))
 }
 
@@ -586,7 +587,12 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
     };
 
-    roundtrip_test(Arc::new(ParquetExec::new(scan_config, None, None)))
+    roundtrip_test(Arc::new(ParquetExec::new(
+        scan_config,
+        None,
+        None,
+        &Default::default(),
+    )))
 }
 
 #[test]
