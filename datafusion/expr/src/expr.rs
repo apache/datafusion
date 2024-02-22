@@ -2015,11 +2015,6 @@ mod test {
                 .is_volatile()
                 .unwrap()
         );
-        assert!(
-            !ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Abs)
-                .is_volatile()
-                .unwrap()
-        );
 
         // UDF
         #[derive(Debug)]
