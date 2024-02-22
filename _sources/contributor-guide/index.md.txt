@@ -202,7 +202,7 @@ There are several tests of the public interface of the DataFusion library in the
 You can run these tests individually using `cargo` as normal command such as
 
 ```shell
-cargo test -p datafusion --test dataframe
+cargo test -p datafusion --test parquet_exec
 ```
 
 ## Benchmarks
@@ -337,4 +337,29 @@ After you've confirmed your prettier version, you can format all the `.md` files
 
 ```bash
 prettier -w {datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
+```
+
+## How to format `.toml` files
+
+We use `taplo` to format `.toml` files.
+
+For Rust developers, you can install it via:
+
+```sh
+cargo install taplo-cli --locked
+```
+
+> Refer to the [Installation section][doc] on other ways to install it.
+>
+> [doc]: https://taplo.tamasfe.dev/cli/installation/binary.html
+
+```bash
+$ taplo --version
+taplo 0.9.0
+```
+
+After you've confirmed your `taplo` version, you can format all the `.toml` files:
+
+```bash
+taplo fmt
 ```

@@ -495,6 +495,17 @@
      document
     </a>
    </li>
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#how-to-format-toml-files">
+     How to format
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       .toml
+      </span>
+     </code>
+     files
+    </a>
+   </li>
   </ul>
  </li>
 </ul>
@@ -706,7 +717,7 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <h3>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">¶</a></h3>
 <p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>dataframe
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_exec
 </pre></div>
 </div>
 </section>
@@ -848,6 +859,25 @@ new specifications as you see fit.</p>
 </div>
 <p>After you’ve confirmed your prettier version, you can format all the <code class="docutils literal notranslate"><span class="pre">.md</span></code> files:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>prettier<span class="w"> </span>-w<span class="w"> </span><span class="o">{</span>datafusion,datafusion-cli,datafusion-examples,dev,docs<span class="o">}</span>/**/*.md
+</pre></div>
+</div>
+</section>
+<section id="how-to-format-toml-files">
+<h2>How to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files<a class="headerlink" href="#how-to-format-toml-files" title="Link to this heading">¶</a></h2>
+<p>We use <code class="docutils literal notranslate"><span class="pre">taplo</span></code> to format <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files.</p>
+<p>For Rust developers, you can install it via:</p>
+<div class="highlight-sh notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>taplo-cli<span class="w"> </span>--locked
+</pre></div>
+</div>
+<blockquote>
+<div><p>Refer to the <a class="reference external" href="https://taplo.tamasfe.dev/cli/installation/binary.html">Installation section</a> on other ways to install it.</p>
+</div></blockquote>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>taplo<span class="w"> </span>--version
+taplo<span class="w"> </span><span class="m">0</span>.9.0
+</pre></div>
+</div>
+<p>After you’ve confirmed your <code class="docutils literal notranslate"><span class="pre">taplo</span></code> version, you can format all the <code class="docutils literal notranslate"><span class="pre">.toml</span></code> files:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>taplo<span class="w"> </span>fmt
 </pre></div>
 </div>
 </section>
