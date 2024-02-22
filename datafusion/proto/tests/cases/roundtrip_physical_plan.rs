@@ -560,7 +560,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         scan_config,
         Some(predicate),
         None,
-        Default::default(),
+        &Default::default(),
     )))
 }
 
