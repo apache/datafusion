@@ -2288,6 +2288,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.

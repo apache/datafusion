@@ -1060,6 +1060,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn many_to_many_round_robin_within_tokio_task() -> Result<()> {
         let join_handle: JoinHandle<Result<Vec<Vec<RecordBatch>>>> =
             tokio::spawn(async move {

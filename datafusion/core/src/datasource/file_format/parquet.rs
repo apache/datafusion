@@ -760,6 +760,9 @@ async fn column_serializer_task(
 }
 
 type ColSender = Sender<ArrowLeafColumn>;
+/// JoinSet per column to ensure the order of execution
+type ColumnWriterTask = JoinSet<Result<ArrowColumnWriter>>;
+
 /// Spawns a parallel serialization task for each column
 /// Returns join handles for each columns serialization task along with a send channel
 /// to send arrow arrays to each serialization task.
@@ -767,22 +770,25 @@ fn spawn_column_parallel_row_group_writer(
     schema: Arc<Schema>,
     parquet_props: Arc<WriterProperties>,
     max_buffer_size: usize,
-) -> Result<(JoinSet<Result<ArrowColumnWriter>>, Vec<ColSender>)> {
+) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
     let schema_desc = arrow_to_parquet_schema(&schema)?;
     let col_writers = get_column_writers(&schema_desc, &parquet_props, &schema)?;
     let num_columns = col_writers.len();
 
-    let mut col_writer_handles = JoinSet::new();
+    let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
     for writer in col_writers.into_iter() {
         // Buffer size of this channel limits the number of arrays queued up for column level serialization
         let (send_array, recieve_array) =
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
-        col_writer_handles.spawn(column_serializer_task(recieve_array, writer));
+
+        let mut join_set = JoinSet::new();
+        join_set.spawn(column_serializer_task(recieve_array, writer));
+        col_writer_tasks.push(join_set);
     }
 
-    Ok((col_writer_handles, col_array_channels))
+    Ok((col_writer_tasks, col_array_channels))
 }
 
 /// Settings related to writing parquet files in parallel
@@ -823,24 +829,26 @@ async fn send_arrays_to_col_writers(
 /// Spawns a tokio task which joins the parallel column writer tasks,
 /// and finalizes the row group
 fn spawn_rg_join_and_finalize_task(
-    mut column_writer_handles: JoinSet<Result<ArrowColumnWriter>>,
+    column_writer_tasks: Vec<ColumnWriterTask>,
     rg_rows: usize,
 ) -> JoinSet<RBStreamSerializeResult> {
     let mut task = JoinSet::new();
     task.spawn(async move {
-        let num_cols = column_writer_handles.len();
+        let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
-        while let Some(result) = column_writer_handles.join_next().await {
-            match result {
-                Ok(r) => {
-                    let w = r?;
-                    finalized_rg.push(w.close()?);
-                }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic())
-                    } else {
-                        unreachable!()
+        for mut task in column_writer_tasks.into_iter() {
+            while let Some(result) = task.join_next().await {
+                match result {
+                    Ok(r) => {
+                        let w = r?;
+                        finalized_rg.push(w.close()?);
+                    }
+                    Err(e) => {
+                        if e.is_panic() {
+                            std::panic::resume_unwind(e.into_panic())
+                        } else {
+                            unreachable!()
+                        }
                     }
                 }
             }
