@@ -36,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        // This is a hack for this example since `test_data` contains many different parquet different files,
+        // This is a workaround for this example since `test_data` contains
+        // many different parquet different files,
         // in practice use FileType::PARQUET.get_ext().
         .with_file_extension("alltypes_plain.parquet");
 
@@ -68,7 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cur_dir = std::env::current_dir()?;
 
     let test_data_path = Path::new(&test_data);
-    let test_data_path_parent = test_data_path.parent().ok_or("No parent")?;
+    let test_data_path_parent = test_data_path
+        .parent()
+        .ok_or("test_data path needs a parent")?;
 
     std::env::set_current_dir(test_data_path_parent)?;
 
