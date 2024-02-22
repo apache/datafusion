@@ -123,6 +123,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         for i in 0..n {
             let idx = i % test_cases.len();
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
+            #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
             let job = tokio::spawn(run_window_test(
                 make_staggered_batches::<true>(1000, n_distinct, i as u64),
                 i as u64,

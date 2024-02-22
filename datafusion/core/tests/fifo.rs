@@ -103,6 +103,7 @@ mod unix_test {
         let broken_pipe_timeout = Duration::from_secs(10);
         let sa = file_path.clone();
         // Spawn a new thread to write to the FIFO file
+        #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
         spawn_blocking(move || {
             let file = OpenOptions::new().write(true).open(sa).unwrap();
             // Reference time to use when deciding to fail the test
@@ -357,6 +358,7 @@ mod unix_test {
             (sink_fifo_path.clone(), sink_fifo_path.display());
 
         // Spawn a new thread to read sink EXTERNAL TABLE.
+        #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
         tasks.push(spawn_blocking(move || {
             let file = File::open(sink_fifo_path_thread).unwrap();
             let schema = Arc::new(Schema::new(vec![
