@@ -73,13 +73,8 @@ pub(super) struct AbsFunc {
 
 impl AbsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature:
-            Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
-                Volatility::Immutable,
-            )
+            signature: Signature::any(1, Volatility::Immutable)
         }
     }
 }
