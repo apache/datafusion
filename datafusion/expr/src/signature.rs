@@ -209,9 +209,8 @@ impl ArrayFunctionSignature {
             if array_type.eq(&DataType::Null) {
                 if allow_null_coercion {
                     return Ok(vec![vec![array_type.clone(), elem_type.clone()]]);
-                } else {
-                    return Ok(vec![vec![]]);
                 }
+                return Ok(vec![vec![]]);
             }
 
             // We need to find the coerced base type, mainly for cases like:
@@ -253,22 +252,12 @@ impl ArrayFunctionSignature {
             if current_types.len() != 2 {
                 return Ok(vec![vec![]]);
             }
-
             let array_type = &current_types[0];
-
-            if array_type.eq(&DataType::Null) && !allow_null_coercion {
-                return Ok(vec![vec![]]);
-            }
-
-            match array_type {
-                DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::FixedSizeList(_, _) => {
-                    let array_type = coerced_fixed_size_list_to_list(array_type);
-                    Ok(vec![vec![array_type, DataType::Int64]])
-                }
-                DataType::Null => Ok(vec![vec![array_type.clone(), DataType::Int64]]),
-                _ => Ok(vec![vec![]]),
+            let array_type = array(&[array_type.clone()], allow_null_coercion)?;
+            if array_type[0].is_empty() {
+                Ok(vec![vec![]])
+            } else {
+                Ok(vec![vec![array_type[0][0].clone(), DataType::Int64]])
             }
         }
         fn array(
