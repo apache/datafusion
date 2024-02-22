@@ -22303,7 +22303,6 @@ impl serde::Serialize for ScalarFunction {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Abs => "Abs",
             Self::Acos => "Acos",
             Self::Asin => "Asin",
             Self::Atan => "Atan",
