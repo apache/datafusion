@@ -1570,7 +1570,7 @@ mod tests {
                 },
                 None,
                 None,
-                Default::default(),
+                &Default::default(),
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
