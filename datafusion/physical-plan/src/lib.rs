@@ -299,13 +299,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// the plan is dropped, generating intermediate results that are never
     /// used.
     ///
-    /// See [`AbortOnDropSingle`], [`AbortOnDropMany`] and
-    /// [`RecordBatchReceiverStreamBuilder`] for structures to help ensure all
-    /// background tasks are cancelled.
+    /// See [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`] for structures
+    /// to help ensure all background tasks are cancelled.
     ///
-    /// [`spawn`]: tokio::task::spawn
-    /// [`AbortOnDropSingle`]: crate::common::AbortOnDropSingle
-    /// [`AbortOnDropMany`]: crate::common::AbortOnDropMany
+    /// [`JoinSet`]: tokio::task::JoinSet
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     ///
     /// # Implementation Examples

@@ -32,7 +32,7 @@ use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -46,7 +46,7 @@ use crate::repartition::distributor_channels::{channels, partition_aware_channel
 use crate::sorts::streaming_merge;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 
-use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
+use super::common::SharedMemoryReservation;
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
@@ -74,7 +74,7 @@ struct RepartitionExecState {
     >,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<AbortOnDropMany<()>>,
+    abort_helper: Arc<JoinSet<()>>,
 }
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
@@ -522,7 +522,7 @@ impl ExecutionPlan for RepartitionExec {
             }
 
             // launch one async task per *input* partition
-            let mut join_handles = Vec::with_capacity(num_input_partitions);
+            let mut join_set = JoinSet::new();
             for i in 0..num_input_partitions {
                 let txs: HashMap<_, _> = state
                     .channels
@@ -534,28 +534,27 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let input_task: JoinHandle<Result<()>> =
-                    tokio::spawn(Self::pull_from_input(
-                        self.input.clone(),
-                        i,
-                        txs.clone(),
-                        self.partitioning.clone(),
-                        r_metrics,
-                        context.clone(),
-                    ));
+                let mut input_task = JoinSet::new();
+                input_task.spawn(Self::pull_from_input(
+                    self.input.clone(),
+                    i,
+                    txs.clone(),
+                    self.partitioning.clone(),
+                    r_metrics,
+                    context.clone(),
+                ));
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                let join_handle = tokio::spawn(Self::wait_for_task(
-                    AbortOnDropSingle::new(input_task),
+                join_set.spawn(Self::wait_for_task(
+                    input_task,
                     txs.into_iter()
                         .map(|(partition, (tx, _reservation))| (partition, tx))
                         .collect(),
                 ));
-                join_handles.push(join_handle);
             }
 
-            state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
+            state.abort_helper = Arc::new(join_set)
         }
 
         trace!(
@@ -638,7 +637,7 @@ impl RepartitionExec {
             partitioning,
             state: Arc::new(Mutex::new(RepartitionExecState {
                 channels: HashMap::new(),
-                abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
+                abort_helper: Arc::new(JoinSet::new()),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order: false,
@@ -759,12 +758,13 @@ impl RepartitionExec {
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
     async fn wait_for_task(
-        input_task: AbortOnDropSingle<Result<()>>,
+        mut input_task: JoinSet<Result<()>>,
         txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-        match input_task.await {
+
+        match input_task.join_next().await.expect("only one input_task") {
             // Error in joining task
             Err(e) => {
                 let e = Arc::new(e);
@@ -813,7 +813,7 @@ struct RepartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDropMany<()>>,
+    drop_helper: Arc<JoinSet<()>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -877,7 +877,7 @@ struct PerPartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDropMany<()>>,
+    drop_helper: Arc<JoinSet<()>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
