@@ -230,7 +230,9 @@ impl DataSink for ArrowFileSink {
             None
         };
 
-        let (demux_task, mut file_stream_rx) = start_demuxer_task(
+        let mut tasks = JoinSet::new();
+        let mut file_stream_rx = start_demuxer_task(
+            &mut tasks,
             data,
             context,
             part_col,
@@ -295,13 +297,15 @@ impl DataSink for ArrowFileSink {
             }
         }
 
-        match demux_task.await {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(r) => r?,
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
                 }
             }
         }
