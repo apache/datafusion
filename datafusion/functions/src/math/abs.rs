@@ -100,6 +100,17 @@ impl ScalarUDFImpl for AbsFunc {
         match arg_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             DataType::Float64 => Ok(DataType::Float64),
+            DataType::Int8 => Ok(DataType::Int8),
+            DataType::Int16 => Ok(DataType::Int16),
+            DataType::Int32 => Ok(DataType::Int32),
+            DataType::Int64 => Ok(DataType::Int64),
+            DataType::Null => Ok(DataType::Null),
+            DataType::UInt8 => Ok(DataType::UInt8),
+            DataType::UInt16 => Ok(DataType::UInt16),
+            DataType::UInt32 => Ok(DataType::UInt32),
+            DataType::UInt64 => Ok(DataType::UInt64),
+            DataType::Decimal128(precision, scale) => Ok(DataType::Decimal128(precision, scale)),
+            DataType::Decimal256(precision, scale) => Ok(DataType::Decimal256(precision, scale)),
             _ => internal_err!("Unsupported data type for abs function"),
         }
     }
@@ -112,7 +123,7 @@ impl ScalarUDFImpl for AbsFunc {
         }
     
         let input_data_type = args[0].data_type();
-        let abs_fun = create_abs_function(&input_data_type)?;
+        let abs_fun = create_abs_function(input_data_type)?;
     
         let arr = abs_fun(&args)?;
         Ok(ColumnarValue::Array(arr))
