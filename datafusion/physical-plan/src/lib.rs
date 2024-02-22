@@ -302,6 +302,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// See [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`] for structures
     /// to help ensure all background tasks are cancelled.
     ///
+    /// [`spawn`]: tokio::task::spawn
     /// [`JoinSet`]: tokio::task::JoinSet
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     ///
