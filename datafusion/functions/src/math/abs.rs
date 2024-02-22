@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
+//! math expressions
 
 use arrow::array::Decimal128Array;
 use arrow::array::Decimal256Array;
@@ -28,7 +28,6 @@ use datafusion_common::not_impl_err;
 use datafusion_common::{internal_err, Result, DataFusionError};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
