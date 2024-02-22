@@ -1950,7 +1950,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the c2 column is gone and that c1 is abc.
     let results = filted_df.collect().await?;
-    let expected = vec!["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
+    let expected = ["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
 
     assert_batches_eq!(expected, &results);
 
@@ -1965,7 +1965,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the df has the entire set of data
     let results = df.collect().await?;
-    let expected = vec![
+    let expected = [
         "+-----+-----+",
         "| c1  | c2  |",
         "+-----+-----+",
