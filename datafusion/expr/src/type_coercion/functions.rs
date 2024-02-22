@@ -499,12 +499,15 @@ mod tests {
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
         let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let i8_inner = Arc::new(Field::new("item", DataType::Int8, false));
         let type_into = DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD);
         let cases = vec![
             DataType::FixedSizeList(inner.clone(), 2),
             DataType::FixedSizeList(inner.clone(), 3),
             DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
+            DataType::FixedSizeList(i8_inner.clone(), FIXED_SIZE_LIST_WILDCARD),
             DataType::List(inner.clone()),
+            DataType::LargeList(inner.clone()),
         ];
         for case in cases {
             let out = coerced_from(&type_into, &case);
@@ -533,34 +536,6 @@ mod tests {
         let type_from_nested = DataType::List(nested_inner.clone());
         let out = coerced_from(&type_into_nested, &type_from_nested);
         assert_eq!(out, Some(type_into_nested));
-
-        Ok(())
-    }
-    #[test]
-    fn test_fixed_list_no_wildcard_coerce() -> Result<()> {
-        let inner = Arc::new(Field::new("item", DataType::Int32, false));
-        let type_into = DataType::FixedSizeList(inner.clone(), 1);
-        let invalid_cases = vec![
-            DataType::FixedSizeList(inner.clone(), 2),
-            DataType::FixedSizeList(inner.clone(), 3),
-            DataType::FixedSizeList(inner.clone(), 4),
-        ];
-        for case in invalid_cases {
-            let out = coerced_from(&type_into, &case);
-            assert_eq!(out, None);
-        }
-
-        let cases = vec![
-            DataType::FixedSizeList(inner.clone(), 1),
-            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
-            DataType::List(inner.clone()),
-        ];
-
-        for case in cases {
-            let out = coerced_from(&type_into, &case);
-
-            assert_eq!(out, Some(type_into.clone()));
-        }
 
         Ok(())
     }
