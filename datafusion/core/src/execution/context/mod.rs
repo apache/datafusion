@@ -2188,14 +2188,16 @@ mod tests {
     use std::sync::Weak;
     use tempfile::TempDir;
     use datafusion_expr::ColumnarValue;
-    use datafusion_expr::expr_fn::create_udf;
-    use datafusion_common::cast::as_float64_array;
+    use datafusion_expr::expr_fn::{create_udf, create_udaf};
+    use datafusion_common::cast::as_int64_array;
     use crate::{
         arrow::{
-            array::{ArrayRef, Float64Array},
+            array::{ArrayRef, Int64Array},
             datatypes::DataType,
         },
         logical_expr::Volatility,
+        physical_plan::Accumulator,
+        scalar::ScalarValue,
     };
 
     #[tokio::test]
@@ -2292,46 +2294,128 @@ mod tests {
 
     #[tokio::test]
     async fn register_deregister_udf() -> Result<()> {
-        let pow = Arc::new(|args: &[ColumnarValue]| {
-            assert_eq!(args.len(), 2);
+        let add = Arc::new(|args: &[ColumnarValue]| {
     
             let args = ColumnarValue::values_to_arrays(args)?;
+            let i64s = as_int64_array(&args[0])?;
     
-            let base = as_float64_array(&args[0]).expect("cast failed");
-            let exponent = as_float64_array(&args[1]).expect("cast failed");
-    
-            assert_eq!(exponent.len(), base.len());
-    
-            let array = base
+            let array = i64s
                 .iter()
-                .zip(exponent.iter())
-                .map(|(base, exponent)| {
-                    match (base, exponent) {
-                        (Some(base), Some(exponent)) => Some(base.powf(exponent)),
-                        _ => None,
-                    }
-                })
-                .collect::<Float64Array>();
-    
+                .map(|array_elem| array_elem.map(|value| value + 1))
+                .collect::<Int64Array>();
+
             Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
         });
 
-        let pow = create_udf(
-            "pow",
-            vec![DataType::Float64, DataType::Float64],
-            Arc::new(DataType::Float64),
+        let udf = create_udf(
+            "add",
+            vec![DataType::Int64],
+            Arc::new(DataType::Int64),
             Volatility::Immutable,
-            pow,
+            add,
         );
 
         let ctx = SessionContext::new();
-        ctx.register_udf(pow.clone());
+        ctx.register_udf(udf.clone());
 
-        assert!(ctx.udfs().contains("pow"));
+        assert!(ctx.udfs().contains("add"));
 
-        ctx.deregister_udf("pow");
+        ctx.deregister_udf("add");
 
-        assert!(!ctx.udfs().contains("pow"));
+        assert!(!ctx.udfs().contains("add"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn register_deregister_udaf() -> Result<()> {
+        #[derive(Debug)]
+        struct GeometricMean {
+            n: u32,
+            prod: f64,
+        }
+        
+        impl GeometricMean {
+            pub fn new() -> Self {
+                GeometricMean { n: 0, prod: 1.0 }
+            }
+        }
+        
+        impl Accumulator for GeometricMean {
+            fn state(&mut self) -> Result<Vec<ScalarValue>> {
+                Ok(vec![
+                    ScalarValue::from(self.prod),
+                    ScalarValue::from(self.n),
+                ])
+            }
+        
+            fn evaluate(&mut self) -> Result<ScalarValue> {
+                let value = self.prod.powf(1.0 / self.n as f64);
+                Ok(ScalarValue::from(value))
+            }
+        
+            fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+                if values.is_empty() {
+                    return Ok(());
+                }
+                let arr = &values[0];
+                (0..arr.len()).try_for_each(|index| {
+                    let v = ScalarValue::try_from_array(arr, index)?;
+        
+                    if let ScalarValue::Float64(Some(value)) = v {
+                        self.prod *= value;
+                        self.n += 1;
+                    } else {
+                        unreachable!("")
+                    }
+                    Ok(())
+                })
+            }
+        
+            fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+                if states.is_empty() {
+                    return Ok(());
+                }
+                let arr = &states[0];
+                (0..arr.len()).try_for_each(|index| {
+                    let v = states
+                        .iter()
+                        .map(|array| ScalarValue::try_from_array(array, index))
+                        .collect::<Result<Vec<_>>>()?;
+                    if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) =
+                        (&v[0], &v[1])
+                    {
+                        self.prod *= prod;
+                        self.n += n;
+                    } else {
+                        unreachable!("")
+                    }
+                    Ok(())
+                })
+            }
+        
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
+        }
+
+        let udaf = create_udaf(
+            "geo_mean",
+            vec![DataType::Float64],
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(GeometricMean::new()))),
+            Arc::new(vec![DataType::Float64, DataType::UInt32]),
+        );
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(udaf.clone());
+
+        assert!(ctx.state().aggregate_functions.contains_key("geo_mean"));
+
+        ctx.deregister_udaf("geo_mean");
+
+        assert!(!ctx.state().aggregate_functions.contains_key("geo_mean"));
 
         Ok(())
     }
