@@ -52,8 +52,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             order_by,
         } = function;
 
-        if let Some(null_treatment) = null_treatment {
-            return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}");
+        // If function is a window function (it has an OVER clause),
+        // it shouldn't have ordering requirement as function argument
+        // required ordering should be defined in OVER clause.
+        let is_function_window = over.is_some();
+
+        match null_treatment {
+            Some(null_treatment) if !is_function_window => return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}"),
+            _ => {}
         }
 
         let name = if name.0.len() > 1 {
@@ -120,10 +126,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
-        // If function is a window function (it has an OVER clause),
-        // it shouldn't have ordering requirement as function argument
-        // required ordering should be defined in OVER clause.
-        let is_function_window = over.is_some();
         if !order_by.is_empty() && is_function_window {
             return plan_err!(
                 "Aggregate ORDER BY is not implemented for window functions"
@@ -198,6 +200,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             partition_by,
                             order_by,
                             window_frame,
+                            null_treatment,
                         ))
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
@@ -206,6 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         partition_by,
                         order_by,
                         window_frame,
+                        null_treatment,
                     )),
                 };
                 return Ok(expr);
