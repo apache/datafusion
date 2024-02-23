@@ -61,7 +61,7 @@ use datafusion_expr::{
     instr, iszero, lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, regexp_like, regexp_match, regexp_replace, repeat, replace, reverse, right,
+    random, regexp_like, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
     sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
     substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
@@ -535,7 +535,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::RegexpLike => Self::RegexpLike,
-            ScalarFunction::RegexpMatch => Self::RegexpMatch,
+            //ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
@@ -1638,12 +1638,12 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::RegexpMatch => Ok(regexp_match(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
+                // ScalarFunction::RegexpMatch => Ok(regexp_match(
+                //     args.to_owned()
+                //         .iter()
+                //         .map(|expr| parse_expr(expr, registry))
+                //         .collect::<Result<Vec<_>, _>>()?,
+                // )),
                 ScalarFunction::RegexpReplace => Ok(regexp_replace(
                     args.to_owned()
                         .iter()

@@ -233,7 +233,7 @@ pub enum BuiltinScalarFunction {
     /// regexp_like
     RegexpLike,
     /// regexp_match
-    RegexpMatch,
+   // RegexpMatch,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -449,7 +449,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpLike => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
+            //BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -814,16 +814,16 @@ impl BuiltinScalarFunction {
                     );
                 }
             }),
-            BuiltinScalarFunction::RegexpMatch => Ok(match &input_expr_types[0] {
-                LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
-                Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
-                Null => Null,
-                other => {
-                    return plan_err!(
-                        "The regexp_match function can only accept strings. Got {other}"
-                    );
-                }
-            }),
+            // BuiltinScalarFunction::RegexpMatch => Ok(match &input_expr_types[0] {
+            //     LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
+            //     Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
+            //     Null => Null,
+            //     other => {
+            //         return plan_err!(
+            //             "The regexp_match function can only accept strings. Got {other}"
+            //         );
+            //     }
+            // }),
 
             BuiltinScalarFunction::Factorial
             | BuiltinScalarFunction::Gcd
@@ -1263,15 +1263,15 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
-                ],
-                self.volatility(),
-            ),
+            // BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+            //     vec![
+            //         Exact(vec![Utf8, Utf8]),
+            //         Exact(vec![LargeUtf8, Utf8]),
+            //         Exact(vec![Utf8, Utf8, Utf8]),
+            //         Exact(vec![LargeUtf8, Utf8, Utf8]),
+            //     ],
+            //     self.volatility(),
+            // ),
             BuiltinScalarFunction::RegexpReplace => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Utf8]),
@@ -1514,7 +1514,7 @@ impl BuiltinScalarFunction {
 
             // regex functions
             BuiltinScalarFunction::RegexpLike => &["regexp_like"],
-            BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
+            //BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
             BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
             // time/date functions
