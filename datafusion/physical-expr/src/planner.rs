@@ -272,8 +272,7 @@ pub fn create_physical_expr(
                     )
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
-                    let return_type =
-                        fun.return_type_from_exprs(args.as_slice(), input_dfschema)?;
+                    let return_type = fun.return_type_from_exprs(args, input_dfschema)?;
 
                     udf::create_physical_expr(
                         fun.clone().as_ref(),
