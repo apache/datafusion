@@ -546,12 +546,12 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
     // Wrap with Expr::Cast() to Int64
-    fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
+    fn simplify(&self, args: &[Expr]) -> Result<Simplified> {
         let dfs = DFSchema::new_with_metadata(
             vec![DFField::new(Some("t"), "x", DataType::Float32, true)],
             HashMap::default(),
         )?;
-        let e = args[0].clone();
+        let e = args[0].to_owned();
         let casted_expr = e.cast_to(&DataType::Int64, &dfs)?;
         Ok(Simplified::Rewritten(casted_expr))
     }

@@ -38,7 +38,7 @@ use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
 use std::sync::Arc;
 
-use self::rewrite_expr::OperatorToFunction;
+use self::rewrite_expr::{FunctionSimplifiction, OperatorToFunction};
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
@@ -78,6 +78,7 @@ impl Analyzer {
             // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
             // and TypeCoercion may cast the argument types from Scalar to List.
             Arc::new(OperatorToFunction::new()),
+            Arc::new(FunctionSimplifiction::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];

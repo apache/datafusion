@@ -31,6 +31,7 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::Operator;
 use datafusion_expr::ScalarFunctionDefinition;
+use datafusion_expr::Simplified;
 use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
 
 use super::AnalyzerRule;
@@ -317,5 +318,69 @@ fn rewrite_array_concat_operator_to_func_for_column(
             }
         }
         _ => Ok(None),
+    }
+}
+
+#[derive(Default)]
+pub struct FunctionSimplifiction {}
+
+impl FunctionSimplifiction {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl AnalyzerRule for FunctionSimplifiction {
+    fn name(&self) -> &str {
+        "function_simplification"
+    }
+
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        function_simplication_analyze_internal(&plan)
+    }
+}
+
+fn function_simplication_analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    // optimize child plans first
+    let new_inputs = plan
+        .inputs()
+        .iter()
+        .map(|p| function_simplication_analyze_internal(p))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut expr_rewrite = FunctionSimplifictionRewriter {};
+
+    let new_expr = plan
+        .expressions()
+        .into_iter()
+        .map(|expr| {
+            // ensure names don't change:
+            // https://github.com/apache/arrow-datafusion/issues/3555
+            rewrite_preserving_name(expr, &mut expr_rewrite)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    plan.with_new_exprs(new_expr, new_inputs)
+}
+
+pub(crate) struct FunctionSimplifictionRewriter {}
+
+impl TreeNodeRewriter for FunctionSimplifictionRewriter {
+    type N = Expr;
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        if let Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(udf),
+            args,
+        }) = &expr
+        {
+            let simplified_expr = udf.simplify(args)?;
+            match simplified_expr {
+                Simplified::Original => Ok(expr),
+                Simplified::Rewritten(expr) => Ok(expr),
+            }
+        } else {
+            Ok(expr)
+        }
     }
 }

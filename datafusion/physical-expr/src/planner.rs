@@ -257,44 +257,35 @@ pub fn create_physical_expr(
             )))
         }
 
-        Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-            ScalarFunctionDefinition::BuiltIn(fun) => {
-                let physical_args = args
-                    .iter()
-                    .map(|e| create_physical_expr(e, input_dfschema, execution_props))
-                    .collect::<Result<Vec<_>>>()?;
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            let physical_args = args
+                .iter()
+                .map(|e| create_physical_expr(e, input_dfschema, execution_props))
+                .collect::<Result<Vec<_>>>()?;
+            match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    functions::create_physical_expr(
+                        fun,
+                        &physical_args,
+                        input_schema,
+                        execution_props,
+                    )
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    let return_type =
+                        fun.return_type_from_exprs(args.as_slice(), input_dfschema)?;
 
-                functions::create_physical_expr(
-                    fun,
-                    &physical_args,
-                    input_schema,
-                    execution_props,
-                )
+                    udf::create_physical_expr(
+                        fun.clone().as_ref(),
+                        &physical_args,
+                        return_type,
+                    )
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
             }
-            ScalarFunctionDefinition::UDF(fun) => {
-                let args = match fun.simplify(args.to_owned())? {
-                    datafusion_expr::Simplified::Original(args) => args,
-                    datafusion_expr::Simplified::Rewritten(expr) => vec![expr],
-                };
-
-                let physical_args = args
-                    .iter()
-                    .map(|e| create_physical_expr(e, input_dfschema, execution_props))
-                    .collect::<Result<Vec<_>>>()?;
-
-                let return_type =
-                    fun.return_type_from_exprs(args.as_slice(), input_dfschema)?;
-
-                udf::create_physical_expr(
-                    fun.clone().as_ref(),
-                    &physical_args,
-                    return_type,
-                )
-            }
-            ScalarFunctionDefinition::Name(_) => {
-                internal_err!("Function `Expr` with name should be resolved.")
-            }
-        },
+        }
         Expr::Between(Between {
             expr,
             negated,

@@ -36,7 +36,7 @@ pub enum Simplified {
     Rewritten(Expr),
     /// the function call could not be simplified, and the arguments
     /// are return unmodified
-    Original(Vec<Expr>),
+    Original,
 }
 
 /// Logical representation of a Scalar User Defined Function.
@@ -173,7 +173,7 @@ impl ScalarUDF {
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
-    pub fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
+    pub fn simplify(&self, args: &[Expr]) -> Result<Simplified> {
         self.inner.simplify(args)
     }
 
@@ -356,8 +356,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     // Do the function rewrite
-    fn simplify(&self, args: Vec<Expr>) -> Result<Simplified> {
-        Ok(Simplified::Original(args))
+    fn simplify(&self, _args: &[Expr]) -> Result<Simplified> {
+        Ok(Simplified::Original)
     }
 }
 
