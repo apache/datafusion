@@ -72,7 +72,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // user-defined function (UDF) should have precedence in case it has the same name as a scalar built-in function
-    
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));

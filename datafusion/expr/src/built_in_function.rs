@@ -233,7 +233,6 @@ pub enum BuiltinScalarFunction {
     /// regexp_like
     RegexpLike,
     /// regexp_match
-   // RegexpMatch,
     /// regexp_replace
     RegexpReplace,
     /// repeat
