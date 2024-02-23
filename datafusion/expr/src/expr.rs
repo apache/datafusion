@@ -30,6 +30,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
+use sqlparser::ast::NullTreatment;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
@@ -646,6 +647,7 @@ pub struct WindowFunction {
     pub order_by: Vec<Expr>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 impl WindowFunction {
@@ -656,6 +658,7 @@ impl WindowFunction {
         partition_by: Vec<Expr>,
         order_by: Vec<Expr>,
         window_frame: window_frame::WindowFrame,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             fun,
@@ -663,6 +666,7 @@ impl WindowFunction {
             partition_by,
             order_by,
             window_frame,
+            null_treatment,
         }
     }
 }
@@ -1440,8 +1444,14 @@ impl fmt::Display for Expr {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => {
                 fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                if let Some(nt) = null_treatment {
+                    write!(f, "{}", nt)?;
+                }
+
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
                 }
@@ -1768,15 +1778,23 @@ fn create_name(e: &Expr) -> Result<String> {
             window_frame,
             partition_by,
             order_by,
+            null_treatment,
         }) => {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
+
+            if let Some(nt) = null_treatment {
+                parts.push(format!("{}", nt));
+            }
+
             if !partition_by.is_empty() {
                 parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
             }
+
             if !order_by.is_empty() {
                 parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
             }
+
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
         }

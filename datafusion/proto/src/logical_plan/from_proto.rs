@@ -1100,6 +1100,8 @@ pub fn parse_expr(
                         "missing window frame during deserialization".to_string(),
                     )
                 })?;
+            // TODO: support proto for null treatment
+            let null_treatment = None;
             regularize_window_order_by(&window_frame, &mut order_by)?;
 
             match window_function {
@@ -1114,6 +1116,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
+                        None
                     )))
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
@@ -1133,6 +1136,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
+                        null_treatment
                     )))
                 }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
@@ -1148,6 +1152,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
+                        None,
                     )))
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
@@ -1163,6 +1168,7 @@ pub fn parse_expr(
                         partition_by,
                         order_by,
                         window_frame,
+                        None,
                     )))
                 }
             }

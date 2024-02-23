@@ -606,6 +606,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
+                // TODO: support null treatment in proto
+                null_treatment: _,
             }) => {
                 let window_function = match fun {
                     WindowFunctionDefinition::AggregateFunction(fun) => {
