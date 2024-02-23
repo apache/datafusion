@@ -1115,6 +1115,7 @@ pub fn to_substrait_rex(
             partition_by,
             order_by,
             window_frame,
+            null_treatment: _,
         }) => {
             // function reference
             let function_anchor = _register_function(fun.to_string(), extension_info);

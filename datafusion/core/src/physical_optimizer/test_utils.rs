@@ -245,6 +245,7 @@ pub fn bounded_window_exec(
                 &sort_exprs,
                 Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
+                false,
             )
             .unwrap()],
             input.clone(),

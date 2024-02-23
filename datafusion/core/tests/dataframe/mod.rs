@@ -182,6 +182,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                 WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
             ),
+            None,
         ))])?
         .explain(false, false)?
         .collect()
