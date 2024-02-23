@@ -298,12 +298,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// "abort" such tasks, they may continue to consume resources even after
     /// the plan is dropped, generating intermediate results that are never
     /// used.
+    /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
-    /// See [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`] for structures
-    /// to help ensure all background tasks are cancelled.
+    /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
+    /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
     /// [`JoinSet`]: tokio::task::JoinSet
+    /// [`SpawnedTask`]: crate::common::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     ///
     /// # Implementation Examples

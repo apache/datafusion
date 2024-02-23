@@ -33,6 +33,8 @@ use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
+use datafusion_physical_plan::common::SpawnedTask;
+use futures::try_join;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinSet;
@@ -50,16 +52,14 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
-        mpsc::channel::<JoinSet<Result<(usize, Bytes), DataFusionError>>>(100);
-    let mut serialize_task = JoinSet::new();
-    serialize_task.spawn(async move {
+        mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
+    let serialize_task = SpawnedTask::spawn(async move {
         // Some serializers (like CSV) handle the first batch differently than
         // subsequent batches, so we track that here.
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = serializer.clone();
-            let mut task = JoinSet::new();
-            task.spawn(async move {
+            let task = SpawnedTask::spawn(async move {
                 let num_rows = batch.num_rows();
                 let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
@@ -75,50 +75,46 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     });
 
     let mut row_count = 0;
-    while let Some(mut task) = rx.recv().await {
-        while let Some(result) = task.join_next().await {
-            match result {
-                Ok(Ok((cnt, bytes))) => {
-                    match writer.write_all(&bytes).await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            return Err((
-                                writer,
-                                DataFusionError::Execution(format!(
-                                    "Error writing to object store: {e}"
-                                )),
-                            ))
-                        }
-                    };
-                    row_count += cnt;
-                }
-                Ok(Err(e)) => {
-                    // Return the writer along with the error
-                    return Err((writer, e));
-                }
-                Err(e) => {
-                    // Handle task panic or cancellation
-                    return Err((
-                        writer,
-                        DataFusionError::Execution(format!(
-                            "Serialization task panicked or was cancelled: {e}"
-                        )),
-                    ));
-                }
+    while let Some(task) = rx.recv().await {
+        match task.join().await {
+            Ok(Ok((cnt, bytes))) => {
+                match writer.write_all(&bytes).await {
+                    Ok(_) => (),
+                    Err(e) => {
+                        return Err((
+                            writer,
+                            DataFusionError::Execution(format!(
+                                "Error writing to object store: {e}"
+                            )),
+                        ))
+                    }
+                };
+                row_count += cnt;
+            }
+            Ok(Err(e)) => {
+                // Return the writer along with the error
+                return Err((writer, e));
+            }
+            Err(e) => {
+                // Handle task panic or cancellation
+                return Err((
+                    writer,
+                    DataFusionError::Execution(format!(
+                        "Serialization task panicked or was cancelled: {e}"
+                    )),
+                ));
             }
         }
     }
 
-    while let Some(result) = serialize_task.join_next().await {
-        match result {
-            Ok(Ok(_)) => (),
-            Ok(Err(e)) => return Err((writer, e)),
-            Err(_) => {
-                return Err((
-                    writer,
-                    internal_datafusion_err!("Unknown error writing to object store"),
-                ))
-            }
+    match serialize_task.join().await {
+        Ok(Ok(_)) => (),
+        Ok(Err(e)) => return Err((writer, e)),
+        Err(_) => {
+            return Err((
+                writer,
+                internal_datafusion_err!("Unknown error writing to object store"),
+            ))
         }
     }
     Ok((writer, row_count as u64))
@@ -232,9 +228,7 @@ pub(crate) async fn stateless_multipart_put(
         None
     };
 
-    let mut tasks = JoinSet::new();
-    let mut file_stream_rx = start_demuxer_task(
-        &mut tasks,
+    let (demux_task, mut file_stream_rx) = start_demuxer_task(
         data,
         context,
         part_cols,
@@ -250,8 +244,7 @@ pub(crate) async fn stateless_multipart_put(
 
     let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
-    // write coordinater task
-    tasks.spawn(async move {
+    let write_coordinator_task = SpawnedTask::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
@@ -268,18 +261,19 @@ pub(crate) async fn stateless_multipart_put(
             })?;
     }
 
-    // Signal to the write coordinater that no more files are coming
+    // Signal to the write coordinator that no more files are coming
     drop(tx_file_bundle);
 
-    while let Some(result) = tasks.join_next().await {
-        match result {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
+    match try_join!(write_coordinator_task.join(), demux_task.join()) {
+        Ok((r1, r2)) => {
+            r1?;
+            r2?;
+        }
+        Err(e) => {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                unreachable!();
             }
         }
     }

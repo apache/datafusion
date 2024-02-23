@@ -41,8 +41,8 @@ use object_store::path::Path;
 
 use rand::distributions::DistString;
 
+use datafusion_physical_plan::common::SpawnedTask;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinSet;
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
 type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
@@ -71,21 +71,20 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 ///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
 ///                                                                              └───────────┘               └────────────┘    └─────────────┘
 pub(crate) fn start_demuxer_task(
-    join_set: &mut JoinSet<Result<()>>,
     input: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-) -> DemuxedStreamReceiver {
+) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
     let single_file_output = !base_output_path.is_collection();
-    match partition_by {
+    let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
             // bound this channel without risking a deadlock.
-            join_set.spawn(async move {
+            SpawnedTask::spawn(async move {
                 hive_style_partitions_demuxer(
                     tx,
                     input,
@@ -95,24 +94,22 @@ pub(crate) fn start_demuxer_task(
                     file_extension,
                 )
                 .await
-            });
+            })
         }
-        None => {
-            join_set.spawn(async move {
-                row_count_demuxer(
-                    tx,
-                    input,
-                    context,
-                    base_output_path,
-                    file_extension,
-                    single_file_output,
-                )
-                .await
-            });
-        }
-    }
+        None => SpawnedTask::spawn(async move {
+            row_count_demuxer(
+                tx,
+                input,
+                context,
+                base_output_path,
+                file_extension,
+                single_file_output,
+            )
+            .await
+        }),
+    };
 
-    rx
+    (task, rx)
 }
 
 /// Dynamically partitions input stream to acheive desired maximum rows per file

@@ -32,14 +32,13 @@ use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use tokio::task::JoinSet;
 
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
-use crate::common::transpose;
+use crate::common::{transpose, SpawnedTask};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{channels, partition_aware_channels};
@@ -74,7 +73,7 @@ struct RepartitionExecState {
     >,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<Vec<JoinSet<()>>>,
+    abort_helper: Arc<Vec<SpawnedTask<()>>>,
 }
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
@@ -522,7 +521,7 @@ impl ExecutionPlan for RepartitionExec {
             }
 
             // launch one async task per *input* partition
-            let mut join_sets = Vec::with_capacity(num_input_partitions);
+            let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
             for i in 0..num_input_partitions {
                 let txs: HashMap<_, _> = state
                     .channels
@@ -534,8 +533,7 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let mut input_task = JoinSet::new();
-                input_task.spawn(Self::pull_from_input(
+                let input_task = SpawnedTask::spawn(Self::pull_from_input(
                     self.input.clone(),
                     i,
                     txs.clone(),
@@ -546,19 +544,16 @@ impl ExecutionPlan for RepartitionExec {
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                //
-                // We have to use JoinSet per input partition to ensure the ordering.
-                let mut wait_for_task = JoinSet::new();
-                wait_for_task.spawn(Self::wait_for_task(
+                let wait_for_task = SpawnedTask::spawn(Self::wait_for_task(
                     input_task,
                     txs.into_iter()
                         .map(|(partition, (tx, _reservation))| (partition, tx))
                         .collect(),
                 ));
-                join_sets.push(wait_for_task);
+                spawned_tasks.push(wait_for_task);
             }
 
-            state.abort_helper = Arc::new(join_sets)
+            state.abort_helper = Arc::new(spawned_tasks)
         }
 
         trace!(
@@ -762,13 +757,13 @@ impl RepartitionExec {
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
     async fn wait_for_task(
-        mut input_task: JoinSet<Result<()>>,
+        input_task: SpawnedTask<Result<()>>,
         txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
 
-        match input_task.join_next().await.expect("only one input_task") {
+        match input_task.join().await {
             // Error in joining task
             Err(e) => {
                 let e = Arc::new(e);
@@ -817,7 +812,7 @@ struct RepartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<Vec<JoinSet<()>>>,
+    drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -881,7 +876,7 @@ struct PerPartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<Vec<JoinSet<()>>>,
+    drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
