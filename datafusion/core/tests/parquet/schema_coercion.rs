@@ -72,7 +72,7 @@ async fn multi_parquet_coercion() {
         },
         None,
         None,
-        &Default::defalt()
+        &Default::default(),
     );
 
     let session_ctx = SessionContext::new();
