@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, _plan_err};
 use crate::{
-    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    OwnedTableReference, TableReference,
+    field_not_found, functional_dependencies, unqualified_field_not_found, Column,
+    FunctionalDependencies, OwnedTableReference, TableReference,
 };
 
 use arrow::compute::can_cast_types;
@@ -188,6 +188,28 @@ impl DFSchema {
         };
         // new_self.check_names()?;
         Ok(new_self)
+    }
+
+    // TODO Add tests
+    pub fn from_qualified_fields(
+        qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
+        metadata: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+            qualified_fields.into_iter().unzip();
+
+        let schema = if let Some(metadata) = metadata {
+            Arc::new(Schema::new_with_metadata(fields, metadata))
+        } else {
+            Arc::new(Schema::new(fields))
+        };
+
+        let dfschema = Self {
+            inner: schema,
+            field_qualifiers: qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        Ok(dfschema)
     }
 
     // fn check_names(&self) -> Result<()> {

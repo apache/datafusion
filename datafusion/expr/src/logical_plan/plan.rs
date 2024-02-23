@@ -896,10 +896,10 @@ impl LogicalPlan {
                     .fields()
                     .iter()
                     .map(|f| {
-                        if f == nested_field {
+                        if f.as_ref() == nested_field {
                             unnested_field.clone()
                         } else {
-                            f.clone()
+                            f.as_ref().clone()
                         }
                     })
                     .collect::<Vec<_>>();
@@ -908,7 +908,7 @@ impl LogicalPlan {
                     DFSchema::new_with_metadata(
                         fields,
                         input.schema().metadata().clone(),
-                    )?
+                    )
                     // We can use the existing functional dependencies as is:
                     .with_functional_dependencies(
                         input.schema().functional_dependencies().clone(),
@@ -1796,9 +1796,10 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::new_with_metadata(
+    // let mut schema = DFSchema::from_qualified_fields
+    let mut schema = DFSchema::from_qualified_fields(
         exprlist_to_fields(exprs, input)?,
-        input.schema().metadata().clone(),
+        Some(input.schema().metadata().clone()),
     )?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
@@ -1970,7 +1971,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields = input.schema().fields();
+        let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = input
+            .schema()
+            .iter()
+            .map(|(q, f)| (q.map(|q| q.clone()), f.clone()))
+            .collect();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
         window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
@@ -2025,7 +2030,7 @@ impl Window {
             input,
             window_expr,
             schema: Arc::new(
-                DFSchema::new_with_metadata(window_fields, metadata)?
+                DFSchema::from_qualified_fields(window_fields, Some(metadata))?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
         })
