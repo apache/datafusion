@@ -316,6 +316,7 @@ impl TreeNode for Expr {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => transform_vec(args, &mut f)?
                 .map_data(|new_args| (new_args, partition_by, order_by))
                 .and_then_transform(|(new_args, partition_by, order_by)| {
@@ -335,6 +336,7 @@ impl TreeNode for Expr {
                         new_partition_by,
                         new_order_by,
                         window_frame,
+                        null_treatment,
                     ))
                 }),
             Expr::AggregateFunction(AggregateFunction {

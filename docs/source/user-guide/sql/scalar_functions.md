@@ -1935,6 +1935,7 @@ from_unixtime(expression)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
+- [generate_series](#generate_series)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
 - [list_cat](#list_cat)
@@ -2881,6 +2882,10 @@ empty(array)
 +------------------+
 ```
 
+### `generate_series`
+
+_Alias of [range](#range)._
+
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
@@ -3089,6 +3094,10 @@ Step can not be 0 (then the range will be nonsense.).
 - **start**: start of the range
 - **end**: end of the range (not included)
 - **step**: increase by step (can not be 0)
+
+#### Aliases
+
+- generate_series
 
 ## Struct Functions
 

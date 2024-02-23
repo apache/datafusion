@@ -1718,6 +1718,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 2. with default window_frame
@@ -1729,6 +1730,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 3. with window_frame with row numbers
@@ -1746,6 +1748,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         range_number_frame,
+        None,
     ));
 
     // 4. test with AggregateFunction
@@ -1761,6 +1764,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
 
     // 5. test with AggregateUDF
@@ -1812,6 +1816,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
     ctx.register_udaf(dummy_agg);
 
@@ -1887,6 +1892,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame,
+        None,
     ));
 
     ctx.register_udwf(dummy_window_udf);
