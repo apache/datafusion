@@ -756,9 +756,8 @@ async fn column_serializer_task(
     Ok(writer)
 }
 
-type ColSender = Sender<ArrowLeafColumn>;
-/// JoinSet per column to ensure the order of execution
 type ColumnWriterTask = SpawnedTask<Result<ArrowColumnWriter>>;
+type ColSender = Sender<ArrowLeafColumn>;
 
 /// Spawns a parallel serialization task for each column
 /// Returns join handles for each columns serialization task along with a send channel
