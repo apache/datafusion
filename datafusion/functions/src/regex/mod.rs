@@ -23,6 +23,7 @@ make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 
 export_functions!((
     regexp_match,
-    input_args,
+    input_arg1
+    input_arg2,
     "returns a list of regular expression matches in a string. "
 ));
