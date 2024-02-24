@@ -854,11 +854,6 @@ nary_scalar_expr!(
     regexp_like,
     "matches a regular expression against a string and returns true or false if there was at least one match or not"
 );
-// nary_scalar_expr!(
-//     RegexpMatch,
-//     regexp_match,
-//     "matches a regular expression against a string and returns matched substrings."
-// );
 nary_scalar_expr!(
     RegexpReplace,
     regexp_replace,
@@ -1380,8 +1375,6 @@ mod test {
         test_scalar_expr!(OctetLength, octet_length, string);
         test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern);
         test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern, flags);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,

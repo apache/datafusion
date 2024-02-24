@@ -16,25 +16,21 @@
 // under the License.
 
 //! Encoding expressions
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
+use datafusion_common::ScalarValue;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use arrow::datatypes::Field;
-use arrow::compute::kernels;
-use arrow::compute::kernels::regexp;
-use datafusion_common::ScalarValue;
-use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
-    OffsetSizeTrait,
-};
 
-use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
+use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use std::sync::{Arc, OnceLock};
+use datafusion_expr::ColumnarValue;
+use std::sync::Arc;
 
 #[cfg(feature = "regex_expressions")]
 macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
@@ -114,9 +110,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| {
-                arg.clone().into_array(inferred_length)
-            })
+            .map(|arg| arg.clone().into_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         let result = regexp_match_func(&args);
@@ -147,9 +141,9 @@ fn regexp_match_func(args: &[ArrayRef]) -> Result<ArrayRef> {
             );
             func(args)
         }
-        other => internal_err!(
-            "Unsupported data type {other:?} for function regexp_match"
-        ),
+        other => {
+            internal_err!("Unsupported data type {other:?} for function regexp_match")
+        }
     }
 }
 pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
