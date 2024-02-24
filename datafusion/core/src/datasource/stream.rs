@@ -29,11 +29,11 @@ use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use futures::StreamExt;
-use tokio::task::JoinSet;
 
 use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_physical_plan::common::SpawnedTask;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
@@ -343,8 +343,7 @@ impl DataSink for StreamWrite {
         let config = self.0.clone();
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
         // Note: FIFO Files support poll so this could use AsyncFd
-        let mut write_task = JoinSet::new();
-        write_task.spawn_blocking(move || {
+        let write_task = SpawnedTask::spawn_blocking(move || {
             let mut count = 0_u64;
             let mut writer = config.writer()?;
             while let Some(batch) = receiver.blocking_recv() {
@@ -360,10 +359,6 @@ impl DataSink for StreamWrite {
             }
         }
         drop(sender);
-        write_task
-            .join_next()
-            .await
-            .expect("always one task in JoinSet")
-            .unwrap()
+        write_task.join().await.unwrap()
     }
 }
