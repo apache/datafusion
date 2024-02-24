@@ -241,14 +241,8 @@ where
                 arg.clone().into_array(expansion_len)
             })
             .collect::<Result<Vec<_>>>()?;
-        use std::any::type_name_of_val;
 
-        fn print_type_of<T: ?Sized>(val: &T) {
-            println!("The type of the variable is: {}", type_name_of_val(val));
-        }
-        print_type_of(&args);
         let result = (inner)(&args);
-        print_type_of(&result);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
