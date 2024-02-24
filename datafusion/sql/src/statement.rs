@@ -44,11 +44,12 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateMemoryTable,
-    CreateView, DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView,
-    EmptyRelation, Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
-    OperateFunctionArg, PlanType, Prepare, SetVariable, Statement as PlanStatement,
-    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, WriteOp,
+    CreateView, DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable,
+    DropView, EmptyRelation, Explain, ExprSchemable, Filter, LogicalPlan,
+    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
+    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -679,6 +680,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
 
                 Ok(LogicalPlan::Statement(statement))
+            }
+            Statement::DropFunction {
+                if_exists,
+                func_desc,
+                ..
+            } => {
+                // Not sure if this is correct way to generate name
+                // postgresql function definition may have schema part as well
+                // datafusion at the moment does lookup based on given string
+                // `schema_name.function_name` will work even if there is no `schema_name`
+
+                // according to postgresql documentation it can be only one function
+                // specified in drop statement
+
+                if let Some(desc) = func_desc.first() {
+                    let name: String = desc
+                        .name
+                        .0
+                        .iter()
+                        .map(|i| i.value.to_owned())
+                        .collect::<Vec<String>>()
+                        .join(".");
+                    let statement = PlanStatement::DropFunction(DropFunction {
+                        if_exists,
+                        name,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    });
+                    Ok(LogicalPlan::Statement(statement))
+                } else {
+                    Err(DataFusionError::Execution(
+                        "Function name not provided".into(),
+                    ))
+                }
             }
             _ => {
                 not_impl_err!("Unsupported SQL statement: {sql:?}")

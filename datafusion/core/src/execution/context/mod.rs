@@ -45,7 +45,7 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    CreateFunction, Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -73,9 +73,10 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropCatalogSchema, DropTable, DropView, Explain, LogicalPlan,
-    LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+    CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable, DropView,
+    Explain, LogicalPlan, LogicalPlanBuilder, SetVariable, TableSource, TableType,
+    UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
 use datafusion_sql::{
@@ -500,6 +501,19 @@ impl SessionContext {
 
                 match function_factory {
                     Some(f) => f.create(self.state.clone(), stmt).await?,
+                    None => Err(DataFusionError::Configuration(
+                        "Function factory has not been configured".into(),
+                    ))?,
+                };
+
+                self.return_empty_dataframe()
+            }
+
+            LogicalPlan::Statement(Statement::DropFunction(stmt)) => {
+                let function_factory = self.state.read().function_factory.clone();
+
+                match function_factory {
+                    Some(f) => f.remove(self.state.clone(), stmt).await?,
                     None => Err(DataFusionError::Configuration(
                         "Function factory has not been configured".into(),
                     ))?,
@@ -1288,6 +1302,14 @@ pub trait FunctionFactory: Sync + Send {
         &self,
         state: Arc<RwLock<SessionState>>,
         statement: CreateFunction,
+    ) -> Result<()>;
+
+    /// Removes function from [SessionState]
+    // drop would make more sense but its already occupied in rust
+    async fn remove(
+        &self,
+        state: Arc<RwLock<SessionState>>,
+        statement: DropFunction,
     ) -> Result<()>;
 }
 /// Execution context for registering data sources and executing queries.

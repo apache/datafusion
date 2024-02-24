@@ -36,8 +36,10 @@ pub enum Statement {
     TransactionEnd(TransactionEnd),
     /// Set a Variable
     SetVariable(SetVariable),
-
+    /// Create function statement
     CreateFunction(CreateFunction),
+    /// Drop function statement
+    DropFunction(DropFunction),
 }
 
 impl Statement {
@@ -48,6 +50,7 @@ impl Statement {
             Statement::TransactionEnd(TransactionEnd { schema, .. }) => schema,
             Statement::SetVariable(SetVariable { schema, .. }) => schema,
             Statement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            Statement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
 
@@ -59,6 +62,7 @@ impl Statement {
             Statement::TransactionEnd(_) => "TransactionEnd",
             Statement::SetVariable(_) => "SetVariable",
             Statement::CreateFunction(_) => "CreateFunction",
+            Statement::DropFunction(_) => "DropFunction",
         }
     }
 
@@ -92,6 +96,9 @@ impl Statement {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
                     Statement::CreateFunction(CreateFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
+                    }
+                    Statement::DropFunction(DropFunction { name, .. }) => {
                         write!(f, "CreateFunction: name {name:?}")
                     }
                 }
@@ -178,4 +185,11 @@ pub struct OperateFunctionArg {
     pub name: Option<Ident>,
     pub data_type: DataType,
     pub default_expr: Option<Expr>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct DropFunction {
+    pub name: String,
+    pub if_exists: bool,
+    pub schema: DFSchemaRef,
 }

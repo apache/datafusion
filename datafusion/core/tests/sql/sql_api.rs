@@ -20,13 +20,14 @@ use std::sync::Arc;
 use arrow_array::ArrowNativeTypeOp;
 use datafusion::{
     execution::context::{FunctionFactory, SessionState},
+    logical_expr::{CreateFunction, DropFunction},
     prelude::*,
 };
 use datafusion_execution::{
     runtime_env::{RuntimeConfig, RuntimeEnv},
     FunctionRegistry,
 };
-use datafusion_expr::CreateFunction;
+
 use parking_lot::RwLock;
 use tempfile::TempDir;
 
@@ -101,6 +102,16 @@ impl FunctionFactory for MockFunctionFactory {
         state.write().register_udf(mock_udf.into())?;
         Ok(())
     }
+
+    async fn remove(
+        &self,
+        _state: Arc<RwLock<SessionState>>,
+        _statement: DropFunction,
+    ) -> datafusion::error::Result<()> {
+        // at the moment state does not support unregister
+        // ignoring for now
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -130,6 +141,8 @@ async fn create_user_defined_function_statement() {
         .show()
         .await
         .unwrap();
+
+    ctx.sql("drop function better_add").await.unwrap();
 }
 
 #[tokio::test]
