@@ -2978,20 +2978,14 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn recursion_explain() -> Result<()> {
+    async fn nested_explain_should_fail() -> Result<()> {
         let ctx = SessionContext::new();
         // must be error
         let mut result = ctx.sql("explain select 1").await?.explain(false, false);
-        assert!(
-            result.is_err(),
-            "Expected an error, but operation succeeded."
-        );
+        assert!(result.is_err());
         // must be error
         result = ctx.sql("explain explain select 1").await;
-        assert!(
-            result.is_err(),
-            "Expected an error, but operation succeeded."
-        );
+        assert!(result.is_err());
         Ok(())
     }
 }
