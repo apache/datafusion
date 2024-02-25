@@ -78,7 +78,7 @@ enum ScalarFunctionType {
     Builtin(BuiltinScalarFunction),
     Op(Operator),
     Expr(BuiltinExprBuilder),
-    UDF(Arc<ScalarUDF>),
+    Udf(Arc<ScalarUDF>),
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -120,7 +120,7 @@ fn scalar_function_type_from_str(
 ) -> Result<ScalarFunctionType> {
     let s = ctx.state();
     if let Some(func) = s.scalar_functions().get(name) {
-        return Ok(ScalarFunctionType::UDF(func.to_owned()));
+        return Ok(ScalarFunctionType::Udf(func.to_owned()));
     }
 
     if let Ok(op) = name_to_op(name) {
@@ -893,7 +893,7 @@ pub async fn from_substrait_rex(
 
             let fn_type = scalar_function_type_from_str(ctx, fn_name)?;
             match fn_type {
-                ScalarFunctionType::UDF(fun) => {
+                ScalarFunctionType::Udf(fun) => {
                     let args = decode_arguments(
                         ctx,
                         input_schema,
