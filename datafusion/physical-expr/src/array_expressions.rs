@@ -791,7 +791,6 @@ pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_front_list::<i64>(array)
         }
-        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_pop_front does not support type: {:?}",
             array_data_type
@@ -815,7 +814,6 @@ pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&args[0])?;
             general_pop_back_list::<i64>(array)
         }
-        DataType::Null => Ok(args[0].clone()),
         _ => exec_err!(
             "array_pop_back does not support type: {:?}",
             array_data_type
@@ -1480,10 +1478,6 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
             check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)
         }
-        DataType::Null => Ok(new_null_array(
-            &DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-            1,
-        )),
         array_type => {
             exec_err!("array_positions does not support type '{array_type:?}'.")
         }
@@ -1616,10 +1610,6 @@ fn array_remove_internal(
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
 ) -> Result<ArrayRef> {
-    if array.data_type().is_null() {
-        return Ok(array.clone());
-    }
-
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
@@ -2294,7 +2284,6 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeList(_) => {
             general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Single)
         }
-        DataType::Null => Ok(new_null_array(&DataType::Boolean, 1)),
         _ => exec_err!("array_has does not support type '{array_type:?}'."),
     }
 }

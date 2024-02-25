@@ -126,34 +126,29 @@ pub enum TypeSignature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
-    /// If `allow_null` is true, the function also accepts a single argument of type Null.
     /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be non-list or list.
     /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
     /// List dimension of the List/LargeList is equivalent to the number of List.
     /// List dimension of the non-list is 0.
-    ArrayAndElement(bool),
+    ArrayAndElement,
     /// Specialized Signature for ArrayPrepend and similar functions
-    /// If `allow_null` is true, the function also accepts a single argument of type Null.
     /// The first argument should be non-list or list, and the second argument should be List/LargeList.
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
-    ElementAndArray(bool),
+    ElementAndArray,
     /// Specialized Signature for Array functions of the form (List/LargeList, Index)
-    /// If `allow_null` is true, the function also accepts a single argument of type Null.
     /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be Int64.
-    ArrayAndIndex(bool),
+    ArrayAndIndex,
     /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
     ArrayAndElementAndOptionalIndex,
     /// Specialized Signature for ArrayEmpty and similar functions
     /// The function takes a single argument that must be a List/LargeList/FixedSizeList
     /// or something that can be coerced to one of those types.
-    /// If `allow_null` is true, the function also accepts a single argument of type Null.
-    Array(bool),
+    Array,
 }
 
 impl ArrayFunctionSignature {
     /// Arguments to ArrayFunctionSignature
     /// `current_types` - The data types of the arguments
-    /// `allow_null_coercion` - Whether null type coercion is allowed
     /// Returns the valid types for the function signature
     pub fn get_type_signature(
         &self,
@@ -169,7 +164,7 @@ impl ArrayFunctionSignature {
 
             let first_two_types = &current_types[0..2];
             let mut valid_types =
-                array_append_or_prepend_valid_types(first_two_types, true, true)?;
+                array_append_or_prepend_valid_types(first_two_types, true)?;
 
             // Early return if there are only 2 arguments
             if current_types.len() == 2 {
@@ -193,7 +188,6 @@ impl ArrayFunctionSignature {
         fn array_append_or_prepend_valid_types(
             current_types: &[DataType],
             is_append: bool,
-            allow_null_coercion: bool,
         ) -> Result<Vec<Vec<DataType>>> {
             if current_types.len() != 2 {
                 return Ok(vec![vec![]]);
@@ -207,9 +201,6 @@ impl ArrayFunctionSignature {
 
             // We follow Postgres on `array_append(Null, T)`, which is not valid.
             if array_type.eq(&DataType::Null) {
-                if allow_null_coercion {
-                    return Ok(vec![vec![array_type.clone(), elem_type.clone()]]);
-                }
                 return Ok(vec![vec![]]);
             }
 
@@ -245,28 +236,20 @@ impl ArrayFunctionSignature {
                 _ => Ok(vec![vec![]]),
             }
         }
-        fn array_and_index(
-            current_types: &[DataType],
-            allow_null_coercion: bool,
-        ) -> Result<Vec<Vec<DataType>>> {
+        fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
             if current_types.len() != 2 {
                 return Ok(vec![vec![]]);
             }
             let array_type = &current_types[0];
-            let array_type = array(&[array_type.clone()], allow_null_coercion)?;
+            let array_type = array(&[array_type.clone()])?;
             if array_type[0].is_empty() {
                 Ok(vec![vec![]])
             } else {
                 Ok(vec![vec![array_type[0][0].clone(), DataType::Int64]])
             }
         }
-        fn array(
-            current_types: &[DataType],
-            allow_null_coercion: bool,
-        ) -> Result<Vec<Vec<DataType>>> {
-            if current_types.len() != 1
-                || (current_types[0].is_null() && !allow_null_coercion)
-            {
+        fn array(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
+            if current_types.len() != 1 {
                 return Ok(vec![vec![]]);
             }
 
@@ -279,26 +262,21 @@ impl ArrayFunctionSignature {
                     let array_type = coerced_fixed_size_list_to_list(array_type);
                     Ok(vec![vec![array_type]])
                 }
-                DataType::Null => Ok(vec![vec![array_type.clone()]]),
                 _ => Ok(vec![vec![]]),
             }
         }
         match self {
-            ArrayFunctionSignature::ArrayAndElement(allow_null) => {
-                array_append_or_prepend_valid_types(current_types, true, *allow_null)
+            ArrayFunctionSignature::ArrayAndElement => {
+                array_append_or_prepend_valid_types(current_types, true)
             }
-            ArrayFunctionSignature::ElementAndArray(allow_null) => {
-                array_append_or_prepend_valid_types(current_types, false, *allow_null)
+            ArrayFunctionSignature::ElementAndArray => {
+                array_append_or_prepend_valid_types(current_types, false)
             }
-            ArrayFunctionSignature::ArrayAndIndex(allow_null) => {
-                array_and_index(current_types, *allow_null)
-            }
+            ArrayFunctionSignature::ArrayAndIndex => array_and_index(current_types),
             ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
                 array_element_and_optional_index(current_types)
             }
-            ArrayFunctionSignature::Array(allow_null) => {
-                array(current_types, *allow_null)
-            }
+            ArrayFunctionSignature::Array => array(current_types),
         }
     }
 }
@@ -306,20 +284,20 @@ impl ArrayFunctionSignature {
 impl std::fmt::Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArrayFunctionSignature::ArrayAndElement(allow_null) => {
-                write!(f, "ArrayAndElement({})", *allow_null)
+            ArrayFunctionSignature::ArrayAndElement => {
+                write!(f, "ArrayAndElement")
             }
             ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
                 write!(f, "array, element, [index]")
             }
-            ArrayFunctionSignature::ElementAndArray(allow_null) => {
-                write!(f, "ElementAndArray({})", *allow_null)
+            ArrayFunctionSignature::ElementAndArray => {
+                write!(f, "ElementAndArray")
             }
-            ArrayFunctionSignature::ArrayAndIndex(allow_null) => {
-                write!(f, "ArrayAndIndex({})", *allow_null)
+            ArrayFunctionSignature::ArrayAndIndex => {
+                write!(f, "ArrayAndIndex")
             }
-            ArrayFunctionSignature::Array(allow_null) => {
-                write!(f, "Array({})", *allow_null)
+            ArrayFunctionSignature::Array => {
+                write!(f, "Array")
             }
         }
     }
@@ -458,10 +436,10 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
-    pub fn array_and_element(allow_null: bool, volatility: Volatility) -> Self {
+    pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndElement(allow_null),
+                ArrayFunctionSignature::ArrayAndElement,
             ),
             volatility,
         }
@@ -476,29 +454,27 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(allow_null: bool, volatility: Volatility) -> Self {
+    pub fn element_and_array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ElementAndArray(allow_null),
+                ArrayFunctionSignature::ElementAndArray,
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
-    pub fn array_and_index(allow_null: bool, volatility: Volatility) -> Self {
+    pub fn array_and_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndIndex(allow_null),
+                ArrayFunctionSignature::ArrayAndIndex,
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
-    pub fn array(allow_null: bool, volatility: Volatility) -> Self {
+    pub fn array(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array(
-                allow_null,
-            )),
+            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
             volatility,
         }
     }
