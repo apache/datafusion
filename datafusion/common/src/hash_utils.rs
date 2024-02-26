@@ -267,32 +267,6 @@ where
     Ok(())
 }
 
-fn hash_struct_array(
-    array: &StructArray,
-    random_state: &RandomState,
-    hashes_buffer: &mut [u64],
-) -> Result<()> {
-    let nulls = array.nulls();
-    let row_len = array.len();
-
-    let valid_row_indices: Vec<usize> = if let Some(nulls) = nulls {
-        nulls.valid_indices().collect()
-    } else {
-        (0..row_len).collect()
-    };
-
-    // Create hashes for each row that combines the hashes over all the column at that row.
-    let mut values_hashes = vec![0u64; row_len];
-    create_hashes(array.columns(), random_state, &mut values_hashes)?;
-
-    for i in valid_row_indices {
-        let hash = &mut hashes_buffer[i];
-        *hash = combine_hashes(*hash, values_hashes[i]);
-    }
-
-    Ok(())
-}
-
 
 /// Test version of `create_hashes` that produces the same value for
 /// all hashes (to test collisions)
