@@ -28,10 +28,13 @@ use datafusion_common::Result;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::Operator;
 use datafusion_expr::ScalarFunctionDefinition;
+use datafusion_expr::ScalarUDF;
 use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
+use datafusion_functions_array::expr_fn::array_append_udf;
+use datafusion_functions_array::expr_fn::array_concat_udf;
+use datafusion_functions_array::expr_fn::array_prepend_udf;
 
 use super::AnalyzerRule;
 
@@ -120,7 +123,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                     let left = (**left).clone();
                     let right = (**right).clone();
                     return Ok(Expr::ScalarFunction(ScalarFunction {
-                        func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                        func_def: ScalarFunctionDefinition::UDF(fun),
                         args: vec![left, right],
                     }));
                 }
@@ -147,7 +150,7 @@ fn rewrite_array_concat_operator_to_func(
     left: &Expr,
     op: Operator,
     right: &Expr,
-) -> Option<BuiltinScalarFunction> {
+) -> Option<Arc<ScalarUDF>> {
     // Convert `Array StringConcat Array` to ScalarFunction::ArrayConcat
 
     if op != Operator::StringConcat {
@@ -159,97 +162,61 @@ fn rewrite_array_concat_operator_to_func(
         // (arry concat, array append, array prepend) || array -> array concat
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        ) => Some(BuiltinScalarFunction::ArrayConcat),
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name())
+            && right_fun.name() == "make_array" =>
+        {
+            Some(array_concat_udf())
+        }
         // Chain concat operator (a || b) || scalar,
         // (arry concat, array append, array prepend) || scalar -> array append
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            _scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name()) =>
+        {
+            Some(array_append_udf())
+        }
         // array || array -> array concat
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) => Some(BuiltinScalarFunction::ArrayConcat),
+        ) if left_fun.name() == "make_array" && right_fun.name() == "make_array" => {
+            Some(array_concat_udf())
+        }
         // array || scalar -> array append
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             _right_scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        ) if left_fun.name() == "make_array" => Some(array_append_udf()),
         // scalar || array -> array prepend
         (
             _left_scalar,
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) => Some(BuiltinScalarFunction::ArrayPrepend),
+        ) if right_fun.name() == "make_array" => Some(array_prepend_udf()),
 
         _ => None,
     }
@@ -265,7 +232,7 @@ fn rewrite_array_concat_operator_to_func_for_column(
     op: Operator,
     right: &Expr,
     schema: &DFSchema,
-) -> Result<Option<BuiltinScalarFunction>> {
+) -> Result<Option<Arc<ScalarUDF>>> {
     if op != Operator::StringConcat {
         return Ok(None);
     }
@@ -275,33 +242,18 @@ fn rewrite_array_concat_operator_to_func_for_column(
         // 1) array_prepend/append/concat || column
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::Column(c),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            Expr::Column(c),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
-                args: _left_args,
-            }),
-            Expr::Column(c),
-        ) => {
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name()) =>
+        {
             let d = schema.field_from_column(c)?.data_type();
             let ndim = list_ndims(d);
             match ndim {
-                0 => Ok(Some(BuiltinScalarFunction::ArrayAppend)),
-                _ => Ok(Some(BuiltinScalarFunction::ArrayConcat)),
+                0 => Ok(Some(array_append_udf())),
+                _ => Ok(Some(array_concat_udf())),
             }
         }
         // 2) select column1 || column2
@@ -311,9 +263,9 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let ndim1 = list_ndims(d1);
             let ndim2 = list_ndims(d2);
             match (ndim1, ndim2) {
-                (0, _) => Ok(Some(BuiltinScalarFunction::ArrayPrepend)),
-                (_, 0) => Ok(Some(BuiltinScalarFunction::ArrayAppend)),
-                _ => Ok(Some(BuiltinScalarFunction::ArrayConcat)),
+                (0, _) => Ok(Some(array_prepend_udf())),
+                (_, 0) => Ok(Some(array_append_udf())),
+                _ => Ok(Some(array_concat_udf())),
             }
         }
         _ => Ok(None),

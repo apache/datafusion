@@ -45,8 +45,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable,
-    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
+    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
+    Projection, ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
 
@@ -333,11 +333,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         &self.schema,
                         &fun.signature(),
                     )?;
-                    let new_args = coerce_arguments_for_fun(
-                        new_args.as_slice(),
-                        &self.schema,
-                        &fun,
-                    )?;
                     Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
@@ -345,6 +340,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         args.as_slice(),
                         &self.schema,
                         fun.signature(),
+                    )?;
+                    let new_expr = coerce_arguments_for_fun(
+                        new_expr.as_slice(),
+                        &self.schema,
+                        &fun,
                     )?;
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_expr)))
                 }
@@ -589,7 +589,7 @@ fn coerce_arguments_for_signature(
 fn coerce_arguments_for_fun(
     expressions: &[Expr],
     schema: &DFSchema,
-    fun: &BuiltinScalarFunction,
+    fun: &Arc<ScalarUDF>,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(vec![]);
@@ -597,7 +597,7 @@ fn coerce_arguments_for_fun(
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
     // Cast Fixedsizelist to List for array functions
-    if *fun == BuiltinScalarFunction::MakeArray {
+    if fun.name() == "make_array" {
         expressions = expressions
             .into_iter()
             .map(|expr| {
@@ -782,6 +782,7 @@ mod test {
         logical_plan::{EmptyRelation, Projection},
         Expr, LogicalPlan, ScalarUDF, Signature, Volatility,
     };
+    use datafusion_functions_array::expr_fn::make_array;
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
     use crate::analyzer::type_coercion::{
@@ -1275,10 +1276,7 @@ mod test {
                 None,
             ),
         )));
-        let expr = Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            vec![val.clone()],
-        ));
+        let expr = make_array(vec![val.clone()]);
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![DFField::new_unqualified(
                 "item",
@@ -1307,10 +1305,7 @@ mod test {
             &schema,
         )?;
 
-        let expected = Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            vec![expected_casted_expr],
-        ));
+        let expected = make_array(vec![expected_casted_expr]);
 
         assert_eq!(result, expected);
         Ok(())

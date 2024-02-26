@@ -22,10 +22,9 @@ use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
-use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::{lit, Expr, Operator};
+use datafusion_functions_array::expr_fn::make_array;
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -142,10 +141,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            values,
-        )))
+        Ok(make_array(values))
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan

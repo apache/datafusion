@@ -18,18 +18,58 @@
 //! [`ScalarUDFImpl`] definitions for array functions.
 
 use arrow::datatypes::DataType;
+use arrow_schema::Field;
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::type_coercion::binary::get_wider_type;
 use datafusion_expr::Expr;
+use datafusion_expr::TypeSignature::{Any as expr_Any, VariadicEqual};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
+use std::cmp::Ordering;
+use std::sync::Arc;
+
+use crate::kernels::make_scalar_function_with_hints;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_function!(ArrayToString,
+make_udf_function!(
+    ArrayToString,
     array_to_string,
-    array delimiter, // arg name
+    args,                                                // arg name
     "converts each element to its text representation.", // doc
-    array_to_string_udf // internal function name
+    array_to_string_udf                                  // internal function name
+);
+
+make_udf_function!(
+    ArrayAppend,
+    array_append,
+    args,                                         // arg name
+    "appends an element to the end of an array.", // doc
+    array_append_udf                              // internal function name
+);
+
+make_udf_function!(
+    ArrayPrepend,
+    array_prepend,
+    args,                                                // arg name
+    "Prepends an element to the beginning of an array.", // doc
+    array_prepend_udf                                    // internal function name
+);
+
+make_udf_function!(
+    ArrayConcat,
+    array_concat,
+    args,                   // arg name
+    "Concatenates arrays.", // doc
+    array_concat_udf        // internal function name
+);
+
+make_udf_function!(
+    MakeArray,
+    make_array,
+    args,                                                            // arg name
+    "Returns an Arrow array using the specified input expressions.", // doc
+    make_array_udf // internal function name
 );
 
 #[derive(Debug)]
@@ -75,8 +115,252 @@ impl ScalarUDFImpl for ArrayToString {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::array_to_string(&args).map(ColumnarValue::Array)
+        make_scalar_function_with_hints(crate::kernels::array_to_string)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayAppend {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayAppend {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array_and_element(Volatility::Immutable),
+            aliases: vec![
+                String::from("array_append"),
+                String::from("list_append"),
+                String::from("array_push_back"),
+                String::from("list_push_back"),
+            ],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayAppend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "array_append"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        make_scalar_function_with_hints(crate::kernels::array_append)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayPrepend {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayPrepend {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::element_and_array(Volatility::Immutable),
+            aliases: vec![
+                String::from("array_prepend"),
+                String::from("list_prepend"),
+                String::from("array_push_front"),
+                String::from("list_push_front"),
+            ],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayPrepend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "array_prepend"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        Ok(arg_types[1].clone())
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        make_scalar_function_with_hints(crate::kernels::array_prepend)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayConcat {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayConcat {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![
+                String::from("array_concat"),
+                String::from("array_cat"),
+                String::from("list_concat"),
+                String::from("list_cat"),
+            ],
+        }
+    }
+
+    /// Returns the dimension [`DataType`] of [`DataType::List`] if
+    /// treated as a N-dimensional array.
+    ///
+    /// ## Examples:
+    ///
+    /// * `Int64` has dimension 1
+    /// * `List(Int64)` has dimension 2
+    /// * `List(List(Int64))` has dimension 3
+    /// * etc.
+    fn return_dimension(&self, input_expr_type: &DataType) -> u64 {
+        let mut result: u64 = 1;
+        let mut current_data_type = input_expr_type;
+        while let DataType::List(field) = current_data_type {
+            current_data_type = field.data_type();
+            result += 1;
+        }
+        result
+    }
+}
+
+impl ScalarUDFImpl for ArrayConcat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "array_concat"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        let mut expr_type = DataType::Null;
+        let mut max_dims = 0;
+        for arg_type in arg_types {
+            match arg_type {
+                DataType::List(field) => {
+                    if !field.data_type().equals_datatype(&DataType::Null) {
+                        let dims = self.return_dimension(arg_type);
+                        expr_type = match max_dims.cmp(&dims) {
+                            Ordering::Greater => expr_type,
+                            Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
+                            Ordering::Less => {
+                                max_dims = dims;
+                                arg_type.clone()
+                            }
+                        };
+                    }
+                }
+                _ => {
+                    return plan_err!(
+                        "The array_concat function can only accept list as the args."
+                    )
+                }
+            }
+        }
+
+        Ok(expr_type)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        make_scalar_function_with_hints(crate::kernels::array_concat)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub struct MakeArray {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl MakeArray {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![VariadicEqual, expr_Any(0)],
+                Volatility::Immutable,
+            ),
+            aliases: vec![String::from("make_array"), String::from("make_list")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for MakeArray {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "make_array"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        match arg_types.len() {
+            0 => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Null,
+                true,
+            )))),
+            _ => {
+                let mut expr_type = DataType::Null;
+                for arg_type in arg_types {
+                    if !arg_type.equals_datatype(&DataType::Null) {
+                        expr_type = arg_type.clone();
+                        break;
+                    }
+                }
+
+                Ok(DataType::List(Arc::new(Field::new(
+                    "item", expr_type, true,
+                ))))
+            }
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        make_scalar_function_with_hints(crate::kernels::make_array)(args)
     }
 
     fn aliases(&self) -> &[String] {
