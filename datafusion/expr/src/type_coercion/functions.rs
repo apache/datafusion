@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::TIMEZONE_WILDCARD;
+use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::list_ndims;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
+};
 
 use super::binary::comparison_coercion;
 
@@ -78,6 +80,98 @@ fn get_valid_types(
     signature: &TypeSignature,
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
+    fn array_element_and_optional_index(
+        current_types: &[DataType],
+    ) -> Result<Vec<Vec<DataType>>> {
+        // make sure there's 2 or 3 arguments
+        if !(current_types.len() == 2 || current_types.len() == 3) {
+            return Ok(vec![vec![]]);
+        }
+
+        let first_two_types = &current_types[0..2];
+        let mut valid_types = array_append_or_prepend_valid_types(first_two_types, true)?;
+
+        // Early return if there are only 2 arguments
+        if current_types.len() == 2 {
+            return Ok(valid_types);
+        }
+
+        let valid_types_with_index = valid_types
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                t.push(DataType::Int64);
+                t
+            })
+            .collect::<Vec<_>>();
+
+        valid_types.extend(valid_types_with_index);
+
+        Ok(valid_types)
+    }
+
+    fn array_append_or_prepend_valid_types(
+        current_types: &[DataType],
+        is_append: bool,
+    ) -> Result<Vec<Vec<DataType>>> {
+        if current_types.len() != 2 {
+            return Ok(vec![vec![]]);
+        }
+
+        let (array_type, elem_type) = if is_append {
+            (&current_types[0], &current_types[1])
+        } else {
+            (&current_types[1], &current_types[0])
+        };
+
+        // We follow Postgres on `array_append(Null, T)`, which is not valid.
+        if array_type.eq(&DataType::Null) {
+            return Ok(vec![vec![]]);
+        }
+
+        // We need to find the coerced base type, mainly for cases like:
+        // `array_append(List(null), i64)` -> `List(i64)`
+        let array_base_type = datafusion_common::utils::base_type(array_type);
+        let elem_base_type = datafusion_common::utils::base_type(elem_type);
+        let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
+
+        let new_base_type = new_base_type.ok_or_else(|| {
+            internal_datafusion_err!(
+                "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
+            )
+        })?;
+
+        let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
+            array_type,
+            &new_base_type,
+        );
+
+        match new_array_type {
+            DataType::List(ref field)
+            | DataType::LargeList(ref field)
+            | DataType::FixedSizeList(ref field, _) => {
+                let new_elem_type = field.data_type();
+                if is_append {
+                    Ok(vec![vec![new_array_type.clone(), new_elem_type.clone()]])
+                } else {
+                    Ok(vec![vec![new_elem_type.to_owned(), new_array_type.clone()]])
+                }
+            }
+            _ => Ok(vec![vec![]]),
+        }
+    }
+    fn array(array_type: &DataType) -> Option<DataType> {
+        match array_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => {
+                let array_type = coerced_fixed_size_list_to_list(array_type);
+                Some(array_type)
+            }
+            _ => None,
+        }
+    }
+
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
@@ -110,10 +204,35 @@ fn get_valid_types(
         }
 
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArraySignature(ref function_signature) => {
-            function_signature.get_type_signature(current_types)?
-        }
+        TypeSignature::ArraySignature(ref function_signature) => match function_signature
+        {
+            ArrayFunctionSignature::ArrayAndElement => {
+                array_append_or_prepend_valid_types(current_types, true)?
+            }
+            ArrayFunctionSignature::ElementAndArray => {
+                array_append_or_prepend_valid_types(current_types, false)?
+            }
+            ArrayFunctionSignature::ArrayAndIndex => {
+                if current_types.len() != 2 {
+                    return Ok(vec![vec![]]);
+                }
+                array(&current_types[0]).map_or_else(
+                    || vec![vec![]],
+                    |array_type| vec![vec![array_type, DataType::Int64]],
+                )
+            }
+            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
+                array_element_and_optional_index(current_types)?
+            }
+            ArrayFunctionSignature::Array => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
 
+                array(&current_types[0])
+                    .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
+            }
+        },
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
                 return plan_err!(
