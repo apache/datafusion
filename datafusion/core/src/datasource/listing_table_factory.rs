@@ -258,22 +258,4 @@ mod tests {
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }
-
-    #[tokio::test]
-    async fn test_sql() -> datafusion_common::Result<()> {
-        let context = SessionContext::new();
-        let state = context.state();
-        context.sql("create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');").await?.collect().await?;
-        let sa = context.sql("COPY source_table to '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table.csv';").await?.collect().await?;
-        print_batches(&sa).unwrap();
-        context.sql("CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW
-            LOCATION '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table.csv';").await?.collect().await?;
-        let sa = context
-            .sql("select * from validate_single_csv")
-            .await?
-            .collect()
-            .await?;
-        print_batches(&sa).unwrap();
-        Ok(())
-    }
 }
