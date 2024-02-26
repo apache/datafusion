@@ -24,7 +24,7 @@ use datafusion::{
     arrow::util::pretty,
     catalog::{
         schema::SchemaProvider,
-        {CatalogProviderList, CatalogProvider},
+        {CatalogProvider, CatalogProviderList},
     },
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat, FileFormat},
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     .unwrap();
     let mut ctx = SessionContext::new();
     let state = ctx.state();
-    let catlist = Arc::new(CustomCatalogProvderList::new());
+    let catlist = Arc::new(CustomCatalogProviderList::new());
     // use our custom catalog list for context. each context has a single catalog list.
     // context will by default have [`MemoryCatalogProviderList`]
     ctx.register_catalog_list(catlist.clone());
