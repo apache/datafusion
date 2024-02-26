@@ -4618,9 +4618,24 @@ select array_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array_di
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
+query ???
+select array_dims(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_dims(arrow_cast(make_array([1, 2], [3, 4]), 'FixedSizeList(2, List(Int64))')), array_dims(arrow_cast(make_array([[[[1], [2]]]]), 'FixedSizeList(1, List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
 # array_dims scalar function #2
 query ??
 select array_dims(array_repeat(array_repeat(array_repeat(2, 3), 2), 1)), array_dims(array_repeat(array_repeat(array_repeat(3, 4), 5), 2));
+----
+[1, 2, 3] [2, 5, 4]
+
+query ??
+select array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(2, 3), 2), 1), 'LargeList(List(List(Int64)))')), array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(3, 4), 5), 2), 'LargeList(List(List(Int64)))'));
+----
+[1, 2, 3] [2, 5, 4]
+
+query ??
+select array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(2, 3), 2), 1), 'FixedSizeList(1, List(List(Int64)))')), array_dims(arrow_cast(array_repeat(array_repeat(array_repeat(3, 4), 5), 2), 'FixedSizeList(2, List(List(Int64)))'));
 ----
 [1, 2, 3] [2, 5, 4]
 
@@ -4646,6 +4661,11 @@ select list_dims(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), list_dims
 ----
 [3] [2, 2] [1, 1, 1, 2, 1]
 
+query ???
+select list_dims(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), list_dims(arrow_cast(make_array([1, 2], [3, 4]), 'FixedSizeList(2, List(Int64))')), list_dims(arrow_cast(make_array([[[[1], [2]]]]), 'FixedSizeList(1, List(List(List(List(Int64)))))'));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
 # array_dims with columns
 query ???
 select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
@@ -4667,6 +4687,17 @@ select array_dims(column1), array_dims(column2), array_dims(column3) from large_
 [2, 2] [3] [3]
 NULL [3] [4]
 [2, 2] NULL [1]
+[2, 2] [3] NULL
+
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from fixed_size_arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+NULL [3] [5]
+[2, 2] NULL [5]
 [2, 2] [3] NULL
 
 
