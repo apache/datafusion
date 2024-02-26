@@ -58,6 +58,7 @@ use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindow
 use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::config::ParquetOptions;
 use datafusion_common::{
     file_options::{
         arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
@@ -833,6 +834,7 @@ impl TryFrom<&JsonSink> for protobuf::JsonSink {
     fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
         Ok(Self {
             config: Some(value.config().try_into()?),
+            writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
@@ -843,6 +845,7 @@ impl TryFrom<&CsvSink> for protobuf::CsvSink {
     fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
         Ok(Self {
             config: Some(value.config().try_into()?),
+            writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
@@ -854,6 +857,7 @@ impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
     fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self {
             config: Some(value.config().try_into()?),
+            parquet_options: Some(value.parquet_options().try_into()?),
         })
     }
 }
@@ -945,6 +949,62 @@ impl TryFrom<&FileTypeWriterOptions> for protobuf::FileTypeWriterOptions {
         };
         Ok(Self {
             file_type: Some(file_type),
+        })
+    }
+}
+
+impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &CsvWriterOptions) -> Result<Self, Self::Error> {
+        Ok(csv_writer_options_to_proto(
+            &opts.writer_options,
+            &opts.compression,
+        ))
+    }
+}
+
+impl TryFrom<&JsonWriterOptions> for protobuf::JsonWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &JsonWriterOptions) -> Result<Self, Self::Error> {
+        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        Ok(protobuf::JsonWriterOptions {
+            compression: compression.into(),
+        })
+    }
+}
+
+impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetOptions) -> Result<Self, Self::Error> {
+        Ok(protobuf::ParquetOptions {
+            enable_page_index: value.enable_page_index,
+            pruning: value.pruning,
+            skip_metadata: value.skip_metadata,
+            metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
+            pushdown_filters: value.pushdown_filters,
+            reorder_filters: value.reorder_filters,
+            data_pagesize_limit: value.data_pagesize_limit as u64,
+            write_batch_size: value.write_batch_size as u64,
+            writer_version: value.writer_version.clone(),
+            compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v)),
+            dictionary_enabled_opt: value.dictionary_enabled.map(|v| protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)),
+            dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
+            statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v)),
+            max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
+            max_row_group_size: value.max_row_group_size as u64,
+            created_by: value.created_by.clone(),
+            column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
+            data_page_row_count_limit: value.data_page_row_count_limit as u64,
+            encoding_opt: value.encoding.map(|v| protobuf::parquet_options::EncodingOpt::Encoding(v)),
+            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(|v| protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v)),
+            bloom_filter_ndv_opt: value.bloom_filter_ndv.map(|v| protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v)),
+            allow_single_file_parallelism: value.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
+            maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
         })
     }
 }

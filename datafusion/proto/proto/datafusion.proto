@@ -1273,6 +1273,7 @@ message FileSinkConfig {
 
 message JsonSink {
   FileSinkConfig config = 1;
+  JsonWriterOptions writer_options = 2;
 }
 
 message JsonSinkExecNode {
@@ -1284,6 +1285,7 @@ message JsonSinkExecNode {
 
 message CsvSink {
   FileSinkConfig config = 1;
+  CsvWriterOptions writer_options = 2;
 }
 
 message CsvSinkExecNode {
@@ -1293,8 +1295,71 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message ParquetOptions {
+  // Regular fields
+  bool enable_page_index = 1; // default = true
+  bool pruning = 2; // default = true
+  bool skip_metadata = 3; // default = true
+  bool pushdown_filters = 5; // default = false
+  bool reorder_filters = 6; // default = false
+  uint64 data_pagesize_limit = 7; // default = 1024 * 1024
+  uint64 write_batch_size = 8; // default = 1024
+  string writer_version = 9; // default = "1.0"
+  bool bloom_filter_enabled = 20; // default = false
+  bool allow_single_file_parallelism = 23; // default = true
+  uint64 maximum_parallel_row_group_writers = 24; // default = 1
+  uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+
+  oneof metadata_size_hint_opt {
+    uint64 metadata_size_hint = 4;
+  }
+
+  oneof compression_opt {
+    string compression = 10;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 11;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 13;
+  }
+
+  oneof max_statistics_size_opt {
+    uint64 max_statistics_size = 14;
+  }
+
+  oneof column_index_truncate_length_opt {
+    uint64 column_index_truncate_length = 17;
+  }
+
+  oneof encoding_opt {
+    string encoding = 19;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 21;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 22;
+  }
+
+  uint64 dictionary_page_size_limit = 12;
+
+  uint64 data_page_row_count_limit = 18;
+
+  uint64 max_row_group_size = 15;
+
+  string created_by = 16;
+}
+
+
+
 message ParquetSink {
   FileSinkConfig config = 1;
+  ParquetOptions parquet_options = 2;
 }
 
 message ParquetSinkExecNode {

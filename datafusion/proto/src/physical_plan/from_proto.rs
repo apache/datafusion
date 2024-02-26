@@ -60,6 +60,7 @@ use crate::protobuf::physical_expr_node::ExprType;
 
 use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
 use chrono::{TimeZone, Utc};
+use datafusion_common::config::{JsonOptions, ParquetOptions};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -761,7 +762,10 @@ impl TryFrom<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
     fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(convert_required!(value.config)?))
+        Ok(Self::new(
+            convert_required!(value.config)?,
+            convert_required!(value.writer_options)?,
+        ))
     }
 }
 
@@ -770,7 +774,10 @@ impl TryFrom<&protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
     fn try_from(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(convert_required!(value.config)?, value.))
+        Ok(Self::new(
+            convert_required!(value.config)?,
+            convert_required!(value.parquet_options)?,
+        ))
     }
 }
 
@@ -778,7 +785,10 @@ impl TryFrom<&protobuf::CsvSink> for CsvSink {
     type Error = DataFusionError;
 
     fn try_from(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(convert_required!(value.config)?))
+        Ok(Self::new(
+            convert_required!(value.config)?,
+            convert_required!(value.writer_options)?,
+        ))
     }
 }
 
@@ -869,5 +879,99 @@ impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
                 Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
             }
         }
+    }
+}
+
+impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &protobuf::CsvWriterOptions) -> Result<Self, Self::Error> {
+        let write_options = csv_writer_options_from_proto(opts)?;
+        let compression: CompressionTypeVariant = opts.compression().into();
+        Ok(CsvWriterOptions::new(write_options, compression))
+    }
+}
+
+impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(opts: &protobuf::JsonWriterOptions) -> Result<Self, Self::Error> {
+        let compression: CompressionTypeVariant = opts.compression().into();
+        Ok(JsonWriterOptions::new(compression))
+    }
+}
+
+impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::ParquetOptions) -> Result<Self, Self::Error> {
+        Ok(ParquetOptions {
+            enable_page_index: value.enable_page_index,
+            pruning: value.pruning,
+            skip_metadata: value.skip_metadata,
+            metadata_size_hint: value
+                .metadata_size_hint_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
+                })
+                .unwrap_or(None),
+            pushdown_filters: value.pushdown_filters,
+            reorder_filters: value.reorder_filters,
+            data_pagesize_limit: value.data_pagesize_limit as usize,
+            write_batch_size: value.write_batch_size as usize,
+            writer_version: value.writer_version,
+            compression: value.compression_opt.map(|opt| match opt {
+                protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
+            }).unwrap_or(None),
+            dictionary_enabled: match value.dictionary_enabled_opt {
+                Some(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)) => Some(v),
+                None => None,
+            },
+            // Continuing from where we left off in the TryFrom implementation
+            dictionary_page_size_limit: value.dictionary_page_size_limit as usize,
+            statistics_enabled: value
+                .statistics_enabled_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                })
+                .unwrap_or(None),
+            max_statistics_size: value
+                .max_statistics_size_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
+                })
+                .unwrap_or(None),
+            max_row_group_size: value.max_row_group_size as usize,
+            created_by: value.created_by.clone(),
+            column_index_truncate_length: value
+                .column_index_truncate_length_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(v as usize),
+                })
+                .unwrap_or(None),
+            data_page_row_count_limit: value.data_page_row_count_limit as usize,
+            encoding: value
+                .encoding_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
+                })
+                .unwrap_or(None),
+            bloom_filter_enabled: value.bloom_filter_enabled,
+            bloom_filter_fpp: value
+                .bloom_filter_fpp_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                })
+                .unwrap_or(None),
+            bloom_filter_ndv: value
+                .bloom_filter_ndv_opt
+                .map(|opt| match opt {
+                    protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
+                })
+                .unwrap_or(None),
+            allow_single_file_parallelism: value.allow_single_file_parallelism,
+            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
+            maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
+        })
     }
 }

@@ -75,11 +75,10 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
     Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
@@ -567,23 +566,14 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    copy_options,
+                                      format_options: copy_options
+                                      , ..
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
-
-                    let file_type_writer_options = match copy_options{
-                        CopyOptions::SQLOptions(statement_options) => {
-                            FileTypeWriterOptions::build(
-                                file_format,
-                                session_state.config_options(),
-                                statement_options)?
-                        },
-                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
-                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -593,14 +583,13 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         overwrite: false,
-                        file_type_writer_options
                     };
 
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::CSV => Arc::new(CsvFormat::default().with_options(copy_options.csv.clone())),
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
-                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default().with_options(copy_options.parquet.clone())),
+                        FileType::JSON => Arc::new(JsonFormat::default().with_options(copy_options.json.clone())),
                         FileType::AVRO => Arc::new(AvroFormat {} ),
                         FileType::ARROW => Arc::new(ArrowFormat {}),
                     };

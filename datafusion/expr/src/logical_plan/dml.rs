@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::{
     fmt::{self, Display},
     sync::Arc,
 };
 
-use datafusion_common::{
-    file_options::StatementOptions, DFSchemaRef, FileType, FileTypeWriterOptions,
-    OwnedTableReference,
-};
+use datafusion_common::config::FormatOptions;
+use datafusion_common::file_options::StatementOptions;
+use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
 
 use crate::LogicalPlan;
 
 /// Operator that copies the contents of a database to file(s)
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct CopyTo {
     /// The relation that determines the tuples to write to the output file(s)
     pub input: Arc<LogicalPlan>,
@@ -37,46 +38,29 @@ pub struct CopyTo {
     /// The file format to output (explicitly defined or inferred from file extension)
     pub file_format: FileType,
     /// Arbitrary options as tuples
-    pub copy_options: CopyOptions,
+    pub format_options: FormatOptions,
+    ///
+    pub source_option_tuples: HashMap<String, String>,
 }
 
-/// When the logical plan is constructed from SQL, CopyOptions
-/// will contain arbitrary string tuples which must be parsed into
-/// FileTypeWriterOptions. When the logical plan is constructed directly
-/// from rust code (such as via the DataFrame API), FileTypeWriterOptions
-/// can be provided directly, avoiding the run time cost and fallibility of
-/// parsing string based options.
-#[derive(Clone)]
-pub enum CopyOptions {
-    /// Holds StatementOptions parsed from a SQL statement
-    SQLOptions(StatementOptions),
-    /// Holds FileTypeWriterOptions directly provided
-    WriterOptions(Box<FileTypeWriterOptions>),
-}
-
-impl PartialEq for CopyOptions {
-    fn eq(&self, other: &CopyOptions) -> bool {
-        match self {
-            Self::SQLOptions(statement1) => match other {
-                Self::SQLOptions(statement2) => statement1.eq(statement2),
-                Self::WriterOptions(_) => false,
-            },
-            Self::WriterOptions(_) => false,
-        }
+// Implement PartialEq manually
+impl PartialEq for CopyTo {
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input
+            && self.output_url == other.output_url
+            && self.file_format == other.file_format
     }
 }
 
-impl Eq for CopyOptions {}
+// Implement Eq (no need for additional logic over PartialEq)
+impl Eq for CopyTo {}
 
-impl std::hash::Hash for CopyOptions {
-    fn hash<H>(&self, hasher: &mut H)
-    where
-        H: std::hash::Hasher,
-    {
-        match self {
-            Self::SQLOptions(statement) => statement.hash(hasher),
-            Self::WriterOptions(_) => (),
-        }
+// Implement Hash manually
+impl Hash for CopyTo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.output_url.hash(state);
+        self.file_format.hash(state);
     }
 }
 

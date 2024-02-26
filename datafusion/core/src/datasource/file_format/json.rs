@@ -50,16 +50,16 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {
-    options: JsonOptions
+    options: JsonOptions,
 }
 
 impl Default for JsonFormat {
@@ -71,7 +71,6 @@ impl Default for JsonFormat {
 }
 
 impl JsonFormat {
-
     pub fn with_options(mut self, options: JsonOptions) -> Self {
         self.options = options;
         self
@@ -166,7 +165,8 @@ impl FileFormat for JsonFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
+        let exec =
+            NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
         Ok(Arc::new(exec))
     }
 
@@ -179,10 +179,6 @@ impl FileFormat for JsonFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Json");
-        }
-
-        if self.options.compression != CompressionTypeVariant::UNCOMPRESSED {
-            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
 
         let writer_options = JsonWriterOptions::try_from(&self.options)?;
@@ -233,7 +229,7 @@ pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
     ///
-    writer_options: JsonWriterOptions
+    writer_options: JsonWriterOptions,
 }
 
 impl Debug for JsonSink {
@@ -257,7 +253,10 @@ impl DisplayAs for JsonSink {
 impl JsonSink {
     /// Create from config.
     pub fn new(config: FileSinkConfig, writer_options: JsonWriterOptions) -> Self {
-        Self { config, writer_options }
+        Self {
+            config,
+            writer_options,
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -283,6 +282,9 @@ impl JsonSink {
             (*compression).into(),
         )
         .await
+    }
+    pub fn writer_options(&self) -> &JsonWriterOptions {
+        &self.writer_options
     }
 }
 

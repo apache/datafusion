@@ -24,7 +24,6 @@ use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
-use crate::dml::CopyOptions;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
 };
@@ -614,13 +613,15 @@ impl LogicalPlan {
                 input: _,
                 output_url,
                 file_format,
-                copy_options,
+                format_options,
+                source_option_tuples,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
 
-                copy_options: copy_options.clone(),
+                format_options: format_options.clone(),
+                source_option_tuples: source_option_tuples.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
@@ -1550,19 +1551,14 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
-                        copy_options,
+                        source_option_tuples,
+                        ..
                     }) => {
-                        let op_str = match copy_options {
-                            CopyOptions::SQLOptions(statement) => statement
-                                .clone()
-                                .into_inner()
-                                .iter()
-                                .map(|(k, v)| format!("{k} {v}"))
-                                .collect::<Vec<String>>()
-                                .join(", "),
-                            CopyOptions::WriterOptions(_) => "".into(),
-                        };
-
+                        let op_str = source_option_tuples
+                            .iter()
+                            .map(|(k, v)| format!("{k} {v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
                         write!(f, "CopyTo: format={file_format} output_url={output_url} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {

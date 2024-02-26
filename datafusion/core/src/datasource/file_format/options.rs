@@ -496,13 +496,12 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let mut file_format = ParquetFormat::new();
-            if let Some(parquet_pruning) = self.parquet_pruning{
-                file_format = file_format.with_enable_pruning(parquet_pruning)
-            }
-        if let Some(skip_metadata) = self.skip_metadata{
+        if let Some(parquet_pruning) = self.parquet_pruning {
+            file_format = file_format.with_enable_pruning(parquet_pruning)
+        }
+        if let Some(skip_metadata) = self.skip_metadata {
             file_format = file_format.with_skip_metadata(skip_metadata)
         }
-
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

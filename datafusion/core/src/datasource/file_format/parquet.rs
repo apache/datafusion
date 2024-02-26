@@ -39,6 +39,8 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
+use datafusion_common::config::{CsvOptions, ParquetOptions, TableParquetOptions};
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -53,8 +55,6 @@ use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
-use datafusion_common::config::{CsvOptions, ParquetOptions};
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, SharedBuffer};
@@ -98,13 +98,13 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 /// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug)]
 pub struct ParquetFormat {
-    options: ParquetOptions
+    options: TableParquetOptions,
 }
 
 impl Default for ParquetFormat {
     fn default() -> Self {
         Self {
-            options: ParquetOptions::default(),
+            options: TableParquetOptions::default(),
         }
     }
 }
@@ -118,13 +118,13 @@ impl ParquetFormat {
     /// Activate statistics based row group level pruning
     /// - If `None`, defaults to value on `config_options`
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
-        self.options.pruning = enable;
+        self.options.global.pruning = enable;
         self
     }
 
     /// Return `true` if pruning is enabled
     pub fn enable_pruning(&self) -> bool {
-        self.options.pruning
+        self.options.global.pruning
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -134,13 +134,13 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
-        self.options.metadata_size_hint = size_hint;
+        self.options.global.metadata_size_hint = size_hint;
         self
     }
 
     /// Return the metadata size hint if set
     pub fn metadata_size_hint(&self) -> Option<usize> {
-        self.options.metadata_size_hint
+        self.options.global.metadata_size_hint
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -149,14 +149,23 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
-        self.options.skip_metadata = skip_metadata;
+        self.options.global.skip_metadata = skip_metadata;
         self
     }
 
     /// Returns `true` if schema metadata will be cleared prior to
     /// schema merging.
     pub fn skip_metadata(&self) -> bool {
-        self.options.skip_metadata
+        self.options.global.skip_metadata
+    }
+
+    pub fn with_options(mut self, options: TableParquetOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn options(&self) -> &ParquetOptions {
+        &self.options.global
     }
 }
 
@@ -260,10 +269,7 @@ impl FileFormat for ParquetFormat {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = self
-            .enable_pruning()
-            .then(|| filters.cloned())
-            .flatten();
+        let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
@@ -544,7 +550,7 @@ pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
     ///
-    parquet_options: ParquetOptions
+    parquet_options: TableParquetOptions,
 }
 
 impl Debug for ParquetSink {
@@ -567,8 +573,11 @@ impl DisplayAs for ParquetSink {
 
 impl ParquetSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig, parquet_options: ParquetOptions) -> Self {
-        Self { config, parquet_options }
+    pub fn new(config: FileSinkConfig, parquet_options: TableParquetOptions) -> Self {
+        Self {
+            config,
+            parquet_options,
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -622,6 +631,9 @@ impl ParquetSink {
         )?;
         Ok(writer)
     }
+    pub fn parquet_options(&self) -> &TableParquetOptions {
+        &self.parquet_options
+    }
 }
 
 #[async_trait]
@@ -641,13 +653,13 @@ impl DataSink for ParquetSink {
     ) -> Result<u64> {
         let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
 
-
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
         let parquet_opts = &self.parquet_options;
-        let allow_single_file_parallelism = parquet_opts.allow_single_file_parallelism;
+        let allow_single_file_parallelism =
+            parquet_opts.global.allow_single_file_parallelism;
 
         let part_col = if !self.config.table_partition_cols.is_empty() {
             Some(self.config.table_partition_cols.clone())
@@ -656,8 +668,11 @@ impl DataSink for ParquetSink {
         };
 
         let parallel_options = ParallelParquetWriterOptions {
-            max_parallel_row_groups: parquet_opts.maximum_parallel_row_group_writers,
+            max_parallel_row_groups: parquet_opts
+                .global
+                .maximum_parallel_row_group_writers,
             max_buffered_record_batches_per_stream: parquet_opts
+                .global
                 .maximum_buffered_record_batches_per_stream,
         };
 

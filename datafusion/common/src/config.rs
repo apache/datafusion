@@ -928,8 +928,18 @@ config_field!(String);
 config_field!(bool);
 config_field!(usize);
 config_field!(f64);
-config_field!(u8);
 config_field!(u64);
+
+impl ConfigField for u8 {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = value.as_bytes()[0];
+        Ok(())
+    }
+}
 
 impl ConfigField for CompressionTypeVariant {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -1079,8 +1089,6 @@ macro_rules! extensions_options {
 pub struct TableOptions {
     /// Catalog options
     pub format: FormatOptions,
-    /// Forkta olacak
-    pub key: KeyOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
 }
@@ -1088,7 +1096,6 @@ pub struct TableOptions {
 impl ConfigField for TableOptions {
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
         self.format.visit(v, "format", "");
-        self.key.visit(v, "key", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1096,7 +1103,6 @@ impl ConfigField for TableOptions {
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
             "format" => self.format.set(rem, value),
-            "key" => self.key.set(rem, value),
             _ => _internal_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
@@ -1110,8 +1116,7 @@ impl TableOptions {
 
     pub fn default_from_session_config(config: &ConfigOptions) -> Self {
         let mut initial = TableOptions::default();
-        initial.format.parquet = config.execution.parquet.clone();
-        initial.format.csv = initial.format.csv.with_has_header(config.catalog.has_header);
+        initial.format.parquet.global = config.execution.parquet.clone();
         initial
     }
 
@@ -1131,7 +1136,7 @@ impl TableOptions {
 
         // Since we do not have a global prefix for all default options,
         // we do not split the prefix from the key value.
-        if prefix == "format" || prefix == "key" {
+        if prefix == "format" {
             return ConfigField::set(self, key, value);
         }
 
@@ -1149,27 +1154,9 @@ impl TableOptions {
     /// Only the built-in configurations will be extracted from the hash map
     /// and other key value pairs will be ignored.
     pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
-        struct Visitor(Vec<String>);
-
-        impl Visit for Visitor {
-            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
-                self.0.push(key.to_string())
-            }
-
-            fn none(&mut self, key: &str, _: &'static str) {
-                self.0.push(key.to_string())
-            }
-        }
-
-        let mut keys = Visitor(vec![]);
         let mut ret = Self::default();
-        ret.visit(&mut keys, "format", "");
-        ret.visit(&mut keys, "key", "");
-
-        for key in keys.0 {
-            if let Some(var) = settings.get(&key) {
-                ret.set(&key, var)?;
-            }
+        for (k, v) in settings {
+            ret.set(k, v)?;
         }
 
         Ok(ret)
@@ -1183,28 +1170,9 @@ impl TableOptions {
         &mut self,
         settings: &HashMap<String, String>,
     ) -> Result<()> {
-        struct Visitor(Vec<String>);
-
-        impl Visit for Visitor {
-            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
-                self.0.push(key.to_string())
-            }
-
-            fn none(&mut self, key: &str, _: &'static str) {
-                self.0.push(key.to_string())
-            }
+        for (k, v) in settings {
+            self.set(k, v)?;
         }
-
-        let mut keys = Visitor(vec![]);
-        self.visit(&mut keys, "format", "");
-        self.visit(&mut keys, "key", "");
-
-        for key in keys.0 {
-            if let Some(var) = settings.get(&key) {
-                self.set(&key, var)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -1237,7 +1205,6 @@ impl TableOptions {
 
         let mut v = Visitor(vec![]);
         self.visit(&mut v, "format", "");
-        self.visit(&mut v, "key", "");
 
         v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
         v.0
@@ -1245,26 +1212,172 @@ impl TableOptions {
 }
 
 config_namespace! {
-    /// Options controlling explain output
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    /// Options controlling the ser/de formats
     pub struct FormatOptions {
         pub csv: CsvOptions, default = Default::default()
-        pub parquet: ParquetOptions, default = Default::default()
+        pub parquet: TableParquetOptions, default = Default::default()
         pub json: JsonOptions, default = Default::default()
     }
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct TableParquetOptions {
+    /// Global parquet options that propagates all columns
+    pub global: ParquetOptions,
+    /// Column specific options.
+    /// Default usage is format.parquet.XX::column.
+    pub column_specific_options: HashMap<String, ColumnOptions>,
+}
+
+impl ConfigField for TableParquetOptions {
+    fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
+        self.global.visit(v, key_prefix, description);
+        self.column_specific_options
+            .visit(v, key_prefix, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Determine the key if it's a global or column-specific setting
+        if key.contains("::") {
+            self.column_specific_options.set(key, value)
+        } else {
+            self.global.set(key, value)
+        }
+    }
+}
+
+
+macro_rules! config_namespace_with_hashmap {
+    (
+     $(#[doc = $struct_d:tt])*
+     $vis:vis struct $struct_name:ident {
+        $(
+        $(#[doc = $d:tt])*
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        )*$(,)*
+    }
+    ) => {
+
+        $(#[doc = $struct_d])*
+        #[derive(Debug, Clone)]
+        #[non_exhaustive]
+        $vis struct $struct_name{
+            $(
+            $(#[doc = $d])*
+            $field_vis $field_name : $field_type,
+            )*
+        }
+
+        impl ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                       stringify!($field_name) => self.$field_name.set(rem, value),
+                    )*
+                    _ => _internal_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
+                }
+            }
+
+            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+                $(
+                let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
+                let desc = concat!($($d),*).trim();
+                self.$field_name.visit(v, key.as_str(), desc);
+                )*
+            }
+        }
+
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self {
+                    $($field_name: $default),*
+                }
+            }
+        }
+
+        impl ConfigField for HashMap<String,$struct_name> {
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+                let parts: Vec<&str> = key.splitn(2, "::").collect();
+                match parts.as_slice() {
+                    [inner_key, hashmap_key] => {
+                        // Get or create the ColumnOptions for the specified column
+                        let inner_value = self
+                            .entry((*hashmap_key).to_owned())
+                            .or_insert_with($struct_name::default);
+
+                        inner_value.set(inner_key, value)
+                    }
+                    _ => Err(DataFusionError::Configuration(format!(
+                        "Unrecognized key '{}'.",
+                        key
+                    ))),
+                }
+            }
+
+            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+                for (column_name, col_options) in self {
+                    $(
+                    let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
+                    let desc = concat!($($d),*).trim();
+                    col_options.$field_name.visit(v, key.as_str(), desc);
+                    )*
+                }
+            }
+        }
+    }
+}
+
+config_namespace_with_hashmap! {
+    pub struct ColumnOptions {
+        /// Sets if bloom filter is enabled for the column path.
+        pub bloom_filter_enabled: Option<bool>, default = None
+
+        /// Sets encoding for the column path.
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case-sensitive. If NULL, uses
+        /// default parquet options
+        pub encoding: Option<String>, default = None
+
+        /// Sets if dictionary encoding is enabled for the column path. If NULL, uses
+        /// default parquet options
+        pub dictionary_enabled: Option<bool>, default = None
+
+        /// Sets default parquet compression codec for the column path.
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case-sensitive. If NULL, uses
+        /// default parquet options
+        pub compression: Option<String>, default = None
+
+        /// Sets if statistics are enabled for the column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet options
+        pub statistics_enabled: Option<String>, default = None
+
+        /// Sets bloom filter false positive probability for the column path. If NULL, uses
+        /// default parquet options
+        pub bloom_filter_fpp: Option<f64>, default = None
+
+        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// default parquet options
+        pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Sets max statistics size for the column path. If NULL, uses
+        /// default parquet options
+        pub max_statistics_size: Option<usize>, default = None
+    }
+}
+
 config_namespace! {
-    /// Options controlling explain output
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    /// Options controlling CSV format
     pub struct CsvOptions {
-        pub has_header: bool, default = false
+        pub has_header: bool, default = true
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
         pub escape: Option<u8>, default = None
@@ -1347,11 +1460,7 @@ impl CsvOptions {
 }
 
 config_namespace! {
-    /// Options controlling explain output
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
         pub schema_infer_max_rec: usize, default = 100
@@ -1401,20 +1510,9 @@ impl ConfigExtension for KafkaConfig {
     const PREFIX: &'static str = "kafka";
 }
 
-config_namespace! {
-    /// My own config options.
-    pub struct KeyOptions {
-        /// Should "foo" be replaced by "bar"?
-        pub format: FormatOptions, default = Default::default()
-
-        /// How many "baz" should be created?
-        pub fields: String, default = "".to_owned()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::config::{Extensions, KafkaConfig, KeyOptions, TableOptions};
+    use crate::config::{Extensions, KafkaConfig, TableOptions};
 
     #[test]
     fn create_table_config() {
@@ -1433,7 +1531,7 @@ mod tests {
         table_config
             .set("format.parquet.write_batch_size", "10")
             .unwrap();
-        assert_eq!(table_config.format.parquet.write_batch_size, 10);
+        assert_eq!(table_config.format.parquet.global.write_batch_size, 10);
         table_config.set("kafka.bootstrap.servers", "mete").unwrap();
         let kafka_config = table_config.extensions.get::<KafkaConfig>().unwrap();
         assert_eq!(
@@ -1443,19 +1541,28 @@ mod tests {
     }
 
     #[test]
-    fn alter_keyed_stream_format() {
-        let mut extension = Extensions::new();
-        extension.insert(KafkaConfig::default());
-        let mut table_config = TableOptions::new().with_extensions(extension);
+    fn parquet_table_options() {
+        let mut table_config = TableOptions::new();
         table_config
-            .set("format.parquet.write_batch_size", "10")
+            .set("format.parquet.bloom_filter_enabled::col1", "true")
             .unwrap();
-        assert_eq!(table_config.format.parquet.write_batch_size, 10);
+        assert_eq!(
+            table_config.format.parquet.column_specific_options["col1"]
+                .bloom_filter_enabled,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn parquet_table_options_config_entry() {
+        let mut table_config = TableOptions::new();
         table_config
-            .set("key.format.parquet.write_batch_size", "10")
+            .set("format.parquet.bloom_filter_enabled::col1", "true")
             .unwrap();
-        table_config.set("key.fields", "user1;user2").unwrap();
-        assert_eq!(table_config.key.format.parquet.write_batch_size, 10);
-        assert_eq!(table_config.key.fields, "user1;user2");
+        let entries = table_config.entries();
+        assert!(entries
+            .iter()
+            .find(|item| item.key == "format.parquet.bloom_filter_enabled::col1")
+            .is_some())
     }
 }

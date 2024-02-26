@@ -16,6 +16,8 @@
 // under the License.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
@@ -28,15 +30,16 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
+use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, FileType,
     OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
     TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -709,23 +712,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        // TODO, parse options as Vec<(String, String)> to avoid this conversion
-        let options = statement
-            .options
-            .iter()
-            .map(|(s, v)| (s.to_owned(), v.to_string()))
-            .collect::<Vec<(String, String)>>();
+        let mut options = HashMap::new();
+        for (key, value) in statement.options {
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!("Unsupported Value in COPY statement {}", value);
+                }
+            };
+            options.insert(key.to_lowercase(), value_string.to_lowercase());
+        }
 
-        let mut statement_options = StatementOptions::new(options);
-        let file_format = statement_options.try_infer_file_type(&statement.target)?;
+        let file_type = try_infer_file_type(&mut options, &statement.target)?;
 
-        let copy_options = CopyOptions::SQLOptions(statement_options);
+        let config_options = self.context_provider.options();
+        let mut table_options = TableOptions::default_from_session_config(config_options);
+        table_options.alter_with_string_hash_map(&options)?;
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format,
-            copy_options,
+            file_format: file_type,
+            format_options: table_options.format,
+            source_option_tuples: options,
         }))
     }
 
@@ -1333,4 +1353,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_source(tables_reference)
             .is_ok()
     }
+}
+
+pub fn try_infer_file_type(
+    options: &mut HashMap<String, String>,
+    target: &str,
+) -> Result<FileType> {
+    let explicit_format = options.remove("format");
+    let format = match explicit_format {
+        Some(s) => FileType::from_str(&s),
+        None => {
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(target)
+                .extension()
+                .ok_or(DataFusionError::Configuration(
+                    "Format not explicitly set and unable to get file extension!"
+                        .to_string(),
+                ))?
+                .to_str()
+                .ok_or(DataFusionError::Configuration(
+                    "Format not explicitly set and failed to parse file extension!"
+                        .to_string(),
+                ))?
+                .to_lowercase();
+
+            FileType::from_str(extension)
+        }
+    }?;
+
+    Ok(format)
 }

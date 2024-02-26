@@ -45,14 +45,11 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
-    SchemaError, UnnestOptions,
+    Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -60,6 +57,7 @@ use datafusion_expr::{
 
 use crate::prelude::SessionContext;
 use async_trait::async_trait;
+use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -69,10 +67,6 @@ pub struct DataFrameWriteOptions {
     /// Controls if all partitions should be coalesced into a single output file
     /// Generally will have slower performance when set to true.
     single_file_output: bool,
-    /// Sets compression by DataFusion applied after file serialization.
-    /// Allows compression of CSV and JSON.
-    /// Not supported for parquet.
-    compression: CompressionTypeVariant,
 }
 
 impl DataFrameWriteOptions {
@@ -81,7 +75,6 @@ impl DataFrameWriteOptions {
         DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
-            compression: CompressionTypeVariant::UNCOMPRESSED,
         }
     }
     /// Set the overwrite option to true or false
@@ -93,12 +86,6 @@ impl DataFrameWriteOptions {
     /// Set the single_file_output value to true or false
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
         self.single_file_output = single_file_output;
-        self
-    }
-
-    /// Sets the compression type applied to the output file(s)
-    pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
-        self.compression = compression;
         self
     }
 }
@@ -1156,27 +1143,27 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
-        writer_properties: Option<WriterBuilder>,
+        writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let props = match writer_properties {
-            Some(props) => props,
-            None => WriterBuilder::new(),
-        };
+        let config_options = self.session_state.config_options();
+        let table_options = TableOptions::default_from_session_config(config_options);
 
-        let file_type_writer_options =
-            FileTypeWriterOptions::CSV(CsvWriterOptions::new(props, options.compression));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+        let props = writer_options.unwrap_or_else(|| table_options.format.csv.clone());
+
+        let mut copy_options = FormatOptions::default();
+        copy_options.csv = props;
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::CSV,
             copy_options,
+            Default::default(),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1198,6 +1185,7 @@ impl DataFrame {
     ///   .write_json(
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
+    ///     None
     /// ).await?;
     /// # Ok(())
     /// # }
@@ -1206,20 +1194,23 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
+        writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
             ));
         }
-        let file_type_writer_options =
-            FileTypeWriterOptions::JSON(JsonWriterOptions::new(options.compression));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+        let props = writer_options.unwrap_or_else(|| JsonOptions::default());
+
+        let mut copy_options = FormatOptions::default();
+        copy_options.json = props;
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::JSON,
             copy_options,
+            Default::default(),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

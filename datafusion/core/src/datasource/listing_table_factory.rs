@@ -35,7 +35,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::{create_table_options_from_cmd, SessionState};
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
+use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -74,7 +74,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
             FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => Arc::new(
-                JsonFormat::default().with_options(table_config.format.json.clone())
+                JsonFormat::default().with_options(table_config.format.json.clone()),
             ),
             FileType::ARROW => Arc::new(ArrowFormat),
         };
@@ -126,44 +126,6 @@ impl TableProviderFactory for ListingTableFactory {
 
         statement_options.take_str_option("unbounded");
 
-        let file_type = file_format.file_type();
-
-        // Use remaining options and session state to build FileTypeWriterOptions
-        let file_type_writer_options = FileTypeWriterOptions::build(
-            &file_type,
-            state.config_options(),
-            &statement_options,
-        )?;
-
-        // Some options have special syntax which takes precedence
-        // e.g. "WITH HEADER ROW" overrides (header false, ...)
-        let file_type_writer_options = match file_type {
-            FileType::CSV => {
-                let mut csv_writer_options =
-                    file_type_writer_options.try_into_csv()?.clone();
-                csv_writer_options.writer_options = csv_writer_options
-                    .writer_options
-                    .with_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter.try_into().map_err(|_| {
-                        DataFusionError::Internal(
-                            "Unable to convert CSV delimiter into u8".into(),
-                        )
-                    })?);
-                csv_writer_options.compression = cmd.file_compression_type;
-                FileTypeWriterOptions::CSV(csv_writer_options)
-            }
-            FileType::JSON => {
-                let mut json_writer_options =
-                    file_type_writer_options.try_into_json()?.clone();
-                json_writer_options.compression = cmd.file_compression_type;
-                FileTypeWriterOptions::JSON(json_writer_options)
-            }
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => file_type_writer_options,
-            FileType::ARROW => file_type_writer_options,
-            FileType::AVRO => file_type_writer_options,
-        };
-
         let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
@@ -171,8 +133,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(cmd.order_exprs.clone())
-            .with_write_options(file_type_writer_options);
+            .with_file_sort_order(cmd.order_exprs.clone());
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
@@ -202,6 +163,7 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use arrow::util::pretty::print_batches;
     use std::collections::HashMap;
 
     use super::*;
@@ -246,5 +208,72 @@ mod tests {
             .unwrap();
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
+    }
+
+    #[tokio::test]
+    async fn test_create_using_non_std_file_ext_csv_options() {
+        let csv_file = tempfile::Builder::new()
+            .prefix("foo")
+            .suffix(".tbl")
+            .tempfile()
+            .unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = OwnedTableReference::bare("foo".to_string());
+
+        let mut options = HashMap::new();
+        options.insert(
+            "format.csv.schema_infer_max_rec".to_owned(),
+            "1000".to_owned(),
+        );
+        let cmd = CreateExternalTable {
+            name,
+            location: csv_file.path().to_str().unwrap().to_string(),
+            file_type: "csv".to_string(),
+            has_header: true,
+            delimiter: ',',
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let format = listing_table.options().format.clone();
+        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_options = csv_format.options().clone();
+        assert_eq!(csv_options.schema_infer_max_rec, 1000);
+        let listing_options = listing_table.options();
+        assert_eq!(".tbl", listing_options.file_extension);
+    }
+
+    #[tokio::test]
+    async fn test_sql() -> datafusion_common::Result<()> {
+        let context = SessionContext::new();
+        let state = context.state();
+        context.sql("create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');").await?.collect().await?;
+        let sa = context.sql("COPY source_table to '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table.csv';").await?.collect().await?;
+        print_batches(&sa).unwrap();
+        context.sql("CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW
+            LOCATION '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table.csv';").await?.collect().await?;
+        let sa = context
+            .sql("select * from validate_single_csv")
+            .await?
+            .collect()
+            .await?;
+        print_batches(&sa).unwrap();
+        Ok(())
     }
 }

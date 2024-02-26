@@ -324,7 +324,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+        format_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -354,7 +354,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
-        copy_options: CopyOptions::WriterOptions(Box::new(
+        format_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
     });
@@ -367,7 +367,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(FileType::PARQUET, copy_to.file_format);
-            match &copy_to.copy_options {
+            match &copy_to.format_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Parquet(p) => {
                         let props = &p.writer_options;
@@ -402,9 +402,9 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         file_format: FileType::ARROW,
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
-            ArrowWriterOptions::new(),
-        ))),
+        format_options: CopyOptions::WriterOptions(Box::new(
+            FileTypeWriterOptions::Arrow(ArrowWriterOptions::new()),
+        )),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -415,7 +415,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
             assert_eq!(FileType::ARROW, copy_to.file_format);
-            match &copy_to.copy_options {
+            match &copy_to.format_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Arrow(_) => {}
                     _ => panic!(),
@@ -447,7 +447,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
+        format_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
                 CompressionTypeVariant::UNCOMPRESSED,
@@ -463,7 +463,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!(FileType::CSV, copy_to.file_format);
-            match &copy_to.copy_options {
+            match &copy_to.format_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::CSV(p) => {
                         let props = &p.writer_options;

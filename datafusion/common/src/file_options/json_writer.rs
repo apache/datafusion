@@ -19,12 +19,12 @@
 
 use std::str::FromStr;
 
+use crate::config::JsonOptions;
 use crate::{
     config::ConfigOptions,
     error::{DataFusionError, Result},
     parsers::CompressionTypeVariant,
 };
-use crate::config::JsonOptions;
 
 use super::StatementOptions;
 
@@ -63,6 +63,8 @@ impl TryFrom<&JsonOptions> for JsonWriterOptions {
     type Error = DataFusionError;
 
     fn try_from(value: &JsonOptions) -> Result<Self> {
-        Ok(JsonWriterOptions { compression:  value.compression})
+        Ok(JsonWriterOptions {
+            compression: value.compression,
+        })
     }
 }

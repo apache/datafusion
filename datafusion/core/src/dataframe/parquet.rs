@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::config::{CsvOptions, FormatOptions, TableParquetOptions};
 use datafusion_common::file_options::parquet_writer::{
     default_builder, ParquetWriterOptions,
 };
 use parquet::file::properties::WriterProperties;
 
 use super::{
-    CompressionTypeVariant, CopyOptions, DataFrame, DataFrameWriteOptions,
-    DataFusionError, FileType, FileTypeWriterOptions, LogicalPlanBuilder, RecordBatch,
+    CompressionTypeVariant, DataFrame, DataFrameWriteOptions, DataFusionError, FileType,
+    LogicalPlanBuilder, RecordBatch,
 };
 
 impl DataFrame {
@@ -51,29 +52,24 @@ impl DataFrame {
         self,
         path: &str,
         options: DataFrameWriteOptions,
-        writer_properties: Option<WriterProperties>,
+        writer_options: Option<TableParquetOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.overwrite {
             return Err(DataFusionError::NotImplemented(
                 "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
             ));
         }
-        match options.compression{
-            CompressionTypeVariant::UNCOMPRESSED => (),
-            _ => return Err(DataFusionError::Configuration("DataFrame::write_parquet method does not support compression set via DataFrameWriteOptions. Set parquet compression via writer_properties instead.".to_owned()))
-        }
-        let props = match writer_properties {
-            Some(props) => props,
-            None => default_builder(self.session_state.config_options())?.build(),
-        };
-        let file_type_writer_options =
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(props));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+        let props = writer_options.unwrap_or_else(|| TableParquetOptions::default());
+
+        let mut copy_options = FormatOptions::default();
+        copy_options.parquet = props;
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::PARQUET,
             copy_options,
+            Default::default(),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -150,14 +146,12 @@ mod tests {
             let local_url = Url::parse("file://local").unwrap();
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
+            let mut options = TableParquetOptions::default();
+            options.global.compression = Some(compression.to_string());
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(compression)
-                        .build(),
-                ),
+                Some(options),
             )
             .await?;
 

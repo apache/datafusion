@@ -23,7 +23,7 @@ c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
-OPTIONS ('quote' '~')
+OPTIONS ('format.csv.quote' '~')
 LOCATION '../core/tests/data/quote.csv';
 
 statement ok
@@ -33,7 +33,7 @@ c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
-OPTIONS ('escape' '\"')
+OPTIONS ('format.csv.escape' '\"')
 LOCATION '../core/tests/data/escape.csv';
 
 query TT

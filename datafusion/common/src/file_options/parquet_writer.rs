@@ -23,12 +23,12 @@ use crate::{config::ConfigOptions, DataFusionError, Result};
 
 use super::StatementOptions;
 
+use crate::config::{ParquetOptions, TableParquetOptions};
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::properties::{EnabledStatistics, WriterVersion},
     schema::types::ColumnPath,
 };
-use crate::config::ParquetOptions;
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
@@ -215,12 +215,11 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
     }
 }
 
-impl TryFrom<&ParquetOptions> for ParquetWriterOptions {
+impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
     type Error = DataFusionError;
 
-    fn try_from(
-        parquet_session_options: &ParquetOptions,
-    ) -> Result<Self> {
+    fn try_from(parquet_options: &TableParquetOptions) -> Result<Self> {
+        let parquet_session_options = &parquet_options.global;
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(parquet_session_options.data_pagesize_limit)
             .set_write_batch_size(parquet_session_options.write_batch_size)
@@ -235,7 +234,9 @@ impl TryFrom<&ParquetOptions> for ParquetWriterOptions {
             .set_column_index_truncate_length(
                 parquet_session_options.column_index_truncate_length,
             )
-            .set_data_page_row_count_limit(parquet_session_options.data_page_row_count_limit)
+            .set_data_page_row_count_limit(
+                parquet_session_options.data_page_row_count_limit,
+            )
             .set_bloom_filter_enabled(parquet_session_options.bloom_filter_enabled);
 
         builder = match &parquet_session_options.encoding {
@@ -276,6 +277,58 @@ impl TryFrom<&ParquetOptions> for ParquetWriterOptions {
             Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
             None => builder,
         };
+        for (column, options) in &parquet_options.column_specific_options {
+            let path = ColumnPath::new(column.split('.').map(|s| s.to_owned()).collect());
+            builder = match &options.bloom_filter_enabled {
+                Some(bloom_filter_enabled) => builder
+                    .set_column_bloom_filter_enabled(path.clone(), *bloom_filter_enabled),
+                None => builder,
+            };
+            builder = match &options.encoding {
+                Some(encoding) => {
+                    let parsed_encoding = parse_encoding_string(encoding)?;
+                    builder.set_column_encoding(path.clone(), parsed_encoding)
+                }
+                None => builder,
+            };
+            builder = match &options.dictionary_enabled {
+                Some(dictionary_enabled) => builder
+                    .set_column_dictionary_enabled(path.clone(), *dictionary_enabled),
+                None => builder,
+            };
+            builder = match &options.compression {
+                Some(compression) => {
+                    let parsed_compression = parse_compression_string(compression)?;
+                    builder.set_column_compression(path.clone(), parsed_compression)
+                }
+                None => builder,
+            };
+            builder = match &options.statistics_enabled {
+                Some(statistics_enabled) => {
+                    let parsed_value = parse_statistics_string(statistics_enabled)?;
+                    builder.set_column_statistics_enabled(path.clone(), parsed_value)
+                }
+                None => builder,
+            };
+            builder = match &options.bloom_filter_fpp {
+                Some(bloom_filter_fpp) => {
+                    builder.set_column_bloom_filter_fpp(path.clone(), *bloom_filter_fpp)
+                }
+                None => builder,
+            };
+            builder = match &options.bloom_filter_ndv {
+                Some(bloom_filter_ndv) => {
+                    builder.set_column_bloom_filter_ndv(path.clone(), *bloom_filter_ndv)
+                }
+                None => builder,
+            };
+            builder = match &options.max_statistics_size {
+                Some(max_statistics_size) => {
+                    builder.set_column_max_statistics_size(path, *max_statistics_size)
+                }
+                None => builder,
+            };
+        }
         Ok(ParquetWriterOptions {
             writer_options: builder.build(),
         })

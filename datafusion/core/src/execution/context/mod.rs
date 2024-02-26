@@ -2192,7 +2192,9 @@ pub fn create_table_options_from_cmd(
         #[cfg(feature = "parquet")]
         FileType::PARQUET => {}
         FileType::AVRO | FileType::ARROW => {}
-        FileType::JSON => table_config.format.json.compression = cmd.file_compression_type
+        FileType::JSON => {
+            table_config.format.json.compression = cmd.file_compression_type
+        }
     };
     Ok(table_config)
 }

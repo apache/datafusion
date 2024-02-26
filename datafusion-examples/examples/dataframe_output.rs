@@ -69,6 +69,7 @@ async fn main() -> Result<(), DataFusionError> {
         .write_json(
             "./datafusion-examples/test_json/",
             DataFrameWriteOptions::new(),
+            None,
         )
         .await?;
 

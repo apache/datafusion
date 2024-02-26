@@ -80,6 +80,7 @@ mod tests {
     use crate::dataframe::DataFrameWriteOptions;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
+    use datafusion_common::config::TableParquetOptions;
     use datafusion_execution::config::SessionConfig;
     use tempfile::tempdir;
 
@@ -199,17 +200,16 @@ mod tests {
             .to_string();
         std::fs::create_dir(dir).expect("create dir failed");
 
+        let mut options = TableParquetOptions::default();
+        options.global.compression = Some(Compression::SNAPPY.to_string());
+
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
             .clone()
             .write_parquet(
                 &path1,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -219,11 +219,7 @@ mod tests {
             .write_parquet(
                 &path2,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -233,11 +229,7 @@ mod tests {
             .write_parquet(
                 &path3,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options.clone()),
             )
             .await?;
 
@@ -246,11 +238,7 @@ mod tests {
             .write_parquet(
                 &path5,
                 DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(Compression::SNAPPY)
-                        .build(),
-                ),
+                Some(options),
             )
             .await?;
 

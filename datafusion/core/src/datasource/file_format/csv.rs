@@ -47,11 +47,11 @@ use datafusion_physical_plan::metrics::MetricsSet;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_common::config::CsvOptions;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
@@ -269,12 +269,6 @@ impl FileFormat for CsvFormat {
             return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
-        if FileCompressionType::from(self.options.compression)
-            != FileCompressionType::UNCOMPRESSED
-        {
-            return not_impl_err!("Inserting compressed CSV is not implemented yet.");
-        }
-
         let writer_options = CsvWriterOptions::try_from(&self.options)?;
 
         let sink_schema = conf.output_schema().clone();
@@ -445,7 +439,7 @@ impl BatchSerializer for CsvSerializer {
 pub struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    writer_options: CsvWriterOptions
+    writer_options: CsvWriterOptions,
 }
 
 impl Debug for CsvSink {
@@ -469,7 +463,10 @@ impl DisplayAs for CsvSink {
 impl CsvSink {
     /// Create from config.
     pub fn new(config: FileSinkConfig, writer_options: CsvWriterOptions) -> Self {
-        Self { config, writer_options }
+        Self {
+            config,
+            writer_options,
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -503,6 +500,9 @@ impl CsvSink {
             self.writer_options.compression.into(),
         )
         .await
+    }
+    pub fn writer_options(&self) -> &CsvWriterOptions {
+        &self.writer_options
     }
 }
 
@@ -547,6 +547,7 @@ mod tests {
 
     use bytes::Bytes;
     use chrono::DateTime;
+    use datafusion_common::parsers::CompressionTypeVariant;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -674,7 +675,9 @@ mod tests {
         };
 
         let num_rows_to_read = 100;
-        let csv_format = CsvFormat::default().with_has_header(false).with_schema_infer_max_rec(num_rows_to_read);
+        let csv_format = CsvFormat::default()
+            .with_has_header(false)
+            .with_schema_infer_max_rec(num_rows_to_read);
         let inferred_schema = csv_format
             .infer_schema(
                 &state,

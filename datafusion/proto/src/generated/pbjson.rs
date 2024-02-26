@@ -5220,9 +5220,15 @@ impl serde::Serialize for CsvSink {
         if self.config.is_some() {
             len += 1;
         }
+        if self.writer_options.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvSink", len)?;
         if let Some(v) = self.config.as_ref() {
             struct_ser.serialize_field("config", v)?;
+        }
+        if let Some(v) = self.writer_options.as_ref() {
+            struct_ser.serialize_field("writerOptions", v)?;
         }
         struct_ser.end()
     }
@@ -5235,11 +5241,14 @@ impl<'de> serde::Deserialize<'de> for CsvSink {
     {
         const FIELDS: &[&str] = &[
             "config",
+            "writer_options",
+            "writerOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Config,
+            WriterOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5262,6 +5271,7 @@ impl<'de> serde::Deserialize<'de> for CsvSink {
                     {
                         match value {
                             "config" => Ok(GeneratedField::Config),
+                            "writerOptions" | "writer_options" => Ok(GeneratedField::WriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5282,6 +5292,7 @@ impl<'de> serde::Deserialize<'de> for CsvSink {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut config__ = None;
+                let mut writer_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Config => {
@@ -5290,10 +5301,17 @@ impl<'de> serde::Deserialize<'de> for CsvSink {
                             }
                             config__ = map_.next_value()?;
                         }
+                        GeneratedField::WriterOptions => {
+                            if writer_options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writerOptions"));
+                            }
+                            writer_options__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(CsvSink {
                     config: config__,
+                    writer_options: writer_options__,
                 })
             }
         }
@@ -11627,9 +11645,15 @@ impl serde::Serialize for JsonSink {
         if self.config.is_some() {
             len += 1;
         }
+        if self.writer_options.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.JsonSink", len)?;
         if let Some(v) = self.config.as_ref() {
             struct_ser.serialize_field("config", v)?;
+        }
+        if let Some(v) = self.writer_options.as_ref() {
+            struct_ser.serialize_field("writerOptions", v)?;
         }
         struct_ser.end()
     }
@@ -11642,11 +11666,14 @@ impl<'de> serde::Deserialize<'de> for JsonSink {
     {
         const FIELDS: &[&str] = &[
             "config",
+            "writer_options",
+            "writerOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Config,
+            WriterOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11669,6 +11696,7 @@ impl<'de> serde::Deserialize<'de> for JsonSink {
                     {
                         match value {
                             "config" => Ok(GeneratedField::Config),
+                            "writerOptions" | "writer_options" => Ok(GeneratedField::WriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11689,6 +11717,7 @@ impl<'de> serde::Deserialize<'de> for JsonSink {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut config__ = None;
+                let mut writer_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Config => {
@@ -11697,10 +11726,17 @@ impl<'de> serde::Deserialize<'de> for JsonSink {
                             }
                             config__ = map_.next_value()?;
                         }
+                        GeneratedField::WriterOptions => {
+                            if writer_options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writerOptions"));
+                            }
+                            writer_options__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(JsonSink {
                     config: config__,
+                    writer_options: writer_options__,
                 })
             }
         }
@@ -15644,6 +15680,588 @@ impl<'de> serde::Deserialize<'de> for ParquetFormat {
         deserializer.deserialize_struct("datafusion.ParquetFormat", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ParquetOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.enable_page_index {
+            len += 1;
+        }
+        if self.pruning {
+            len += 1;
+        }
+        if self.skip_metadata {
+            len += 1;
+        }
+        if self.pushdown_filters {
+            len += 1;
+        }
+        if self.reorder_filters {
+            len += 1;
+        }
+        if self.data_pagesize_limit != 0 {
+            len += 1;
+        }
+        if self.write_batch_size != 0 {
+            len += 1;
+        }
+        if !self.writer_version.is_empty() {
+            len += 1;
+        }
+        if self.bloom_filter_enabled {
+            len += 1;
+        }
+        if self.allow_single_file_parallelism {
+            len += 1;
+        }
+        if self.maximum_parallel_row_group_writers != 0 {
+            len += 1;
+        }
+        if self.maximum_buffered_record_batches_per_stream != 0 {
+            len += 1;
+        }
+        if self.dictionary_page_size_limit != 0 {
+            len += 1;
+        }
+        if self.data_page_row_count_limit != 0 {
+            len += 1;
+        }
+        if self.max_row_group_size != 0 {
+            len += 1;
+        }
+        if !self.created_by.is_empty() {
+            len += 1;
+        }
+        if self.metadata_size_hint_opt.is_some() {
+            len += 1;
+        }
+        if self.compression_opt.is_some() {
+            len += 1;
+        }
+        if self.dictionary_enabled_opt.is_some() {
+            len += 1;
+        }
+        if self.statistics_enabled_opt.is_some() {
+            len += 1;
+        }
+        if self.max_statistics_size_opt.is_some() {
+            len += 1;
+        }
+        if self.column_index_truncate_length_opt.is_some() {
+            len += 1;
+        }
+        if self.encoding_opt.is_some() {
+            len += 1;
+        }
+        if self.bloom_filter_fpp_opt.is_some() {
+            len += 1;
+        }
+        if self.bloom_filter_ndv_opt.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ParquetOptions", len)?;
+        if self.enable_page_index {
+            struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
+        }
+        if self.pruning {
+            struct_ser.serialize_field("pruning", &self.pruning)?;
+        }
+        if self.skip_metadata {
+            struct_ser.serialize_field("skipMetadata", &self.skip_metadata)?;
+        }
+        if self.pushdown_filters {
+            struct_ser.serialize_field("pushdownFilters", &self.pushdown_filters)?;
+        }
+        if self.reorder_filters {
+            struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
+        }
+        if self.data_pagesize_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPagesizeLimit", ToString::to_string(&self.data_pagesize_limit).as_str())?;
+        }
+        if self.write_batch_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("writeBatchSize", ToString::to_string(&self.write_batch_size).as_str())?;
+        }
+        if !self.writer_version.is_empty() {
+            struct_ser.serialize_field("writerVersion", &self.writer_version)?;
+        }
+        if self.bloom_filter_enabled {
+            struct_ser.serialize_field("bloomFilterEnabled", &self.bloom_filter_enabled)?;
+        }
+        if self.allow_single_file_parallelism {
+            struct_ser.serialize_field("allowSingleFileParallelism", &self.allow_single_file_parallelism)?;
+        }
+        if self.maximum_parallel_row_group_writers != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("maximumParallelRowGroupWriters", ToString::to_string(&self.maximum_parallel_row_group_writers).as_str())?;
+        }
+        if self.maximum_buffered_record_batches_per_stream != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("maximumBufferedRecordBatchesPerStream", ToString::to_string(&self.maximum_buffered_record_batches_per_stream).as_str())?;
+        }
+        if self.dictionary_page_size_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dictionaryPageSizeLimit", ToString::to_string(&self.dictionary_page_size_limit).as_str())?;
+        }
+        if self.data_page_row_count_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("dataPageRowCountLimit", ToString::to_string(&self.data_page_row_count_limit).as_str())?;
+        }
+        if self.max_row_group_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
+        }
+        if !self.created_by.is_empty() {
+            struct_ser.serialize_field("createdBy", &self.created_by)?;
+        }
+        if let Some(v) = self.metadata_size_hint_opt.as_ref() {
+            match v {
+                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("metadataSizeHint", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.compression_opt.as_ref() {
+            match v {
+                parquet_options::CompressionOpt::Compression(v) => {
+                    struct_ser.serialize_field("compression", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.dictionary_enabled_opt.as_ref() {
+            match v {
+                parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v) => {
+                    struct_ser.serialize_field("dictionaryEnabled", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.statistics_enabled_opt.as_ref() {
+            match v {
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => {
+                    struct_ser.serialize_field("statisticsEnabled", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.max_statistics_size_opt.as_ref() {
+            match v {
+                parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("maxStatisticsSize", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.column_index_truncate_length_opt.as_ref() {
+            match v {
+                parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("columnIndexTruncateLength", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.encoding_opt.as_ref() {
+            match v {
+                parquet_options::EncodingOpt::Encoding(v) => {
+                    struct_ser.serialize_field("encoding", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.bloom_filter_fpp_opt.as_ref() {
+            match v {
+                parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => {
+                    struct_ser.serialize_field("bloomFilterFpp", v)?;
+                }
+            }
+        }
+        if let Some(v) = self.bloom_filter_ndv_opt.as_ref() {
+            match v {
+                parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "enable_page_index",
+            "enablePageIndex",
+            "pruning",
+            "skip_metadata",
+            "skipMetadata",
+            "pushdown_filters",
+            "pushdownFilters",
+            "reorder_filters",
+            "reorderFilters",
+            "data_pagesize_limit",
+            "dataPagesizeLimit",
+            "write_batch_size",
+            "writeBatchSize",
+            "writer_version",
+            "writerVersion",
+            "bloom_filter_enabled",
+            "bloomFilterEnabled",
+            "allow_single_file_parallelism",
+            "allowSingleFileParallelism",
+            "maximum_parallel_row_group_writers",
+            "maximumParallelRowGroupWriters",
+            "maximum_buffered_record_batches_per_stream",
+            "maximumBufferedRecordBatchesPerStream",
+            "dictionary_page_size_limit",
+            "dictionaryPageSizeLimit",
+            "data_page_row_count_limit",
+            "dataPageRowCountLimit",
+            "max_row_group_size",
+            "maxRowGroupSize",
+            "created_by",
+            "createdBy",
+            "metadata_size_hint",
+            "metadataSizeHint",
+            "compression",
+            "dictionary_enabled",
+            "dictionaryEnabled",
+            "statistics_enabled",
+            "statisticsEnabled",
+            "max_statistics_size",
+            "maxStatisticsSize",
+            "column_index_truncate_length",
+            "columnIndexTruncateLength",
+            "encoding",
+            "bloom_filter_fpp",
+            "bloomFilterFpp",
+            "bloom_filter_ndv",
+            "bloomFilterNdv",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            EnablePageIndex,
+            Pruning,
+            SkipMetadata,
+            PushdownFilters,
+            ReorderFilters,
+            DataPagesizeLimit,
+            WriteBatchSize,
+            WriterVersion,
+            BloomFilterEnabled,
+            AllowSingleFileParallelism,
+            MaximumParallelRowGroupWriters,
+            MaximumBufferedRecordBatchesPerStream,
+            DictionaryPageSizeLimit,
+            DataPageRowCountLimit,
+            MaxRowGroupSize,
+            CreatedBy,
+            MetadataSizeHint,
+            Compression,
+            DictionaryEnabled,
+            StatisticsEnabled,
+            MaxStatisticsSize,
+            ColumnIndexTruncateLength,
+            Encoding,
+            BloomFilterFpp,
+            BloomFilterNdv,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "enablePageIndex" | "enable_page_index" => Ok(GeneratedField::EnablePageIndex),
+                            "pruning" => Ok(GeneratedField::Pruning),
+                            "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
+                            "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
+                            "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
+                            "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
+                            "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
+                            "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
+                            "bloomFilterEnabled" | "bloom_filter_enabled" => Ok(GeneratedField::BloomFilterEnabled),
+                            "allowSingleFileParallelism" | "allow_single_file_parallelism" => Ok(GeneratedField::AllowSingleFileParallelism),
+                            "maximumParallelRowGroupWriters" | "maximum_parallel_row_group_writers" => Ok(GeneratedField::MaximumParallelRowGroupWriters),
+                            "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
+                            "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
+                            "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
+                            "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
+                            "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
+                            "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
+                            "compression" => Ok(GeneratedField::Compression),
+                            "dictionaryEnabled" | "dictionary_enabled" => Ok(GeneratedField::DictionaryEnabled),
+                            "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
+                            "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
+                            "columnIndexTruncateLength" | "column_index_truncate_length" => Ok(GeneratedField::ColumnIndexTruncateLength),
+                            "encoding" => Ok(GeneratedField::Encoding),
+                            "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
+                            "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ParquetOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut enable_page_index__ = None;
+                let mut pruning__ = None;
+                let mut skip_metadata__ = None;
+                let mut pushdown_filters__ = None;
+                let mut reorder_filters__ = None;
+                let mut data_pagesize_limit__ = None;
+                let mut write_batch_size__ = None;
+                let mut writer_version__ = None;
+                let mut bloom_filter_enabled__ = None;
+                let mut allow_single_file_parallelism__ = None;
+                let mut maximum_parallel_row_group_writers__ = None;
+                let mut maximum_buffered_record_batches_per_stream__ = None;
+                let mut dictionary_page_size_limit__ = None;
+                let mut data_page_row_count_limit__ = None;
+                let mut max_row_group_size__ = None;
+                let mut created_by__ = None;
+                let mut metadata_size_hint_opt__ = None;
+                let mut compression_opt__ = None;
+                let mut dictionary_enabled_opt__ = None;
+                let mut statistics_enabled_opt__ = None;
+                let mut max_statistics_size_opt__ = None;
+                let mut column_index_truncate_length_opt__ = None;
+                let mut encoding_opt__ = None;
+                let mut bloom_filter_fpp_opt__ = None;
+                let mut bloom_filter_ndv_opt__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::EnablePageIndex => {
+                            if enable_page_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enablePageIndex"));
+                            }
+                            enable_page_index__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Pruning => {
+                            if pruning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pruning"));
+                            }
+                            pruning__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::SkipMetadata => {
+                            if skip_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skipMetadata"));
+                            }
+                            skip_metadata__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PushdownFilters => {
+                            if pushdown_filters__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pushdownFilters"));
+                            }
+                            pushdown_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ReorderFilters => {
+                            if reorder_filters__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reorderFilters"));
+                            }
+                            reorder_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DataPagesizeLimit => {
+                            if data_pagesize_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPagesizeLimit"));
+                            }
+                            data_pagesize_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WriteBatchSize => {
+                            if write_batch_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writeBatchSize"));
+                            }
+                            write_batch_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WriterVersion => {
+                            if writer_version__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("writerVersion"));
+                            }
+                            writer_version__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BloomFilterEnabled => {
+                            if bloom_filter_enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterEnabled"));
+                            }
+                            bloom_filter_enabled__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AllowSingleFileParallelism => {
+                            if allow_single_file_parallelism__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("allowSingleFileParallelism"));
+                            }
+                            allow_single_file_parallelism__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MaximumParallelRowGroupWriters => {
+                            if maximum_parallel_row_group_writers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maximumParallelRowGroupWriters"));
+                            }
+                            maximum_parallel_row_group_writers__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaximumBufferedRecordBatchesPerStream => {
+                            if maximum_buffered_record_batches_per_stream__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maximumBufferedRecordBatchesPerStream"));
+                            }
+                            maximum_buffered_record_batches_per_stream__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DictionaryPageSizeLimit => {
+                            if dictionary_page_size_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
+                            }
+                            dictionary_page_size_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::DataPageRowCountLimit => {
+                            if data_page_row_count_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dataPageRowCountLimit"));
+                            }
+                            data_page_row_count_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaxRowGroupSize => {
+                            if max_row_group_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxRowGroupSize"));
+                            }
+                            max_row_group_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::CreatedBy => {
+                            if created_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("createdBy"));
+                            }
+                            created_by__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MetadataSizeHint => {
+                            if metadata_size_hint_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadataSizeHint"));
+                            }
+                            metadata_size_hint_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MetadataSizeHintOpt::MetadataSizeHint(x.0));
+                        }
+                        GeneratedField::Compression => {
+                            if compression_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compression"));
+                            }
+                            compression_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CompressionOpt::Compression);
+                        }
+                        GeneratedField::DictionaryEnabled => {
+                            if dictionary_enabled_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaryEnabled"));
+                            }
+                            dictionary_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::DictionaryEnabledOpt::DictionaryEnabled);
+                        }
+                        GeneratedField::StatisticsEnabled => {
+                            if statistics_enabled_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statisticsEnabled"));
+                            }
+                            statistics_enabled_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::StatisticsEnabledOpt::StatisticsEnabled);
+                        }
+                        GeneratedField::MaxStatisticsSize => {
+                            if max_statistics_size_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxStatisticsSize"));
+                            }
+                            max_statistics_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(x.0));
+                        }
+                        GeneratedField::ColumnIndexTruncateLength => {
+                            if column_index_truncate_length_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columnIndexTruncateLength"));
+                            }
+                            column_index_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(x.0));
+                        }
+                        GeneratedField::Encoding => {
+                            if encoding_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("encoding"));
+                            }
+                            encoding_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::EncodingOpt::Encoding);
+                        }
+                        GeneratedField::BloomFilterFpp => {
+                            if bloom_filter_fpp_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterFpp"));
+                            }
+                            bloom_filter_fpp_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::BloomFilterFppOpt::BloomFilterFpp(x.0));
+                        }
+                        GeneratedField::BloomFilterNdv => {
+                            if bloom_filter_ndv_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bloomFilterNdv"));
+                            }
+                            bloom_filter_ndv_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::BloomFilterNdvOpt::BloomFilterNdv(x.0));
+                        }
+                    }
+                }
+                Ok(ParquetOptions {
+                    enable_page_index: enable_page_index__.unwrap_or_default(),
+                    pruning: pruning__.unwrap_or_default(),
+                    skip_metadata: skip_metadata__.unwrap_or_default(),
+                    pushdown_filters: pushdown_filters__.unwrap_or_default(),
+                    reorder_filters: reorder_filters__.unwrap_or_default(),
+                    data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
+                    write_batch_size: write_batch_size__.unwrap_or_default(),
+                    writer_version: writer_version__.unwrap_or_default(),
+                    bloom_filter_enabled: bloom_filter_enabled__.unwrap_or_default(),
+                    allow_single_file_parallelism: allow_single_file_parallelism__.unwrap_or_default(),
+                    maximum_parallel_row_group_writers: maximum_parallel_row_group_writers__.unwrap_or_default(),
+                    maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
+                    dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
+                    data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
+                    max_row_group_size: max_row_group_size__.unwrap_or_default(),
+                    created_by: created_by__.unwrap_or_default(),
+                    metadata_size_hint_opt: metadata_size_hint_opt__,
+                    compression_opt: compression_opt__,
+                    dictionary_enabled_opt: dictionary_enabled_opt__,
+                    statistics_enabled_opt: statistics_enabled_opt__,
+                    max_statistics_size_opt: max_statistics_size_opt__,
+                    column_index_truncate_length_opt: column_index_truncate_length_opt__,
+                    encoding_opt: encoding_opt__,
+                    bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
+                    bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ParquetOptions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ParquetScanExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -15764,9 +16382,15 @@ impl serde::Serialize for ParquetSink {
         if self.config.is_some() {
             len += 1;
         }
+        if self.parquet_options.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetSink", len)?;
         if let Some(v) = self.config.as_ref() {
             struct_ser.serialize_field("config", v)?;
+        }
+        if let Some(v) = self.parquet_options.as_ref() {
+            struct_ser.serialize_field("parquetOptions", v)?;
         }
         struct_ser.end()
     }
@@ -15779,11 +16403,14 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
     {
         const FIELDS: &[&str] = &[
             "config",
+            "parquet_options",
+            "parquetOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Config,
+            ParquetOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15806,6 +16433,7 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
                     {
                         match value {
                             "config" => Ok(GeneratedField::Config),
+                            "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15826,6 +16454,7 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut config__ = None;
+                let mut parquet_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Config => {
@@ -15834,10 +16463,17 @@ impl<'de> serde::Deserialize<'de> for ParquetSink {
                             }
                             config__ = map_.next_value()?;
                         }
+                        GeneratedField::ParquetOptions => {
+                            if parquet_options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parquetOptions"));
+                            }
+                            parquet_options__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ParquetSink {
                     config: config__,
+                    parquet_options: parquet_options__,
                 })
             }
         }

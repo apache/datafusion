@@ -317,20 +317,6 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             create_external_table(&ctx, cmd).await?;
-            let options: Vec<_> = cmd
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            let statement_options = StatementOptions::new(options);
-            let file_type =
-                datafusion_common::FileType::from_str(cmd.file_type.as_str())?;
-
-            let _file_type_writer_options = FileTypeWriterOptions::build(
-                &file_type,
-                ctx.state().config_options(),
-                &statement_options,
-            )?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }

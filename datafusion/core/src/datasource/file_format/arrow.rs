@@ -46,6 +46,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use async_trait::async_trait;
+use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use futures::stream::BoxStream;
@@ -215,11 +217,6 @@ impl DataSink for ArrowFileSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        // No props are supported yet, but can be by updating FileTypeWriterOptions
-        // to populate this struct and use those options to initialize the arrow_ipc::writer::FileWriter
-        // https://github.com/apache/arrow-datafusion/issues/8635
-        let _arrow_props = self.config.file_type_writer_options.try_into_arrow()?;
-
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;

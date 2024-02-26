@@ -1746,6 +1746,8 @@ pub struct FileSinkConfig {
 pub struct JsonSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub writer_options: ::core::option::Option<JsonWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1764,6 +1766,8 @@ pub struct JsonSinkExecNode {
 pub struct CsvSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub writer_options: ::core::option::Option<CsvWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1779,9 +1783,146 @@ pub struct CsvSinkExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetOptions {
+    /// Regular fields
+    ///
+    /// default = true
+    #[prost(bool, tag = "1")]
+    pub enable_page_index: bool,
+    /// default = true
+    #[prost(bool, tag = "2")]
+    pub pruning: bool,
+    /// default = true
+    #[prost(bool, tag = "3")]
+    pub skip_metadata: bool,
+    /// default = false
+    #[prost(bool, tag = "5")]
+    pub pushdown_filters: bool,
+    /// default = false
+    #[prost(bool, tag = "6")]
+    pub reorder_filters: bool,
+    /// default = 1024 * 1024
+    #[prost(uint64, tag = "7")]
+    pub data_pagesize_limit: u64,
+    /// default = 1024
+    #[prost(uint64, tag = "8")]
+    pub write_batch_size: u64,
+    /// default = "1.0"
+    #[prost(string, tag = "9")]
+    pub writer_version: ::prost::alloc::string::String,
+    /// default = false
+    #[prost(bool, tag = "20")]
+    pub bloom_filter_enabled: bool,
+    /// default = true
+    #[prost(bool, tag = "23")]
+    pub allow_single_file_parallelism: bool,
+    /// default = 1
+    #[prost(uint64, tag = "24")]
+    pub maximum_parallel_row_group_writers: u64,
+    /// default = 2
+    #[prost(uint64, tag = "25")]
+    pub maximum_buffered_record_batches_per_stream: u64,
+    #[prost(uint64, tag = "12")]
+    pub dictionary_page_size_limit: u64,
+    #[prost(uint64, tag = "18")]
+    pub data_page_row_count_limit: u64,
+    #[prost(uint64, tag = "15")]
+    pub max_row_group_size: u64,
+    #[prost(string, tag = "16")]
+    pub created_by: ::prost::alloc::string::String,
+    #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
+    pub metadata_size_hint_opt: ::core::option::Option<
+        parquet_options::MetadataSizeHintOpt,
+    >,
+    #[prost(oneof = "parquet_options::CompressionOpt", tags = "10")]
+    pub compression_opt: ::core::option::Option<parquet_options::CompressionOpt>,
+    #[prost(oneof = "parquet_options::DictionaryEnabledOpt", tags = "11")]
+    pub dictionary_enabled_opt: ::core::option::Option<
+        parquet_options::DictionaryEnabledOpt,
+    >,
+    #[prost(oneof = "parquet_options::StatisticsEnabledOpt", tags = "13")]
+    pub statistics_enabled_opt: ::core::option::Option<
+        parquet_options::StatisticsEnabledOpt,
+    >,
+    #[prost(oneof = "parquet_options::MaxStatisticsSizeOpt", tags = "14")]
+    pub max_statistics_size_opt: ::core::option::Option<
+        parquet_options::MaxStatisticsSizeOpt,
+    >,
+    #[prost(oneof = "parquet_options::ColumnIndexTruncateLengthOpt", tags = "17")]
+    pub column_index_truncate_length_opt: ::core::option::Option<
+        parquet_options::ColumnIndexTruncateLengthOpt,
+    >,
+    #[prost(oneof = "parquet_options::EncodingOpt", tags = "19")]
+    pub encoding_opt: ::core::option::Option<parquet_options::EncodingOpt>,
+    #[prost(oneof = "parquet_options::BloomFilterFppOpt", tags = "21")]
+    pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
+    #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
+    pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+}
+/// Nested message and enum types in `ParquetOptions`.
+pub mod parquet_options {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum MetadataSizeHintOpt {
+        #[prost(uint64, tag = "4")]
+        MetadataSizeHint(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CompressionOpt {
+        #[prost(string, tag = "10")]
+        Compression(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DictionaryEnabledOpt {
+        #[prost(bool, tag = "11")]
+        DictionaryEnabled(bool),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum StatisticsEnabledOpt {
+        #[prost(string, tag = "13")]
+        StatisticsEnabled(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum MaxStatisticsSizeOpt {
+        #[prost(uint64, tag = "14")]
+        MaxStatisticsSize(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ColumnIndexTruncateLengthOpt {
+        #[prost(uint64, tag = "17")]
+        ColumnIndexTruncateLength(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum EncodingOpt {
+        #[prost(string, tag = "19")]
+        Encoding(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterFppOpt {
+        #[prost(double, tag = "21")]
+        BloomFilterFpp(f64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterNdvOpt {
+        #[prost(uint64, tag = "22")]
+        BloomFilterNdv(u64),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub parquet_options: ::core::option::Option<ParquetOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

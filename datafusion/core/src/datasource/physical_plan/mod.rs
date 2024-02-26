@@ -68,7 +68,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
+use datafusion_common::plan_err;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::ExecutionPlan;
@@ -93,8 +93,6 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
-    /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
-    pub file_type_writer_options: FileTypeWriterOptions,
 }
 
 impl FileSinkConfig {
