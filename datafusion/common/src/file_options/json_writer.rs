@@ -21,12 +21,9 @@ use std::str::FromStr;
 
 use crate::config::JsonOptions;
 use crate::{
-    config::ConfigOptions,
     error::{DataFusionError, Result},
     parsers::CompressionTypeVariant,
 };
-
-use super::StatementOptions;
 
 /// Options for writing JSON files
 #[derive(Clone, Debug)]
@@ -37,25 +34,6 @@ pub struct JsonWriterOptions {
 impl JsonWriterOptions {
     pub fn new(compression: CompressionTypeVariant) -> Self {
         Self { compression }
-    }
-}
-
-impl TryFrom<(&ConfigOptions, &StatementOptions)> for JsonWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
-        let _configs = value.0;
-        let statement_options = value.1;
-        let mut compression = CompressionTypeVariant::UNCOMPRESSED;
-        for (option, value) in &statement_options.options {
-            match option.to_lowercase().as_str(){
-                "compression" => {
-                    compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
-                },
-                _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for JSON format!")))
-            }
-        }
-        Ok(JsonWriterOptions { compression })
     }
 }
 

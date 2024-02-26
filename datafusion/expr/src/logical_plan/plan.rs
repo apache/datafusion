@@ -54,6 +54,7 @@ use datafusion_common::{
 };
 
 // backwards compatibility
+use crate::builder::change_redundant_column;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 

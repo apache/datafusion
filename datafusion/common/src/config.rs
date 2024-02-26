@@ -1246,7 +1246,6 @@ impl ConfigField for TableParquetOptions {
     }
 }
 
-
 macro_rules! config_namespace_with_hashmap {
     (
      $(#[doc = $struct_d:tt])*

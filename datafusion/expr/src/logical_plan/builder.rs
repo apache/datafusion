@@ -50,7 +50,6 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
     DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
@@ -268,7 +267,6 @@ impl LogicalPlanBuilder {
         format_options: FormatOptions,
         source_option_tuples: HashMap<String, String>,
         partition_by: Vec<String>,
-
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),

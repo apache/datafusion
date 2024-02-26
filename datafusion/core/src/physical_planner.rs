@@ -569,6 +569,7 @@ impl DefaultPhysicalPlanner {
                     file_format,
                     format_options,
                     partition_by,
+                    ..
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -594,10 +595,10 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default().with_options(copy_options.csv.clone())),
+                        FileType::CSV => Arc::new(CsvFormat::default().with_options(format_options.csv.clone())),
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default().with_options(copy_options.parquet.clone())),
-                        FileType::JSON => Arc::new(JsonFormat::default().with_options(copy_options.json.clone())),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default().with_options(format_options.parquet.clone())),
+                        FileType::JSON => Arc::new(JsonFormat::default().with_options(format_options.json.clone())),
                         FileType::AVRO => Arc::new(AvroFormat {} ),
                         FileType::ARROW => Arc::new(ArrowFormat {}),
                     };

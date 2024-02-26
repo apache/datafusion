@@ -39,7 +39,7 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
-use datafusion_common::config::{CsvOptions, ParquetOptions, TableParquetOptions};
+use datafusion_common::config::{ParquetOptions, TableParquetOptions};
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
@@ -64,7 +64,6 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
-use crate::datasource::file_format::csv::CsvFormat;
 
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,

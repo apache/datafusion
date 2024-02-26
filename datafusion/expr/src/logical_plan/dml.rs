@@ -23,7 +23,6 @@ use std::{
 };
 
 use datafusion_common::config::FormatOptions;
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
 
 use crate::LogicalPlan;

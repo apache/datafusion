@@ -46,8 +46,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use async_trait::async_trait;
-use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use futures::stream::BoxStream;

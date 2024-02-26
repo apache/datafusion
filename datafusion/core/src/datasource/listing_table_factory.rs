@@ -24,8 +24,7 @@ use std::sync::Arc;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::{
-    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat,
-    file_compression_type::FileCompressionType, json::JsonFormat, FileFormat,
+    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat, FileFormat,
 };
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -35,7 +34,6 @@ use crate::datasource::TableProvider;
 use crate::execution::context::{create_table_options_from_cmd, SessionState};
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -121,10 +119,6 @@ impl TableProviderFactory for ListingTableFactory {
             let schema = Arc::new(schema.project(&project_idx)?);
             (Some(schema), table_partition_cols)
         };
-
-        let mut statement_options = StatementOptions::from(&cmd.options);
-
-        statement_options.take_str_option("unbounded");
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
 

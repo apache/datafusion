@@ -17,12 +17,5 @@
 
 //! Options related to how avro files should be written
 
-use crate::{
-    config::ConfigOptions,
-    error::{DataFusionError, Result},
-};
-
-use super::StatementOptions;
-
 #[derive(Clone, Debug)]
 pub struct AvroWriterOptions {}

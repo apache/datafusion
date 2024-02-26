@@ -35,7 +35,6 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
-use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,

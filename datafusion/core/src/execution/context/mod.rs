@@ -108,7 +108,6 @@ use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_common::config::TableOptions;
-use datafusion_common::file_options::StatementOptions;
 use datafusion_optimizer::{
     analyzer::{Analyzer, AnalyzerRule},
     OptimizerConfig,
@@ -116,12 +115,6 @@ use datafusion_optimizer::{
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
-// backwards compatibility
-use crate::datasource::file_format::arrow::ArrowFormat;
-use crate::datasource::file_format::avro::AvroFormat;
-use crate::datasource::file_format::csv::CsvFormat;
-use crate::datasource::file_format::json::JsonFormat;
-use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;

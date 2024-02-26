@@ -27,7 +27,6 @@ use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
@@ -50,10 +49,8 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_common::config::{CsvOptions, JsonOptions};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::config::JsonOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.

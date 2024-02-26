@@ -43,12 +43,11 @@ use crate::physical_plan::{
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
-use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError,
+    UnnestOptions,
 };
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
@@ -97,7 +96,6 @@ impl DataFrameWriteOptions {
         self.partition_by = partition_by;
         self
     }
-
 }
 
 impl Default for DataFrameWriteOptions {
@@ -1177,9 +1175,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
-            options.partition_by,
             copy_options,
             Default::default(),
+            options.partition_by,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1227,9 +1225,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
-            options.partition_by,
             copy_options,
             Default::default(),
+            options.partition_by,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

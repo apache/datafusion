@@ -17,18 +17,13 @@
 
 //! Options related to how csv files should be written
 
-use std::str::FromStr;
-
 use arrow::csv::WriterBuilder;
 
-use crate::config::{CsvOptions, TableOptions};
+use crate::config::CsvOptions;
 use crate::{
-    config::ConfigOptions,
     error::{DataFusionError, Result},
     parsers::CompressionTypeVariant,
 };
-
-use super::StatementOptions;
 
 /// Options for writing CSV files
 #[derive(Clone, Debug)]

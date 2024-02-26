@@ -15,15 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::{CsvOptions, FormatOptions, TableParquetOptions};
-use datafusion_common::file_options::parquet_writer::{
-    default_builder, ParquetWriterOptions,
-};
-use parquet::file::properties::WriterProperties;
+use datafusion_common::config::{FormatOptions, TableParquetOptions};
 
 use super::{
-    CompressionTypeVariant, DataFrame, DataFrameWriteOptions, DataFusionError, FileType,
-    LogicalPlanBuilder, RecordBatch,
+    DataFrame, DataFrameWriteOptions, DataFusionError, FileType, LogicalPlanBuilder,
+    RecordBatch,
 };
 
 impl DataFrame {
@@ -70,9 +66,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::PARQUET,
-            options.partition_by,
             copy_options,
             Default::default(),
+            options.partition_by,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

@@ -26,146 +26,9 @@ pub mod json_writer;
 pub mod parquet_writer;
 pub(crate) mod parse_utils;
 
-use std::{
-    collections::HashMap,
-    fmt::{self, Display},
-    path::Path,
-    str::FromStr,
-};
+use std::str::FromStr;
 
-use crate::{
-    config::ConfigOptions, file_options::parse_utils::parse_boolean_string,
-    DataFusionError, FileType, Result,
-};
-
-#[cfg(feature = "parquet")]
-use self::parquet_writer::ParquetWriterOptions;
-
-use self::{
-    arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
-    csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions,
-};
-
-/// Represents a single arbitrary setting in a
-/// [StatementOptions] where OptionTuple.0 determines
-/// the specific setting to be modified and OptionTuple.1
-/// determines the value which should be applied
-pub type OptionTuple = (String, String);
-
-/// Represents arbitrary tuples of options passed as String
-/// tuples from SQL statements. As in the following statement:
-/// COPY ... TO ... (setting1 value1, setting2 value2, ...)
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct StatementOptions {
-    options: Vec<OptionTuple>,
-}
-
-/// Useful for conversion from external tables which use Hashmap<String, String>
-impl From<&HashMap<String, String>> for StatementOptions {
-    fn from(value: &HashMap<String, String>) -> Self {
-        Self {
-            options: value
-                .iter()
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect::<Vec<OptionTuple>>(),
-        }
-    }
-}
-
-impl StatementOptions {
-    pub fn new(options: Vec<OptionTuple>) -> Self {
-        Self { options }
-    }
-
-    pub fn into_inner(self) -> Vec<OptionTuple> {
-        self.options
-    }
-
-    /// Scans for option and if it exists removes it and attempts to parse as a boolean
-    /// Returns none if it does not exist.
-    pub fn take_bool_option(&mut self, find: &str) -> Result<Option<bool>> {
-        let maybe_option = self.scan_and_remove_option(find);
-        maybe_option
-            .map(|(_, v)| parse_boolean_string(find, v))
-            .transpose()
-    }
-
-    /// Scans for option and if it exists removes it and returns it
-    /// Returns none if it does not exist
-    pub fn take_str_option(&mut self, find: &str) -> Option<String> {
-        let maybe_option = self.scan_and_remove_option(find);
-        maybe_option.map(|(_, v)| v)
-    }
-
-    /// Finds partition_by option if exists and parses into a `Vec<String>`.
-    /// If option doesn't exist, returns empty `vec![]`.
-    /// E.g. (partition_by 'colA, colB, colC') -> `vec!['colA','colB','colC']`
-    pub fn take_partition_by(&mut self) -> Vec<String> {
-        let partition_by = self.take_str_option("partition_by");
-        match partition_by {
-            Some(part_cols) => {
-                let dequoted = part_cols
-                    .chars()
-                    .enumerate()
-                    .filter(|(idx, c)| {
-                        !((*idx == 0 || *idx == part_cols.len() - 1)
-                            && (*c == '\'' || *c == '"'))
-                    })
-                    .map(|(_idx, c)| c)
-                    .collect::<String>();
-                dequoted
-                    .split(',')
-                    .map(|s| s.trim().replace("''", "'"))
-                    .collect::<Vec<_>>()
-            }
-            None => vec![],
-        }
-    }
-
-    /// Infers the file_type given a target and arbitrary options.
-    /// If the options contain an explicit "format" option, that will be used.
-    /// Otherwise, attempt to infer file_type from the extension of target.
-    /// Finally, return an error if unable to determine the file_type
-    /// If found, format is removed from the options list.
-    pub fn try_infer_file_type(&mut self, target: &str) -> Result<FileType> {
-        let explicit_format = self.scan_and_remove_option("format");
-        let format = match explicit_format {
-            Some(s) => FileType::from_str(s.1.as_str()),
-            None => {
-                // try to infer file format from file extension
-                let extension: &str = &Path::new(target)
-                    .extension()
-                    .ok_or(DataFusionError::Configuration(
-                        "Format not explicitly set and unable to get file extension!"
-                            .to_string(),
-                    ))?
-                    .to_str()
-                    .ok_or(DataFusionError::Configuration(
-                        "Format not explicitly set and failed to parse file extension!"
-                            .to_string(),
-                    ))?
-                    .to_lowercase();
-
-                FileType::from_str(extension)
-            }
-        }?;
-
-        Ok(format)
-    }
-
-    /// Finds an option in StatementOptions if exists, removes and returns it
-    /// along with the vec of remaining options.
-    fn scan_and_remove_option(&mut self, find: &str) -> Option<OptionTuple> {
-        let idx = self
-            .options
-            .iter()
-            .position(|(k, _)| k.to_lowercase() == find.to_lowercase());
-        match idx {
-            Some(i) => Some(self.options.swap_remove(i)),
-            None => None,
-        }
-    }
-}
+use crate::FileType;
 
 #[cfg(test)]
 #[cfg(feature = "parquet")]
@@ -187,7 +50,7 @@ mod tests {
 
     use crate::Result;
 
-    use super::{parquet_writer::ParquetWriterOptions, StatementOptions};
+    use super::parquet_writer::ParquetWriterOptions;
 
     #[test]
     fn test_writeroptions_parquet_from_statement_options() -> Result<()> {

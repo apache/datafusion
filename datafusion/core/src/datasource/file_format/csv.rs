@@ -23,7 +23,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use super::FileFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
@@ -48,7 +48,6 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};

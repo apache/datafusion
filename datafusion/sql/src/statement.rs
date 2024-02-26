@@ -30,8 +30,7 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
-use datafusion_common::config::{FormatOptions, TableOptions};
-use datafusion_common::file_options::StatementOptions;
+use datafusion_common::config::TableOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
@@ -735,6 +734,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let file_type = try_infer_file_type(&mut options, &statement.target)?;
+        let partition_by = take_partition_by(&mut options);
 
         let config_options = self.context_provider.options();
         let mut table_options = TableOptions::default_from_session_config(config_options);
@@ -1383,4 +1383,26 @@ pub fn try_infer_file_type(
     }?;
 
     Ok(format)
+}
+
+pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
+    let partition_by = options.remove("partition_by");
+    match partition_by {
+        Some(part_cols) => {
+            let dequoted = part_cols
+                .chars()
+                .enumerate()
+                .filter(|(idx, c)| {
+                    !((*idx == 0 || *idx == part_cols.len() - 1)
+                        && (*c == '\'' || *c == '"'))
+                })
+                .map(|(_idx, c)| c)
+                .collect::<String>();
+            dequoted
+                .split(',')
+                .map(|s| s.trim().replace("''", "'"))
+                .collect::<Vec<_>>()
+        }
+        None => vec![],
+    }
 }

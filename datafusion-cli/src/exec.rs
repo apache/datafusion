@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use datafusion::common::plan_err;
     use datafusion_common::{
-        file_options::StatementOptions, FileType, FileTypeWriterOptions,
+        FileType, FileTypeWriterOptions,
     };
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
