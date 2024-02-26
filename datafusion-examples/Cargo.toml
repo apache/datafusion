@@ -42,10 +42,6 @@ name = "flight_client"
 path = "examples/flight/flight_client.rs"
 
 [[example]]
-name = "catalog"
-path = "examples/external_dependency/catalog.rs"
-
-[[example]]
 name = "dataframe_to_s3"
 path = "examples/external_dependency/dataframe-to-s3.rs"
 
