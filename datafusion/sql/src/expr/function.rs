@@ -102,9 +102,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return not_impl_err!("unnest() does not support struct yet");
                 }
                 _ => {
-                    return plan_err!(
-                        "unnest() can only be applied to array and structs and null"
-                    );
+                    return plan_err!("unnest() can only be applied to array and struct");
                 }
             }
 
