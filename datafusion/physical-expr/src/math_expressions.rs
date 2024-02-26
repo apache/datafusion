@@ -18,15 +18,11 @@
 //! Math expressions
 
 use arrow::array::ArrayRef;
-use arrow::array::{
-    BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array,
-};
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
+use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{Float32, Int64};
-use datafusion_common::{internal_err, not_impl_err};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
@@ -34,8 +30,6 @@ use std::any::type_name;
 use std::iter;
 use std::mem::swap;
 use std::sync::Arc;
-
-type MathArrayFunction = fn(&[ArrayRef]) -> Result<ArrayRef>;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
