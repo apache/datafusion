@@ -176,7 +176,6 @@ math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
-math_unary_function!("abs", abs);
 math_unary_function!("signum", signum);
 math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
@@ -671,88 +670,6 @@ fn compute_truncate32(x: f32, y: i64) -> f32 {
 fn compute_truncate64(x: f64, y: i64) -> f64 {
     let factor = 10.0_f64.powi(y as i32);
     (x * factor).round() / factor
-}
-
-macro_rules! make_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array.unary(|x| x.abs());
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-macro_rules! make_try_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array.try_unary(|x| {
-                x.checked_abs().ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
-                        "{} overflow on abs({})",
-                        stringify!($ARRAY_TYPE),
-                        x
-                    ))
-                })
-            })?;
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-macro_rules! make_decimal_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array
-                .unary(|x| x.wrapping_abs())
-                .with_data_type(args[0].data_type().clone());
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-/// Abs SQL function
-/// Return different implementations based on input datatype to reduce branches during execution
-pub(super) fn create_abs_function(
-    input_data_type: &DataType,
-) -> Result<MathArrayFunction> {
-    match input_data_type {
-        DataType::Float32 => Ok(make_abs_function!(Float32Array)),
-        DataType::Float64 => Ok(make_abs_function!(Float64Array)),
-
-        // Types that may overflow, such as abs(-128_i8).
-        DataType::Int8 => Ok(make_try_abs_function!(Int8Array)),
-        DataType::Int16 => Ok(make_try_abs_function!(Int16Array)),
-        DataType::Int32 => Ok(make_try_abs_function!(Int32Array)),
-        DataType::Int64 => Ok(make_try_abs_function!(Int64Array)),
-
-        // Types of results are the same as the input.
-        DataType::Null
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => Ok(|args: &[ArrayRef]| Ok(args[0].clone())),
-
-        // Decimal types
-        DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
-        DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
-
-        other => not_impl_err!("Unsupported data type {other:?} for function abs"),
-    }
-}
-
-/// abs() SQL function implementation
-pub fn abs_invoke(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return internal_err!("abs function requires 1 argument, got {}", args.len());
-    }
-
-    let input_data_type = args[0].data_type();
-    let abs_fun = create_abs_function(input_data_type)?;
-
-    abs_fun(args)
 }
 
 #[cfg(test)]

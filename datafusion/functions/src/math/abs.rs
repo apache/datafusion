@@ -38,6 +38,46 @@ use arrow::error::ArrowError;
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
+macro_rules! make_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &Vec<ArrayRef>| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array.unary(|x| x.abs());
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
+macro_rules! make_try_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &Vec<ArrayRef>| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array.try_unary(|x| {
+                x.checked_abs().ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "{} overflow on abs({})",
+                        stringify!($ARRAY_TYPE),
+                        x
+                    ))
+                })
+            })?;
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
+macro_rules! make_decimal_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &Vec<ArrayRef>| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array
+                .unary(|x| x.wrapping_abs())
+                .with_data_type(args[0].data_type().clone());
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
 /// Abs SQL function
 /// Return different implementations based on input datatype to reduce branches during execution
 fn create_abs_function(
