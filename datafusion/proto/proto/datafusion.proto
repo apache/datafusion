@@ -545,9 +545,10 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  //  0 was Abs
+  //  0 was Abs before
   //  The first enum value must be zero for open enums
-  Acos = 0;
+  unknown = 0;
+  Acos = 1;
   Asin = 2;
   Atan = 3;
   Ascii = 4;
