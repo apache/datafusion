@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::{FormatOptions, TableParquetOptions};
+use datafusion_common::config::{FormatOptions, TableOptions, TableParquetOptions};
 
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, FileType, LogicalPlanBuilder,
@@ -57,7 +57,12 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
             ));
         }
-        let props = writer_options.unwrap_or_else(|| TableParquetOptions::default());
+
+        let config_options = self.session_state.config_options();
+        let table_options = TableOptions::default_from_session_config(config_options);
+
+        let props =
+            writer_options.unwrap_or_else(|| table_options.format.parquet.clone());
 
         let mut copy_options = FormatOptions::default();
         copy_options.parquet = props;

@@ -1217,7 +1217,11 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
             ));
         }
-        let props = writer_options.unwrap_or_else(|| JsonOptions::default());
+
+        let config_options = self.session_state.config_options();
+        let table_options = TableOptions::default_from_session_config(config_options);
+
+        let props = writer_options.unwrap_or_else(|| table_options.format.json.clone());
 
         let mut copy_options = FormatOptions::default();
         copy_options.json = props;
