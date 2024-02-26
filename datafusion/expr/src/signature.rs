@@ -236,33 +236,15 @@ impl ArrayFunctionSignature {
                 _ => Ok(vec![vec![]]),
             }
         }
-        fn array_and_index(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
-            if current_types.len() != 2 {
-                return Ok(vec![vec![]]);
-            }
-            let array_type = &current_types[0];
-            let array_type = array(&[array_type.clone()])?;
-            if array_type[0].is_empty() {
-                Ok(vec![vec![]])
-            } else {
-                Ok(vec![vec![array_type[0][0].clone(), DataType::Int64]])
-            }
-        }
-        fn array(current_types: &[DataType]) -> Result<Vec<Vec<DataType>>> {
-            if current_types.len() != 1 {
-                return Ok(vec![vec![]]);
-            }
-
-            let array_type = &current_types[0];
-
+        fn array(array_type: &DataType) -> Option<DataType> {
             match array_type {
                 DataType::List(_)
                 | DataType::LargeList(_)
                 | DataType::FixedSizeList(_, _) => {
                     let array_type = coerced_fixed_size_list_to_list(array_type);
-                    Ok(vec![vec![array_type]])
+                    Some(array_type)
                 }
-                _ => Ok(vec![vec![]]),
+                _ => None,
             }
         }
         match self {
@@ -272,11 +254,28 @@ impl ArrayFunctionSignature {
             ArrayFunctionSignature::ElementAndArray => {
                 array_append_or_prepend_valid_types(current_types, false)
             }
-            ArrayFunctionSignature::ArrayAndIndex => array_and_index(current_types),
+            ArrayFunctionSignature::ArrayAndIndex => {
+                if current_types.len() != 2 {
+                    return Ok(vec![vec![]]);
+                }
+                array(&current_types[0]).map_or_else(
+                    || Ok(vec![vec![]]),
+                    |array_type| Ok(vec![vec![array_type, DataType::Int64]]),
+                )
+            }
             ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
                 array_element_and_optional_index(current_types)
             }
-            ArrayFunctionSignature::Array => array(current_types),
+            ArrayFunctionSignature::Array => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
+
+                array(&current_types[0]).map_or_else(
+                    || Ok(vec![vec![]]),
+                    |array_type| Ok(vec![vec![array_type]]),
+                )
+            }
         }
     }
 }
