@@ -2655,7 +2655,7 @@ pub enum ScalarFunction {
     Sqrt = 17,
     Tan = 18,
     Trunc = 19,
-    // Array = 20,
+    /// 20 was Array
     /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
@@ -2721,15 +2721,15 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
-    // ArrayAppend = 86,
-    // ArrayConcat = 87,
+    /// 86 was ArrayAppend
+    /// 87 was ArrayConcat
     ArrayDims = 88,
     ArrayRepeat = 89,
     ArrayLength = 90,
     ArrayNdims = 91,
     ArrayPosition = 92,
     ArrayPositions = 93,
-    // ArrayPrepend = 94,
+    /// 94 was ArrayPrepend
     ArrayRemove = 95,
     ArrayReplace = 96,
     /// 97 was ArrayToString
