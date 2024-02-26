@@ -2603,6 +2603,31 @@ select array_position(arrow_cast(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4,
 ----
 2 2
 
+query I
+SELECT array_position(arrow_cast([5, 2, 3, 4, 5], 'List(Int32)'), 5)
+----
+1
+
+query I
+SELECT array_position(arrow_cast([5, 2, 3, 4, 5], 'List(Int32)'), 5, 2)
+----
+5
+
+query I
+SELECT array_position(arrow_cast([1, 1, 100, 1, 1], 'LargeList(Int32)'), 100)
+----
+3
+
+query I
+SELECT array_position([1, 2, 3], 'foo')
+----
+NULL
+
+query I
+SELECT array_position([1, 2, 3], 'foo', 2)
+----
+NULL
+
 # list_position scalar function #5 (function alias `array_position`)
 query III
 select list_position(['h', 'e', 'l', 'l', 'o'], 'l'), list_position([1, 2, 3, 4, 5], 5), list_position([1, 1, 1], 1);
@@ -4262,21 +4287,26 @@ NULL [3] [4]
 
 # array_ndims scalar function #1
 
-query III
+query error
+select array_ndims(1);
+
+#follow PostgreSQL
+query error
 select
-  array_ndims(1),
-  array_ndims(null),
+  array_ndims(null);
+
+query I
+select
   array_ndims([2, 3]);
 ----
-0 0 1
+1
 
 statement ok
 CREATE TABLE array_ndims_table
 AS VALUES
-  (1, [1, 2, 3], [[7]], [[[[[10]]]]]),
-  (2, [4, 5], [[8]], [[[[[10]]]]]),
-  (null, [6], [[9]], [[[[[10]]]]]),
-  (3, [6], [[9]], [[[[[10]]]]])
+  ([1], [1, 2, 3], [[7]], [[[[[10]]]]]),
+  ([2], [4, 5], [[8]], [[[[[10]]]]]),
+  ([3], [6], [[9]], [[[[[10]]]]])
 ;
 
 statement ok
@@ -4296,10 +4326,9 @@ select
   array_ndims(column4)
 from array_ndims_table;
 ----
-0 1 2 5
-0 1 2 5
-0 1 2 5
-0 1 2 5
+1 1 2 5
+1 1 2 5
+1 1 2 5
 
 query IIII
 select
@@ -4309,10 +4338,9 @@ select
   array_ndims(column4)
 from large_array_ndims_table;
 ----
-0 1 2 5
-0 1 2 5
-0 1 2 5
-0 1 2 5
+1 1 2 5
+1 1 2 5
+1 1 2 5
 
 statement ok
 drop table array_ndims_table;

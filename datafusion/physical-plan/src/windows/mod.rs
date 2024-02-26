@@ -55,6 +55,7 @@ pub use datafusion_physical_expr::window::{
 };
 
 /// Create a physical expression for window function
+#[allow(clippy::too_many_arguments)]
 pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
@@ -63,6 +64,7 @@ pub fn create_window_expr(
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateFunction(fun) => {
@@ -83,7 +85,7 @@ pub fn create_window_expr(
         }
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
             Arc::new(BuiltInWindowExpr::new(
-                create_built_in_window_expr(fun, args, input_schema, name)?,
+                create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
                 partition_by,
                 order_by,
                 window_frame,
@@ -159,6 +161,7 @@ fn create_built_in_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
@@ -208,6 +211,7 @@ fn create_built_in_window_expr(
                 arg,
                 shift_offset,
                 default_value,
+                ignore_nulls,
             ))
         }
         BuiltInWindowFunction::Lead => {
@@ -222,6 +226,7 @@ fn create_built_in_window_expr(
                 arg,
                 shift_offset,
                 default_value,
+                ignore_nulls,
             ))
         }
         BuiltInWindowFunction::NthValue => {
@@ -329,11 +334,11 @@ pub(crate) fn calc_requirements<
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
-/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// This function calculates the indices such that when partition by expressions reordered with the indices
 /// resulting expressions define a preset for existing ordering.
-// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
-// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
-// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
+/// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used,
+/// this vector will be [1, 0]. It means that when we iterate b, a columns with the order [1, 0]
+/// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
@@ -671,6 +676,7 @@ mod tests {
                 &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
             )?],
             blocking_exec,
             vec![],

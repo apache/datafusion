@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides ScalarValue, an enum that can be used for storage of single elements
+//! [`ScalarValue`]: stores single  values
+
+mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -43,24 +45,44 @@ use arrow::{
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Field, Fields, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
         IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-        IntervalYearMonthType, SchemaBuilder, TimeUnit, TimestampMicrosecondType,
+        IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::cast::as_list_array;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
-use arrow_buffer::NullBuffer;
 
-/// A dynamically typed, nullable single value, (the single-valued counter-part
-/// to arrow's [`Array`])
+pub use struct_builder::ScalarStructBuilder;
+
+/// A dynamically typed, nullable single value.
+///
+/// While an arrow  [`Array`]) stores one or more values of the same type, in a
+/// single column, a `ScalarValue` stores a single value of a single type, the
+/// equivalent of 1 row and one column.
+///
+/// ```text
+///  ┌────────┐
+///  │ value1 │
+///  │ value2 │                  ┌────────┐
+///  │ value3 │                  │ value2 │
+///  │  ...   │                  └────────┘
+///  │ valueN │
+///  └────────┘
+///
+///    Array                     ScalarValue
+///
+/// stores multiple,             stores a single,
+/// possibly null, values of     possible null, value
+/// the same type
+/// ```
 ///
 /// # Performance
 ///
-/// In general, please use arrow [`Array`]s rather than [`ScalarValue`] whenever
-/// possible, as it is far more efficient for multiple values.
+/// In general, performance will be better using arrow [`Array`]s rather than
+/// [`ScalarValue`], as it is far more efficient to process multiple values at
+/// once (vectorized processing).
 ///
 /// # Example
 /// ```
@@ -98,6 +120,66 @@ use arrow_buffer::NullBuffer;
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Nested Types
+///
+/// `List` / `LargeList` / `FixedSizeList` / `Struct` are represented as a
+/// single element array of the corresponding type.
+///
+/// ## Example: Creating [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field};
+/// # use datafusion_common::{ScalarValue, scalar::ScalarStructBuilder};
+/// // Build a struct like: {a: 1, b: "foo"}
+/// let field_a = Field::new("a", DataType::Int32, false);
+/// let field_b = Field::new("b", DataType::Utf8, false);
+///
+/// let s1 = ScalarStructBuilder::new()
+///    .with_scalar(field_a, ScalarValue::from(1i32))
+///    .with_scalar(field_b, ScalarValue::from("foo"))
+///    .build();
+/// ```
+///
+/// ## Example: Creating a null [`ScalarValue::Struct`] using [`ScalarStructBuilder`]
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field};
+/// # use datafusion_common::{ScalarValue, scalar::ScalarStructBuilder};
+/// // Build a struct representing a NULL value
+/// let fields = vec![
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Utf8, false),
+/// ];
+///
+/// let s1 = ScalarStructBuilder::new_null(fields);
+/// ```
+///
+/// ## Example: Creating [`ScalarValue::Struct`] directly
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field, Fields};
+/// # use arrow_array::{ArrayRef, Int32Array, StructArray, StringArray};
+/// # use datafusion_common::ScalarValue;
+/// // Build a struct like: {a: 1, b: "foo"}
+/// // Field description
+/// let fields = Fields::from(vec![
+///   Field::new("a", DataType::Int32, false),
+///   Field::new("b", DataType::Utf8, false),
+/// ]);
+/// // one row arrays for each field
+/// let arrays: Vec<ArrayRef> = vec![
+///   Arc::new(Int32Array::from(vec![1])),
+///   Arc::new(StringArray::from(vec!["foo"])),
+/// ];
+/// // no nulls for this array
+/// let nulls = None;
+/// let arr = StructArray::new(fields, arrays, nulls);
+///
+/// // Create a ScalarValue::Struct directly
+/// let s1 = ScalarValue::Struct(Arc::new(arr));
+/// ```
+///
 ///
 /// # Further Reading
 /// See [datatypes](https://arrow.apache.org/docs/python/api/datatypes.html) for
@@ -153,7 +235,8 @@ pub enum ScalarValue {
     List(Arc<ListArray>),
     /// The array must be a LargeListArray with length 1.
     LargeList(Arc<LargeListArray>),
-    /// Represents a single element of a [`StructArray`] as an [`ArrayRef`]
+    /// Represents a single element [`StructArray`] as an [`ArrayRef`]. See
+    /// [`ScalarValue`] for examples of how to create instances of this type.
     Struct(Arc<StructArray>),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
@@ -2054,28 +2137,67 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     ///
-    /// Example
+    /// Example 1: Array (ScalarValue::Int32)
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
     ///
+    /// // Equivalent to [[1,2,3], [4,5]]
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
     ///    Some(vec![Some(1), Some(2), Some(3)]),
-    ///    None,
     ///    Some(vec![Some(4), Some(5)])
     /// ]);
     ///
+    /// // Convert the array into Scalar Values for each row
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
     ///
     /// let expected = vec![
-    ///   vec![
+    /// vec![
     ///     ScalarValue::Int32(Some(1)),
     ///     ScalarValue::Int32(Some(2)),
     ///     ScalarValue::Int32(Some(3)),
+    /// ],
+    /// vec![
+    ///    ScalarValue::Int32(Some(4)),
+    ///    ScalarValue::Int32(Some(5)),
+    /// ],
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
+    ///
+    /// Example 2: Nested array (ScalarValue::List)
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::utils::array_into_list_array;
+    /// use std::sync::Arc;
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
+    ///
+    /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
+    /// let list_arr = array_into_list_array(Arc::new(list_arr));
+    ///
+    /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(1), Some(2), Some(3)]),
+    /// ]);
+    /// let l2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///     Some(vec![Some(4), Some(5)]),
+    /// ]);
+    ///
+    /// let expected = vec![
+    ///   vec![
+    ///     ScalarValue::List(Arc::new(l1)),
+    ///     ScalarValue::List(Arc::new(l2)),
     ///   ],
-    ///   vec![],
-    ///   vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(5))]
     /// ];
     ///
     /// assert_eq!(scalar_vec, expected);
@@ -2084,27 +2206,13 @@ impl ScalarValue {
         let mut scalars = Vec::with_capacity(array.len());
 
         for index in 0..array.len() {
-            let scalar_values = match array.data_type() {
-                DataType::List(_) => {
-                    let list_array = as_list_array(array);
-                    match list_array.is_null(index) {
-                        true => Vec::new(),
-                        false => {
-                            let nested_array = list_array.value(index);
-                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?
-                                .into_iter()
-                                .flatten()
-                                .collect()
-                        }
-                    }
-                }
-                _ => {
-                    let scalar = ScalarValue::try_from_array(array, index)?;
-                    vec![scalar]
-                }
-            };
+            let nested_array = array.as_list::<i32>().value(index);
+            let scalar_values = (0..nested_array.len())
+                .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                .collect::<Result<Vec<_>>>()?;
             scalars.push(scalar_values);
         }
+
         Ok(scalars)
     }
 
@@ -2679,20 +2787,13 @@ impl From<Option<&str>> for ScalarValue {
 /// Wrapper to create ScalarValue::Struct for convenience
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
-        let (fields, scalars): (SchemaBuilder, Vec<_>) = value
+        value
             .into_iter()
-            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
-            .unzip();
-
-        let arrays = scalars
-            .into_iter()
-            .map(|scalar| scalar.to_array().unwrap())
-            .collect::<Vec<ArrayRef>>();
-
-        let fields = fields.finish().fields;
-        let struct_array = StructArray::try_new(fields, arrays, None).unwrap();
-
-        Self::Struct(Arc::new(struct_array))
+            .fold(ScalarStructBuilder::new(), |builder, (name, value)| {
+                builder.with_name_and_scalar(name, value)
+            })
+            .build()
+            .unwrap()
     }
 }
 
@@ -2707,27 +2808,6 @@ impl FromStr for ScalarValue {
 impl From<String> for ScalarValue {
     fn from(value: String) -> Self {
         ScalarValue::Utf8(Some(value))
-    }
-}
-
-// TODO: Remove this after changing to Scalar<T>
-// Wrapper for ScalarValue::Struct that checks the length of the arrays, without nulls
-impl From<(Fields, Vec<ArrayRef>)> for ScalarValue {
-    fn from((fields, arrays): (Fields, Vec<ArrayRef>)) -> Self {
-        Self::from((fields, arrays, None))
-    }
-}
-
-// TODO: Remove this after changing to Scalar<T>
-// Wrapper for ScalarValue::Struct that checks the length of the arrays
-impl From<(Fields, Vec<ArrayRef>, Option<NullBuffer>)> for ScalarValue {
-    fn from(
-        (fields, arrays, nulls): (Fields, Vec<ArrayRef>, Option<NullBuffer>),
-    ) -> Self {
-        for arr in arrays.iter() {
-            assert_eq!(arr.len(), 1);
-        }
-        Self::Struct(Arc::new(StructArray::new(fields, arrays, nulls)))
     }
 }
 
@@ -3047,6 +3127,11 @@ impl fmt::Display for ScalarValue {
                 // ScalarValue Struct should always have a single element
                 assert_eq!(struct_arr.len(), 1);
 
+                if struct_arr.null_count() == struct_arr.len() {
+                    write!(f, "NULL")?;
+                    return Ok(());
+                }
+
                 let columns = struct_arr.columns();
                 let fields = struct_arr.fields();
                 let nulls = struct_arr.nulls();
@@ -3242,11 +3327,13 @@ mod tests {
         as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
     };
 
+    use crate::assert_batches_eq;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{ArrowNumericType, ArrowPrimitiveType};
     use arrow::util::pretty::pretty_format_columns;
     use arrow_buffer::Buffer;
+    use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
 
@@ -3266,31 +3353,33 @@ mod tests {
             ),
         ]);
 
-        let arrays = vec![boolean as ArrayRef, int as ArrayRef];
-        let fields = Fields::from(vec![
-            Field::new("b", DataType::Boolean, false),
-            Field::new("c", DataType::Int32, false),
-        ]);
-        let sv = ScalarValue::from((fields, arrays));
+        let sv = ScalarStructBuilder::new()
+            .with_array(Field::new("b", DataType::Boolean, false), boolean)
+            .with_array(Field::new("c", DataType::Int32, false), int)
+            .build()
+            .unwrap();
+
         let struct_arr = sv.to_array().unwrap();
         let actual = as_struct_array(&struct_arr).unwrap();
         assert_eq!(actual, &expected);
     }
 
     #[test]
-    #[should_panic(expected = "assertion `left == right` failed")]
+    #[should_panic(
+        expected = "Error building ScalarValue::Struct. Expected array with exactly one element, found array with 4 elements"
+    )]
     fn test_scalar_value_from_for_struct_should_panic() {
-        let fields = Fields::from(vec![
-            Field::new("bool", DataType::Boolean, false),
-            Field::new("i32", DataType::Int32, false),
-        ]);
-
-        let arrays = vec![
-            Arc::new(BooleanArray::from(vec![false, true, false, false])) as ArrayRef,
-            Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
-        ];
-
-        let _ = ScalarValue::from((fields, arrays));
+        let _ = ScalarStructBuilder::new()
+            .with_array(
+                Field::new("bool", DataType::Boolean, false),
+                Arc::new(BooleanArray::from(vec![false, true, false, false])),
+            )
+            .with_array(
+                Field::new("i32", DataType::Int32, false),
+                Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
+            )
+            .build()
+            .unwrap();
     }
 
     #[test]
@@ -5629,6 +5718,59 @@ mod tests {
         let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
         let array = arrow::compute::concat(&arrays).unwrap();
         check_array(array);
+    }
+
+    #[test]
+    fn test_struct_display() {
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Utf8, true);
+
+        let s = ScalarStructBuilder::new()
+            .with_scalar(field_a, ScalarValue::from(1i32))
+            .with_scalar(field_b, ScalarValue::Utf8(None))
+            .build()
+            .unwrap();
+
+        assert_eq!(s.to_string(), "{a:1,b:}");
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+        let expected = [
+            "+-------------+",
+            "| s           |",
+            "+-------------+",
+            "| {a: 1, b: } |",
+            "+-------------+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
+    }
+
+    #[test]
+    fn test_struct_display_null() {
+        let fields = vec![Field::new("a", DataType::Int32, false)];
+        let s = ScalarStructBuilder::new_null(fields);
+        assert_eq!(s.to_string(), "NULL");
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+
+        #[rustfmt::skip]
+        let expected = [
+            "+---+",
+            "| s |",
+            "+---+",
+            "|   |",
+            "+---+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
     }
 
     #[test]

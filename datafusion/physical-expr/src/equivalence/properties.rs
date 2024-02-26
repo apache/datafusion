@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use crate::expressions::CastExpr;
+use arrow_schema::SchemaRef;
+use datafusion_common::{JoinSide, JoinType, Result};
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -31,12 +35,8 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{JoinSide, JoinType};
-
-use indexmap::IndexSet;
-use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -426,6 +426,71 @@ impl EquivalenceProperties {
         (!meet.is_empty()).then_some(meet)
     }
 
+    /// we substitute the ordering according to input expression type, this is a simplified version
+    /// In this case, we just substitute when the expression satisfy the following condition:
+    /// I. just have one column and is a CAST expression
+    /// TODO: Add one-to-ones analysis for monotonic ScalarFunctions.
+    /// TODO: we could precompute all the scenario that is computable, for example: atan(x + 1000) should also be substituted if
+    ///  x is DESC or ASC
+    /// After substitution, we may generate more than 1 `LexOrdering`. As an example,
+    /// `[a ASC, b ASC]` will turn into `[a ASC, b ASC], [CAST(a) ASC, b ASC]` when projection expressions `a, b, CAST(a)` is applied.
+    pub fn substitute_ordering_component(
+        &self,
+        mapping: &ProjectionMapping,
+        sort_expr: &[PhysicalSortExpr],
+    ) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        let new_orderings = sort_expr
+            .iter()
+            .map(|sort_expr| {
+                let referring_exprs: Vec<_> = mapping
+                    .iter()
+                    .map(|(source, _target)| source)
+                    .filter(|source| expr_refers(source, &sort_expr.expr))
+                    .cloned()
+                    .collect();
+                let mut res = vec![sort_expr.clone()];
+                // TODO: Add one-to-ones analysis for ScalarFunctions.
+                for r_expr in referring_exprs {
+                    // we check whether this expression is substitutable or not
+                    if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
+                        // we need to know whether the Cast Expr matches or not
+                        let expr_type = sort_expr.expr.data_type(&self.schema)?;
+                        if cast_expr.expr.eq(&sort_expr.expr)
+                            && cast_expr.is_bigger_cast(expr_type)
+                        {
+                            res.push(PhysicalSortExpr {
+                                expr: r_expr.clone(),
+                                options: sort_expr.options,
+                            });
+                        }
+                    }
+                }
+                Ok(res)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Generate all valid orderings, given substituted expressions.
+        let res = new_orderings
+            .into_iter()
+            .multi_cartesian_product()
+            .collect::<Vec<_>>();
+        Ok(res)
+    }
+
+    /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression
+    /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
+    /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
+    /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
+    /// dependency map, happen in issue 8838: <https://github.com/apache/arrow-datafusion/issues/8838>
+    pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
+        let orderings = &self.oeq_class.orderings;
+        let new_order = orderings
+            .iter()
+            .map(|order| self.substitute_ordering_component(mapping, order))
+            .collect::<Result<Vec<_>>>()?;
+        let new_order = new_order.into_iter().flatten().collect();
+        self.oeq_class = OrderingEquivalenceClass::new(new_order);
+        Ok(())
+    }
     /// Projects argument `expr` according to `projection_mapping`, taking
     /// equivalences into account.
     ///
@@ -477,7 +542,7 @@ impl EquivalenceProperties {
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        let mut dependency_map = HashMap::new();
+        let mut dependency_map = IndexMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
                 let target_sort_expr =
@@ -503,7 +568,7 @@ impl EquivalenceProperties {
                         .entry(sort_expr.clone())
                         .or_insert_with(|| DependencyNode {
                             target_sort_expr: target_sort_expr.clone(),
-                            dependencies: HashSet::new(),
+                            dependencies: IndexSet::new(),
                         })
                         .insert_dependency(dependency);
                 }
@@ -564,7 +629,6 @@ impl EquivalenceProperties {
 
         // Get dependency map for existing orderings:
         let dependency_map = self.construct_dependency_map(&mapping);
-
         let orderings = mapping.iter().flat_map(|(source, target)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
@@ -896,7 +960,7 @@ fn referred_dependencies(
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Dependencies> {
     // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
-    let mut expr_to_sort_exprs = HashMap::<ExprWrapper, Dependencies>::new();
+    let mut expr_to_sort_exprs = IndexMap::<ExprWrapper, Dependencies>::new();
     for sort_expr in dependency_map
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
@@ -1054,8 +1118,13 @@ impl DependencyNode {
     }
 }
 
-type DependencyMap = HashMap<PhysicalSortExpr, DependencyNode>;
-type Dependencies = HashSet<PhysicalSortExpr>;
+// Using `IndexMap` and `IndexSet` makes sure to generate consistent results across different executions for the same query.
+// We could have used `HashSet`, `HashMap` in place of them without any loss of functionality.
+// As an example, if existing orderings are `[a ASC, b ASC]`, `[c ASC]` for output ordering
+// both `[a ASC, b ASC, c ASC]` and `[c ASC, a ASC, b ASC]` are valid (e.g. concatenated version of the alternative orderings).
+// When using `HashSet`, `HashMap` it is not guaranteed to generate consistent result, among the possible 2 results in the example above.
+type DependencyMap = IndexMap<PhysicalSortExpr, DependencyNode>;
+type Dependencies = IndexSet<PhysicalSortExpr>;
 
 /// This function recursively analyzes the dependencies of the given sort
 /// expression within the given dependency map to construct lexicographical

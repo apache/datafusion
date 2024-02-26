@@ -745,6 +745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             output_url: statement.target,
             file_format: file_type,
             format_options: table_options.format,
+            partition_by,
             source_option_tuples: options,
         }))
     }

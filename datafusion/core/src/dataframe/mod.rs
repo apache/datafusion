@@ -67,14 +67,17 @@ pub struct DataFrameWriteOptions {
     /// Controls if all partitions should be coalesced into a single output file
     /// Generally will have slower performance when set to true.
     single_file_output: bool,
+    /// Sets which columns should be used for hive-style partitioned writes by name.
+    /// Can be set to empty vec![] for non-partitioned writes.
+    partition_by: Vec<String>,
 }
 
 impl DataFrameWriteOptions {
-    /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
         DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
+            partition_by: vec![],
         }
     }
     /// Set the overwrite option to true or false
@@ -88,6 +91,13 @@ impl DataFrameWriteOptions {
         self.single_file_output = single_file_output;
         self
     }
+
+    /// Sets the partition_by columns for output partitioning
+    pub fn with_partition_by(mut self, partition_by: Vec<String>) -> Self {
+        self.partition_by = partition_by;
+        self
+    }
+
 }
 
 impl Default for DataFrameWriteOptions {
@@ -1021,6 +1031,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        if matches!(self.plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -1124,6 +1137,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1136,6 +1150,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify CSV writing options here
     /// ).await?;
+    /// # fs::remove_file("output.csv")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1162,6 +1177,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
+            options.partition_by,
             copy_options,
             Default::default(),
         )?
@@ -1175,6 +1191,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1187,6 +1204,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None
     /// ).await?;
+    /// # fs::remove_file("output.json")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1209,6 +1227,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
+            options.partition_by,
             copy_options,
             Default::default(),
         )?
@@ -1660,6 +1679,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2947,6 +2967,17 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn nested_explain_should_fail() -> Result<()> {
+        let ctx = SessionContext::new();
+        // must be error
+        let mut result = ctx.sql("explain select 1").await?.explain(false, false);
+        assert!(result.is_err());
+        // must be error
+        result = ctx.sql("explain explain select 1").await;
+        assert!(result.is_err());
         Ok(())
     }
 }

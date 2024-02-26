@@ -99,6 +99,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
+use sqlparser::ast::NullTreatment;
 
 fn create_function_physical_name(
     fun: &str,
@@ -566,8 +567,8 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                                      format_options: copy_options
-                                      , ..
+                    format_options,
+                    partition_by,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -575,13 +576,20 @@ impl DefaultPhysicalPlanner {
 
                     let schema: Schema = (**input.schema()).clone().into();
 
+                    // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
+                    // from the schema of the RecordBatch being written. This allows COPY statements to specify only
+                    // the column name rather than column name + explicit data type.
+                    let table_partition_cols = partition_by.iter()
+                        .map(|s| (s.to_string(), arrow_schema::DataType::Null))
+                        .collect::<Vec<_>>();
+
                     // Set file sink related options
                     let config = FileSinkConfig {
                         object_store_url,
                         table_paths: vec![parsed_url],
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
-                        table_partition_cols: vec![],
+                        table_partition_cols,
                         overwrite: false,
                     };
 
@@ -1562,6 +1570,7 @@ pub fn create_window_expr_with_name(
             partition_by,
             order_by,
             window_frame,
+            null_treatment,
         }) => {
             let args = args
                 .iter()
@@ -1586,6 +1595,9 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
@@ -1594,6 +1606,7 @@ pub fn create_window_expr_with_name(
                 &order_by,
                 window_frame,
                 physical_input_schema,
+                ignore_nulls,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),

@@ -392,6 +392,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
@@ -414,6 +415,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     partition_by,
                     order_by,
                     window_frame,
+                    null_treatment,
                 ));
                 Ok(expr)
             }
@@ -681,17 +683,17 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
     let case_type = case
         .expr
         .as_ref()
-        .map(|expr| expr.get_type(&schema))
+        .map(|expr| expr.get_type(schema))
         .transpose()?;
     let then_types = case
         .when_then_expr
         .iter()
-        .map(|(_when, then)| then.get_type(&schema))
+        .map(|(_when, then)| then.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let else_type = case
         .else_expr
         .as_ref()
-        .map(|expr| expr.get_type(&schema))
+        .map(|expr| expr.get_type(schema))
         .transpose()?;
 
     // find common coercible types
@@ -701,7 +703,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
             let when_types = case
                 .when_then_expr
                 .iter()
-                .map(|(when, _then)| when.get_type(&schema))
+                .map(|(when, _then)| when.get_type(schema))
                 .collect::<Result<Vec<_>>>()?;
             let coerced_type =
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
@@ -727,7 +729,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
     let case_expr = case
         .expr
         .zip(case_when_coerce_type.as_ref())
-        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, &schema))
+        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, schema))
         .transpose()?
         .map(Box::new);
     let when_then = case
@@ -735,7 +737,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
         .into_iter()
         .map(|(when, then)| {
             let when_type = case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
-            let when = when.cast_to(when_type, &schema).map_err(|e| {
+            let when = when.cast_to(when_type, schema).map_err(|e| {
                 DataFusionError::Context(
                     format!(
                         "WHEN expressions in CASE couldn't be \
@@ -744,13 +746,13 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
                     Box::new(e),
                 )
             })?;
-            let then = then.cast_to(&then_else_coerce_type, &schema)?;
+            let then = then.cast_to(&then_else_coerce_type, schema)?;
             Ok((Box::new(when), Box::new(then)))
         })
         .collect::<Result<Vec<_>>>()?;
     let else_expr = case
         .else_expr
-        .map(|expr| expr.cast_to(&then_else_coerce_type, &schema))
+        .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
         .transpose()?
         .map(Box::new);
 

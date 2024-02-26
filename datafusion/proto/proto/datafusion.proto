@@ -327,6 +327,7 @@ message CopyToNode {
         FileTypeWriterOptions writer_options = 5;
     }
     string file_type = 6;
+    repeated string partition_by = 7;
 }
 
 message SQLOptions {

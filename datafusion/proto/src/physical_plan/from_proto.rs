@@ -177,6 +177,7 @@ pub fn parse_physical_window_expr(
         &order_by,
         Arc::new(window_frame),
         input_schema,
+        false,
     )
 }
 

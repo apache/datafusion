@@ -953,7 +953,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayDistinct => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
-                Signature::variadic_any(self.volatility())
+                Signature::array_and_element_and_optional_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayPositions => {
                 Signature::array_and_element(self.volatility())

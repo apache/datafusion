@@ -615,13 +615,14 @@ impl LogicalPlan {
                 file_format,
                 format_options,
                 source_option_tuples,
+                partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
-
                 format_options: format_options.clone(),
                 source_option_tuples: source_option_tuples.clone(),
+                partition_by: partition_by.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
@@ -1887,7 +1888,9 @@ impl SubqueryAlias {
         alias: impl Into<OwnedTableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let schema: Schema = plan.schema().as_ref().clone().into();
+        let fields = change_redundant_column(plan.schema().fields().clone());
+        let meta_data = plan.schema().as_ref().metadata().clone();
+        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2177,6 +2180,7 @@ impl TableScan {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
+
         Ok(Self {
             table_name,
             source: table_source,

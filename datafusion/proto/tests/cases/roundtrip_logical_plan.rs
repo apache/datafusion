@@ -21,7 +21,6 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
-use arrow::array::{BooleanArray, Int32Array};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
@@ -42,6 +41,7 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_common::{FileType, Result};
@@ -324,7 +324,8 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        format_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -354,7 +355,8 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
-        format_options: CopyOptions::WriterOptions(Box::new(
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
     });
@@ -367,7 +369,8 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(FileType::PARQUET, copy_to.file_format);
-            match &copy_to.format_options {
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+            match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Parquet(p) => {
                         let props = &p.writer_options;
@@ -402,9 +405,10 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         file_format: FileType::ARROW,
-        format_options: CopyOptions::WriterOptions(Box::new(
-            FileTypeWriterOptions::Arrow(ArrowWriterOptions::new()),
-        )),
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
+            ArrowWriterOptions::new(),
+        ))),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -415,7 +419,8 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
             assert_eq!(FileType::ARROW, copy_to.file_format);
-            match &copy_to.format_options {
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+            match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Arrow(_) => {}
                     _ => panic!(),
@@ -447,7 +452,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
-        format_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
                 CompressionTypeVariant::UNCOMPRESSED,
@@ -463,7 +469,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!(FileType::CSV, copy_to.file_format);
-            match &copy_to.format_options {
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
+            match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::CSV(p) => {
                         let props = &p.writer_options;
@@ -932,17 +939,17 @@ fn round_trip_scalar_values() {
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
         ScalarValue::LargeBinary(None),
-        ScalarValue::from((
-            vec![
+        ScalarStructBuilder::new()
+            .with_scalar(
                 Field::new("a", DataType::Int32, true),
+                ScalarValue::from(23i32),
+            )
+            .with_scalar(
                 Field::new("b", DataType::Boolean, false),
-            ]
-            .into(),
-            vec![
-                Arc::new(Int32Array::from(vec![Some(23)])) as ArrayRef,
-                Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
-            ],
-        )),
+                ScalarValue::from(false),
+            )
+            .build()
+            .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
@@ -1714,6 +1721,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 2. with default window_frame
@@ -1725,6 +1733,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 3. with window_frame with row numbers
@@ -1742,6 +1751,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         range_number_frame,
+        None,
     ));
 
     // 4. test with AggregateFunction
@@ -1757,6 +1767,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
 
     // 5. test with AggregateUDF
@@ -1808,6 +1819,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
     ctx.register_udaf(dummy_agg);
 
@@ -1883,6 +1895,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame,
+        None,
     ));
 
     ctx.register_udwf(dummy_window_udf);

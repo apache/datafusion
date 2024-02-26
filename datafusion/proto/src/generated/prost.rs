@@ -511,6 +511,8 @@ pub struct CopyToNode {
     pub output_url: ::prost::alloc::string::String,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "7")]
+    pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
     pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
 }

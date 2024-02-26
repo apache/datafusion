@@ -130,6 +130,7 @@ impl WindowUDF {
             partition_by,
             order_by,
             window_frame,
+            null_treatment: None,
         })
     }
 

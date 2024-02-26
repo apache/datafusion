@@ -19,12 +19,13 @@
 //! [`crate::displayable`] for examples of how to format
 
 use std::fmt;
+use std::fmt::Formatter;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
@@ -435,6 +436,31 @@ impl<'a> fmt::Display for OutputOrderingDisplay<'a> {
         }
         write!(f, "]")
     }
+}
+
+pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
+    if let Some(ordering) = orderings.first() {
+        if !ordering.is_empty() {
+            let start = if orderings.len() == 1 {
+                ", output_ordering="
+            } else {
+                ", output_orderings=["
+            };
+            write!(f, "{}", start)?;
+            for (idx, ordering) in
+                orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
+            {
+                match idx {
+                    0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
+                    _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
+                }
+            }
+            let end = if orderings.len() == 1 { "" } else { "]" };
+            write!(f, "{}", end)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
