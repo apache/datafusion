@@ -94,7 +94,8 @@ ProjectionExec: expr=[a@0 as a, NTH_VALUE(multiple_ordered_table.c,Int64(1) + In
 query II
 SELECT a, ARRAY_AGG(c ORDER BY c)[1] as result
                         FROM multiple_ordered_table
-                        GROUP BY a;
+                        GROUP BY a
+                        ORDER BY a;
 ----
 0 0
 1 50
