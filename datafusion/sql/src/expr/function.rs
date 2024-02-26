@@ -101,8 +101,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 DataType::Struct(_) => {
                     return not_impl_err!("unnest() does not support struct yet");
                 }
+                DataType::Null => {
+                    return not_impl_err!("unnest() does not support null yet");
+                }
                 _ => {
-                    return plan_err!("unnest() can only be applied to array and struct");
+                    return plan_err!(
+                        "unnest() can only be applied to array, struct and null"
+                    );
                 }
             }
 

@@ -36,7 +36,7 @@ select unnest([1,2,3]);
 2
 3
 
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and struct
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null);
 
 ## Unnest empty array
@@ -71,7 +71,7 @@ NULL
 NULL
 
 ## Unnest column with scalars
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and struct
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(column3) from unnest_table;
 
 ## Unnest multiple columns
@@ -79,7 +79,7 @@ query error DataFusion error: This feature is not implemented: Only support sing
 select unnest(column1), unnest(column2) from unnest_table;
 
 ## Unnest scalar
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and struct
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(1);
 
 
