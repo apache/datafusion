@@ -285,19 +285,19 @@ impl std::fmt::Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
-                write!(f, "ArrayAndElement")
+                write!(f, "array, element")
             }
             ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
                 write!(f, "array, element, [index]")
             }
             ArrayFunctionSignature::ElementAndArray => {
-                write!(f, "ElementAndArray")
+                write!(f, "element, array")
             }
             ArrayFunctionSignature::ArrayAndIndex => {
-                write!(f, "ArrayAndIndex")
+                write!(f, "array, index")
             }
             ArrayFunctionSignature::Array => {
-                write!(f, "Array")
+                write!(f, "array")
             }
         }
     }
