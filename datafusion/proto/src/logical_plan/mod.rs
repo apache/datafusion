@@ -913,12 +913,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                     None => return Err(proto_error("CopyTo missing CopyOptions")),
                 };
+
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
                         file_format: FileType::from_str(&copy.file_type)?,
-                        partition_by: vec![],
+                        partition_by: copy.partition_by.clone(),
                         copy_options,
                     },
                 ))
@@ -1642,7 +1643,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 output_url,
                 file_format,
                 copy_options,
-                partition_by: _,
+                partition_by,
             }) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     input,
@@ -1726,6 +1727,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             output_url: output_url.to_string(),
                             file_type: file_format.to_string(),
                             copy_options: copy_options_proto,
+                            partition_by: partition_by.clone(),
                         },
                     ))),
                 })

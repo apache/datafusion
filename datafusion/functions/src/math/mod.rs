@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "core" DataFusion functions
+//! "math" DataFusion functions
 
 mod nans;
 
