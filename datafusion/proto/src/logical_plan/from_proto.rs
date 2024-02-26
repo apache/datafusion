@@ -442,6 +442,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
     fn from(f: &protobuf::ScalarFunction) -> Self {
         use protobuf::ScalarFunction;
         match f {
+            ScalarFunction::Unknown => todo!(),
             ScalarFunction::Sqrt => Self::Sqrt,
             ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
@@ -1359,6 +1360,7 @@ pub fn parse_expr(
             let args = &expr.args;
 
             match scalar_function {
+                ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
                 ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acos => Ok(acos(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Asinh => Ok(asinh(parse_expr(&args[0], registry)?)),
