@@ -858,7 +858,7 @@ impl SessionContext {
         self.state.write().deregister_udaf(name).ok();
     }
 
-    /// Deregisters a UDTF within this context.
+    /// Deregisters a UDWF within this context.
     pub fn deregister_udwf(&self, name: &str) {
         self.state.write().deregister_udwf(name).ok();
     }
