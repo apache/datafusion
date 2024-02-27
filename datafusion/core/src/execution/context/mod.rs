@@ -2181,24 +2181,24 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use async_trait::async_trait;
-    use datafusion_expr::Expr;
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Weak;
-    use tempfile::TempDir;
-    use datafusion_expr::{ColumnarValue, PartitionEvaluator};
-    use datafusion_expr::expr_fn::{create_udf, create_udaf, create_udwf};
-    use datafusion_common::cast::as_int64_array;
     use crate::{
         arrow::{
-            array::{ArrayRef, AsArray, Int64Array, Float64Array},
+            array::{ArrayRef, AsArray, Float64Array, Int64Array},
             datatypes::{DataType, Float64Type},
         },
         logical_expr::Volatility,
         physical_plan::Accumulator,
         scalar::ScalarValue,
     };
+    use async_trait::async_trait;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_expr::expr_fn::{create_udaf, create_udf, create_udwf};
+    use datafusion_expr::Expr;
+    use datafusion_expr::{ColumnarValue, PartitionEvaluator};
+    use std::env;
+    use std::path::PathBuf;
+    use std::sync::Weak;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
@@ -2295,10 +2295,9 @@ mod tests {
     #[tokio::test]
     async fn register_deregister_udf() -> Result<()> {
         let add = Arc::new(|args: &[ColumnarValue]| {
-    
             let args = ColumnarValue::values_to_arrays(args)?;
             let i64s = as_int64_array(&args[0])?;
-    
+
             let array = i64s
                 .iter()
                 .map(|array_elem| array_elem.map(|value| value + 1))
@@ -2334,13 +2333,13 @@ mod tests {
             n: u32,
             prod: f64,
         }
-        
+
         impl GeometricMean {
             pub fn new() -> Self {
                 GeometricMean { n: 0, prod: 1.0 }
             }
         }
-        
+
         impl Accumulator for GeometricMean {
             fn state(&mut self) -> Result<Vec<ScalarValue>> {
                 Ok(vec![
@@ -2348,12 +2347,12 @@ mod tests {
                     ScalarValue::from(self.n),
                 ])
             }
-        
+
             fn evaluate(&mut self) -> Result<ScalarValue> {
                 let value = self.prod.powf(1.0 / self.n as f64);
                 Ok(ScalarValue::from(value))
             }
-        
+
             fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
                 if values.is_empty() {
                     return Ok(());
@@ -2361,7 +2360,7 @@ mod tests {
                 let arr = &values[0];
                 (0..arr.len()).try_for_each(|index| {
                     let v = ScalarValue::try_from_array(arr, index)?;
-        
+
                     if let ScalarValue::Float64(Some(value)) = v {
                         self.prod *= value;
                         self.n += 1;
@@ -2371,7 +2370,7 @@ mod tests {
                     Ok(())
                 })
             }
-        
+
             fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
                 if states.is_empty() {
                     return Ok(());
@@ -2382,8 +2381,10 @@ mod tests {
                         .iter()
                         .map(|array| ScalarValue::try_from_array(array, index))
                         .collect::<Result<Vec<_>>>()?;
-                    if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) =
-                        (&v[0], &v[1])
+                    if let (
+                        ScalarValue::Float64(Some(prod)),
+                        ScalarValue::UInt32(Some(n)),
+                    ) = (&v[0], &v[1])
                     {
                         self.prod *= prod;
                         self.n += n;
@@ -2393,7 +2394,7 @@ mod tests {
                     Ok(())
                 })
             }
-        
+
             fn size(&self) -> usize {
                 std::mem::size_of_val(self)
             }
@@ -2435,7 +2436,7 @@ mod tests {
             fn uses_window_frame(&self) -> bool {
                 true
             }
-        
+
             fn evaluate(
                 &mut self,
                 values: &[ArrayRef],
@@ -2443,14 +2444,15 @@ mod tests {
             ) -> Result<ScalarValue> {
                 let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
                 let range_len = range.end - range.start;
-        
+
                 let output = if range_len > 0 {
-                    let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+                    let sum: f64 =
+                        arr.values().iter().skip(range.start).take(range_len).sum();
                     Some(sum / range_len as f64)
                 } else {
                     None
                 };
-        
+
                 Ok(ScalarValue::Float64(output))
             }
         }
