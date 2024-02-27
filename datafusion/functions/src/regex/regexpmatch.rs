@@ -24,7 +24,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-
+use datafusion_common::exec_err;
 use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
@@ -32,24 +32,6 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
-#[cfg(feature = "regex_expressions")]
-macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        $FUNC::<$T>
-    }};
-}
-
-#[cfg(not(feature = "regex_expressions"))]
-macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {
-        |_: &[ArrayRef]| -> Result<ArrayRef> {
-            internal_err!(
-                "function {} requires compilation with feature flag: regex_expressions.",
-                $NAME
-            )
-        }
-    };
-}
 #[derive(Debug)]
 pub(super) struct RegexpMatchFunc {
     signature: Signature,
@@ -126,20 +108,10 @@ impl ScalarUDFImpl for RegexpMatchFunc {
 fn regexp_match_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
-            let func = invoke_on_array_if_regex_expressions_feature_flag!(
-                regexp_match,
-                i32,
-                "regexp_match"
-            );
-            func(args)
+            regexp_match::<i32>(args)
         }
         DataType::LargeUtf8 => {
-            let func = invoke_on_array_if_regex_expressions_feature_flag!(
-                regexp_match,
-                i64,
-                "regexp_match"
-            );
-            func(args)
+            regexp_match::<i64>(args)
         }
         other => {
             internal_err!("Unsupported data type {other:?} for function regexp_match")
@@ -166,7 +138,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             regexp::regexp_match(values, regex, Some(flags))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
-        other => internal_err!(
+        other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }

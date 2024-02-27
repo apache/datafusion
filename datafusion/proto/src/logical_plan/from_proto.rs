@@ -535,7 +535,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::RegexpLike => Self::RegexpLike,
-            //ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
