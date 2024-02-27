@@ -122,6 +122,30 @@ macro_rules! make_package {
     };
 }
 
+/// Macro creates a sub module if the feature is not enabled
+///
+/// The rationale for providing stub functions is to help users to configure datafusion
+/// properly (so they get an error telling them why a function is not available)
+/// instead of getting a cryptic "no function found" message at runtime.
+
+macro_rules! make_stub_package {
+    ($name:ident, $feature:literal) => {
+        #[cfg(not(feature = $feature))]
+        #[doc = concat!("Disabled. Enable via feature flag `", $feature, "`")]
+        pub mod $name {
+            use datafusion_expr::ScalarUDF;
+            use log::debug;
+            use std::sync::Arc;
+
+            /// Returns an empty list of functions when the feature is not enabled
+            pub fn functions() -> Vec<Arc<ScalarUDF>> {
+                debug!("{} functions disabled", stringify!($name));
+                vec![]
+            }
+        }
+    };
+}
+
 /// Invokes a function on each element of an array and returns the result as a new array
 ///
 /// $ARG: ArrayRef

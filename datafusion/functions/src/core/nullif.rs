@@ -18,15 +18,15 @@
 //! Encoding expressions
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::ScalarValue;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 
 #[derive(Debug)]
 pub(super) struct NullIfFunc {
@@ -52,14 +52,14 @@ static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
     DataType::LargeUtf8,
 ];
 
-
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature:
-            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(),
+            signature: Signature::uniform(
+                2,
+                SUPPORTED_NULLIF_TYPES.to_vec(),
                 Volatility::Immutable,
-            )
+            ),
         }
     }
 }
@@ -78,18 +78,19 @@ impl ScalarUDFImpl for NullIfFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         // NULLIF has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
-        coerced_types.map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NULLIF")
-        )
+        let coerced_types = datafusion_expr::type_coercion::functions::data_types(
+            arg_types,
+            &self.signature,
+        );
+        coerced_types
+            .map(|typs| typs[0].clone())
+            .map_err(|e| e.context("Failed to coerce arguments for NULLIF"))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         nullif_func(args)
     }
 }
-
-
 
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
