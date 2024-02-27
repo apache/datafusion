@@ -3795,6 +3795,9 @@ impl serde::Serialize for CopyToNode {
         if !self.file_type.is_empty() {
             len += 1;
         }
+        if !self.partition_by.is_empty() {
+            len += 1;
+        }
         if self.copy_options.is_some() {
             len += 1;
         }
@@ -3807,6 +3810,9 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
+        }
+        if !self.partition_by.is_empty() {
+            struct_ser.serialize_field("partitionBy", &self.partition_by)?;
         }
         if let Some(v) = self.copy_options.as_ref() {
             match v {
@@ -3833,6 +3839,8 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             "outputUrl",
             "file_type",
             "fileType",
+            "partition_by",
+            "partitionBy",
             "sql_options",
             "sqlOptions",
             "writer_options",
@@ -3844,6 +3852,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             Input,
             OutputUrl,
             FileType,
+            PartitionBy,
             SqlOptions,
             WriterOptions,
         }
@@ -3870,6 +3879,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             "input" => Ok(GeneratedField::Input),
                             "outputUrl" | "output_url" => Ok(GeneratedField::OutputUrl),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
+                            "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
                             "sqlOptions" | "sql_options" => Ok(GeneratedField::SqlOptions),
                             "writerOptions" | "writer_options" => Ok(GeneratedField::WriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -3894,6 +3904,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                 let mut input__ = None;
                 let mut output_url__ = None;
                 let mut file_type__ = None;
+                let mut partition_by__ = None;
                 let mut copy_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3915,6 +3926,12 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             }
                             file_type__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PartitionBy => {
+                            if partition_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionBy"));
+                            }
+                            partition_by__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::SqlOptions => {
                             if copy_options__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sqlOptions"));
@@ -3935,6 +3952,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                     input: input__,
                     output_url: output_url__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
+                    partition_by: partition_by__.unwrap_or_default(),
                     copy_options: copy_options__,
                 })
             }
@@ -22303,7 +22321,7 @@ impl serde::Serialize for ScalarFunction {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Abs => "Abs",
+            Self::Unknown => "unknown",
             Self::Acos => "Acos",
             Self::Asin => "Asin",
             Self::Atan => "Atan",
@@ -22446,7 +22464,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "Abs",
+            "unknown",
             "Acos",
             "Asin",
             "Atan",
@@ -22618,7 +22636,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                 E: serde::de::Error,
             {
                 match value {
-                    "Abs" => Ok(ScalarFunction::Abs),
+                    "unknown" => Ok(ScalarFunction::Unknown),
                     "Acos" => Ok(ScalarFunction::Acos),
                     "Asin" => Ok(ScalarFunction::Asin),
                     "Atan" => Ok(ScalarFunction::Atan),

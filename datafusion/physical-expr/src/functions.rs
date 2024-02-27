@@ -261,9 +261,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Abs => Arc::new(|args| {
-            make_scalar_function_inner(math_expressions::abs_invoke)(args)
-        }),
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
@@ -3074,7 +3071,6 @@ mod tests {
         let funs = [
             BuiltinScalarFunction::Concat,
             BuiltinScalarFunction::ToTimestamp,
-            BuiltinScalarFunction::Abs,
             BuiltinScalarFunction::Repeat,
         ];
 

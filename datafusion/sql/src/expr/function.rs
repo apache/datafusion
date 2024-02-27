@@ -16,16 +16,17 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use arrow_schema::DataType;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError,
-    Dependency, Result,
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
+    Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, AggregateFunction, BuiltinScalarFunction, Expr, ScalarFunctionDefinition,
-    WindowFrame, WindowFunctionDefinition,
+    expr, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable, WindowFrame,
+    WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
@@ -52,8 +53,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             order_by,
         } = function;
 
-        if let Some(null_treatment) = null_treatment {
-            return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}");
+        // If function is a window function (it has an OVER clause),
+        // it shouldn't have ordering requirement as function argument
+        // required ordering should be defined in OVER clause.
+        let is_function_window = over.is_some();
+
+        match null_treatment {
+            Some(null_treatment) if !is_function_window => return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}"),
+            _ => {}
         }
 
         let name = if name.0.len() > 1 {
@@ -74,39 +81,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if name.eq("unnest") {
             let exprs =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
-
-            match exprs.len() {
+            // Currently only one argument is supported
+            let arg = match exprs.len() {
                 0 => {
-                    return exec_err!("unnest() requires at least one argument");
+                    return plan_err!("unnest() requires at least one argument");
                 }
-                1 => {
-                    if let Expr::ScalarFunction(ScalarFunction {
-                        func_def:
-                            ScalarFunctionDefinition::BuiltIn(
-                                BuiltinScalarFunction::MakeArray,
-                            ),
-                        ..
-                    }) = exprs[0]
-                    {
-                        // valid
-                    } else if let Expr::Column(_) = exprs[0] {
-                        // valid
-                    } else if let Expr::ScalarFunction(ScalarFunction {
-                        func_def:
-                            ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Struct),
-                        ..
-                    }) = exprs[0]
-                    {
-                        return not_impl_err!("unnest() does not support struct yet");
-                    } else {
-                        return plan_err!(
-                            "unnest() can only be applied to array and structs and null"
-                        );
-                    }
-                }
+                1 => &exprs[0],
                 _ => {
                     return not_impl_err!(
                         "unnest() does not support multiple arguments yet"
+                    );
+                }
+            };
+            // Check argument type, array types are supported
+            match arg.get_type(schema)? {
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _) => {}
+                DataType::Struct(_) => {
+                    return not_impl_err!("unnest() does not support struct yet");
+                }
+                DataType::Null => {
+                    return not_impl_err!("unnest() does not support null yet");
+                }
+                _ => {
+                    return plan_err!(
+                        "unnest() can only be applied to array, struct and null"
                     );
                 }
             }
@@ -120,10 +120,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
-        // If function is a window function (it has an OVER clause),
-        // it shouldn't have ordering requirement as function argument
-        // required ordering should be defined in OVER clause.
-        let is_function_window = over.is_some();
         if !order_by.is_empty() && is_function_window {
             return plan_err!(
                 "Aggregate ORDER BY is not implemented for window functions"
@@ -198,6 +194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             partition_by,
                             order_by,
                             window_frame,
+                            null_treatment,
                         ))
                     }
                     _ => Expr::WindowFunction(expr::WindowFunction::new(
@@ -206,6 +203,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         partition_by,
                         order_by,
                         window_frame,
+                        null_treatment,
                     )),
                 };
                 return Ok(expr);

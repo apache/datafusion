@@ -49,8 +49,8 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
-    SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions,
+    ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
@@ -1044,6 +1044,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        if matches!(self.plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -1685,6 +1688,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2972,6 +2976,17 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn nested_explain_should_fail() -> Result<()> {
+        let ctx = SessionContext::new();
+        // must be error
+        let mut result = ctx.sql("explain select 1").await?.explain(false, false);
+        assert!(result.is_err());
+        // must be error
+        result = ctx.sql("explain explain select 1").await;
+        assert!(result.is_err());
         Ok(())
     }
 }
