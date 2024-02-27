@@ -511,6 +511,8 @@ pub struct CopyToNode {
     pub output_url: ::prost::alloc::string::String,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "7")]
+    pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
     pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
 }
@@ -2631,7 +2633,9 @@ impl JoinConstraint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ScalarFunction {
-    Abs = 0,
+    ///   0 was Abs before
+    ///   The first enum value must be zero for open enums
+    Unknown = 0,
     Acos = 1,
     Asin = 2,
     Atan = 3,
@@ -2774,7 +2778,7 @@ impl ScalarFunction {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ScalarFunction::Abs => "Abs",
+            ScalarFunction::Unknown => "unknown",
             ScalarFunction::Acos => "Acos",
             ScalarFunction::Asin => "Asin",
             ScalarFunction::Atan => "Atan",
@@ -2911,7 +2915,7 @@ impl ScalarFunction {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "Abs" => Some(Self::Abs),
+            "unknown" => Some(Self::Unknown),
             "Acos" => Some(Self::Acos),
             "Asin" => Some(Self::Asin),
             "Atan" => Some(Self::Atan),

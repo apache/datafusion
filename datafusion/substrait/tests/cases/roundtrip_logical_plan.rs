@@ -310,6 +310,11 @@ async fn simple_scalar_function_abs() -> Result<()> {
 }
 
 #[tokio::test]
+async fn simple_scalar_function_isnan() -> Result<()> {
+    roundtrip("SELECT ISNAN(a) FROM data").await
+}
+
+#[tokio::test]
 async fn simple_scalar_function_pow() -> Result<()> {
     roundtrip("SELECT POW(a, 2) FROM data").await
 }

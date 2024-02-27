@@ -137,3 +137,4 @@ datafusion/proto/src/generated/prost.rs
 .github/workflows/docs.yaml
 **/node_modules/*
 datafusion/wasmtest/pkg/*
+clippy.toml

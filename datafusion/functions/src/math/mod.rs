@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "core" DataFusion functions
+//! "math" DataFusion functions
 
 mod nans;
+mod abs;
 
 // create  UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
+make_udf_function!(abs::AbsFunc, ABS, abs);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
-    (isnan, num, "returns true if a given number is +NaN or -NaN otherwise returns false")
+    (isnan, num, "returns true if a given number is +NaN or -NaN otherwise returns false"),
+    (abs, num, "returns the absolute value of a given number")
 );
-

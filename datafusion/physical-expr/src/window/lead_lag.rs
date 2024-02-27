@@ -23,10 +23,14 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use arrow_array::Array;
+use datafusion_common::{
+    arrow_datafusion_err, exec_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
 
@@ -39,6 +43,7 @@ pub struct WindowShift {
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool,
 }
 
 impl WindowShift {
@@ -60,6 +65,7 @@ pub fn lead(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
         name,
@@ -67,6 +73,7 @@ pub fn lead(
         shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
         expr,
         default_value,
+        ignore_nulls,
     }
 }
 
@@ -77,6 +84,7 @@ pub fn lag(
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
         name,
@@ -84,6 +92,7 @@ pub fn lag(
         shift_offset: shift_offset.unwrap_or(1),
         expr,
         default_value,
+        ignore_nulls,
     }
 }
 
@@ -110,6 +119,8 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
+            ignore_nulls: self.ignore_nulls,
+            non_null_offsets: VecDeque::new(),
         }))
     }
 
@@ -120,6 +131,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: -self.shift_offset,
             expr: self.expr.clone(),
             default_value: self.default_value.clone(),
+            ignore_nulls: self.ignore_nulls,
         }))
     }
 }
@@ -128,6 +140,16 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: Option<ScalarValue>,
+    ignore_nulls: bool,
+    // VecDeque contains offset values that between non-null entries
+    non_null_offsets: VecDeque<usize>,
+}
+
+impl WindowShiftEvaluator {
+    fn is_lag(&self) -> bool {
+        // Mode is LAG, when shift_offset is positive
+        self.shift_offset > 0
+    }
 }
 
 fn create_empty_array(
@@ -182,9 +204,13 @@ fn shift_with_default_value(
 
 impl PartitionEvaluator for WindowShiftEvaluator {
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
-        if self.shift_offset > 0 {
-            let offset = self.shift_offset as usize;
-            let start = idx.saturating_sub(offset);
+        if self.is_lag() {
+            let start = if self.non_null_offsets.len() == self.shift_offset as usize {
+                let offset: usize = self.non_null_offsets.iter().sum();
+                idx.saturating_sub(offset + 1)
+            } else {
+                0
+            };
             let end = idx + 1;
             Ok(Range { start, end })
         } else {
@@ -196,7 +222,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
     fn is_causal(&self) -> bool {
         // Lagging windows are causal by definition:
-        self.shift_offset > 0
+        self.is_lag()
     }
 
     fn evaluate(
@@ -204,17 +230,57 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         values: &[ArrayRef],
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
+        // TODO: try to get rid of i64 usize conversion
+        // TODO: do not recalculate default value every call
+        // TODO: support LEAD mode for IGNORE NULLS
         let array = &values[0];
         let dtype = array.data_type();
+        let len = array.len() as i64;
         // LAG mode
-        let idx = if self.shift_offset > 0 {
+        let mut idx = if self.is_lag() {
             range.end as i64 - self.shift_offset - 1
         } else {
             // LEAD mode
             range.start as i64 - self.shift_offset
         };
 
-        if idx < 0 || idx as usize >= array.len() {
+        // Support LAG only for now, as LEAD requires some brainstorm first
+        // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
+        // If current row index points to NULL value the row is NOT counted
+        if self.ignore_nulls && self.is_lag() {
+            // Find the nonNULL row index that shifted by offset comparing to current row index
+            idx = if self.non_null_offsets.len() == self.shift_offset as usize {
+                let total_offset: usize = self.non_null_offsets.iter().sum();
+                (range.end - 1 - total_offset) as i64
+            } else {
+                -1
+            };
+
+            // Keep track of offset values between non-null entries
+            if array.is_valid(range.end - 1) {
+                // Non-null add new offset
+                self.non_null_offsets.push_back(1);
+                if self.non_null_offsets.len() > self.shift_offset as usize {
+                    // WE do not need to keep track of more than `lag number of offset` values.
+                    self.non_null_offsets.pop_front();
+                }
+            } else if !self.non_null_offsets.is_empty() {
+                // Entry is null, increment offset value of the last entry.
+                let end_idx = self.non_null_offsets.len() - 1;
+                self.non_null_offsets[end_idx] += 1;
+            }
+        } else if self.ignore_nulls && !self.is_lag() {
+            // IGNORE NULLS and LEAD mode.
+            return Err(exec_datafusion_err!(
+                "IGNORE NULLS mode for LEAD is not supported for BoundedWindowAggExec"
+            ));
+        }
+
+        // Set the default value if
+        // - index is out of window bounds
+        // OR
+        // - ignore nulls mode and current value is null and is within window bounds
+        if idx < 0 || idx >= len || (self.ignore_nulls && array.is_null(idx as usize)) {
             get_default_value(self.default_value.as_ref(), dtype)
         } else {
             ScalarValue::try_from_array(array, idx as usize)
@@ -226,6 +292,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         values: &[ArrayRef],
         _num_rows: usize,
     ) -> Result<ArrayRef> {
+        if self.ignore_nulls {
+            return Err(exec_datafusion_err!(
+                "IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec"
+            ));
+        }
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
         shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
@@ -279,6 +350,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 None,
+                false,
             ),
             [
                 Some(-2),
@@ -301,6 +373,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 None,
+                false,
             ),
             [
                 None,
@@ -323,6 +396,7 @@ mod tests {
                 Arc::new(Column::new("c3", 0)),
                 None,
                 Some(ScalarValue::Int32(Some(100))),
+                false,
             ),
             [
                 Some(100),
