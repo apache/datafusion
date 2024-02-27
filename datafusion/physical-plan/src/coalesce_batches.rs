@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, PlanProperties, Statistics};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };

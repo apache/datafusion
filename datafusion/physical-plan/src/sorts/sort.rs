@@ -37,7 +37,8 @@ use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take};

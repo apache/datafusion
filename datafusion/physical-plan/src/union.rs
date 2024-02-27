@@ -29,8 +29,9 @@ use std::{any::Any, sync::Arc};
 use super::{
     execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
@@ -204,7 +205,7 @@ impl ExecutionPlan for UnionExec {
         // which is the "meet" of all input orderings. In this example, this
         // function will return vec![false, true, true], indicating that we
         // preserve the orderings for the 2nd and the 3rd children.
-        if let Some(output_ordering) = self.output_ordering() {
+        if let Some(output_ordering) = self.cache.output_ordering() {
             self.inputs()
                 .iter()
                 .map(|child| {

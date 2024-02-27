@@ -32,6 +32,7 @@ use datafusion_common::{
     not_impl_err, plan_err, Constraints, DFSchema, DataFusionError, SchemaExt,
 };
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -161,10 +162,10 @@ impl MemTable {
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
 
         if let Some(num_partitions) = output_partitions {
-            let exec = RepartitionExec::try_new(
+            let exec = Arc::new(RepartitionExec::try_new(
                 Arc::new(exec),
                 Partitioning::RoundRobinBatch(num_partitions),
-            )?;
+            )?) as Arc<dyn ExecutionPlan>;
 
             // execute and collect results
             let mut output_partitions = vec![];

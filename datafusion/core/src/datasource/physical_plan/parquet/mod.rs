@@ -48,6 +48,7 @@ use arrow::error::ArrowError;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use bytes::Bytes;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -362,7 +363,7 @@ impl ExecutionPlan for ParquetExec {
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_preserve_order_within_groups(self.cache.output_ordering().is_some())
             .repartition_file_groups(&self.base_config.file_groups);
 
         let mut new_plan = self.clone();
@@ -1557,7 +1558,7 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = ParquetExec::new(
+            let parquet_exec = Arc::new(ParquetExec::new(
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
@@ -1570,7 +1571,7 @@ mod tests {
                 },
                 None,
                 None,
-            );
+            )) as Arc<dyn ExecutionPlan>;
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
             let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
 
@@ -1685,7 +1686,10 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            parquet_exec.cache.output_partitioning().partition_count(),
+            1
+        );
         assert_eq!(parquet_exec.schema().as_ref(), &expected_schema);
 
         let mut results = parquet_exec.execute(0, task_ctx)?;

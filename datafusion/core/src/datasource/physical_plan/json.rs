@@ -42,6 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
+use datafusion_physical_plan::ExecutionPlanProperties;
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -150,7 +151,7 @@ impl ExecutionPlan for NdJsonExec {
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let preserve_order_within_groups = self.output_ordering().is_some();
+        let preserve_order_within_groups = self.cache.output_ordering().is_some();
         let file_groups = &self.base_config.file_groups;
 
         let repartitioned_file_groups_option = FileGroupPartitioner::new()

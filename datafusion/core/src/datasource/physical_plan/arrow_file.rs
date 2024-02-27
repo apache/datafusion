@@ -152,7 +152,7 @@ impl ExecutionPlan for ArrowExec {
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_preserve_order_within_groups(self.cache.output_ordering().is_some())
             .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {

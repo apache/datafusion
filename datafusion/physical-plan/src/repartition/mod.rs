@@ -26,7 +26,9 @@ use std::{any::Any, vec};
 
 use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
+use super::{
+    DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
+};
 use crate::common::{transpose, SpawnedTask};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;

@@ -23,8 +23,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;

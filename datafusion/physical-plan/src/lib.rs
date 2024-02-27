@@ -127,33 +127,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     fn properties(&self) -> &PlanProperties;
 
-    /// Specifies how the output of this `ExecutionPlan` is split into
-    /// partitions.
-    fn output_partitioning(&self) -> &Partitioning {
-        &self.properties().partitioning
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().exec_mode
-    }
-
-    /// If the output of this `ExecutionPlan` within each partition is sorted,
-    /// returns `Some(keys)` with the description of how it was sorted.
-    ///
-    /// For example, Sort, (obviously) produces sorted output as does
-    /// SortPreservingMergeStream. Less obviously `Projection`
-    /// produces sorted output if its input was sorted as it does not
-    /// reorder the input rows,
-    ///
-    /// It is safe to return `None` here if your `ExecutionPlan` does not
-    /// have any particular output order here
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.properties().output_ordering.as_deref()
-    }
-
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -210,27 +183,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .into_iter()
             .map(|dist| !matches!(dist, Distribution::SinglePartition))
             .collect()
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan.
-    ///
-    /// Equivalence properties tell DataFusion what columns are known to be
-    /// equal, during various optimization passes. By default, this returns "no
-    /// known equivalences" which is always correct, but may cause DataFusion to
-    /// unnecessarily resort data.
-    ///
-    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
-    /// through it or how columns within each row relate to each other, it
-    /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
-    /// otherwise modify them, it preserves its input equivalence properties.
-    /// However, since `ProjectionExec` may calculate derived expressions, it
-    /// needs special handling.
-    ///
-    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
-    /// for related concepts.
-    fn equivalence_properties(&self) -> &EquivalenceProperties {
-        &self.properties().eq_properties
     }
 
     /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
@@ -450,6 +402,66 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+pub trait ExecutionPlanProperties {
+    fn output_partitioning(&self) -> &Partitioning;
+
+    fn execution_mode(&self) -> ExecutionMode;
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
+    fn equivalence_properties(&self) -> &EquivalenceProperties;
+}
+
+impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
+    /// Specifies how the output of this `ExecutionPlan` is split into
+    /// partitions.
+    fn output_partitioning(&self) -> &Partitioning {
+        self.properties().output_partitioning()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn execution_mode(&self) -> ExecutionMode {
+        self.properties().execution_mode()
+    }
+
+    /// If the output of this `ExecutionPlan` within each partition is sorted,
+    /// returns `Some(keys)` with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows,
+    ///
+    /// It is safe to return `None` here if your `ExecutionPlan` does not
+    /// have any particular output order here
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.properties().output_ordering()
+    }
+
+    /// Get the [`EquivalenceProperties`] within the plan.
+    ///
+    /// Equivalence properties tell DataFusion what columns are known to be
+    /// equal, during various optimization passes. By default, this returns "no
+    /// known equivalences" which is always correct, but may cause DataFusion to
+    /// unnecessarily resort data.
+    ///
+    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
+    /// through it or how columns within each row relate to each other, it
+    /// should return the equivalence properties of its input. For
+    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// otherwise modify them, it preserves its input equivalence properties.
+    /// However, since `ProjectionExec` may calculate derived expressions, it
+    /// needs special handling.
+    ///
+    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
+    /// for related concepts.
+    fn equivalence_properties(&self) -> &EquivalenceProperties {
+        self.properties().equivalence_properties()
+    }
+}
+
 /// Describes the execution mode of an operator's resulting stream with respect
 /// to its size and behavior. There are three possible execution modes: `Bounded`,
 /// `Unbounded` and `PipelineBreaking`.
@@ -564,6 +576,22 @@ impl PlanProperties {
         self
     }
 
+    pub fn equivalence_properties(&self) -> &EquivalenceProperties {
+        &self.eq_properties
+    }
+
+    pub fn output_partitioning(&self) -> &Partitioning {
+        &self.partitioning
+    }
+
+    pub fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.output_ordering.as_deref()
+    }
+
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.exec_mode
+    }
+
     /// Get schema of the node.
     fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
@@ -577,11 +605,8 @@ impl PlanProperties {
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        !matches!(
-            repart.output_partitioning(),
-            Partitioning::RoundRobinBatch(_)
-        )
+    if let Some(_) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        !matches!(plan.output_partitioning(), Partitioning::RoundRobinBatch(_))
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
     {
         coalesce.input().output_partitioning().partition_count() > 1
@@ -652,7 +677,8 @@ pub fn execute_stream(
         1 => plan.execute(0, context),
         _ => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(plan.clone());
+            let plan = Arc::new(CoalescePartitionsExec::new(plan.clone()))
+                as Arc<dyn ExecutionPlan>;
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
             plan.execute(0, context)

@@ -96,6 +96,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};

@@ -38,8 +38,8 @@ use crate::joins::utils::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
     execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;
@@ -189,16 +189,16 @@ impl SortMergeJoinExec {
         &self.on
     }
 
-    pub fn right(&self) -> &dyn ExecutionPlan {
-        self.right.as_ref()
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
     }
 
     pub fn join_type(&self) -> JoinType {
         self.join_type
     }
 
-    pub fn left(&self) -> &dyn ExecutionPlan {
-        self.left.as_ref()
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.

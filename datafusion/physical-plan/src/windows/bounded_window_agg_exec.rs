@@ -35,8 +35,8 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    InputOrderMode, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics, WindowExpr,
+    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
 use arrow::{

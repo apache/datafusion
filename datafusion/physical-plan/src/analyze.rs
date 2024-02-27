@@ -21,7 +21,10 @@ use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{DisplayAs, Distribution, PlanProperties, SendableRecordBatchStream};
+use super::{
+    DisplayAs, Distribution, ExecutionPlanProperties, PlanProperties,
+    SendableRecordBatchStream,
+};
 
 use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};

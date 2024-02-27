@@ -22,7 +22,7 @@ use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::SendableRecordBatchStream;
+use super::{ExecutionPlanProperties, SendableRecordBatchStream};
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 

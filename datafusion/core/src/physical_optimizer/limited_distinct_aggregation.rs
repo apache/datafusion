@@ -25,6 +25,7 @@ use crate::physical_plan::ExecutionPlan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use itertools::Itertools;
 use std::sync::Arc;
 

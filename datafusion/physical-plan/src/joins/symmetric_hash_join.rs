@@ -50,8 +50,8 @@ use crate::{
     expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{

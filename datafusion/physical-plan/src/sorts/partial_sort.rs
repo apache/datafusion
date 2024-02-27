@@ -61,8 +61,8 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::concat_batches;

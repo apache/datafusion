@@ -23,7 +23,10 @@ use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
-use super::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use super::{
+    DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 

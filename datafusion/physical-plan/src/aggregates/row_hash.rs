@@ -32,7 +32,7 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::sorts::sort::{read_spill_as_stream, sort_batch};
 use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
@@ -341,6 +341,7 @@ impl GroupedHashAggregateStream {
             .with_can_spill(true)
             .register(context.memory_pool());
         let (ordering, _) = agg
+            .cache
             .equivalence_properties()
             .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(

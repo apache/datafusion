@@ -1517,7 +1517,7 @@ mod tests {
         WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {

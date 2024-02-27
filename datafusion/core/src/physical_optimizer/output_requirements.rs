@@ -33,7 +33,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::PlanProperties;
+use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -242,7 +242,7 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let req_ordering = sort_exec.output_ordering().unwrap_or(&[]);
+        let req_ordering = plan.output_ordering().unwrap_or(&[]);
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((

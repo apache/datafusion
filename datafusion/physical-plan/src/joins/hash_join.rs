@@ -27,6 +27,7 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
+use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
     execution_mode_from_children, handle_state,

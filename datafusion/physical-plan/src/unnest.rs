@@ -20,7 +20,7 @@
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, PlanProperties};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, PhysicalExpr,
     RecordBatchStream, SendableRecordBatchStream,

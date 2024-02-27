@@ -26,6 +26,7 @@ use super::utils::{
 use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::ExecutionPlanProperties;
 use crate::{
     execution_mode_from_children, ColumnStatistics, DisplayAs, DisplayFormatType,
     Distribution, ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,

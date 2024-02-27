@@ -31,6 +31,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).

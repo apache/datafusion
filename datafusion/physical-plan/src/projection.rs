@@ -29,7 +29,8 @@ use std::task::{Context, Poll};
 use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,

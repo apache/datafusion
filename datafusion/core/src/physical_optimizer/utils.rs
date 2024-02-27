@@ -30,6 +30,7 @@ use crate::physical_plan::ExecutionPlan;
 use datafusion_physical_expr::{LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.

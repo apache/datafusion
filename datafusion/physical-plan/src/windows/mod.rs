@@ -27,7 +27,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, ExecutionPlan, InputOrderMode, PhysicalExpr,
+    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;

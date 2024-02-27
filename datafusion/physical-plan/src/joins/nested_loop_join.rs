@@ -35,8 +35,8 @@ use crate::joins::utils::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{

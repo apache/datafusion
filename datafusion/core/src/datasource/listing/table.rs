@@ -920,6 +920,7 @@ mod tests {
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::ExecutionPlanProperties;
     use tempfile::TempDir;
 
     #[tokio::test]

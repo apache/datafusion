@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, PlanProperties};
+use super::{DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -496,7 +496,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
-        if self.output_ordering().is_some() {
+        if self.cache.output_ordering().is_some() {
             return false;
         }
         // ensure no ordering is required on the input

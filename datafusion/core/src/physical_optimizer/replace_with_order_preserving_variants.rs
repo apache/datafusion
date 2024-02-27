@@ -32,6 +32,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 
+use datafusion_physical_plan::ExecutionPlanProperties;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
