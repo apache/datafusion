@@ -443,10 +443,10 @@ where
             join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
     }
-    let mut requirements = join_plan;
-    requirements.children[0].data = left_keys;
-    requirements.children[1].data = right_keys;
-    Ok(requirements)
+
+    join_plan.children[0].data = left_keys;
+    join_plan.children[1].data = right_keys;
+    Ok(join_plan)
 }
 
 fn reorder_aggregate_keys(
@@ -1299,8 +1299,7 @@ pub(crate) mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::ParquetExec;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::{
