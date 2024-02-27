@@ -182,8 +182,6 @@ pub enum BuiltinScalarFunction {
     MakeArray,
     /// Flatten
     Flatten,
-    /// Range
-    Range,
 
     // struct functions
     /// struct
@@ -424,7 +422,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
-            BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -634,9 +631,6 @@ impl BuiltinScalarFunction {
                     (dt, DataType::Null) => Ok(dt),
                     (dt, _) => Ok(dt),
                 }
-            }
-            BuiltinScalarFunction::Range => {
-                Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
             BuiltinScalarFunction::ArrayExcept => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
@@ -966,14 +960,6 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
 
-            BuiltinScalarFunction::Range => Signature::one_of(
-                vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Struct => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
@@ -1593,7 +1579,6 @@ impl BuiltinScalarFunction {
                 &["array_intersect", "list_intersect"]
             }
             BuiltinScalarFunction::OverLay => &["overlay"],
-            BuiltinScalarFunction::Range => &["range", "generate_series"],
 
             // struct functions
             BuiltinScalarFunction::Struct => &["struct"],

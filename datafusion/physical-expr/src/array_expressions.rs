@@ -39,7 +39,6 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     DataFusionError, Result, ScalarValue,
 };
-
 use itertools::Itertools;
 
 macro_rules! downcast_arg {
