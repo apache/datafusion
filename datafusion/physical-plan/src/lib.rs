@@ -460,6 +460,9 @@ pub enum ExecutionMode {
     /// Represents the mode where generated stream is unbounded, e.g. infinite.
     /// Even though the operator generates an unbounded stream of results, it
     /// works with bounded memory and execution can still continue successfully.
+    ///
+    /// The stream that results from calling `execute` on an `ExecutionPlan` that is `Unbounded` 
+    /// will never be done (return `None`), except in case of error.
     Unbounded,
     /// Represents the mode where some of the operator's input stream(s) are
     /// unbounded; however, the operator cannot generate streaming results from
