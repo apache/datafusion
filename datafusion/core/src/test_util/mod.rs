@@ -46,6 +46,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -55,7 +56,6 @@ use tempfile::TempDir;
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
-use datafusion_physical_expr::EquivalenceProperties;
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -246,6 +246,7 @@ impl UnboundedExec {
         }
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         schema: SchemaRef,
         batch_produce: Option<usize>,

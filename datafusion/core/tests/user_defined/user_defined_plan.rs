@@ -81,6 +81,7 @@ use datafusion::{
         UserDefinedLogicalNodeCore,
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
+    physical_expr::EquivalenceProperties,
     physical_plan::{
         DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
         Partitioning, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
@@ -91,7 +92,6 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
-use datafusion_physical_expr::EquivalenceProperties;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -421,6 +421,7 @@ impl TopKExec {
         Self { input, k, cache }
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
         let eq_properties = EquivalenceProperties::new(schema);
 

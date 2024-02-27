@@ -73,6 +73,7 @@ impl CoalesceBatchesExec {
         self.target_batch_size
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
         // The coalesce batches operator does not make any changes to the
         // partitioning of its input.

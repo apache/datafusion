@@ -37,7 +37,7 @@ use crate::{
         check_join_is_valid, estimate_join_statistics, get_final_indices_from_bit_map,
         need_produce_result_in_final, partitioned_join_output_partitioning,
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
-        JoinHashMapType, JoinOn, StatefulStreamResult,
+        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
@@ -65,7 +65,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 
-use crate::joins::utils::JoinOnRef;
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -406,6 +405,7 @@ impl HashJoinExec {
         JoinSide::Right
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,

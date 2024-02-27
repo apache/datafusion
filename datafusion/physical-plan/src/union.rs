@@ -111,6 +111,7 @@ impl UnionExec {
         &self.inputs
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         inputs: &[Arc<dyn ExecutionPlan>],
         schema: SchemaRef,
@@ -340,6 +341,7 @@ impl InterleaveExec {
         &self.inputs
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(inputs: &[Arc<dyn ExecutionPlan>]) -> PlanPropertiesCache {
         let schema = union_schema(inputs);
         let eq_properties = EquivalenceProperties::new(schema);

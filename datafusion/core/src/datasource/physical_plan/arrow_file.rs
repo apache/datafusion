@@ -84,6 +84,7 @@ impl ArrowExec {
         Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         schema: SchemaRef,
         projected_output_ordering: &[LexOrdering],

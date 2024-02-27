@@ -180,6 +180,7 @@ impl PartialSortExec {
         }
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,

@@ -616,12 +616,8 @@ impl RepartitionExec {
         input: &Arc<dyn ExecutionPlan>,
         preserve_order: bool,
     ) -> Vec<bool> {
-        if preserve_order {
-            vec![true]
-        } else {
-            // We preserve ordering when input partitioning is 1
-            vec![input.output_partitioning().partition_count() <= 1]
-        }
+        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
+        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
     }
 
     fn eq_properties_helper(
@@ -637,6 +633,7 @@ impl RepartitionExec {
         eq_properties
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(
         input: &Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,

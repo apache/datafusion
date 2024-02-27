@@ -86,6 +86,7 @@ impl CustomExecutionPlan {
         Self { projection, cache }
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
         let eq_properties = EquivalenceProperties::new(schema);
         PlanPropertiesCache::new(

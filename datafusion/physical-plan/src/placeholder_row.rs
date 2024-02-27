@@ -94,6 +94,7 @@ impl PlaceholderRowExec {
         Partitioning::UnknownPartitioning(n_partitions)
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
