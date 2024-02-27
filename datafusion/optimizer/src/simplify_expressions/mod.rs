@@ -19,6 +19,7 @@ pub mod context;
 pub mod expr_simplifier;
 mod guarantees;
 mod inlist_simplifier;
+mod function_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod utils;

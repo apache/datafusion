@@ -19,6 +19,14 @@
 
 use std::ops::Not;
 
+use super::function_simplifier::FunctionSimplifier;
+use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
+use super::utils::*;
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
@@ -137,6 +145,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
+        let mut function_simplifier = FunctionSimplifier::new();
 
         let expr = if self.canonicalize {
             expr.rewrite(&mut Canonicalizer::new())?
@@ -148,7 +157,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)?
+        expr.rewrite(&mut function_simplifier)?
+            .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut inlist_simplifier)?
             .rewrite(&mut shorten_in_list_simplifier)?
