@@ -27,7 +27,7 @@ COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'format.p
 
 # Copy to directory as partitioned files
 query IT
-COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, compression 'zstd(10)', partition_by 'col2');
+COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, 'format.parquet.compression' 'zstd(10)', partition_by 'col2');
 ----
 2
 
@@ -55,7 +55,7 @@ select * from validate_partitioned_parquet_bar order by col1;
 # Copy to directory as partitioned files
 query ITT
 COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
-(format parquet, compression 'zstd(10)', partition_by 'column2, column3');
+(format parquet, partition_by 'column2, column3', 'format.parquet.compression' 'zstd(10)');
 ----
 3
 
@@ -83,7 +83,7 @@ select * from validate_partitioned_parquet_a_x order by column1;
 # Copy to directory as partitioned files
 query TTT
 COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
-(format parquet, compression 'zstd(10)', partition_by 'column1, column3');
+(format parquet, 'format.parquet.compression' 'zstd(10)', partition_by 'column1, column3');
 ----
 3
 
@@ -383,7 +383,7 @@ COPY source_table  to 'test_files/scratch/copy/table.json';
 
 # Validate single JSON file`
 statement ok
-CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/copy/table_json';
+CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/copy/table_json' OPTIONS;
 
 query IT
 select * from validate_single_json;
