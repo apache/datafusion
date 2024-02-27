@@ -39,7 +39,7 @@ prost-types = "0.12"
 substrait = "0.24.0"
 
 [dev-dependencies]
-tokio = "1.17"
+tokio = { workspace = true }
 
 [features]
 protoc = ["substrait/protoc"]

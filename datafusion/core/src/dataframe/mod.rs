@@ -49,8 +49,8 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
-    SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions,
+    ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
@@ -73,6 +73,9 @@ pub struct DataFrameWriteOptions {
     /// Allows compression of CSV and JSON.
     /// Not supported for parquet.
     compression: CompressionTypeVariant,
+    /// Sets which columns should be used for hive-style partitioned writes by name.
+    /// Can be set to empty vec![] for non-partitioned writes.
+    partition_by: Vec<String>,
 }
 
 impl DataFrameWriteOptions {
@@ -82,6 +85,7 @@ impl DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
             compression: CompressionTypeVariant::UNCOMPRESSED,
+            partition_by: vec![],
         }
     }
     /// Set the overwrite option to true or false
@@ -99,6 +103,12 @@ impl DataFrameWriteOptions {
     /// Sets the compression type applied to the output file(s)
     pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Sets the partition_by columns for output partitioning
+    pub fn with_partition_by(mut self, partition_by: Vec<String>) -> Self {
+        self.partition_by = partition_by;
         self
     }
 }
@@ -1034,6 +1044,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        if matches!(self.plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -1106,17 +1119,15 @@ impl DataFrame {
         ))
     }
 
-    /// Write this DataFrame to the referenced table by name.
+    /// Execute this `DataFrame` and write the results to `table_name`.
     ///
-    /// This method uses on the same underlying implementation
-    /// as the SQL Insert Into statement. Unlike most other DataFrame methods,
-    /// this method executes eagerly. Data is written to the table using an
-    /// execution plan returned by the [TableProvider]'s insert_into method.
-    /// Refer to the documentation of the specific [TableProvider] to determine
-    /// the expected data returned by the insert_into plan via this method.
-    /// For the built in ListingTable provider, a single [RecordBatch] containing
-    /// a single column and row representing the count of total rows written
-    /// is returned.
+    /// Returns a single [RecordBatch] containing a single column and
+    /// row representing the count of total rows written.
+    ///
+    /// Unlike most other `DataFrame` methods, this method executes eagerly.
+    /// Data is written to the table using the [`TableProvider::insert_into`]
+    /// method. This is the same underlying implementation used by SQL `INSERT
+    /// INTO` statements.
     pub async fn write_table(
         self,
         table_name: &str,
@@ -1139,6 +1150,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1151,6 +1163,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify CSV writing options here
     /// ).await?;
+    /// # fs::remove_file("output.csv")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1178,6 +1191,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
@@ -1190,6 +1204,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1201,6 +1216,7 @@ impl DataFrame {
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
     /// ).await?;
+    /// # fs::remove_file("output.json")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1221,6 +1237,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
@@ -1671,6 +1688,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2154,6 +2172,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn sendable() {
         let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
@@ -2958,6 +2977,17 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn nested_explain_should_fail() -> Result<()> {
+        let ctx = SessionContext::new();
+        // must be error
+        let mut result = ctx.sql("explain select 1").await?.explain(false, false);
+        assert!(result.is_err());
+        // must be error
+        result = ctx.sql("explain explain select 1").await;
+        assert!(result.is_err());
         Ok(())
     }
 }

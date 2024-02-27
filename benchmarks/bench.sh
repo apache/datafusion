@@ -278,7 +278,7 @@ data_tpch() {
         echo " tbl files exist ($FILE exists)."
     else
         echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/databloom-ai/tpch-docker:main -vf -s ${SCALE_FACTOR}
+        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s ${SCALE_FACTOR}
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -288,7 +288,7 @@ data_tpch() {
     else
         echo " Copying answers to ${TPCH_DIR}/answers"
         mkdir -p "${TPCH_DIR}/answers"
-        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/databloom-ai/tpch-docker:main -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
+        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
     # Create 'parquet' files from tbl

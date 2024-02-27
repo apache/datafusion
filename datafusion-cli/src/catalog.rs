@@ -15,19 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::object_storage::get_object_store;
 use async_trait::async_trait;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion::common::{plan_datafusion_err, DataFusionError};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
-use object_store::http::HttpBuilder;
-use object_store::ObjectStore;
 use parking_lot::RwLock;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use url::Url;
 
@@ -145,45 +146,49 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.inner.register_table(name, table)
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let inner_table = self.inner.table(name).await;
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let inner_table = self.inner.table(name).await?;
         if inner_table.is_some() {
-            return inner_table;
+            return Ok(inner_table);
         }
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self.state.upgrade()?.read().clone();
-        let table_url = ListingTableUrl::parse(name).ok()?;
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| plan_datafusion_err!("locking error"))?
+            .read()
+            .clone();
+        let table_url = ListingTableUrl::parse(name)?;
+        let url: &Url = table_url.as_ref();
 
-        // Assure the `http` store for this url is registered if this
-        // is an `http(s)` listing
-        // TODO: support for other types, e.g. `s3`, may need to be added
-        match table_url.scheme() {
-            "http" | "https" => {
-                let url: &Url = table_url.as_ref();
-                match state.runtime_env().object_store_registry.get_store(url) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        let store = Arc::new(
-                            HttpBuilder::new()
-                                .with_url(url.origin().ascii_serialization())
-                                .build()
-                                .ok()?,
-                        ) as Arc<dyn ObjectStore>;
-                        state.runtime_env().register_object_store(url, store);
-                    }
-                }
+        // If the store is already registered for this URL then `get_store`
+        // will return `Ok` which means we don't need to register it again. However,
+        // if `get_store` returns an `Err` then it means the corresponding store is
+        // not registered yet and we need to register it
+        match state.runtime_env().object_store_registry.get_store(url) {
+            Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
+            Err(_) => {
+                // Register the store for this URL. Here we don't have access
+                // to any command options so the only choice is to use an empty collection
+                let mut options = HashMap::new();
+                let store =
+                    get_object_store(&state, &mut options, table_url.scheme(), url)
+                        .await?;
+                state.runtime_env().register_object_store(url, store);
             }
-            _ => {}
         }
 
-        let config = ListingTableConfig::new(table_url)
-            .infer(&state)
-            .await
-            .ok()?;
+        let config = match ListingTableConfig::new(table_url).infer(&state).await {
+            Ok(cfg) => cfg,
+            Err(_) => {
+                // treat as non-existing
+                return Ok(None);
+            }
+        };
 
-        Some(Arc::new(ListingTable::try_new(config).ok()?))
+        Ok(Some(Arc::new(ListingTable::try_new(config)?)))
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -198,15 +203,10 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::catalog::schema::SchemaProvider;
     use datafusion::prelude::SessionContext;
 
-    #[tokio::test]
-    async fn query_http_location_test() -> Result<()> {
-        // Perhaps this could be changed to use an existing file but
-        // that will require a permanently availalble web resource
-        let domain = "example.com";
-        let location = format!("http://{domain}/file.parquet");
-
+    fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let mut ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
             ctx.state().catalog_list(),
@@ -222,12 +222,23 @@ mod tests {
         let schema = catalog
             .schema(catalog.schema_names().first().unwrap())
             .unwrap();
-        let none = schema.table(&location).await;
+        (ctx, schema)
+    }
 
-        // That's a non-existing location so expecting None here
-        assert!(none.is_none());
+    #[tokio::test]
+    async fn query_http_location_test() -> Result<()> {
+        // This is a unit test so not expecting a connection or a file to be
+        // available
+        let domain = "example.com";
+        let location = format!("http://{domain}/file.parquet");
 
-        // It should still create an object store for the location
+        let (ctx, schema) = setup_context();
+
+        // That's a non registered table so expecting None here
+        let table = schema.table(&location).await.unwrap();
+        assert!(table.is_none());
+
+        // It should still create an object store for the location in the SessionState
         let store = ctx
             .runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
@@ -239,5 +250,57 @@ mod tests {
         assert!(format!("{store:?}").contains(&expected_domain));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_s3_location_test() -> Result<()> {
+        let bucket = "examples3bucket";
+        let location = format!("s3://{bucket}/file.parquet");
+
+        let (ctx, schema) = setup_context();
+
+        let table = schema.table(&location).await.unwrap();
+        assert!(table.is_none());
+
+        let store = ctx
+            .runtime_env()
+            .object_store(ListingTableUrl::parse(location)?)?;
+        assert_eq!(format!("{store}"), format!("AmazonS3({bucket})"));
+
+        // The store must be configured for this domain
+        let expected_bucket = format!("bucket: \"{bucket}\"");
+        assert!(format!("{store:?}").contains(&expected_bucket));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_gs_location_test() -> Result<()> {
+        let bucket = "examplegsbucket";
+        let location = format!("gs://{bucket}/file.parquet");
+
+        let (ctx, schema) = setup_context();
+
+        let table = schema.table(&location).await.unwrap();
+        assert!(table.is_none());
+
+        let store = ctx
+            .runtime_env()
+            .object_store(ListingTableUrl::parse(location)?)?;
+        assert_eq!(format!("{store}"), format!("GoogleCloudStorage({bucket})"));
+
+        // The store must be configured for this domain
+        let expected_bucket = format!("bucket_name_encoded: \"{bucket}\"");
+        assert!(format!("{store:?}").contains(&expected_bucket));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_invalid_location_test() {
+        let location = "ts://file.parquet";
+        let (_ctx, schema) = setup_context();
+
+        assert!(schema.table(location).await.is_err());
     }
 }

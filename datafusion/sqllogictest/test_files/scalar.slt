@@ -575,6 +575,12 @@ select log(null, null) a, log(null) b;
 ----
 NULL NULL
 
+# log scalar fraction
+query RR rowsort
+select log(2, 2.0/3) a, log(10, 2.0/3) b;
+----
+-0.584962500721 -0.176091259056
+
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
@@ -614,6 +620,12 @@ select log10(null);
 ----
 NULL
 
+# log10 scalar fraction
+query R rowsort
+select log10(2.0/3);
+----
+-0.176091259056
+
 # log10 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
@@ -643,6 +655,12 @@ query R rowsort
 select log2(null);
 ----
 NULL
+
+# log2 scalar fraction
+query R rowsort
+select log2(2.0/3);
+----
+-0.584962500721
 
 # log2 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
@@ -1840,8 +1858,9 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+statement error DataFusion error: Failed to coerce arguments for NULLIF
 SELECT nullif(1);
+
 
 # error message for wrong function signature (Exact: exact number of args of an exact type)
 statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
@@ -1994,5 +2013,5 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The "instr" function can only accept strings, but got Int64\.
+query error DataFusion error: Error during planning: The INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)

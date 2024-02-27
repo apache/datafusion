@@ -56,12 +56,14 @@ cargo run --example csv_sql
 - [`flight_sql_server.rs`](examples/flight/flight_sql_server.rs): Run DataFusion as a standalone process and execute SQL queries from JDBC clients
 - [`make_date.rs`](examples/make_date.rs): Examples of using the make_date function
 - [`memtable.rs`](examples/memtable.rs): Create an query data in memory using SQL and `RecordBatch`es
+- [`pruning.rs`](examples/parquet_sql.rs): Use pruning to rule out files based on statistics
 - [`parquet_sql.rs`](examples/parquet_sql.rs): Build and run a query plan from a SQL statement against a local Parquet file
 - [`parquet_sql_multiple_files.rs`](examples/parquet_sql_multiple_files.rs): Build and run a query plan from a SQL statement against multiple local Parquet files
 - [`query-aws-s3.rs`](examples/external_dependency/query-aws-s3.rs): Configure `object_store` and run a query against files stored in AWS S3
 - [`query-http-csv.rs`](examples/query-http-csv.rs): Configure `object_store` and run a query against files vi HTTP
 - [`regexp.rs`](examples/regexp.rs): Examples of using regular expression functions
 - [`rewrite_expr.rs`](examples/rewrite_expr.rs): Define and invoke a custom Query Optimizer pass
+- [`to_char.rs`](examples/to_char.rs): Examples of using the to_char function
 - [`to_timestamp.rs`](examples/to_timestamp.rs): Examples of using to_timestamp functions
 - [`simple_udf.rs`](examples/simple_udf.rs): Define and invoke a User Defined Scalar Function (UDF)
 - [`advanced_udf.rs`](examples/advanced_udf.rs): Define and invoke a more complicated User Defined Scalar Function (UDF)

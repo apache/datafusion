@@ -29,6 +29,30 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[[example]]
+name = "flight_sql_server"
+path = "examples/flight/flight_sql_server.rs"
+
+[[example]]
+name = "flight_server"
+path = "examples/flight/flight_server.rs"
+
+[[example]]
+name = "flight_client"
+path = "examples/flight/flight_client.rs"
+
+[[example]]
+name = "catalog"
+path = "examples/external_dependency/catalog.rs"
+
+[[example]]
+name = "dataframe_to_s3"
+path = "examples/external_dependency/dataframe-to-s3.rs"
+
+[[example]]
+name = "query_aws_s3"
+path = "examples/external_dependency/query-aws-s3.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
@@ -53,7 +77,8 @@ prost-derive = { version = "0.12", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.11"
+tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
+# 0.10 and 0.11 are incompatible. Need to upgrade tonic to 0.11 when upgrading to arrow 51
+tonic = "0.10"
 url = { workspace = true }
 uuid = "1.2"

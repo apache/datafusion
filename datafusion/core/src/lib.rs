@@ -521,6 +521,12 @@ pub mod functions {
     pub use datafusion_functions::*;
 }
 
+/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
+pub mod functions_array {
+    #[cfg(feature = "array_expressions")]
+    pub use datafusion_functions::*;
+}
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

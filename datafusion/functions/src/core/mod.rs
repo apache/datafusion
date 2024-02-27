@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_proto::bytes::Serializeable;
+//! "core" DataFusion functions
 
-fn main() -> Result<()> {
-    // Create a new `Expr` a < 32
-    let expr = col("a").lt(lit(5i32));
+mod nullif;
+mod nvl;
 
-    // Convert it to an opaque form
-    let bytes = expr.to_bytes()?;
+// create UDFs
+make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
+make_udf_function!(nvl::NVLFunc, NVL, nvl);
 
-    // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes)?;
-    assert_eq!(expr, decoded_expr);
-    Ok(())
-}
+// Export the functions out of this package, both as expr_fn as well as a list of functions
+export_functions!(
+    (nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."),
+    (nvl, arg_1 arg_2, "returns value2 if value1 is NULL; otherwise it returns value1")
+);
+

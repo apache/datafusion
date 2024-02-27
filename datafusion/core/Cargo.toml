@@ -38,19 +38,33 @@ path = "src/lib.rs"
 
 [features]
 # Used to enable the avro format
+array_expressions = ["datafusion-functions-array"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
+default = [
+    "array_expressions",
+    "crypto_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "unicode_expressions",
+    "compression",
+    "parquet",
+]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
+math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
 serde = ["arrow-schema/serde"]
-unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusion-optimizer/unicode_expressions", "datafusion-sql/unicode_expressions"]
+unicode_expressions = [
+    "datafusion-physical-expr/unicode_expressions",
+    "datafusion-optimizer/unicode_expressions",
+    "datafusion-sql/unicode_expressions",
+]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -59,18 +73,26 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
-async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
+async-compression = { version = "0.4.0", features = [
+    "bzip2",
+    "gzip",
+    "xz",
+    "zstd",
+    "futures-io",
+    "tokio",
+], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "35.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { path = "../common", version = "36.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { path = "../functions", version = "35.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "35.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
+datafusion-functions = { workspace = true }
+datafusion-functions-array = { workspace = true, optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "36.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "36.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
@@ -90,16 +112,17 @@ pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt",  "sync"] }
+tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
-xz2 = { version = "0.1", optional = true }
+xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
+cargo = "0.77.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = { workspace = true }
@@ -116,10 +139,10 @@ rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
 test-utils = { path = "../../test-utils" }
 thiserror = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.27.1", features = ["fs"] }
+nix = { version = "0.28.0", features = ["fs"] }
 
 [[bench]]
 harness = false

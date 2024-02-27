@@ -15,22 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
-use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+//! "math" DataFusion functions
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await?;
-    let dataframe = ctx.table("t1").await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let bytes = physical_plan_to_bytes(physical_plan.clone())?;
-    let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(
-        format!("{physical_plan:?}"),
-        format!("{physical_round_trip:?}")
-    );
-    Ok(())
-}
+mod nans;
+mod abs;
+
+// create  UDFs
+make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
+make_udf_function!(abs::AbsFunc, ABS, abs);
+
+// Export the functions out of this package, both as expr_fn as well as a list of functions
+export_functions!(
+    (isnan, num, "returns true if a given number is +NaN or -NaN otherwise returns false"),
+    (abs, num, "returns the absolute value of a given number")
+);

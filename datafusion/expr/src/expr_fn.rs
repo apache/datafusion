@@ -557,7 +557,6 @@ nary_scalar_expr!(
     trunc,
     "truncate toward zero, with optional precision"
 );
-scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
@@ -565,7 +564,6 @@ scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
 scalar_expr!(Log2, log2, num, "base 2 logarithm");
 scalar_expr!(Log10, log10, num, "base 10 logarithm");
 scalar_expr!(Ln, ln, num, "natural logarithm");
-scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(
@@ -740,12 +738,6 @@ scalar_expr!(
     array begin end stride,
     "returns a slice of the array."
 );
-scalar_expr!(
-    ArrayToString,
-    array_to_string,
-    array delimiter,
-    "converts each element to its text representation."
-);
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
@@ -896,6 +888,12 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
+scalar_expr!(
+    ToChar,
+    to_char,
+    datetime format,
+    "converts a date, time, timestamp or duration to a string based on the provided format"
+);
 nary_scalar_expr!(
     ToTimestamp,
     to_timestamp,
@@ -932,12 +930,6 @@ scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the sam
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
-scalar_expr!(
-    Isnan,
-    isnan,
-    num,
-    "returns true if a given number is +NaN or -NaN otherwise returns false"
-);
 scalar_expr!(
     Iszero,
     iszero,
@@ -1361,7 +1353,6 @@ mod test {
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_nary_scalar_expr!(Trunc, trunc, num);
         test_nary_scalar_expr!(Trunc, trunc, num, precision);
-        test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
         test_unary_scalar_expr!(Log2, log2);
@@ -1369,7 +1360,6 @@ mod test {
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
         test_scalar_expr!(Nanvl, nanvl, x, y);
-        test_scalar_expr!(Isnan, isnan, input);
         test_scalar_expr!(Iszero, iszero, input);
 
         test_scalar_expr!(Ascii, ascii, input);
@@ -1454,7 +1444,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
 

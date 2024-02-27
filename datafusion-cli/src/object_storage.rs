@@ -17,8 +17,12 @@
 
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
+use datafusion::common::exec_datafusion_err;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::SessionState;
 use object_store::aws::AwsCredential;
+use object_store::http::HttpBuilder;
+use object_store::ObjectStore;
 use object_store::{
     aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, CredentialProvider,
 };
@@ -154,6 +158,44 @@ fn get_bucket_name(url: &Url) -> Result<&str> {
             url.as_str()
         ))
     })
+}
+
+pub(crate) async fn get_object_store(
+    state: &SessionState,
+    options: &mut HashMap<String, String>,
+    scheme: &str,
+    url: &Url,
+) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
+    let store = match scheme {
+        "s3" => {
+            let builder = get_s3_object_store_builder(url, options).await?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "oss" => {
+            let builder = get_oss_object_store_builder(url, options)?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "gs" | "gcs" => {
+            let builder = get_gcs_object_store_builder(url, options)?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "http" | "https" => Arc::new(
+            HttpBuilder::new()
+                .with_url(url.origin().ascii_serialization())
+                .build()?,
+        ) as Arc<dyn ObjectStore>,
+        _ => {
+            // for other types, try to get from the object_store_registry
+            state
+                .runtime_env()
+                .object_store_registry
+                .get_store(url)
+                .map_err(|_| {
+                    exec_datafusion_err!("Unsupported object store scheme: {}", scheme)
+                })?
+        }
+    };
+    Ok(store)
 }
 
 #[cfg(test)]

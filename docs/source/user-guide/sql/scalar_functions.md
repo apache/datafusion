@@ -569,6 +569,8 @@ trunc(numeric_expression[, decimal_places])
 
 - [coalesce](#coalesce)
 - [nullif](#nullif)
+- [nvl](#nvl)
+- [ifnull](#ifnull)
 
 ### `coalesce`
 
@@ -602,6 +604,25 @@ nullif(expression1, expression2)
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression2**: Expression to compare to expression1.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl`
+
+Returns _expression2_ if _expression1_ is NULL; otherwise it returns _expression1_.
+
+```
+nvl(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: return if expression1 not is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `ifnull`
+
+_Alias of [nvl](#nvl)._
 
 ## String Functions
 
@@ -722,7 +743,7 @@ concat(str[, ..., str_n])
 - **str_n**: Subsequent string column or literal string to concatenate.
 
 **Related functions**:
-[contcat_ws](#contcat_ws)
+[concat_ws](#concat_ws)
 
 ### `concat_ws`
 
@@ -1298,13 +1319,13 @@ regexp_like(str, regexp[, flags])
 #### Example
 
 ```sql
-❯ select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
 | regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
 +--------------------------------------------------------+
 | true                                                   |
 +--------------------------------------------------------+
-❯ SELECT regexp_like('aBc', '(b|d)', 'i');
+SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 | regexp_like(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
 +--------------------------------------------------+
@@ -1312,15 +1333,11 @@ regexp_like(str, regexp[, flags])
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_match`
 
-Returns a list of [regular expression] matches in a string.
-
-[regular expression]: https://docs.rs/regex/latest/regex/#syntax
+Returns a list of [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
 
 ```
 regexp_match(str, regexp[, flags])
@@ -1343,13 +1360,13 @@ regexp_match(str, regexp[, flags])
 #### Example
 
 ```sql
-❯ select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +---------------------------------------------------------+
 | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
 +---------------------------------------------------------+
 | [Köln]                                                  |
 +---------------------------------------------------------+
-❯ SELECT regexp_match('aBc', '(b|d)', 'i');
+SELECT regexp_match('aBc', '(b|d)', 'i');
 +---------------------------------------------------+
 | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
 +---------------------------------------------------+
@@ -1357,15 +1374,11 @@ regexp_match(str, regexp[, flags])
 +---------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `regexp_replace`
 
-Replaces substrings in a string that match a [regular expression].
-
-[regular expression]: https://docs.rs/regex/latest/regex/#syntax
+Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).
 
 ```
 regexp_replace(str, regexp, replacement[, flags])
@@ -1391,13 +1404,13 @@ regexp_replace(str, regexp, replacement[, flags])
 #### Example
 
 ```sql
-❯ SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+
 | regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
 +------------------------------------------------------------------------+
 | fooXarYXazY                                                            |
 +------------------------------------------------------------------------+
-❯ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
+SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 | regexp_replace(Utf8("aBc"),Utf8("(b|d)"),Utf8("Ab\1a"),Utf8("i")) |
 +-------------------------------------------------------------------+
@@ -1405,9 +1418,7 @@ regexp_replace(str, regexp, replacement[, flags])
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
 ### `position`
 
@@ -1435,6 +1446,7 @@ position(substr in origstr)
 - [extract](#extract)
 - [today](#today)
 - [make_date](#make_date)
+- [to_char](#to_char)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1657,9 +1669,43 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+
+### `to_char`
+
+Returns a string representation of a date, time, timestamp or duration based
+on a [Chrono format]. Unlike the PostgreSQL equivalent of this function
+numerical formatting is not supported.
+
+```
+to_char(expression, format)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function that results in a
+  date, time, timestamp or duration.
+- **format**: A [Chrono format] string to use to convert the expression.
+
+#### Example
+
+```
+❯ ❯ select to_char('2023-03-01'::date, '%d-%m-%Y');
++----------------------------------------------+
+| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
++----------------------------------------------+
+| 01-03-2023                                   |
++----------------------------------------------+
+```
+
 Additional examples can be found [here]
 
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/make_date.rs
+[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_char.rs
+
+#### Aliases
+
+- date_format
 
 ### `to_timestamp`
 
@@ -1704,9 +1750,7 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_millis`
 
@@ -1745,9 +1789,7 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_micros`
 
@@ -1786,9 +1828,7 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_nanos`
 
@@ -1827,9 +1867,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `to_timestamp_seconds`
 
@@ -1868,9 +1906,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here]
-
-[here]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs
+Additional examples can be found [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 
 ### `from_unixtime`
 
@@ -1920,6 +1956,7 @@ from_unixtime(expression)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
+- [generate_series](#generate_series)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
 - [list_cat](#list_cat)
@@ -2052,6 +2089,10 @@ array_concat(array[, ..., array_n])
 - array_cat
 - list_cat
 - list_concat
+
+### `array_contains`
+
+_Alias of [array_has](#array_has)._
 
 ### `array_has`
 
@@ -2862,6 +2903,10 @@ empty(array)
 +------------------+
 ```
 
+### `generate_series`
+
+_Alias of [range](#range)._
+
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
@@ -3071,6 +3116,10 @@ Step can not be 0 (then the range will be nonsense.).
 - **end**: end of the range (not included)
 - **step**: increase by step (can not be 0)
 
+#### Aliases
+
+- generate_series
+
 ## Struct Functions
 
 - [struct](#struct)
@@ -3088,8 +3137,8 @@ struct(expression1[, ..., expression_n])
 For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `c0` and `c1`:
 
-```sql
-❯ select * from t;
+```
+select * from t;
 +---+---+
 | a | b |
 +---+---+
@@ -3097,7 +3146,7 @@ a struct type of fields `c0` and `c1`:
 | 3 | 4 |
 +---+---+
 
-❯ select struct(a, b) from t;
+select struct(a, b) from t;
 +-----------------+
 | struct(t.a,t.b) |
 +-----------------+

@@ -77,7 +77,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -88,8 +87,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
-        let mut combined_schema = (**projected_plan.schema()).clone();
-        combined_schema.merge(base_plan.schema());
+        // Place the fields of the base plan at the front so that when there are references
+        // with the same name, the fields of the base plan will be searched first.
+        // See https://github.com/apache/arrow-datafusion/issues/9162
+        let mut combined_schema = base_plan.schema().as_ref().clone();
+        combined_schema.merge(projected_plan.schema());
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);

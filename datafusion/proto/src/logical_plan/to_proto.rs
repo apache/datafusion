@@ -606,6 +606,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
+                // TODO: support null treatment in proto
+                null_treatment: _,
             }) => {
                 let window_function = match fun {
                     WindowFunctionDefinition::AggregateFunction(fun) => {
@@ -1448,7 +1450,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::Abs => Self::Abs,
             BuiltinScalarFunction::OctetLength => Self::OctetLength,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::Lower => Self::Lower,
@@ -1456,6 +1457,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Trim => Self::Trim,
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
+            BuiltinScalarFunction::ToChar => Self::ToChar,
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArraySort => Self::ArraySort,
@@ -1486,13 +1488,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
-            BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
             BuiltinScalarFunction::Range => Self::Range,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
-            BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
             BuiltinScalarFunction::DateBin => Self::DateBin,
@@ -1547,7 +1547,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
             BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
-            BuiltinScalarFunction::Isnan => Self::Isnan,
             BuiltinScalarFunction::Iszero => Self::Iszero,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             BuiltinScalarFunction::OverLay => Self::OverLay,

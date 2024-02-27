@@ -63,7 +63,7 @@ async fn create_external_table_with_ddl() -> Result<()> {
     let exists = schema.table_exist("dt");
     assert!(exists, "Table should have been created!");
 
-    let table_schema = schema.table("dt").await.unwrap().schema();
+    let table_schema = schema.table("dt").await.unwrap().unwrap().schema();
 
     assert_eq!(3, table_schema.fields().len());
 

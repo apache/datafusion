@@ -203,9 +203,44 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::ArrayIndex { obj, indexes } => {
+                fn is_unsupported(expr: &SQLExpr) -> bool {
+                    matches!(expr, SQLExpr::JsonAccess { .. })
+                }
+                fn simplify_array_index_expr(expr: Expr, index: Expr) -> (Expr, bool) {
+                    match &expr {
+                        Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
+                            let mut new_args = agg_func.args.clone();
+                            new_args.push(index.clone());
+                            (Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new(
+                                datafusion_expr::AggregateFunction::NthValue,
+                                new_args,
+                                agg_func.distinct,
+                                agg_func.filter.clone(),
+                                agg_func.order_by.clone(),
+                            )), true)
+                        },
+                        _ => (expr, false),
+                    }
+                }
                 let expr =
                     self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                self.plan_indexed(expr, indexes, schema, planner_context)
+                if indexes.len() > 1 || is_unsupported(&indexes[0]) {
+                    return self.plan_indexed(expr, indexes, schema, planner_context);
+                }
+                let (new_expr, changed) = simplify_array_index_expr(
+                    expr,
+                    self.sql_expr_to_logical_expr(
+                        indexes[0].clone(),
+                        schema,
+                        planner_context,
+                    )?,
+                );
+
+                if changed {
+                    Ok(new_expr)
+                } else {
+                    self.plan_indexed(new_expr, indexes, schema, planner_context)
+                }
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -557,7 +592,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             limit,
             within_group,
         } = array_agg;
-
         let order_by = if let Some(order_by) = order_by {
             Some(self.order_by_to_sort_expr(
                 &order_by,
@@ -581,10 +615,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
 
         // next, aggregate built-ins
-        let fun = AggregateFunction::ArrayAgg;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None, order_by,
+            AggregateFunction::ArrayAgg,
+            args,
+            distinct,
+            None,
+            order_by,
         )))
+        // see if we can rewrite it into NTH-VALUE
     }
 
     fn sql_in_list_to_expr(

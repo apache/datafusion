@@ -36,6 +36,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -782,7 +783,7 @@ impl SessionContext {
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(&table).await {
+            if let Some(table_provider) = schema.table(&table).await? {
                 if table_provider.table_type() == table_type {
                     schema.deregister_table(&table)?;
                     return Ok(true);
@@ -949,7 +950,29 @@ impl SessionContext {
             .build()?,
         ))
     }
-
+    /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
+    pub fn read_batches(
+        &self,
+        batches: impl IntoIterator<Item = RecordBatch>,
+    ) -> Result<DataFrame> {
+        // check schema uniqueness
+        let mut batches = batches.into_iter().peekable();
+        let schema = if let Some(batch) = batches.peek() {
+            batch.schema().clone()
+        } else {
+            Arc::new(Schema::empty())
+        };
+        let provider = MemTable::try_new(schema, vec![batches.collect()])?;
+        Ok(DataFrame::new(
+            self.state(),
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        ))
+    }
     /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
@@ -1107,7 +1130,7 @@ impl SessionContext {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(&table).await {
+        match schema.table(&table).await? {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => plan_err!("No table named '{table}'"),
         }
@@ -1195,6 +1218,18 @@ impl FunctionRegistry for SessionContext {
 
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.state.read().udwf(name)
+    }
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        self.state.write().register_udf(udf)
+    }
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        self.state.write().register_udaf(udaf)
+    }
+    fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        self.state.write().register_udwf(udwf)
     }
 }
 
@@ -1362,6 +1397,11 @@ impl SessionState {
         // register built in functions
         datafusion_functions::register_all(&mut new_self)
             .expect("can not register built in functions");
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        datafusion_functions_array::register_all(&mut new_self)
+            .expect("can not register array expressions");
 
         new_self
     }
@@ -1689,7 +1729,7 @@ impl SessionState {
             let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(table).await {
+                    if let Some(table) = schema.table(table).await? {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -2281,6 +2321,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
