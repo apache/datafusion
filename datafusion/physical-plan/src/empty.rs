@@ -26,7 +26,7 @@ use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
 use log::trace;

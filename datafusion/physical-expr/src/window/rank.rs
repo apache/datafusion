@@ -28,7 +28,7 @@ use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 
 use std::any::Any;

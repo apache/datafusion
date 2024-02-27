@@ -23,7 +23,7 @@ use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
 use crate::expressions::datum::apply_cmp;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Schema};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 
 // Like expression

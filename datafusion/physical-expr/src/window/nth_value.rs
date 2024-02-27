@@ -29,8 +29,8 @@ use crate::PhysicalExpr;
 
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
 

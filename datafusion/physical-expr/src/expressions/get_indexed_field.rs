@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{
     cast::{as_map_array, as_struct_array},
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::{field_util::GetFieldAccessSchema, ColumnarValue};
 use std::fmt::Debug;

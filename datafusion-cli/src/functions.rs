@@ -21,7 +21,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
-use datafusion::common::DataFusionError;
+
 use datafusion::common::{plan_err, Column};
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;

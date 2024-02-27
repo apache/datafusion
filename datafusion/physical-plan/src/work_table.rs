@@ -34,7 +34,7 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
