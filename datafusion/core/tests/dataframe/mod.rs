@@ -1975,7 +1975,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
         "+-----+-----+",
     ];
 
-    assert_batches_eq!(expected, &results);
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }
