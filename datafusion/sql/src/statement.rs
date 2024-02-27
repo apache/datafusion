@@ -1389,16 +1389,7 @@ pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
     let partition_by = options.remove("partition_by");
     match partition_by {
         Some(part_cols) => {
-            let dequoted = part_cols
-                .chars()
-                .enumerate()
-                .filter(|(idx, c)| {
-                    !((*idx == 0 || *idx == part_cols.len() - 1)
-                        && (*c == '\'' || *c == '"'))
-                })
-                .map(|(_idx, c)| c)
-                .collect::<String>();
-            dequoted
+            part_cols
                 .split(',')
                 .map(|s| s.trim().replace("''", "'"))
                 .collect::<Vec<_>>()
@@ -1406,3 +1397,5 @@ pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
         None => vec![],
     }
 }
+
+

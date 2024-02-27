@@ -123,11 +123,11 @@ a
 b
 c
 
-# # Note to place a single ' inside of a literal string escape by putting two ''
-# query TTT
-# copy test to 'test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')
-# ----
-# 3
+# Note to place a single ' inside of a literal string escape by putting two ''
+query TTT
+copy test to 'test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')
+----
+3
 
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV 
