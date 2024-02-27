@@ -191,9 +191,9 @@ impl SchemaProvider for DirSchema {
         tables.keys().cloned().collect::<Vec<_>>()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let tables = self.tables.read().unwrap();
-        tables.get(name).cloned()
+        Ok(tables.get(name).cloned())
     }
 
     fn table_exist(&self, name: &str) -> bool {

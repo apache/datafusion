@@ -15,28 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
-
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-
+use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use arrow::compute::kernels::zip::zip;
+use arrow::compute::is_not_null;
 use arrow::array::Array;
-use arrow::compute::kernels::cmp::eq;
-use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct NullIfFunc {
+pub(super) struct NVLFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
-/// Currently supported types by the nullif function.
+/// Currently supported types by the nvl/ifnull function.
 /// The order of these types correspond to the order on which coercion applies
 /// This should thus be from least informative to most informative
-static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
+static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Boolean,
     DataType::UInt8,
     DataType::UInt16,
@@ -52,24 +47,25 @@ static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
     DataType::LargeUtf8,
 ];
 
-
-impl NullIfFunc {
+impl NVLFunc {
     pub fn new() -> Self {
         Self {
             signature:
-            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(),
-                               Volatility::Immutable,
-            )
+            Signature::uniform(2, SUPPORTED_NVL_TYPES.to_vec(),
+                Volatility::Immutable,
+            ),
+            aliases: vec![String::from("ifnull")],
         }
     }
 }
 
-impl ScalarUDFImpl for NullIfFunc {
-    fn as_any(&self) -> &dyn Any {
+impl ScalarUDFImpl for NVLFunc {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
     fn name(&self) -> &str {
-        "nullif"
+        "nvl"
     }
 
     fn signature(&self) -> &Signature {
@@ -77,58 +73,50 @@ impl ScalarUDFImpl for NullIfFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NULLIF has two args and they might get coerced, get a preview of this
+        // NVL has two args and they might get coerced, get a preview of this
         let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
         coerced_types.map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NULLIF")
-            )
+            .map_err(|e| e.context("Failed to coerce arguments for NVL")
+        )
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        nullif_func(args)
+        nvl_func(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 
-
-/// Implements NULLIF(expr1, expr2)
-/// Args: 0 - left expr is any array
-///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
-///
-fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but NULLIF takes exactly two args",
+        return internal_err!(
+            "{:?} args were supplied but NVL/IFNULL takes exactly two args",
             args.len()
         );
     }
-
-    let (lhs, rhs) = (&args[0], &args[1]);
-
-    match (lhs, rhs) {
+    let (lhs_array, rhs_array) = match (&args[0], &args[1]) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
-            let rhs = rhs.to_scalar()?;
-            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
-
-            Ok(ColumnarValue::Array(array))
+            (lhs.clone(), rhs.to_array_of_size(lhs.len())?)
         }
         (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => {
-            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
-            Ok(ColumnarValue::Array(array))
+            (lhs.clone(), rhs.clone())
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
-            let lhs = lhs.to_array_of_size(rhs.len())?;
-            let array = nullif(&lhs, &eq(&lhs, &rhs)?)?;
-            Ok(ColumnarValue::Array(array))
+            (lhs.to_array_of_size(rhs.len())?, rhs.clone())
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
-            let val: ScalarValue = match lhs.eq(rhs) {
-                true => lhs.data_type().try_into()?,
-                false => lhs.clone(),
-            };
-
-            Ok(ColumnarValue::Scalar(val))
+            let mut current_value = lhs;
+            if lhs.is_null() {
+                current_value = rhs;
+            }
+            return Ok(ColumnarValue::Scalar(current_value.clone()));
         }
-    }
+    };
+    let to_apply = is_not_null(&lhs_array)?;
+    let value = zip(&to_apply, &lhs_array, &rhs_array)?;
+    Ok(ColumnarValue::Array(value))
 }
 
 #[cfg(test)]
@@ -141,7 +129,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
-    fn nullif_int32() -> Result<()> {
+    fn nvl_int32() -> Result<()> {
         let a = Int32Array::from(vec![
             Some(1),
             Some(2),
@@ -155,19 +143,19 @@ mod tests {
         ]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(6i32)));
 
-        let result = nullif_func(&[a, lit_array])?;
+        let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
             Some(1),
-            None,
-            None,
-            None,
+            Some(2),
+            Some(6),
+            Some(6),
             Some(3),
-            None,
-            None,
+            Some(6),
+            Some(6),
             Some(4),
             Some(5),
         ])) as ArrayRef;
@@ -176,23 +164,23 @@ mod tests {
     }
 
     #[test]
-    // Ensure that arrays with no nulls can also invoke NULLIF() correctly
-    fn nullif_int32_nonulls() -> Result<()> {
+    // Ensure that arrays with no nulls can also invoke nvl() correctly
+    fn nvl_int32_nonulls() -> Result<()> {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(20i32)));
 
-        let result = nullif_func(&[a, lit_array])?;
+        let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
-            None,
+            Some(1),
             Some(3),
             Some(10),
             Some(7),
             Some(8),
-            None,
+            Some(1),
             Some(2),
             Some(4),
             Some(5),
@@ -202,36 +190,36 @@ mod tests {
     }
 
     #[test]
-    fn nullif_boolean() -> Result<()> {
+    fn nvl_boolean() -> Result<()> {
         let a = BooleanArray::from(vec![Some(true), Some(false), None]);
         let a = ColumnarValue::Array(Arc::new(a));
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
 
-        let result = nullif_func(&[a, lit_array])?;
+        let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected =
-            Arc::new(BooleanArray::from(vec![Some(true), None, None])) as ArrayRef;
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false), Some(false)])) as ArrayRef;
 
         assert_eq!(expected.as_ref(), result.as_ref());
         Ok(())
     }
 
     #[test]
-    fn nullif_string() -> Result<()> {
+    fn nvl_string() -> Result<()> {
         let a = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::from("bar"));
+        let lit_array = ColumnarValue::Scalar(ScalarValue::from("bax"));
 
-        let result = nullif_func(&[a, lit_array])?;
+        let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(StringArray::from(vec![
             Some("foo"),
-            None,
-            None,
+            Some("bar"),
+            Some("bax"),
             Some("baz"),
         ])) as ArrayRef;
 
@@ -240,18 +228,18 @@ mod tests {
     }
 
     #[test]
-    fn nullif_literal_first() -> Result<()> {
+    fn nvl_literal_first() -> Result<()> {
         let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), Some(4)]);
         let a = ColumnarValue::Array(Arc::new(a));
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
-        let result = nullif_func(&[lit_array, a])?;
+        let result = nvl_func(&[lit_array, a])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
         let expected = Arc::new(Int32Array::from(vec![
             Some(2),
-            None,
+            Some(2),
             Some(2),
             Some(2),
             Some(2),
@@ -262,27 +250,27 @@ mod tests {
     }
 
     #[test]
-    fn nullif_scalar() -> Result<()> {
-        let a_eq = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
-        let b_eq = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+    fn nvl_scalar() -> Result<()> {
+        let a_null = ColumnarValue::Scalar(ScalarValue::Int32(None));
+        let b_null = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
-        let result_eq = nullif_func(&[a_eq, b_eq])?;
-        let result_eq = result_eq.into_array(1).expect("Failed to convert to array");
+        let result_null = nvl_func(&[a_null, b_null])?;
+        let result_null = result_null.into_array(1).expect("Failed to convert to array");
 
-        let expected_eq = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
+        let expected_null = Arc::new(Int32Array::from(vec![Some(2i32)])) as ArrayRef;
 
-        assert_eq!(expected_eq.as_ref(), result_eq.as_ref());
+        assert_eq!(expected_null.as_ref(), result_null.as_ref());
 
-        let a_neq = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
-        let b_neq = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
+        let a_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+        let b_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
 
-        let result_neq = nullif_func(&[a_neq, b_neq])?;
-        let result_neq = result_neq
+        let result_nnull = nvl_func(&[a_nnull, b_nnull])?;
+        let result_nnull = result_nnull
             .into_array(1)
             .expect("Failed to convert to array");
 
-        let expected_neq = Arc::new(Int32Array::from(vec![Some(2i32)])) as ArrayRef;
-        assert_eq!(expected_neq.as_ref(), result_neq.as_ref());
+        let expected_nnull = Arc::new(Int32Array::from(vec![Some(2i32)])) as ArrayRef;
+        assert_eq!(expected_nnull.as_ref(), result_nnull.as_ref());
 
         Ok(())
     }
