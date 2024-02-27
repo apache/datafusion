@@ -233,7 +233,7 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _arg: &DataType, _sort_exprs: Vec<Expr>, _schema: Option<Schema>) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn accumulator(&self, _arg: &DataType, _sort_exprs: Vec<Expr>, _schema: Option<&Schema>) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
 ///        Ok(vec![DataType::Float64, DataType::UInt32])
 ///    }
