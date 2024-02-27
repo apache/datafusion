@@ -24,9 +24,9 @@ use arrow::array::Int32Array;
 use arrow::array::Int64Array;
 use arrow::array::Int8Array;
 use arrow::datatypes::DataType;
-use datafusion_common::not_impl_err;
+use datafusion_common::{exec_err, not_impl_err};
 use datafusion_common::plan_datafusion_err;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{Result, DataFusionError};
 use datafusion_expr::utils;
 use datafusion_expr::ColumnarValue;
 
@@ -165,7 +165,7 @@ impl ScalarUDFImpl for AbsFunc {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         if args.len() != 1 {
-            return internal_err!("abs function requires 1 argument, got {}", args.len());
+            return exec_err!("abs function requires 1 argument, got {}", args.len());
         }
     
         let input_data_type = args[0].data_type();

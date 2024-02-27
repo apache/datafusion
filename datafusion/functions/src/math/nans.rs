@@ -18,14 +18,14 @@
 //! Encoding expressions
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
+use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
 
 #[derive(Debug)]
 pub(super) struct IsNanFunc {
@@ -73,7 +73,7 @@ impl ScalarUDFImpl for IsNanFunc {
                                 BooleanArray,
                                 { f64::is_nan }
                             ))
-            },
+            }
             DataType::Float32 => {
                 Arc::new(make_function_scalar_inputs_return_type!(
                             &args[0],
@@ -82,8 +82,8 @@ impl ScalarUDFImpl for IsNanFunc {
                             BooleanArray,
                             { f32::is_nan }
                         ))
-            },
-            other => return internal_err!("Unsupported data type {other:?} for function isnan"),
+            }
+            other => return exec_err!("Unsupported data type {other:?} for function isnan"),
         };
         Ok(ColumnarValue::Array(arr))
     }
