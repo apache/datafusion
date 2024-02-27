@@ -19,6 +19,7 @@ use crate::object_storage::get_object_store;
 use async_trait::async_trait;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+use datafusion::common::{plan_datafusion_err, DataFusionError};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -145,16 +146,21 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.inner.register_table(name, table)
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let inner_table = self.inner.table(name).await;
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let inner_table = self.inner.table(name).await?;
         if inner_table.is_some() {
-            return inner_table;
+            return Ok(inner_table);
         }
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self.state.upgrade()?.read().clone();
-        let table_url = ListingTableUrl::parse(name).ok()?;
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| plan_datafusion_err!("locking error"))?
+            .read()
+            .clone();
+        let table_url = ListingTableUrl::parse(name)?;
         let url: &Url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
@@ -169,18 +175,20 @@ impl SchemaProvider for DynamicFileSchemaProvider {
                 let mut options = HashMap::new();
                 let store =
                     get_object_store(&state, &mut options, table_url.scheme(), url)
-                        .await
-                        .unwrap();
+                        .await?;
                 state.runtime_env().register_object_store(url, store);
             }
         }
 
-        let config = ListingTableConfig::new(table_url)
-            .infer(&state)
-            .await
-            .ok()?;
+        let config = match ListingTableConfig::new(table_url).infer(&state).await {
+            Ok(cfg) => cfg,
+            Err(_) => {
+                // treat as non-existing
+                return Ok(None);
+            }
+        };
 
-        Some(Arc::new(ListingTable::try_new(config).ok()?))
+        Ok(Some(Arc::new(ListingTable::try_new(config)?)))
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -227,7 +235,7 @@ mod tests {
         let (ctx, schema) = setup_context();
 
         // That's a non registered table so expecting None here
-        let table = schema.table(&location).await;
+        let table = schema.table(&location).await.unwrap();
         assert!(table.is_none());
 
         // It should still create an object store for the location in the SessionState
@@ -251,7 +259,7 @@ mod tests {
 
         let (ctx, schema) = setup_context();
 
-        let table = schema.table(&location).await;
+        let table = schema.table(&location).await.unwrap();
         assert!(table.is_none());
 
         let store = ctx
@@ -273,7 +281,7 @@ mod tests {
 
         let (ctx, schema) = setup_context();
 
-        let table = schema.table(&location).await;
+        let table = schema.table(&location).await.unwrap();
         assert!(table.is_none());
 
         let store = ctx
@@ -289,13 +297,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn query_invalid_location_test() {
         let location = "ts://file.parquet";
         let (_ctx, schema) = setup_context();
 
-        // This will panic, we cannot prevent that because `schema.table`
-        // returns an Option
-        schema.table(location).await;
+        assert!(schema.table(location).await.is_err());
     }
 }
