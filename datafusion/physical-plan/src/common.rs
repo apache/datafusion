@@ -21,7 +21,6 @@ use std::fs;
 use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use super::SendableRecordBatchStream;
 use crate::stream::RecordBatchReceiverStream;
@@ -39,8 +38,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use futures::{Future, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-use pin_project_lite::pin_project;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinSet};
 
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
@@ -174,50 +172,43 @@ pub fn compute_record_batch_statistics(
     }
 }
 
-pin_project! {
-    /// Helper that aborts the given join handle on drop.
-    ///
-    /// Useful to kill background tasks when the consumer is dropped.
-    #[derive(Debug)]
-    pub struct AbortOnDropSingle<T>{
-        #[pin]
-        join_handle: JoinHandle<T>,
-    }
-
-    impl<T> PinnedDrop for AbortOnDropSingle<T> {
-        fn drop(this: Pin<&mut Self>) {
-            this.join_handle.abort();
-        }
-    }
-}
-
-impl<T> AbortOnDropSingle<T> {
-    /// Create new abort helper from join handle.
-    pub fn new(join_handle: JoinHandle<T>) -> Self {
-        Self { join_handle }
-    }
-}
-
-impl<T> Future for AbortOnDropSingle<T> {
-    type Output = Result<T, tokio::task::JoinError>;
-
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.join_handle.poll(cx)
-    }
-}
-
-/// Helper that aborts the given join handles on drop.
+/// Helper that  provides a simple API to spawn a single task and join it.
+/// Provides guarantees of aborting on `Drop` to keep it cancel-safe.
 ///
-/// Useful to kill background tasks when the consumer is dropped.
+/// Technically, it's just a wrapper of `JoinSet` (with size=1).
 #[derive(Debug)]
-pub struct AbortOnDropMany<T>(pub Vec<JoinHandle<T>>);
+pub struct SpawnedTask<R> {
+    inner: JoinSet<R>,
+}
 
-impl<T> Drop for AbortOnDropMany<T> {
-    fn drop(&mut self) {
-        for join_handle in &self.0 {
-            join_handle.abort();
-        }
+impl<R: 'static> SpawnedTask<R> {
+    pub fn spawn<T>(task: T) -> Self
+    where
+        T: Future<Output = R>,
+        T: Send + 'static,
+        R: Send,
+    {
+        let mut inner = JoinSet::new();
+        inner.spawn(task);
+        Self { inner }
+    }
+
+    pub fn spawn_blocking<T>(task: T) -> Self
+    where
+        T: FnOnce() -> R,
+        T: Send + 'static,
+        R: Send,
+    {
+        let mut inner = JoinSet::new();
+        inner.spawn_blocking(task);
+        Self { inner }
+    }
+
+    pub async fn join(mut self) -> Result<R, JoinError> {
+        self.inner
+            .join_next()
+            .await
+            .expect("`SpawnedTask` instance always contains exactly 1 task")
     }
 }
 
