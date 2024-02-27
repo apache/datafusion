@@ -461,7 +461,7 @@ pub enum ExecutionMode {
     /// Even though the operator generates an unbounded stream of results, it
     /// works with bounded memory and execution can still continue successfully.
     ///
-    /// The stream that results from calling `execute` on an `ExecutionPlan` that is `Unbounded` 
+    /// The stream that results from calling `execute` on an `ExecutionPlan` that is `Unbounded`
     /// will never be done (return `None`), except in case of error.
     Unbounded,
     /// Represents the mode where some of the operator's input stream(s) are
@@ -511,8 +511,8 @@ fn execution_mode_from_children<'a>(
 
 /// Stores the plan properties used in query optimization.
 ///
-/// This struct holds various properties useful for the query planning, which are used
-/// during optimization and execution phases.
+/// These properties are in a single structure to permit this information to be computed
+/// once and then those cached results used multiple times without recomputation (aka a cache)
 #[derive(Debug, Clone)]
 pub struct PlanProperties {
     /// Stores the [`EquivalenceProperties`] of the [`ExecutionPlan`].
