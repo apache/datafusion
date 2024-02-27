@@ -127,7 +127,11 @@ impl ScalarUDFImpl for Range {
 
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         use DataType::*;
-        Ok(List(Arc::new(Field::new("item", Int64, true))))
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
@@ -139,6 +143,7 @@ impl ScalarUDFImpl for Range {
         &self.aliases
     }
 }
+
 make_udf_function!(
     GenSeries,
     gen_series,
@@ -181,7 +186,11 @@ impl ScalarUDFImpl for GenSeries {
 
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         use DataType::*;
-        Ok(List(Arc::new(Field::new("item", Int64, true))))
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {

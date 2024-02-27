@@ -5550,7 +5550,7 @@ select generate_series(5),
        generate_series(2, 10, 3)
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8]
+[0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8]
 
 ## array_except
 
