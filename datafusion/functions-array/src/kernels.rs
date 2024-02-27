@@ -293,7 +293,7 @@ pub fn gen_range(
     let mut values = vec![];
     let mut offsets = vec![0];
     for (idx, stop) in stop_array.iter().enumerate() {
-        let stop = stop.unwrap_or(0) + include_upper;
+        let mut stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
         if step == 0 {
@@ -301,9 +301,11 @@ pub fn gen_range(
         }
         if step < 0 {
             // Decreasing range
+            stop -= include_upper;
             values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
         } else {
             // Increasing range
+            stop += include_upper;
             values.extend((start..stop).step_by(step as usize));
         }
 
