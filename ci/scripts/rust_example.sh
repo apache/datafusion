@@ -26,6 +26,7 @@ files=$(ls .)
 for filename in $files
 do
   example_name=`basename $filename ".rs"`
+  # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
      cargo run --example $example_name
   fi
