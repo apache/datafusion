@@ -41,9 +41,8 @@ mod tests {
         schema::types::ColumnPath,
     };
 
-    use crate::config::TableOptions;
     use crate::{
-        config::ConfigOptions,
+        config::{ConfigOptions, TableOptions},
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
         parsers::CompressionTypeVariant,
     };

@@ -157,7 +157,6 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow::util::pretty::print_batches;
     use std::collections::HashMap;
 
     use super::*;

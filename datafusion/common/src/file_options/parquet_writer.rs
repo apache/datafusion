@@ -19,9 +19,11 @@
 
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 
-use crate::{config::ConfigOptions, DataFusionError, Result};
+use crate::{
+    config::{ConfigOptions, TableParquetOptions},
+    DataFusionError, Result,
+};
 
-use crate::config::TableParquetOptions;
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::properties::{EnabledStatistics, WriterVersion},

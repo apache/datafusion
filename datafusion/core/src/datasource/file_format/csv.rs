@@ -39,6 +39,8 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
+use datafusion_common::config::CsvOptions;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -46,8 +48,6 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_common::config::CsvOptions;
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
@@ -907,7 +907,7 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-            let expected = ["+--------------+",
+        let expected = ["+--------------+",
             "| SUM(aggr.c2) |",
             "+--------------+",
             "| 285          |",
@@ -1110,7 +1110,7 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-            let expected = ["+---------------------+",
+        let expected = ["+---------------------+",
             "| SUM(empty.column_1) |",
             "+---------------------+",
             "| 10                  |",
@@ -1149,7 +1149,7 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-            let expected = ["+-----------------------+",
+        let expected = ["+-----------------------+",
             "| SUM(one_col.column_1) |",
             "+-----------------------+",
             "| 50                    |",
@@ -1197,7 +1197,7 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-            let expected = ["+---------------+",
+        let expected = ["+---------------+",
             "| sum_of_5_cols |",
             "+---------------+",
             "| 15            |",

@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::{Schema, SchemaRef};
@@ -44,6 +45,7 @@ use crate::physical_plan::{
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError,
@@ -56,7 +58,6 @@ use datafusion_expr::{
 
 use crate::prelude::SessionContext;
 use async_trait::async_trait;
-use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1176,7 +1177,7 @@ impl DataFrame {
             path.into(),
             FileType::CSV,
             copy_options,
-            Default::default(),
+            HashMap::new(),
             options.partition_by,
         )?
         .build()?;

@@ -19,8 +19,8 @@
 
 use std::str::FromStr;
 
-use crate::config::JsonOptions;
 use crate::{
+    config::JsonOptions,
     error::{DataFusionError, Result},
     parsers::CompressionTypeVariant,
 };
