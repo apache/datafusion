@@ -49,7 +49,10 @@ pub trait SchemaProvider: Sync + Send {
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>>;
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
 
     /// If supported by the implementation, adds a new table named `name` to
     /// this schema.
@@ -111,8 +114,11 @@ impl SchemaProvider for MemorySchemaProvider {
             .collect()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables.get(name).map(|table| table.value().clone())
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        Ok(self.tables.get(name).map(|table| table.value().clone()))
     }
 
     fn register_table(
