@@ -2187,13 +2187,13 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Weak;
     use tempfile::TempDir;
-    use datafusion_expr::ColumnarValue;
-    use datafusion_expr::expr_fn::{create_udf, create_udaf};
+    use datafusion_expr::{ColumnarValue, PartitionEvaluator};
+    use datafusion_expr::expr_fn::{create_udf, create_udaf, create_udwf};
     use datafusion_common::cast::as_int64_array;
     use crate::{
         arrow::{
-            array::{ArrayRef, Int64Array},
-            datatypes::DataType,
+            array::{ArrayRef, AsArray, Int64Array, Float64Array},
+            datatypes::{DataType, Float64Type},
         },
         logical_expr::Volatility,
         physical_plan::Accumulator,
@@ -2416,6 +2416,66 @@ mod tests {
         ctx.deregister_udaf("geo_mean");
 
         assert!(!ctx.state().aggregate_functions.contains_key("geo_mean"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn register_deregister_udwf() -> Result<()> {
+        #[derive(Clone, Debug)]
+        struct MyPartitionEvaluator {}
+
+        impl MyPartitionEvaluator {
+            fn new() -> Self {
+                Self {}
+            }
+        }
+
+        impl PartitionEvaluator for MyPartitionEvaluator {
+            fn uses_window_frame(&self) -> bool {
+                true
+            }
+        
+            fn evaluate(
+                &mut self,
+                values: &[ArrayRef],
+                range: &std::ops::Range<usize>,
+            ) -> Result<ScalarValue> {
+                let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+                let range_len = range.end - range.start;
+        
+                let output = if range_len > 0 {
+                    let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+                    Some(sum / range_len as f64)
+                } else {
+                    None
+                };
+        
+                Ok(ScalarValue::Float64(output))
+            }
+        }
+
+        fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+            Ok(Box::new(MyPartitionEvaluator::new()))
+        }
+
+        let smooth_it = create_udwf(
+            "smooth_it",
+            DataType::Float64,
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            Arc::new(make_partition_evaluator),
+        );
+
+        let ctx = SessionContext::new();
+
+        ctx.register_udwf(smooth_it.clone());
+
+        assert!(ctx.state().window_functions.contains_key("smooth_it"));
+
+        ctx.deregister_udwf("smooth_it");
+
+        assert!(!ctx.state().window_functions.contains_key("smooth_it"));
 
         Ok(())
     }
