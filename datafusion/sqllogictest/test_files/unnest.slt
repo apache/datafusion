@@ -118,6 +118,15 @@ query error DataFusion error: SQL error: ParserError\("Expected an expression:, 
 select * from unnest();
 
 
+## Unnest multiple expressions in select list
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+select unnest([1,2], [2,3]);
+
+## Unnest multiple expressions in from clause
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+select * from unnest([1,2], [2,3]);
+
+
 ## Unnest struct expression in select list
 query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
 select unnest(struct(null));
@@ -195,11 +204,6 @@ select * from unnest([1,2]) with offset;
 
 query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
 select * from unnest([1,2]) with offset offset_alias;
-
-
-## Unnest in from clause with multiple arguments
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
-select * from unnest([1,2], [2,3]);
 
 
 ## More complex cases
