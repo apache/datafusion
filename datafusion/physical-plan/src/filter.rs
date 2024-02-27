@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::{
-    ColumnStatistics, DisplayAs, PlanPropertiesCache, RecordBatchStream,
+    ColumnStatistics, DisplayAs, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::{
@@ -62,7 +62,7 @@ pub struct FilterExec {
     metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 all rows
     default_selectivity: u8,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl FilterExec {
@@ -74,7 +74,8 @@ impl FilterExec {
         match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => {
                 let default_selectivity = 20;
-                let cache = Self::create_cache(&input, &predicate, default_selectivity)?;
+                let cache =
+                    Self::compute_properties(&input, &predicate, default_selectivity)?;
                 Ok(Self {
                     predicate,
                     input: input.clone(),
@@ -159,11 +160,11 @@ impl FilterExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
-    ) -> Result<PlanPropertiesCache> {
+    ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
         let stats = Self::statistics_helper(input, predicate, default_selectivity)?;
@@ -182,7 +183,7 @@ impl FilterExec {
             .map(|column| Arc::new(column) as _);
         eq_properties = eq_properties.add_constants(constants);
 
-        Ok(PlanPropertiesCache::new(
+        Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
             input.execution_mode(),              // Execution Mode
@@ -210,7 +211,7 @@ impl ExecutionPlan for FilterExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

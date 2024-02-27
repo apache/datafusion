@@ -25,7 +25,7 @@ use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -42,7 +42,7 @@ pub struct AvroExec {
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl AvroExec {
@@ -50,7 +50,7 @@ impl AvroExec {
     pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             projected_schema.clone(),
             &projected_output_ordering,
             &base_config,
@@ -70,16 +70,16 @@ impl AvroExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
         file_scan_config: &FileScanConfig,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
         let n_partitions = file_scan_config.file_groups.len();
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
             ExecutionMode::Bounded,                          // Execution Mode
@@ -103,7 +103,7 @@ impl ExecutionPlan for AvroExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

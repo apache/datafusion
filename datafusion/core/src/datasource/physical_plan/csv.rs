@@ -33,7 +33,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::csv;
@@ -61,7 +61,7 @@ pub struct CsvExec {
     metrics: ExecutionPlanMetricsSet,
     /// Compression type of the file associated with CsvExec
     pub file_compression_type: FileCompressionType,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CsvExec {
@@ -76,7 +76,7 @@ impl CsvExec {
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             projected_schema,
             &projected_output_ordering,
             &base_config,
@@ -122,15 +122,15 @@ impl CsvExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
         file_scan_config: &FileScanConfig,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
             ExecutionMode::Bounded,                             // Execution Mode
@@ -164,7 +164,7 @@ impl ExecutionPlan for CsvExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

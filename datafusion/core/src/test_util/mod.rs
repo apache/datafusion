@@ -38,7 +38,7 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
 
@@ -227,7 +227,7 @@ impl TableProvider for TestTableProvider {
 pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 impl UnboundedExec {
     /// Create new exec that clones the given record batch to its output.
@@ -238,7 +238,7 @@ impl UnboundedExec {
         batch: RecordBatch,
         partitions: usize,
     ) -> Self {
-        let cache = Self::create_cache(batch.schema(), batch_produce, partitions);
+        let cache = Self::compute_properties(batch.schema(), batch_produce, partitions);
         Self {
             batch_produce,
             batch,
@@ -247,18 +247,18 @@ impl UnboundedExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         batch_produce: Option<usize>,
         n_partitions: usize,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         let mode = if batch_produce.is_none() {
             ExecutionMode::Unbounded
         } else {
             ExecutionMode::Bounded
         };
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions),
             mode,
@@ -289,7 +289,7 @@ impl ExecutionPlan for UnboundedExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

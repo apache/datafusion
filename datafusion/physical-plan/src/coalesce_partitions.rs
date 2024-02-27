@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
-use super::{DisplayAs, PlanPropertiesCache, SendableRecordBatchStream, Statistics};
+use super::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -38,13 +38,13 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CoalescePartitionsExec {
     /// Create a new CoalescePartitionsExec
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -58,12 +58,12 @@ impl CoalescePartitionsExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
             input.execution_mode(),               // Execution Mode
@@ -91,7 +91,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

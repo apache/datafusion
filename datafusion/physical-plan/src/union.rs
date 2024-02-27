@@ -27,10 +27,10 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    exec_mode_flatten,
+    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
@@ -91,14 +91,14 @@ pub struct UnionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl UnionExec {
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let schema = union_schema(&inputs);
-        let cache = Self::create_cache(&inputs, schema);
+        let cache = Self::compute_properties(&inputs, schema);
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -112,10 +112,10 @@ impl UnionExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         inputs: &[Arc<dyn ExecutionPlan>],
         schema: SchemaRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         // TODO: In some cases, we should be able to preserve some equivalence
         //       classes and constants. Add support for such cases.
@@ -161,9 +161,9 @@ impl UnionExec {
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
 
         // Determine execution mode:
-        let mode = exec_mode_flatten(inputs.iter());
+        let mode = execution_mode_from_children(inputs.iter());
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -187,7 +187,7 @@ impl ExecutionPlan for UnionExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -317,7 +317,7 @@ pub struct InterleaveExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl InterleaveExec {
@@ -328,7 +328,7 @@ impl InterleaveExec {
                 "Not all InterleaveExec children have a consistent hash partitioning"
             );
         }
-        let cache = Self::create_cache(&inputs);
+        let cache = Self::compute_properties(&inputs);
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -342,15 +342,15 @@ impl InterleaveExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(inputs: &[Arc<dyn ExecutionPlan>]) -> PlanPropertiesCache {
+    fn compute_properties(inputs: &[Arc<dyn ExecutionPlan>]) -> PlanProperties {
         let schema = union_schema(inputs);
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
         // Determine execution mode:
-        let mode = exec_mode_flatten(inputs.iter());
+        let mode = execution_mode_from_children(inputs.iter());
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -374,7 +374,7 @@ impl ExecutionPlan for InterleaveExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

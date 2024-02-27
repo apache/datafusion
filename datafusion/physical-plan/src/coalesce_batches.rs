@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, PlanPropertiesCache, Statistics};
+use super::{DisplayAs, PlanProperties, Statistics};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -48,13 +48,13 @@ pub struct CoalesceBatchesExec {
     target_batch_size: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             target_batch_size,
@@ -74,10 +74,10 @@ impl CoalesceBatchesExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
         // The coalesce batches operator does not make any changes to the
         // partitioning of its input.
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             input.execution_mode(),                 // Execution Mode
@@ -109,7 +109,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

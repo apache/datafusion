@@ -26,7 +26,7 @@ use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use datafusion_common::{internal_err, DataFusionError, Result};
@@ -74,13 +74,13 @@ pub struct SortPreservingMergeExec {
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             expr,
@@ -111,8 +111,8 @@ impl SortPreservingMergeExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
-        PlanPropertiesCache::new(
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
             input.execution_mode(),                 // Execution Mode
@@ -149,7 +149,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

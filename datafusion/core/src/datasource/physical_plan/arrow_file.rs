@@ -37,7 +37,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use futures::StreamExt;
 use itertools::Itertools;
@@ -53,7 +53,7 @@ pub struct ArrowExec {
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl ArrowExec {
@@ -61,7 +61,7 @@ impl ArrowExec {
     pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             projected_schema.clone(),
             &projected_output_ordering,
             &base_config,
@@ -85,16 +85,16 @@ impl ArrowExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         projected_output_ordering: &[LexOrdering],
         file_scan_config: &FileScanConfig,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties =
             EquivalenceProperties::new_with_orderings(schema, projected_output_ordering);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
             ExecutionMode::Bounded,                             // Execution Mode
@@ -126,7 +126,7 @@ impl ExecutionPlan for ArrowExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

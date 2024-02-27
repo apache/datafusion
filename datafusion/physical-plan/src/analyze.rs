@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{DisplayAs, Distribution, PlanPropertiesCache, SendableRecordBatchStream};
+use super::{DisplayAs, Distribution, PlanProperties, SendableRecordBatchStream};
 
 use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
@@ -45,7 +45,7 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl AnalyzeExec {
@@ -56,7 +56,7 @@ impl AnalyzeExec {
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
-        let cache = Self::create_cache(&input, schema.clone());
+        let cache = Self::compute_properties(&input, schema.clone());
         AnalyzeExec {
             verbose,
             show_statistics,
@@ -82,14 +82,14 @@ impl AnalyzeExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         let output_partitioning = Partitioning::UnknownPartitioning(1);
         let exec_mode = input.execution_mode();
-        PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
     }
 }
 
@@ -113,7 +113,7 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

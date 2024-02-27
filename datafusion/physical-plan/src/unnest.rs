@@ -20,7 +20,7 @@
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, PlanPropertiesCache};
+use super::{DisplayAs, PlanProperties};
 use crate::{
     expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, PhysicalExpr,
     RecordBatchStream, SendableRecordBatchStream,
@@ -60,7 +60,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl UnnestExec {
@@ -71,7 +71,7 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
-        let cache = Self::create_cache(&input, schema.clone());
+        let cache = Self::compute_properties(&input, schema.clone());
         UnnestExec {
             input,
             schema,
@@ -83,13 +83,13 @@ impl UnnestExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(),
             input.execution_mode(),
@@ -116,7 +116,7 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

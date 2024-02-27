@@ -62,7 +62,7 @@ use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::concat_batches;
@@ -94,7 +94,7 @@ pub struct PartialSortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl PartialSortExec {
@@ -106,7 +106,7 @@ impl PartialSortExec {
     ) -> Self {
         assert!(common_prefix_length > 0);
         let preserve_partitioning = false;
-        let cache = Self::create_cache(&input, expr.clone(), preserve_partitioning);
+        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
             input,
             expr,
@@ -181,11 +181,11 @@ impl PartialSortExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
         let eq_properties = input
@@ -200,7 +200,7 @@ impl PartialSortExec {
         // Determine execution mode:
         let mode = input.execution_mode();
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -230,7 +230,7 @@ impl ExecutionPlan for PartialSortExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

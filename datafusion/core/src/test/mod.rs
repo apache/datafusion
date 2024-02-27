@@ -45,7 +45,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, PlanPropertiesCache,
+    DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
 };
 
 #[cfg(feature = "compression")]
@@ -367,7 +367,7 @@ pub fn csv_exec_ordered(
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl StatisticsExec {
@@ -376,7 +376,7 @@ impl StatisticsExec {
             stats.column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = Self::create_cache(Arc::new(schema.clone()));
+        let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
@@ -385,9 +385,9 @@ impl StatisticsExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             // Output Partitioning
             Partitioning::UnknownPartitioning(2),
@@ -421,7 +421,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

@@ -25,7 +25,7 @@ use std::task::{Context, Poll};
 use super::expressions::PhysicalSortExpr;
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -48,7 +48,7 @@ pub struct MemoryExec {
     projection: Option<Vec<usize>>,
     // Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -101,7 +101,7 @@ impl ExecutionPlan for MemoryExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -153,7 +153,7 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache = Self::create_cache(projected_schema.clone(), &[], partitions);
+        let cache = Self::compute_properties(projected_schema.clone(), &[], partitions);
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -205,13 +205,13 @@ impl MemoryExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Vec<RecordBatch>],
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,                                       // Equivalence Properties
             Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
             ExecutionMode::Bounded,                              // Execution Mode

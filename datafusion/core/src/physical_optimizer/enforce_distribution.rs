@@ -1331,7 +1331,7 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, expressions::Column,
         LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
-    use datafusion_physical_plan::PlanPropertiesCache;
+    use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
@@ -1339,7 +1339,7 @@ pub(crate) mod tests {
     struct SortRequiredExec {
         input: Arc<dyn ExecutionPlan>,
         expr: LexOrdering,
-        cache: PlanPropertiesCache,
+        cache: PlanProperties,
     }
 
     impl SortRequiredExec {
@@ -1352,7 +1352,7 @@ pub(crate) mod tests {
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
         ) -> Self {
-            let cache = Self::create_cache(&input);
+            let cache = Self::compute_properties(&input);
             Self {
                 input,
                 expr: requirement,
@@ -1361,8 +1361,8 @@ pub(crate) mod tests {
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-        fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
-            PlanPropertiesCache::new(
+        fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+            PlanProperties::new(
                 input.equivalence_properties().clone(), // Equivalence Properties
                 input.output_partitioning().clone(),    // Output Partitioning
                 input.execution_mode(),                 // Execution Mode
@@ -1389,7 +1389,7 @@ pub(crate) mod tests {
             self
         }
 
-        fn cache(&self) -> &PlanPropertiesCache {
+        fn properties(&self) -> &PlanProperties {
             &self.cache
         }
 

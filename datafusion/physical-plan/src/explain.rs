@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, PlanPropertiesCache, SendableRecordBatchStream};
+use super::{DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -43,7 +43,7 @@ pub struct ExplainExec {
     stringified_plans: Vec<StringifiedPlan>,
     /// control which plans to print
     verbose: bool,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl ExplainExec {
@@ -53,7 +53,7 @@ impl ExplainExec {
         stringified_plans: Vec<StringifiedPlan>,
         verbose: bool,
     ) -> Self {
-        let cache = Self::create_cache(schema.clone());
+        let cache = Self::compute_properties(schema.clone());
         ExplainExec {
             schema,
             stringified_plans,
@@ -73,9 +73,9 @@ impl ExplainExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -103,7 +103,7 @@ impl ExecutionPlan for ExplainExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

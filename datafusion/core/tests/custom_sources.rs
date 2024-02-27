@@ -40,7 +40,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::{ExecutionMode, PlanPropertiesCache};
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -74,7 +74,7 @@ struct CustomTableProvider;
 #[derive(Debug, Clone)]
 struct CustomExecutionPlan {
     projection: Option<Vec<usize>>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CustomExecutionPlan {
@@ -82,14 +82,14 @@ impl CustomExecutionPlan {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
         let schema =
             project_schema(&schema, projection.as_ref()).expect("projected schema");
-        let cache = Self::create_cache(schema);
+        let cache = Self::compute_properties(schema);
         Self { projection, cache }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             // Output Partitioning
             Partitioning::UnknownPartitioning(1),
@@ -144,7 +144,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

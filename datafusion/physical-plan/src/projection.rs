@@ -29,8 +29,7 @@ use std::task::{Context, Poll};
 use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
@@ -59,7 +58,7 @@ pub struct ProjectionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl ProjectionExec {
@@ -93,7 +92,8 @@ impl ProjectionExec {
 
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
-        let cache = Self::create_cache(&input, &projection_mapping, schema.clone())?;
+        let cache =
+            Self::compute_properties(&input, &projection_mapping, schema.clone())?;
         Ok(Self {
             expr,
             schema,
@@ -114,11 +114,11 @@ impl ProjectionExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         projection_mapping: &ProjectionMapping,
         schema: SchemaRef,
-    ) -> Result<PlanPropertiesCache> {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut input_eq_properties = input.equivalence_properties().clone();
         input_eq_properties.substitute_oeq_class(projection_mapping)?;
@@ -143,7 +143,7 @@ impl ProjectionExec {
             input_partition.clone()
         };
 
-        Ok(PlanPropertiesCache::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             input.execution_mode(),
@@ -184,7 +184,7 @@ impl ExecutionPlan for ProjectionExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

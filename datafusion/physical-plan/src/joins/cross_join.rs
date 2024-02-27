@@ -27,8 +27,8 @@ use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    exec_mode_flatten, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionMode, ExecutionPlan, PlanPropertiesCache, RecordBatchStream,
+    execution_mode_from_children, ColumnStatistics, DisplayAs, DisplayFormatType,
+    Distribution, ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -61,7 +61,7 @@ pub struct CrossJoinExec {
     left_fut: OnceAsync<JoinLeftData>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CrossJoinExec {
@@ -77,7 +77,7 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns));
-        let cache = Self::create_cache(&left, &right, schema.clone());
+        let cache = Self::compute_properties(&left, &right, schema.clone());
         CrossJoinExec {
             left,
             right,
@@ -99,11 +99,11 @@ impl CrossJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
@@ -126,13 +126,13 @@ impl CrossJoinExec {
         );
 
         // Determine the execution mode:
-        let mut mode = exec_mode_flatten([left, right]);
+        let mut mode = execution_mode_from_children([left, right]);
         if mode.is_unbounded() {
             // If any of the inputs is unbounded, cross join breaks the pipeline.
             mode = ExecutionMode::PipelineBreaking;
         }
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -197,7 +197,7 @@ impl ExecutionPlan for CrossJoinExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

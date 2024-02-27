@@ -33,7 +33,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::PlanPropertiesCache;
+use datafusion_physical_plan::PlanProperties;
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -90,7 +90,7 @@ pub(crate) struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<LexRequirement>,
     dist_requirement: Distribution,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl OutputRequirementExec {
@@ -99,7 +99,7 @@ impl OutputRequirementExec {
         requirements: Option<LexRequirement>,
         dist_requirement: Distribution,
     ) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             order_requirement: requirements,
@@ -113,8 +113,8 @@ impl OutputRequirementExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
-        PlanPropertiesCache::new(
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             input.execution_mode(),                 // Execution Mode
@@ -137,7 +137,7 @@ impl ExecutionPlan for OutputRequirementExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

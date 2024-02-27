@@ -466,7 +466,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::DisplayableExecutionPlan;
-    use crate::{DisplayAs, ExecutionPlan, PlanPropertiesCache};
+    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
 
     use datafusion_common::{DataFusionError, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -493,7 +493,7 @@ mod tests {
             self
         }
 
-        fn cache(&self) -> &PlanPropertiesCache {
+        fn properties(&self) -> &PlanProperties {
             unimplemented!()
         }
 

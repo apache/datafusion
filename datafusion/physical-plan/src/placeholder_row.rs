@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{
-    common, DisplayAs, ExecutionMode, PlanPropertiesCache, SendableRecordBatchStream,
+    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
 use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
@@ -43,14 +43,14 @@ pub struct PlaceholderRowExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl PlaceholderRowExec {
     /// Create a new PlaceholderRowExec
     pub fn new(schema: SchemaRef) -> Self {
         let partitions = 1;
-        let cache = Self::create_cache(schema.clone(), partitions);
+        let cache = Self::compute_properties(schema.clone(), partitions);
         PlaceholderRowExec {
             schema,
             partitions,
@@ -95,16 +95,12 @@ impl PlaceholderRowExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = Self::output_partitioning_helper(n_partitions);
 
-        PlanPropertiesCache::new(
-            eq_properties,
-            output_partitioning,
-            ExecutionMode::Bounded,
-        )
+        PlanProperties::new(eq_properties, output_partitioning, ExecutionMode::Bounded)
     }
 }
 
@@ -128,7 +124,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

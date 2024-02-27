@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionMode, PlanPropertiesCache, RecordBatchStream,
+    DisplayAs, ExecutionMode, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
@@ -51,13 +51,13 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         GlobalLimitExec {
             input,
             skip,
@@ -83,8 +83,8 @@ impl GlobalLimitExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
-        PlanPropertiesCache::new(
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
             ExecutionMode::Bounded,                 // Execution Mode
@@ -117,7 +117,7 @@ impl ExecutionPlan for GlobalLimitExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -268,13 +268,13 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
     pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
-        let cache = Self::create_cache(&input);
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             fetch,
@@ -294,8 +294,8 @@ impl LocalLimitExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(input: &Arc<dyn ExecutionPlan>) -> PlanPropertiesCache {
-        PlanPropertiesCache::new(
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             ExecutionMode::Bounded,                 // Execution Mode
@@ -323,7 +323,7 @@ impl ExecutionPlan for LocalLimitExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

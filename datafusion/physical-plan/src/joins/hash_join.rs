@@ -29,7 +29,7 @@ use super::{
 };
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
-    exec_mode_flatten, handle_state,
+    execution_mode_from_children, handle_state,
     hash_utils::create_hashes,
     joins::utils::{
         adjust_indices_by_join_type, adjust_right_output_partitioning,
@@ -41,7 +41,7 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics,
 };
 
@@ -297,7 +297,7 @@ pub struct HashJoinExec {
     /// matched and thus will not appear in the output.
     pub null_equals_null: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl HashJoinExec {
@@ -327,7 +327,7 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             &left,
             &right,
             Arc::new(schema.clone()),
@@ -406,14 +406,14 @@ impl HashJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -470,10 +470,10 @@ impl HashJoinExec {
         let mode = if pipeline_breaking {
             ExecutionMode::PipelineBreaking
         } else {
-            exec_mode_flatten([left, right])
+            execution_mode_from_children([left, right])
         };
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -506,7 +506,7 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

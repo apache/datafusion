@@ -28,7 +28,7 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -58,19 +58,19 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 #[derive(Debug)]
 struct CustomPlan {
     batches: Vec<RecordBatch>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CustomPlan {
     fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
-        let cache = Self::create_cache(schema);
+        let cache = Self::compute_properties(schema);
         Self { batches, cache }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -97,7 +97,7 @@ impl ExecutionPlan for CustomPlan {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

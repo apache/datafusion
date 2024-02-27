@@ -46,11 +46,11 @@ use crate::joins::utils::{
     JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
 };
 use crate::{
-    exec_mode_flatten,
+    execution_mode_from_children,
     expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanPropertiesCache,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
@@ -192,7 +192,7 @@ pub struct SymmetricHashJoinExec {
     /// Partition Mode
     mode: StreamJoinPartitionMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl SymmetricHashJoinExec {
@@ -234,7 +234,8 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let schema = Arc::new(schema);
-        let cache = Self::create_cache(&left, &right, schema.clone(), *join_type, &on);
+        let cache =
+            Self::compute_properties(&left, &right, schema.clone(), *join_type, &on);
         Ok(SymmetricHashJoinExec {
             left,
             right,
@@ -253,13 +254,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -282,9 +283,9 @@ impl SymmetricHashJoinExec {
         );
 
         // Determine execution mode:
-        let mode = exec_mode_flatten([left, right]);
+        let mode = execution_mode_from_children([left, right]);
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 
     /// left stream
@@ -390,7 +391,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

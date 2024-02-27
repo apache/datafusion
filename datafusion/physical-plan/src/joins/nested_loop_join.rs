@@ -34,8 +34,9 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    exec_mode_flatten, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -93,7 +94,7 @@ pub struct NestedLoopJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl NestedLoopJoinExec {
@@ -110,7 +111,7 @@ impl NestedLoopJoinExec {
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
         let schema = Arc::new(schema);
-        let cache = Self::create_cache(&left, &right, schema.clone(), *join_type);
+        let cache = Self::compute_properties(&left, &right, schema.clone(), *join_type);
         Ok(NestedLoopJoinExec {
             left,
             right,
@@ -145,12 +146,12 @@ impl NestedLoopJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -176,12 +177,12 @@ impl NestedLoopJoinExec {
         };
 
         // Determine execution mode:
-        let mut mode = exec_mode_flatten([left, right]);
+        let mut mode = execution_mode_from_children([left, right]);
         if mode.is_unbounded() {
             mode = ExecutionMode::PipelineBreaking;
         }
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -208,7 +209,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

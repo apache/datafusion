@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{
-    common, DisplayAs, ExecutionMode, PlanPropertiesCache, SendableRecordBatchStream,
+    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
 use crate::{
@@ -43,7 +43,7 @@ pub struct ValuesExec {
     /// The data
     data: Vec<RecordBatch>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl ValuesExec {
@@ -114,7 +114,7 @@ impl ValuesExec {
             }
         }
 
-        let cache = Self::create_cache(schema.clone());
+        let cache = Self::compute_properties(schema.clone());
         Ok(ValuesExec {
             schema,
             data: batches,
@@ -128,10 +128,10 @@ impl ValuesExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -159,7 +159,7 @@ impl ExecutionPlan for ValuesExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

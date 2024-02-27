@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     work_table::{WorkTable, WorkTableExec},
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
@@ -67,7 +67,7 @@ pub struct RecursiveQueryExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl RecursiveQueryExec {
@@ -82,7 +82,7 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, work_table.clone())?;
-        let cache = Self::create_cache(static_term.schema());
+        let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -95,10 +95,10 @@ impl RecursiveQueryExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -111,7 +111,7 @@ impl ExecutionPlan for RecursiveQueryExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

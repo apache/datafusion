@@ -37,8 +37,7 @@ use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, Partitioning, PlanPropertiesCache, SendableRecordBatchStream,
-    Statistics,
+    ExecutionPlan, Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
@@ -678,7 +677,7 @@ pub struct SortExec {
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl SortExec {
@@ -696,7 +695,7 @@ impl SortExec {
     /// sorted output partition.
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
-        let cache = Self::create_cache(&input, expr.clone(), preserve_partitioning);
+        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
             expr,
             input,
@@ -787,11 +786,11 @@ impl SortExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
         let eq_properties = input
@@ -811,7 +810,7 @@ impl SortExec {
             ExecutionMode::Bounded => ExecutionMode::Bounded,
         };
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -840,7 +839,7 @@ impl ExecutionPlan for SortExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

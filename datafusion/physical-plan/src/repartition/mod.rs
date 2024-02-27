@@ -34,9 +34,7 @@ use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
 use crate::sorts::streaming_merge;
-use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PlanPropertiesCache, Statistics,
-};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
@@ -305,7 +303,7 @@ pub struct RepartitionExec {
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 #[derive(Debug, Clone)]
@@ -411,7 +409,7 @@ impl ExecutionPlan for RepartitionExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -598,7 +596,8 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache = Self::create_cache(&input, partitioning.clone(), preserve_order);
+        let cache =
+            Self::compute_properties(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
             partitioning,
@@ -634,15 +633,15 @@ impl RepartitionExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
         preserve_order: bool,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = Self::eq_properties_helper(input, preserve_order);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,          // Equivalence Properties
             partitioning,           // Output Partitioning
             input.execution_mode(), // Execution Mode

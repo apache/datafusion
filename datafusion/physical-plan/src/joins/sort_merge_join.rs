@@ -37,8 +37,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    exec_mode_flatten, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, PhysicalExpr, PlanPropertiesCache, RecordBatchStream,
+    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, PhysicalExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -84,7 +84,7 @@ pub struct SortMergeJoinExec {
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl SortMergeJoinExec {
@@ -137,7 +137,8 @@ impl SortMergeJoinExec {
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-        let cache = Self::create_cache(&left, &right, schema.clone(), join_type, &on);
+        let cache =
+            Self::compute_properties(&left, &right, schema.clone(), join_type, &on);
         Ok(Self {
             left,
             right,
@@ -201,13 +202,13 @@ impl SortMergeJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -229,9 +230,9 @@ impl SortMergeJoinExec {
         );
 
         // Determine execution mode:
-        let mode = exec_mode_flatten([left, right]);
+        let mode = execution_mode_from_children([left, right]);
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -265,7 +266,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

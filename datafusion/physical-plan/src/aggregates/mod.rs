@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, PlanPropertiesCache};
+use super::{DisplayAs, ExecutionMode, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -265,7 +265,7 @@ pub struct AggregateExec {
     required_input_ordering: Option<LexRequirement>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl AggregateExec {
@@ -362,7 +362,7 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             &input,
             schema.clone(),
             &projection_mapping,
@@ -507,13 +507,13 @@ impl AggregateExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         projection_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Construct equivalence properties:
         let eq_properties = input
             .equivalence_properties()
@@ -550,7 +550,7 @@ impl AggregateExec {
             exec_mode = ExecutionMode::PipelineBreaking;
         }
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -641,7 +641,7 @@ impl ExecutionPlan for AggregateExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -1620,20 +1620,20 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
-        cache: PlanPropertiesCache,
+        cache: PlanProperties,
     }
 
     impl TestYieldingExec {
         fn new(yield_first: bool) -> Self {
             let schema = some_data().0;
-            let cache = Self::create_cache(schema);
+            let cache = Self::compute_properties(schema);
             Self { yield_first, cache }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-        fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let eq_properties = EquivalenceProperties::new(schema);
-            PlanPropertiesCache::new(
+            PlanProperties::new(
                 eq_properties,
                 // Output Partitioning
                 Partitioning::UnknownPartitioning(1),
@@ -1662,7 +1662,7 @@ mod tests {
             self
         }
 
-        fn cache(&self) -> &PlanPropertiesCache {
+        fn properties(&self) -> &PlanProperties {
             &self.cache
         }
 

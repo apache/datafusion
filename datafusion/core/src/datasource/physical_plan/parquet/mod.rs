@@ -38,8 +38,8 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-        PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        SendableRecordBatchStream, Statistics,
     },
 };
 
@@ -100,7 +100,7 @@ pub struct ParquetExec {
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl ParquetExec {
@@ -148,7 +148,7 @@ impl ParquetExec {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             projected_schema,
             &projected_output_ordering,
             &base_config,
@@ -267,15 +267,15 @@ impl ParquetExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
         file_config: &FileScanConfig,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_config), // Output Partitioning
             ExecutionMode::Bounded,                        // Execution Mode
@@ -335,7 +335,7 @@ impl ExecutionPlan for ParquetExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

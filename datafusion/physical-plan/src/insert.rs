@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanPropertiesCache,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
 use crate::metrics::MetricsSet;
@@ -88,7 +88,7 @@ pub struct FileSinkExec {
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
     sort_order: Option<Vec<PhysicalSortRequirement>>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl fmt::Debug for FileSinkExec {
@@ -180,9 +180,9 @@ impl FileSinkExec {
     fn create_schema(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             input.execution_mode(),
@@ -211,7 +211,7 @@ impl ExecutionPlan for FileSinkExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

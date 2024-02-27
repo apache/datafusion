@@ -27,7 +27,7 @@ use datafusion::{
     logical_expr::Expr,
     physical_plan::{
         ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-        Partitioning, PlanPropertiesCache, SendableRecordBatchStream, Statistics,
+        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
@@ -43,7 +43,7 @@ use async_trait::async_trait;
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl StatisticsValidation {
@@ -53,7 +53,7 @@ impl StatisticsValidation {
             schema.fields().len(),
             "the column statistics vector length should be the number of fields"
         );
-        let cache = Self::create_cache(schema.clone());
+        let cache = Self::compute_properties(schema.clone());
         Self {
             stats,
             schema,
@@ -62,10 +62,10 @@ impl StatisticsValidation {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(2),
             ExecutionMode::Bounded,
@@ -149,7 +149,7 @@ impl ExecutionPlan for StatisticsValidation {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

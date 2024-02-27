@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanPropertiesCache};
+use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
@@ -58,7 +58,7 @@ pub struct StreamingTableExec {
     projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl StreamingTableExec {
@@ -87,7 +87,7 @@ impl StreamingTableExec {
         };
         let projected_output_ordering =
             projected_output_ordering.into_iter().collect::<Vec<_>>();
-        let cache = Self::create_cache(
+        let cache = Self::compute_properties(
             projected_schema.clone(),
             &projected_output_ordering,
             &partitions,
@@ -128,12 +128,12 @@ impl StreamingTableExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Arc<dyn PartitionStream>],
         is_infinite: bool,
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
@@ -147,7 +147,7 @@ impl StreamingTableExec {
             ExecutionMode::Bounded
         };
 
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -195,7 +195,7 @@ impl ExecutionPlan for StreamingTableExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

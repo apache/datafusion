@@ -27,7 +27,7 @@ use std::{
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -121,7 +121,7 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl MockExec {
@@ -133,7 +133,7 @@ impl MockExec {
     /// ensure any poll loops are correct. This behavior can be
     /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
-        let cache = Self::create_cache(schema.clone());
+        let cache = Self::compute_properties(schema.clone());
         Self {
             data,
             schema,
@@ -151,10 +151,10 @@ impl MockExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -181,7 +181,7 @@ impl ExecutionPlan for MockExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -282,7 +282,7 @@ pub struct BarrierExec {
 
     /// all streams wait on this barrier to produce
     barrier: Arc<Barrier>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl BarrierExec {
@@ -290,7 +290,7 @@ impl BarrierExec {
     pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
         // wait for all streams and the input
         let barrier = Arc::new(Barrier::new(data.len() + 1));
-        let cache = Self::create_cache(schema.clone(), &data);
+        let cache = Self::compute_properties(schema.clone(), &data);
         Self {
             data,
             schema,
@@ -307,9 +307,12 @@ impl BarrierExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef, data: &[Vec<RecordBatch>]) -> PlanPropertiesCache {
+    fn compute_properties(
+        schema: SchemaRef,
+        data: &[Vec<RecordBatch>],
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(data.len()),
             ExecutionMode::Bounded,
@@ -336,7 +339,7 @@ impl ExecutionPlan for BarrierExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -394,7 +397,7 @@ impl ExecutionPlan for BarrierExec {
 /// A mock execution plan that errors on a call to execute
 #[derive(Debug)]
 pub struct ErrorExec {
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl Default for ErrorExec {
@@ -410,15 +413,15 @@ impl ErrorExec {
             DataType::Int64,
             true,
         )]));
-        let cache = Self::create_cache(schema.clone());
+        let cache = Self::compute_properties(schema.clone());
         Self { cache }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -445,7 +448,7 @@ impl ExecutionPlan for ErrorExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -475,7 +478,7 @@ impl ExecutionPlan for ErrorExec {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
@@ -484,7 +487,7 @@ impl StatisticsExec {
                 .column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = Self::create_cache(Arc::new(schema.clone()));
+        let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
@@ -493,10 +496,10 @@ impl StatisticsExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(2),
             ExecutionMode::Bounded,
@@ -528,7 +531,7 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -566,13 +569,13 @@ pub struct BlockingExec {
 
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl BlockingExec {
     /// Create new [`BlockingExec`] with a give schema and number of partitions.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
-        let cache = Self::create_cache(schema.clone(), n_partitions);
+        let cache = Self::compute_properties(schema.clone(), n_partitions);
         Self {
             schema,
             refs: Default::default(),
@@ -590,10 +593,10 @@ impl BlockingExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef, n_partitions: usize) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions),
             ExecutionMode::Bounded,
@@ -620,7 +623,7 @@ impl ExecutionPlan for BlockingExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
@@ -704,7 +707,7 @@ pub struct PanicExec {
     /// Number of output partitions. Each partition will produce this
     /// many empty output record batches prior to panicing
     batches_until_panics: Vec<usize>,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl PanicExec {
@@ -712,7 +715,7 @@ impl PanicExec {
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         let batches_until_panics = vec![0; n_partitions];
-        let cache = Self::create_cache(schema.clone(), &batches_until_panics);
+        let cache = Self::compute_properties(schema.clone(), &batches_until_panics);
         Self {
             schema,
             batches_until_panics,
@@ -727,14 +730,14 @@ impl PanicExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         batches_until_panics: &[usize],
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         let num_partitions = batches_until_panics.len();
 
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(num_partitions),
             ExecutionMode::Bounded,
@@ -761,7 +764,7 @@ impl ExecutionPlan for PanicExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

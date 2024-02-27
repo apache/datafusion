@@ -122,22 +122,22 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.cache().schema().clone()
+        self.properties().schema().clone()
     }
 
-    fn cache(&self) -> &PlanPropertiesCache;
+    fn properties(&self) -> &PlanProperties;
 
     /// Specifies how the output of this `ExecutionPlan` is split into
     /// partitions.
     fn output_partitioning(&self) -> &Partitioning {
-        &self.cache().partitioning
+        &self.properties().partitioning
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn execution_mode(&self) -> ExecutionMode {
-        self.cache().exec_mode
+        self.properties().exec_mode
     }
 
     /// If the output of this `ExecutionPlan` within each partition is sorted,
@@ -151,7 +151,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// It is safe to return `None` here if your `ExecutionPlan` does not
     /// have any particular output order here
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.cache().output_ordering.as_deref()
+        self.properties().output_ordering.as_deref()
     }
 
     /// Specifies the data distribution requirements for all the
@@ -230,7 +230,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
     fn equivalence_properties(&self) -> &EquivalenceProperties {
-        &self.cache().eq_properties
+        &self.properties().eq_properties
     }
 
     /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
@@ -482,7 +482,7 @@ impl ExecutionMode {
 }
 
 /// Conservatively "combines" execution modes of a given collection of operators.
-fn exec_mode_flatten<'a>(
+fn execution_mode_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> ExecutionMode {
     let mut result = ExecutionMode::Bounded;
@@ -506,12 +506,12 @@ fn exec_mode_flatten<'a>(
     result
 }
 
-/// Represents a cache for plan properties used in query optimization.
+/// Stores the plan properties used in query optimization.
 ///
 /// This struct holds various properties useful for the query planning, which are used
 /// during optimization and execution phases.
 #[derive(Debug, Clone)]
-pub struct PlanPropertiesCache {
+pub struct PlanProperties {
     /// Stores the [`EquivalenceProperties`] of the [`ExecutionPlan`].
     pub eq_properties: EquivalenceProperties,
     /// Stores the output [`Partitioning`] of the [`ExecutionPlan`].
@@ -523,7 +523,7 @@ pub struct PlanPropertiesCache {
     output_ordering: Option<LexOrdering>,
 }
 
-impl PlanPropertiesCache {
+impl PlanProperties {
     /// Construct a new `PlanPropertiesCache` from the
     pub fn new(
         eq_properties: EquivalenceProperties,

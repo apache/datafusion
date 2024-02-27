@@ -31,7 +31,7 @@ use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanPropertiesCache, SendableRecordBatchStream,
+    Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
@@ -190,7 +190,7 @@ impl TableProvider for CustomDataSource {
 struct CustomExec {
     db: CustomDataSource,
     projected_schema: SchemaRef,
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl CustomExec {
@@ -200,7 +200,7 @@ impl CustomExec {
         db: CustomDataSource,
     ) -> Self {
         let projected_schema = project_schema(&schema, projections).unwrap();
-        let cache = Self::create_cache(projected_schema.clone());
+        let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
             projected_schema,
@@ -209,9 +209,9 @@ impl CustomExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
             ExecutionMode::Bounded,
@@ -230,7 +230,7 @@ impl ExecutionPlan for CustomExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

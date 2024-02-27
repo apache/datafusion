@@ -35,7 +35,7 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    InputOrderMode, PlanPropertiesCache, RecordBatchStream, SendableRecordBatchStream,
+    InputOrderMode, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics, WindowExpr,
 };
 
@@ -90,7 +90,7 @@ pub struct BoundedWindowAggExec {
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl BoundedWindowAggExec {
@@ -121,7 +121,7 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
-        let cache = Self::create_cache(&input, &schema, &window_expr);
+        let cache = Self::compute_properties(&input, &schema, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -183,11 +183,11 @@ impl BoundedWindowAggExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
         window_expr: &[Arc<dyn WindowExpr>],
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = window_equivalence_properties(schema, input, window_expr);
 
@@ -197,7 +197,7 @@ impl BoundedWindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache
-        PlanPropertiesCache::new(
+        PlanProperties::new(
             eq_properties,          // Equivalence Properties
             output_partitioning,    // Output Partitioning
             input.execution_mode(), // Execution Mode
@@ -240,7 +240,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 

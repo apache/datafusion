@@ -1995,7 +1995,7 @@ mod tests {
     use crate::datasource::MemTable;
     use crate::physical_plan::{
         expressions, DisplayAs, DisplayFormatType, ExecutionMode, Partitioning,
-        PlanPropertiesCache, SendableRecordBatchStream,
+        PlanProperties, SendableRecordBatchStream,
     };
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
@@ -2575,19 +2575,19 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        cache: PlanPropertiesCache,
+        cache: PlanProperties,
     }
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
-            let cache = Self::create_cache(schema.clone());
+            let cache = Self::compute_properties(schema.clone());
             Self { cache }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-        fn create_cache(schema: SchemaRef) -> PlanPropertiesCache {
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let eq_properties = EquivalenceProperties::new(schema);
-            PlanPropertiesCache::new(
+            PlanProperties::new(
                 eq_properties,
                 // Output Partitioning
                 Partitioning::UnknownPartitioning(1),
@@ -2613,7 +2613,7 @@ mod tests {
             self
         }
 
-        fn cache(&self) -> &PlanPropertiesCache {
+        fn properties(&self) -> &PlanProperties {
             &self.cache
         }
 

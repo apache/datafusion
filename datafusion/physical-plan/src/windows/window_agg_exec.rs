@@ -31,7 +31,7 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, PhysicalExpr, PlanPropertiesCache, RecordBatchStream,
+    ExecutionPlan, PhysicalExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
@@ -65,7 +65,7 @@ pub struct WindowAggExec {
     // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanPropertiesCache,
+    cache: PlanProperties,
 }
 
 impl WindowAggExec {
@@ -80,7 +80,7 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::create_cache(schema.clone(), &input, &window_expr);
+        let cache = Self::compute_properties(schema.clone(), &input, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -117,11 +117,11 @@ impl WindowAggExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn create_cache(
+    fn compute_properties(
         schema: SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
         window_expr: &[Arc<dyn WindowExpr>],
-    ) -> PlanPropertiesCache {
+    ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = window_equivalence_properties(&schema, input, window_expr);
 
@@ -139,7 +139,7 @@ impl WindowAggExec {
         };
 
         // Construct properties cache:
-        PlanPropertiesCache::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -177,7 +177,7 @@ impl ExecutionPlan for WindowAggExec {
         self
     }
 
-    fn cache(&self) -> &PlanPropertiesCache {
+    fn properties(&self) -> &PlanProperties {
         &self.cache
     }
 
