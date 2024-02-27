@@ -235,7 +235,7 @@ async fn simple_udaf_order() -> Result<()> {
     fn create_accumulator(
         data_type: &DataType,
         order_by: Vec<Expr>,
-        schema: Option<Schema>,
+        schema: Option<&Schema>,
     ) -> Result<Box<dyn Accumulator>> {
         // test with ordering so schema is required
         let schema = schema.unwrap();
@@ -248,7 +248,7 @@ async fn simple_udaf_order() -> Result<()> {
             if let Expr::Sort(sort) = expr {
                 if let Expr::Column(col) = sort.expr.as_ref() {
                     let name = &col.name;
-                    let e = expressions::col(name, &schema)?;
+                    let e = expressions::col(name, schema)?;
                     sort_exprs.push(PhysicalSortExpr {
                         expr: e,
                         options: SortOptions {
@@ -267,7 +267,7 @@ async fn simple_udaf_order() -> Result<()> {
 
         let ordering_types = ordering_req
             .iter()
-            .map(|e| e.expr.data_type(&schema))
+            .map(|e| e.expr.data_type(schema))
             .collect::<Result<Vec<_>>>()?;
 
         let acc = FirstValueAccumulator::try_new(
@@ -291,7 +291,7 @@ async fn simple_udaf_order() -> Result<()> {
             asc: false,
             nulls_first: false,
         })],
-        Some(schema),
+        Some(&schema),
     );
 
     ctx.register_udaf(my_first);
@@ -792,7 +792,7 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         &self,
         _arg: &DataType,
         _sort_exprs: Vec<Expr>,
-        _schmea: Option<Schema>,
+        _schmea: Option<&Schema>,
     ) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");
