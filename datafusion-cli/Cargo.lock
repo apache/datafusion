@@ -1243,6 +1243,9 @@ name = "datafusion-functions-array"
 version = "36.0.0"
 dependencies = [
  "arrow",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -1259,6 +1262,7 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-array",
  "datafusion-physical-expr",
  "hashbrown 0.14.3",
  "itertools",
@@ -1337,6 +1341,7 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-array",
  "log",
  "sqlparser",
 ]
