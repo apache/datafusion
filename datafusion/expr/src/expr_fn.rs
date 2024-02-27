@@ -557,7 +557,6 @@ nary_scalar_expr!(
     trunc,
     "truncate toward zero, with optional precision"
 );
-scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
@@ -1354,7 +1353,6 @@ mod test {
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_nary_scalar_expr!(Trunc, trunc, num);
         test_nary_scalar_expr!(Trunc, trunc, num, precision);
-        test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
         test_unary_scalar_expr!(Log2, log2);
