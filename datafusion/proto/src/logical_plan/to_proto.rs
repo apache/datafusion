@@ -1450,7 +1450,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::Abs => Self::Abs,
             BuiltinScalarFunction::OctetLength => Self::OctetLength,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::Lower => Self::Lower,
