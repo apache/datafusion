@@ -494,6 +494,22 @@ async fn test_user_defined_functions_zero_argument() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn deregister_udf() -> Result<()> {
+    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
+    let ctx = SessionContext::new();
+
+    ctx.register_udf(random_normal_udf.clone());
+
+    assert!(ctx.udfs().contains("random_udf"));
+
+    ctx.deregister_udf("random_udf");
+
+    assert!(!ctx.udfs().contains("random_udf"));
+
+    Ok(())
+}
+
 fn create_udf_context() -> SessionContext {
     let ctx = SessionContext::new();
     // register a custom UDF
