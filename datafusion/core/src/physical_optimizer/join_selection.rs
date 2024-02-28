@@ -41,8 +41,8 @@ use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::JoinType;
 use datafusion_common::{internal_err, JoinSide};
-use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};

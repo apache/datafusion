@@ -21,7 +21,7 @@ use arrow::datatypes::SchemaBuilder;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
     common::plan_err,
-    error::{DataFusionError, Result},
+    error::Result,
 };
 use std::fs;
 mod run;

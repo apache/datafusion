@@ -29,7 +29,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
 use arrow_schema::{DataType, Schema};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
 

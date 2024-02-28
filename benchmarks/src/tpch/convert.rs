@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use datafusion::common::not_impl_err;
-use datafusion::error::DataFusionError;
+
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use parquet::basic::Compression;

@@ -33,7 +33,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    exec_err, DataFusionError, Result,
+    exec_err, Result,
 };
 
 /// Returns number of characters in the string.

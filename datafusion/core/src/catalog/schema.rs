@@ -20,12 +20,12 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, DataFusionError};
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 
 /// Represents a schema, comprising a number of named tables.
 ///

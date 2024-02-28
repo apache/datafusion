@@ -35,7 +35,7 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{GenericListArray, OffsetSizeTrait};
-use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
+use datafusion_common::{exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 
 use async_trait::async_trait;
