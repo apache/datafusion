@@ -42,8 +42,6 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// acos
-    Acos,
     /// asin
     Asin,
     /// atan
@@ -362,7 +360,6 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Acos => Volatility::Immutable,
             BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
             BuiltinScalarFunction::Atan2 => Volatility::Immutable,
@@ -873,8 +870,7 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "levenshtein")
             }
 
-            BuiltinScalarFunction::Acos
-            | BuiltinScalarFunction::Asin
+            BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
@@ -1346,8 +1342,7 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Acos
-            | BuiltinScalarFunction::Asin
+            BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
@@ -1438,7 +1433,6 @@ impl BuiltinScalarFunction {
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Acos => &["acos"],
             BuiltinScalarFunction::Acosh => &["acosh"],
             BuiltinScalarFunction::Asin => &["asin"],
             BuiltinScalarFunction::Asinh => &["asinh"],

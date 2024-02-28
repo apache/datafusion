@@ -548,7 +548,7 @@ enum ScalarFunction {
   //  0 was Abs before
   //  The first enum value must be zero for open enums
   unknown = 0;
-  Acos = 1;
+  //  1 was Acos
   Asin = 2;
   Atan = 3;
   Ascii = 4;
