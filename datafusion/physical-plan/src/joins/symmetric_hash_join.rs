@@ -62,9 +62,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{
-    internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-};
+use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;

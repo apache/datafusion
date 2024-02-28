@@ -41,7 +41,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::{not_impl_err, DataFusionError, FileType};
+use datafusion_common::{not_impl_err, FileType};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;

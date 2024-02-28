@@ -14,18 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//! Verifies [Macro Hygene]
+//!
+//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+mod plan_err {
+    // NO other imports!
+    use datafusion_common::plan_err;
 
-use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::Operator;
-use sqlparser::ast::JsonOperator;
+    #[test]
+    fn test_macro() {
+        // need type annotation for Ok variant
+        let _res: Result<(), _> = plan_err!("foo");
+    }
+}
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(crate) fn parse_sql_json_access(&self, op: JsonOperator) -> Result<Operator> {
-        match op {
-            JsonOperator::AtArrow => Ok(Operator::AtArrow),
-            JsonOperator::ArrowAt => Ok(Operator::ArrowAt),
-            _ => not_impl_err!("Unsupported SQL json operator {op:?}"),
-        }
+mod plan_datafusion_err {
+    // NO other imports!
+    use datafusion_common::plan_datafusion_err;
+
+    #[test]
+    fn test_macro() {
+        plan_datafusion_err!("foo");
     }
 }

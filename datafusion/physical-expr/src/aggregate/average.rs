@@ -39,7 +39,7 @@ use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
 };
 use arrow_buffer::{i256, ArrowNativeType};
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::avg_return_type;
 use datafusion_expr::{Accumulator, EmitTo, GroupsAccumulator};
 
