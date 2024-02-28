@@ -15,19 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_proto::bytes::Serializeable;
+//! "regx" DataFusion functions
 
-fn main() -> Result<()> {
-    // Create a new `Expr` a < 32
-    let expr = col("a").lt(lit(5i32));
+mod regexpmatch;
+// create UDFs
+make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 
-    // Convert it to an opaque form
-    let bytes = expr.to_bytes()?;
-
-    // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes)?;
-    assert_eq!(expr, decoded_expr);
-    Ok(())
-}
+export_functions!((
+    regexp_match,
+    input_arg1
+    input_arg2,
+    "returns a list of regular expression matches in a string. "
+));

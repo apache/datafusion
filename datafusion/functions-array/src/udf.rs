@@ -18,7 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array functions.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};

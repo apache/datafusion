@@ -21,7 +21,7 @@ use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Result};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};

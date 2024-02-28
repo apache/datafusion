@@ -25,15 +25,14 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalSortRequirement;
 
 use log::{debug, trace};
 
@@ -74,16 +73,20 @@ pub struct SortPreservingMergeExec {
     metrics: ExecutionPlanMetricsSet,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
+            cache,
         }
     }
     /// Sets the number of rows to fetch
@@ -105,6 +108,15 @@ impl SortPreservingMergeExec {
     /// Fetch
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            input.execution_mode(),                 // Execution Mode
+        )
     }
 }
 
@@ -137,20 +149,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -165,16 +165,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

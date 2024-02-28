@@ -32,18 +32,18 @@ use std::task::{Context, Poll};
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinFilter, JoinOn,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;
-use arrow::compute;
-use arrow::compute::{concat_batches, take, SortOptions};
+use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -53,9 +53,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExprRef, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
 
@@ -81,12 +79,12 @@ pub struct SortMergeJoinExec {
     left_sort_exprs: Vec<PhysicalSortExpr>,
     /// The right SortExpr
     right_sort_exprs: Vec<PhysicalSortExpr>,
-    /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
     pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl SortMergeJoinExec {
@@ -137,19 +135,10 @@ impl SortMergeJoinExec {
             })
             .unzip();
 
-        let output_ordering = calculate_join_output_ordering(
-            left.output_ordering().unwrap_or(&[]),
-            right.output_ordering().unwrap_or(&[]),
-            join_type,
-            &on,
-            left_schema.fields.len(),
-            &Self::maintains_input_order(join_type),
-            Some(Self::probe_side(&join_type)),
-        );
-
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-
+        let cache =
+            Self::compute_properties(&left, &right, schema.clone(), join_type, &on);
         Ok(Self {
             left,
             right,
@@ -160,9 +149,9 @@ impl SortMergeJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             left_sort_exprs,
             right_sort_exprs,
-            output_ordering,
             sort_options,
             null_equals_null,
+            cache,
         })
     }
 
@@ -200,16 +189,50 @@ impl SortMergeJoinExec {
         &self.on
     }
 
-    pub fn right(&self) -> &dyn ExecutionPlan {
-        self.right.as_ref()
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
     }
 
     pub fn join_type(&self) -> JoinType {
         self.join_type
     }
 
-    pub fn left(&self) -> &dyn ExecutionPlan {
-        self.left.as_ref()
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        join_on: JoinOnRef,
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = join_equivalence_properties(
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &Self::maintains_input_order(join_type),
+            Some(Self::probe_side(&join_type)),
+            join_on,
+        );
+
+        // Get output partitioning:
+        let left_columns_len = left.schema().fields.len();
+        let output_partitioning = partitioned_join_output_partitioning(
+            join_type,
+            left.output_partitioning(),
+            right.output_partitioning(),
+            left_columns_len,
+        );
+
+        // Determine execution mode:
+        let mode = execution_mode_from_children([left, right]);
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -243,8 +266,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -267,34 +290,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         Self::maintains_input_order(self.join_type)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            Some(Self::probe_side(&self.join_type)),
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -14,23 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//! Verifies [Macro Hygene]
+//!
+//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+mod plan_err {
+    // NO other imports!
+    use datafusion_common::plan_err;
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
-use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+    #[test]
+    fn test_macro() {
+        // need type annotation for Ok variant
+        let _res: Result<(), _> = plan_err!("foo");
+    }
+}
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await?;
-    let dataframe = ctx.table("t1").await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let bytes = physical_plan_to_bytes(physical_plan.clone())?;
-    let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(
-        format!("{physical_plan:?}"),
-        format!("{physical_round_trip:?}")
-    );
-    Ok(())
+mod plan_datafusion_err {
+    // NO other imports!
+    use datafusion_common::plan_datafusion_err;
+
+    #[test]
+    fn test_macro() {
+        plan_datafusion_err!("foo");
+    }
 }

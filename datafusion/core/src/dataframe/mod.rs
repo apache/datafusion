@@ -23,15 +23,12 @@ mod parquet;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
-use crate::execution::{
-    context::{SessionState, TaskContext},
-    FunctionRegistry,
-};
+use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
     col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
@@ -40,17 +37,18 @@ use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
 };
+use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
-    SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions,
+    ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
@@ -58,7 +56,6 @@ use datafusion_expr::{
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
-use crate::prelude::SessionContext;
 use async_trait::async_trait;
 
 /// Contains options that control how data is
@@ -1044,6 +1041,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        if matches!(self.plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -1516,7 +1516,7 @@ mod tests {
         WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -1685,6 +1685,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2168,6 +2169,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn sendable() {
         let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
@@ -2902,7 +2904,7 @@ mod tests {
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
             physical_plan.output_partitioning(),
-            Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
+            Partitioning::UnknownPartitioning(partition_count) if *partition_count == default_partition_count * 2));
         Ok(())
     }
 
@@ -2951,7 +2953,7 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(left_exprs, default_partition_count)
+                        &Partitioning::Hash(left_exprs, default_partition_count)
                     );
                 }
                 JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
@@ -2961,17 +2963,28 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(right_exprs, default_partition_count)
+                        &Partitioning::Hash(right_exprs, default_partition_count)
                     );
                 }
                 JoinType::Full => {
                     assert!(matches!(
                         out_partitioning,
-                    Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                    &Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn nested_explain_should_fail() -> Result<()> {
+        let ctx = SessionContext::new();
+        // must be error
+        let mut result = ctx.sql("explain select 1").await?.explain(false, false);
+        assert!(result.is_err());
+        // must be error
+        result = ctx.sql("explain explain select 1").await;
+        assert!(result.is_err());
         Ok(())
     }
 }

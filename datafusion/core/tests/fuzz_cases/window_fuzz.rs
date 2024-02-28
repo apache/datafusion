@@ -123,6 +123,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         for i in 0..n {
             let idx = i % test_cases.len();
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
+            #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
             let job = tokio::spawn(run_window_test(
                 make_staggered_batches::<true>(1000, n_distinct, i as u64),
                 i as u64,
@@ -281,6 +282,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &orderby_exprs,
                     Arc::new(window_frame),
                     schema.as_ref(),
+                    false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
@@ -642,6 +644,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
+                false,
             )
             .unwrap()],
             exec1,
@@ -664,6 +667,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
+                false,
             )
             .unwrap()],
             exec2,

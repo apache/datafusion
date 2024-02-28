@@ -128,6 +128,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
                     Expr::WindowFunction(expr::WindowFunction {
@@ -138,6 +139,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                         partition_by,
                         order_by,
                         window_frame,
+                        null_treatment,
                     })
                 }
 
@@ -351,6 +353,7 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
                     WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
                 ),
+                None,
             ))])?
             .project(vec![count(wildcard())])?
             .build()?;

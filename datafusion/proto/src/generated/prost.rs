@@ -511,6 +511,8 @@ pub struct CopyToNode {
     pub output_url: ::prost::alloc::string::String,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "7")]
+    pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
     pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
 }
@@ -2631,9 +2633,11 @@ impl JoinConstraint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ScalarFunction {
-    Abs = 0,
-    Acos = 1,
-    Asin = 2,
+    ///   0 was Abs before
+    ///   The first enum value must be zero for open enums
+    Unknown = 0,
+    ///   1 was Acos
+    ///   2 was Asin
     Atan = 3,
     Ascii = 4,
     Ceil = 5,
@@ -2652,7 +2656,7 @@ pub enum ScalarFunction {
     Tan = 18,
     Trunc = 19,
     Array = 20,
-    RegexpMatch = 21,
+    /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
     CharacterLength = 24,
@@ -2774,9 +2778,7 @@ impl ScalarFunction {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ScalarFunction::Abs => "Abs",
-            ScalarFunction::Acos => "Acos",
-            ScalarFunction::Asin => "Asin",
+            ScalarFunction::Unknown => "unknown",
             ScalarFunction::Atan => "Atan",
             ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
@@ -2795,7 +2797,6 @@ impl ScalarFunction {
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
-            ScalarFunction::RegexpMatch => "RegexpMatch",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
@@ -2911,9 +2912,7 @@ impl ScalarFunction {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "Abs" => Some(Self::Abs),
-            "Acos" => Some(Self::Acos),
-            "Asin" => Some(Self::Asin),
+            "unknown" => Some(Self::Unknown),
             "Atan" => Some(Self::Atan),
             "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
@@ -2932,7 +2931,6 @@ impl ScalarFunction {
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
-            "RegexpMatch" => Some(Self::RegexpMatch),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),

@@ -116,12 +116,13 @@ tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
-xz2 = { version = "0.1", optional = true }
+xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
+cargo = "0.77.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = { workspace = true }
@@ -141,7 +142,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.27.1", features = ["fs"] }
+nix = { version = "0.28.0", features = ["fs"] }
 
 [[bench]]
 harness = false

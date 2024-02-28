@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, TableReference,
+    Result, ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
@@ -129,14 +129,15 @@ fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
 
 /// Merge two grouping_set
 ///
-///
-/// Example:
-///
+/// # Example
+/// ```text
 /// (A, B), (C, D) -> (A, B, C, D)
+/// ```
 ///
-/// Error:
+/// # Error
+/// - [`DataFusionError`]: The number of group_expression in grouping_set exceeds the maximum limit
 ///
-/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit
+/// [`DataFusionError`]: datafusion_common::DataFusionError
 fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
     check_grouping_set_size_limit(left.len() + right.len())?;
     Ok(left.iter().chain(right.iter()).cloned().collect())
@@ -144,15 +145,16 @@ fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
 
 /// Compute the cross product of two grouping_sets
 ///
+/// # Example
+/// ```text
+/// [(A, B), (C, D)], [(E), (F)] -> [(A, B, E), (A, B, F), (C, D, E), (C, D, F)]
+/// ```
 ///
-/// Example:
+/// # Error
+/// - [`DataFusionError`]: The number of group_expression in grouping_set exceeds the maximum limit
+/// - [`DataFusionError`]: The number of grouping_set in grouping_sets exceeds the maximum limit
 ///
-/// \[(A, B), (C, D)], [(E), (F)\] -> \[(A, B, E), (A, B, F), (C, D, E), (C, D, F)\]
-///
-/// Error:
-///
-/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
-/// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
+/// [`DataFusionError`]: datafusion_common::DataFusionError
 fn cross_join_grouping_sets<T: Clone>(
     left: &[Vec<T>],
     right: &[Vec<T>],
@@ -1255,6 +1257,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
@@ -1262,6 +1265,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
@@ -1269,6 +1273,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1276,6 +1281,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1298,6 +1304,7 @@ mod tests {
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(Some(false)),
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
@@ -1305,6 +1312,7 @@ mod tests {
             vec![],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
@@ -1312,6 +1320,7 @@ mod tests {
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
             WindowFrame::new(Some(false)),
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1319,6 +1328,7 @@ mod tests {
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
             WindowFrame::new(Some(false)),
+            None,
         ));
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
@@ -1353,6 +1363,7 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
                 ],
                 WindowFrame::new(Some(false)),
+                None,
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1364,6 +1375,7 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
                 ],
                 WindowFrame::new(Some(false)),
+                None,
             )),
         ];
         let expected = vec![

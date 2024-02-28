@@ -84,7 +84,11 @@ use log::debug;
 #[macro_use]
 pub mod macros;
 
-make_package!(core, "core_expressions", "Core datafusion expressions");
+/// Core datafusion expressions
+/// Enabled via feature flag `core_expressions`
+#[cfg(feature = "core_expressions")]
+pub mod core;
+make_stub_package!(core, "core_expressions");
 
 make_package!(
     encoding,
@@ -93,7 +97,7 @@ make_package!(
 );
 
 make_package!(math, "math_expressions", "Mathematical functions.");
-
+make_package!(regex, "regex_expressions", "Regex functions");
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
@@ -102,6 +106,8 @@ pub mod expr_fn {
     pub use super::encoding::expr_fn::*;
     #[cfg(feature = "math_expressions")]
     pub use super::math::expr_fn::*;
+    #[cfg(feature = "regex_expressions")]
+    pub use super::regex::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -109,7 +115,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let mut all_functions = core::functions()
         .into_iter()
         .chain(encoding::functions())
-        .chain(math::functions());
+        .chain(math::functions())
+        .chain(regex::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

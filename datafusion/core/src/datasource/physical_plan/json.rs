@@ -24,17 +24,16 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::json::ReaderBuilder;
@@ -44,8 +43,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
-use object_store::{self, GetOptions};
-use object_store::{GetResultPayload, ObjectStore};
+use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
@@ -54,11 +52,10 @@ use tokio::task::JoinSet;
 pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_schema: SchemaRef,
-    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
+    cache: PlanProperties,
 }
 
 impl NdJsonExec {
@@ -69,20 +66,51 @@ impl NdJsonExec {
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = Self::compute_properties(
+            projected_schema,
+            &projected_output_ordering,
+            &base_config,
+        );
         Self {
             base_config,
-            projected_schema,
             projected_statistics,
-            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
+            cache,
         }
     }
 
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            ExecutionMode::Bounded,                             // Execution Mode
+        )
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
     }
 }
 
@@ -101,26 +129,8 @@ impl ExecutionPlan for NdJsonExec {
     fn as_any(&self) -> &dyn Any {
         self
     }
-
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -140,7 +150,7 @@ impl ExecutionPlan for NdJsonExec {
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let preserve_order_within_groups = self.output_ordering().is_some();
+        let preserve_order_within_groups = self.properties().output_ordering().is_some();
         let file_groups = &self.base_config.file_groups;
 
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
@@ -151,7 +161,7 @@ impl ExecutionPlan for NdJsonExec {
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
             return Ok(Some(Arc::new(new_plan)));
         }
 
@@ -365,11 +375,10 @@ pub async fn plan_to_json(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Array;
-    use arrow::datatypes::{Field, SchemaBuilder};
-    use futures::StreamExt;
-    use object_store::local::LocalFileSystem;
+    use std::fs;
+    use std::path::Path;
 
+    use super::*;
     use crate::assert_batches_eq;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::file_compression_type::FileTypeExt;
@@ -377,19 +386,22 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
-    use crate::prelude::NdJsonReadOptions;
-    use crate::prelude::*;
+    use crate::prelude::{
+        CsvReadOptions, NdJsonReadOptions, SessionConfig, SessionContext,
+    };
     use crate::test::partitioned_file_groups;
+
+    use arrow::array::Array;
+    use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::FileType;
+
+    use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
+    use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs;
-    use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
-
-    use super::*;
 
     const TEST_DATA_BASE: &str = "tests/data";
 

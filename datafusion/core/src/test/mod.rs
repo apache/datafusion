@@ -42,9 +42,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, FileType, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
+};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -365,17 +367,33 @@ pub fn csv_exec_ordered(
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
+    cache: PlanProperties,
 }
+
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
             stats.column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
+        let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,
             schema: Arc::new(schema),
+            cache,
         }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanProperties::new(
+            eq_properties,
+            // Output Partitioning
+            Partitioning::UnknownPartitioning(2),
+            // Execution Mode
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -403,16 +421,8 @@ impl ExecutionPlan for StatisticsExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(2)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
