@@ -555,7 +555,7 @@ mod test {
         let task_ctx = Arc::new(TaskContext::default());
 
         let input = Arc::new(input);
-        let num_partitions = input.output_partitioning().partition_count();
+        let num_partitions = input.properties().output_partitioning().partition_count();
 
         // Configure a RecordBatchReceiverStream to consume all the input partitions
         let mut builder =

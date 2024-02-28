@@ -497,10 +497,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn output_partitioning(&self) -> &datafusion_physical_expr::Partitioning {
-            &datafusion_physical_expr::Partitioning::UnknownPartitioning(1)
-        }
-
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
             vec![]
         }

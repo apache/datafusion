@@ -36,7 +36,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::dml::CopyTo;
 use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
-use datafusion::physical_plan::{collect, execute_stream};
+use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;

@@ -30,7 +30,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -87,7 +86,7 @@ impl TopKAggregation {
 
         let children = sort.children();
         let child = children.iter().exactly_one().ok()?;
-        let order = plan.output_ordering()?;
+        let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;
 

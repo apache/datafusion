@@ -279,7 +279,13 @@ mod tests {
             table_partition_cols: vec![],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
         let mut results = avro_exec
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
@@ -350,7 +356,13 @@ mod tests {
             table_partition_cols: vec![],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
 
         let mut results = avro_exec
             .execute(0, state.task_ctx())
@@ -420,7 +432,13 @@ mod tests {
             table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
 
         let mut results = avro_exec
             .execute(0, state.task_ctx())

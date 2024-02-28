@@ -162,14 +162,14 @@ impl MemTable {
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
 
         if let Some(num_partitions) = output_partitions {
-            let exec = Arc::new(RepartitionExec::try_new(
+            let exec = RepartitionExec::try_new(
                 Arc::new(exec),
                 Partitioning::RoundRobinBatch(num_partitions),
-            )?) as Arc<dyn ExecutionPlan>;
+            )?;
 
             // execute and collect results
             let mut output_partitions = vec![];
-            for i in 0..exec.output_partitioning().partition_count() {
+            for i in 0..exec.properties().output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
                 let task_ctx = state.task_ctx();
                 let mut stream = exec.execute(i, task_ctx)?;

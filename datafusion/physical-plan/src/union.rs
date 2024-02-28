@@ -205,7 +205,7 @@ impl ExecutionPlan for UnionExec {
         // which is the "meet" of all input orderings. In this example, this
         // function will return vec![false, true, true], indicating that we
         // preserve the orderings for the 2nd and the 3rd children.
-        if let Some(output_ordering) = self.cache.output_ordering() {
+        if let Some(output_ordering) = self.properties().output_ordering() {
             self.inputs()
                 .iter()
                 .map(|child| {
@@ -635,7 +635,13 @@ mod tests {
         let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
 
         // Should have 9 partitions and 9 output batches
-        assert_eq!(union_exec.output_partitioning().partition_count(), 9);
+        assert_eq!(
+            union_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            9
+        );
 
         let result: Vec<RecordBatch> = collect(union_exec, task_ctx).await?;
         assert_eq!(result.len(), 9);
@@ -806,7 +812,7 @@ mod tests {
             );
 
             let union = UnionExec::new(vec![child1, child2]);
-            let union_eq_properties = union.equivalence_properties();
+            let union_eq_properties = union.properties().equivalence_properties();
             let union_actual_orderings = union_eq_properties.oeq_class();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",

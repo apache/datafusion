@@ -52,8 +52,8 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
-
 use datafusion_physical_plan::ExecutionPlanProperties;
+
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to

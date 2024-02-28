@@ -496,7 +496,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
-        if self.cache.output_ordering().is_some() {
+        if self.properties().output_ordering().is_some() {
             return false;
         }
         // ensure no ordering is required on the input

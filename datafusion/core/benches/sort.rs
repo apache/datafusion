@@ -95,6 +95,7 @@ use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
 
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// Total number of streams to divide each input into
 /// models 8 partition plan (should it be 16??)

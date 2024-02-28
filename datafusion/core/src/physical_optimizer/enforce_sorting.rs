@@ -64,8 +64,8 @@ use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
-
 use datafusion_physical_plan::ExecutionPlanProperties;
+
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -391,7 +391,7 @@ fn analyze_immediate_sort_removal(
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
-            .ordering_satisfy(node.plan.output_ordering().unwrap_or(&[]))
+            .ordering_satisfy(sort_exec.properties().output_ordering().unwrap_or(&[]))
         {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1

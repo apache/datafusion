@@ -192,7 +192,10 @@ mod tests {
         let merge = CoalescePartitionsExec::new(csv);
 
         // output of CoalescePartitionsExec should have a single partition
-        assert_eq!(merge.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            merge.properties().output_partitioning().partition_count(),
+            1
+        );
 
         // the result should contain 4 batches (one per input partition)
         let iter = merge.execute(0, task_ctx)?;

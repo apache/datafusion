@@ -41,9 +41,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use bytes::{Buf, Bytes};
-use datafusion_physical_plan::ExecutionPlanProperties;
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -198,7 +198,9 @@ impl ExecutionPlan for CsvExec {
 
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
-            .with_preserve_order_within_groups(self.cache.output_ordering().is_some())
+            .with_preserve_order_within_groups(
+                self.properties().output_ordering().is_some(),
+            )
             .with_repartition_file_min_size(repartition_file_min_size)
             .repartition_file_groups(&self.base_config.file_groups);
 

@@ -410,7 +410,8 @@ impl ExecutionPlan for LocalLimitExec {
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Precision::Inexact(
-                    self.fetch * self.cache.output_partitioning().partition_count(),
+                    self.fetch
+                        * self.properties().output_partitioning().partition_count(),
                 ),
 
                 column_statistics: col_stats,

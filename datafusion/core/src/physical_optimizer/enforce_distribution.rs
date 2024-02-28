@@ -55,8 +55,8 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
-
 use datafusion_physical_plan::ExecutionPlanProperties;
+
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1404,7 +1404,7 @@ pub(crate) mod tests {
         // model that it requires the output ordering of its input
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
             vec![self
-                .cache
+                .properties()
                 .output_ordering()
                 .map(PhysicalSortRequirement::from_sort_exprs)]
         }

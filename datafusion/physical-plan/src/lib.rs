@@ -101,7 +101,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// `ExecutionPlan`'s output from its input. See [`Partitioning`] for more
 /// details on partitioning.
 ///
-/// Methods such as [`schema`] and [`output_partitioning`] communicate
+/// Methods such as [`Self::schema`] and [`ExecutionPlanProperties::output_partitioning`] communicate
 /// properties of this output to the DataFusion optimizer, and methods such as
 /// [`required_input_distribution`] and [`required_input_ordering`] express
 /// requirements of the `ExecutionPlan` from its input.
@@ -111,8 +111,6 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// quite verbose) `Debug` output.
 ///
 /// [`execute`]: ExecutionPlan::execute
-/// [`schema`]: ExecutionPlan::schema
-/// [`output_partitioning`]: ExecutionPlan::output_partitioning
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
@@ -455,7 +453,7 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
     ///
-    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
+    /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
     fn equivalence_properties(&self) -> &EquivalenceProperties {
         self.properties().equivalence_properties()
@@ -605,8 +603,11 @@ impl PlanProperties {
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(_) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        !matches!(plan.output_partitioning(), Partitioning::RoundRobinBatch(_))
+    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        !matches!(
+            repartition.properties().output_partitioning(),
+            Partitioning::RoundRobinBatch(_)
+        )
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
     {
         coalesce.input().output_partitioning().partition_count() > 1
@@ -677,10 +678,9 @@ pub fn execute_stream(
         1 => plan.execute(0, context),
         _ => {
             // merge into a single partition
-            let plan = Arc::new(CoalescePartitionsExec::new(plan.clone()))
-                as Arc<dyn ExecutionPlan>;
+            let plan = CoalescePartitionsExec::new(plan.clone());
             // CoalescePartitionsExec must produce a single partition
-            assert_eq!(1, plan.output_partitioning().partition_count());
+            assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
         }
     }

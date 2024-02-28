@@ -287,8 +287,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::MemoryExec;
-    use crate::ExecutionPlan;
 
+    use crate::ExecutionPlan;
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -322,8 +322,11 @@ mod tests {
         let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
             .with_sort_information(sort_information);
 
-        assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
-        let eq_properties = mem_exec.equivalence_properties();
+        assert_eq!(
+            mem_exec.properties().output_ordering().unwrap(),
+            expected_output_order
+        );
+        let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
         assert!(eq_properties.oeq_class().contains(&sort2));
         Ok(())
