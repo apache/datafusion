@@ -112,6 +112,7 @@ pub mod expr_fn {
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let mut all_functions = core::functions()
         .into_iter()
+        .chain(datetime::functions())
         .chain(encoding::functions())
         .chain(math::functions());
 

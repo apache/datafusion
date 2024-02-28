@@ -3052,10 +3052,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // pick some arbitrary functions to test
-        let funs = [
-            BuiltinScalarFunction::Concat,
-            BuiltinScalarFunction::Repeat,
-        ];
+        let funs = [BuiltinScalarFunction::Concat, BuiltinScalarFunction::Repeat];
 
         for fun in funs.iter() {
             let expr = create_physical_expr_with_type_coercion(

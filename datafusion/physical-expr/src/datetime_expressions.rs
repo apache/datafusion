@@ -21,12 +21,14 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::compute::cast;
+use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow::{
     array::{Array, ArrayRef, Float64Array, PrimitiveArray},
     datatypes::{
-        ArrowNumericType, ArrowTemporalType, DataType,
-        IntervalDayTimeType, IntervalMonthDayNanoType, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        ArrowNumericType, ArrowTemporalType, DataType, IntervalDayTimeType,
+        IntervalMonthDayNanoType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
     },
 };
 use arrow::{
@@ -34,25 +36,21 @@ use arrow::{
     datatypes::TimeUnit,
     temporal_conversions::{as_datetime_with_timezone, timestamp_ns_to_datetime},
 };
-use arrow::compute::cast;
-use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::StringArray;
 use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
-use chrono::{Duration, LocalResult, Months, NaiveDate};
+use arrow_array::StringArray;
 use chrono::prelude::*;
+use chrono::{Duration, LocalResult, Months, NaiveDate};
 
-use datafusion_common::{
-    DataFusionError, exec_err, not_impl_err, Result, ScalarValue,
-};
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_primitive_array,
-    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
-    as_timestamp_nanosecond_array, as_timestamp_second_array,
+    as_date32_array, as_date64_array, as_primitive_array, as_timestamp_microsecond_array,
+    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
+    as_timestamp_second_array,
 };
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use crate::expressions::cast_column;
@@ -432,10 +430,7 @@ where
 
 fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
 where
-    T: Datelike
-    + Timelike
-    + Sub<Duration, Output=T>
-    + Copy,
+    T: Datelike + Timelike + Sub<Duration, Output = T> + Copy,
 {
     let value = match granularity {
         "millisecond" => value,
@@ -1174,20 +1169,17 @@ pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{
-        ArrayRef, as_primitive_array, Int64Array, IntervalDayTimeArray,
-    };
+    use arrow::array::{as_primitive_array, ArrayRef, Int64Array, IntervalDayTimeArray};
+    use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow_array::{
         Date32Array, Date64Array, Int32Array, Time32MillisecondArray, Time32SecondArray,
         Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         UInt32Array,
     };
-    use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use datafusion_common::ScalarValue;
 
     use super::*;
-
 
     #[test]
     fn date_trunc_test() {

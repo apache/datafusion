@@ -58,10 +58,12 @@ datafusion-physical-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = "0.4.20"
-criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+criterion = "0.5"
 
 [[bench]]
 harness = false

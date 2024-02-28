@@ -36,9 +36,7 @@ pub mod expr_fn {
     use datafusion_expr::Expr;
 
     #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
-    pub fn to_timestamp(args: Vec<Expr>) -> Expr {
-        super::to_timestamp().call(args)
-    }
+    pub fn to_timestamp(args: Vec<Expr>) -> Expr { super::to_timestamp().call(args) }
 
     #[doc = "converts a string and optional formats to a `Timestamp(Seconds, None)`"]
     pub fn to_timestamp_seconds(args: Vec<Expr>) -> Expr {
