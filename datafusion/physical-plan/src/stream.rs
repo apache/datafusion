@@ -22,21 +22,20 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
+use super::metrics::BaselineMetrics;
+use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::internal_err;
 
-use datafusion_common::Result;
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
-
-use super::metrics::BaselineMetrics;
-use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
@@ -458,12 +457,12 @@ impl futures::Stream for ObservedStream {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::exec_err;
-
     use crate::test::exec::{
         assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
     };
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::exec_err;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))

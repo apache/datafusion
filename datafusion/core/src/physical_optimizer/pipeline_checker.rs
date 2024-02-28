@@ -24,14 +24,13 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).

@@ -25,7 +25,6 @@ use super::{
     DisplayAs, Distribution, ExecutionPlanProperties, PlanProperties,
     SendableRecordBatchStream,
 };
-
 use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -249,9 +248,7 @@ fn create_output_batch(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema};
-    use futures::FutureExt;
-
+    use super::*;
     use crate::{
         collect,
         test::{
@@ -260,7 +257,8 @@ mod tests {
         },
     };
 
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {

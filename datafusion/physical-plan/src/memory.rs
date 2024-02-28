@@ -287,8 +287,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::MemoryExec;
-
     use crate::ExecutionPlan;
+
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;

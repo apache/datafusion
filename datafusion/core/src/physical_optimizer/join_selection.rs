@@ -34,16 +34,14 @@ use crate::physical_plan::joins::{
     SymmetricHashJoinExec,
 };
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::JoinType;
-use datafusion_common::{internal_err, JoinSide};
+use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::ExecutionPlanProperties;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -1366,8 +1364,9 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
-    use self::tests_statistical::crosscheck_plans;
+    use std::sync::Arc;
 
+    use self::tests_statistical::crosscheck_plans;
     use super::*;
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
@@ -1375,12 +1374,12 @@ mod hash_join_tests {
     use crate::physical_plan::joins::PartitionMode;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::test_util::UnboundedExec;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::utils::DataPtr;
     use datafusion_common::JoinType;
     use datafusion_physical_plan::ExecutionPlanProperties;
-    use std::sync::Arc;
 
     struct TestCase {
         case: String,

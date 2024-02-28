@@ -38,15 +38,14 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
-        SendableRecordBatchStream, Statistics,
+        DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
+        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
     },
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::ExecutionPlanProperties;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;

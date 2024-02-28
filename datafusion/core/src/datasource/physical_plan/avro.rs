@@ -219,21 +219,21 @@ mod private {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
+    use super::*;
+    use crate::arrow::datatypes::{DataType, Field, SchemaBuilder};
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::datatypes::{DataType, Field, SchemaBuilder};
+
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
-
-    use super::*;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {

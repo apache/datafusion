@@ -123,6 +123,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         self.properties().schema().clone()
     }
 
+    /// Gets plan properties, such as output ordering(s), partitioning information etc.
     fn properties(&self) -> &PlanProperties;
 
     /// Specifies the data distribution requirements for all the
@@ -400,6 +401,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// This extension trait provides an API to fetch various properties of
+/// [`ExecutionPlan`] objects.
 pub trait ExecutionPlanProperties {
     fn output_partitioning(&self) -> &Partitioning;
 
@@ -419,21 +422,18 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
+    /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
     fn execution_mode(&self) -> ExecutionMode {
         self.properties().execution_mode()
     }
 
     /// If the output of this `ExecutionPlan` within each partition is sorted,
-    /// returns `Some(keys)` with the description of how it was sorted.
+    /// returns `Some(keys)` describing the ordering. A `None` return value
+    /// indicates no assumptions should be made on the output ordering.
     ///
-    /// For example, Sort, (obviously) produces sorted output as does
-    /// SortPreservingMergeStream. Less obviously `Projection`
-    /// produces sorted output if its input was sorted as it does not
-    /// reorder the input rows,
-    ///
-    /// It is safe to return `None` here if your `ExecutionPlan` does not
-    /// have any particular output order here
+    /// For example, `SortExec` (obviously) produces sorted output as does
+    /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
+    /// output if its input is sorted as it does not reorder the input rows.
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.properties().output_ordering()
     }

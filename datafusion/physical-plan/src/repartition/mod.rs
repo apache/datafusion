@@ -926,17 +926,7 @@ impl RecordBatchStream for PerPartitionStream {
 mod tests {
     use std::collections::HashSet;
 
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use futures::FutureExt;
-    use tokio::task::JoinHandle;
-
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-
+    use super::*;
     use crate::{
         test::{
             assert_is_pending,
@@ -948,7 +938,15 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use super::*;
+    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+
+    use futures::FutureExt;
+    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

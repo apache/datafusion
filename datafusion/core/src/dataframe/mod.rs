@@ -23,7 +23,6 @@ mod parquet;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
@@ -43,7 +42,7 @@ use crate::prelude::SessionContext;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;

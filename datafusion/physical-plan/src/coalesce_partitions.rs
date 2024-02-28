@@ -168,16 +168,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
 #[cfg(test)]
 mod tests {
-
-    use arrow::datatypes::{DataType, Field, Schema};
-    use futures::FutureExt;
-
     use super::*;
     use crate::test::exec::{
         assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn merge() -> Result<()> {

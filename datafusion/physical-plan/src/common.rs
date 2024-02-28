@@ -381,11 +381,10 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::{
-        array::{Float32Array, Float64Array},
+        array::{Float32Array, Float64Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
-    use arrow_array::UInt64Array;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 

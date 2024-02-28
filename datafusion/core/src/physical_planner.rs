@@ -66,8 +66,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, InputOrderMode,
-    Partitioning, PhysicalExpr, WindowExpr,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan,
+    ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -93,7 +93,6 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;

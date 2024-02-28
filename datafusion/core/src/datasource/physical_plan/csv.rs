@@ -32,8 +32,8 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::csv;
@@ -41,7 +41,6 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::ExecutionPlanProperties;
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
@@ -512,20 +511,23 @@ pub async fn plan_to_csv(
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{self, File};
+    use std::io::Write;
+
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
+
     use arrow::datatypes::*;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::FileType;
+
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs::{self, File};
-    use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
 
