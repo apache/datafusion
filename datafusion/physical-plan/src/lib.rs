@@ -101,8 +101,8 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// `ExecutionPlan`'s output from its input. See [`Partitioning`] for more
 /// details on partitioning.
 ///
-/// Methods such as [`Self::schema`] and [`ExecutionPlanProperties::output_partitioning`] communicate
-/// properties of this output to the DataFusion optimizer, and methods such as
+/// Methods such as [`Self::schema`] and [`Self::properties`] communicate
+/// properties of the output to the DataFusion optimizer, and methods such as
 /// [`required_input_distribution`] and [`required_input_ordering`] express
 /// requirements of the `ExecutionPlan` from its input.
 ///
@@ -123,7 +123,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         self.properties().schema().clone()
     }
 
-    /// Gets plan properties, such as output ordering(s), partitioning information etc.
+    /// Return properties of the output of the `ExecutionPlan`, such as output
+    /// ordering(s), partitioning information etc.
+    ///
+    /// This information is available via methods on [`ExecutionPlanProperties`]
+    /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
 
     /// Specifies the data distribution requirements for all the
@@ -401,31 +405,17 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// This extension trait provides an API to fetch various properties of
-/// [`ExecutionPlan`] objects.
+/// Extension trait provides an easy API to fetch various properties of
+/// [`ExecutionPlan`] objects based on [`ExecutionPlan::properties`].
 pub trait ExecutionPlanProperties {
-    fn output_partitioning(&self) -> &Partitioning;
-
-    fn execution_mode(&self) -> ExecutionMode;
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
-
-    fn equivalence_properties(&self) -> &EquivalenceProperties;
-}
-
-impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     /// Specifies how the output of this `ExecutionPlan` is split into
     /// partitions.
-    fn output_partitioning(&self) -> &Partitioning {
-        self.properties().output_partitioning()
-    }
+    fn output_partitioning(&self) -> &Partitioning;
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
-    }
+    fn execution_mode(&self) -> ExecutionMode;
 
     /// If the output of this `ExecutionPlan` within each partition is sorted,
     /// returns `Some(keys)` describing the ordering. A `None` return value
@@ -434,9 +424,7 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     /// For example, `SortExec` (obviously) produces sorted output as does
     /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
     /// output if its input is sorted as it does not reorder the input rows.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.properties().output_ordering()
-    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
@@ -455,6 +443,22 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    fn equivalence_properties(&self) -> &EquivalenceProperties;
+}
+
+impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
+    fn output_partitioning(&self) -> &Partitioning {
+        self.properties().output_partitioning()
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        self.properties().execution_mode()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.properties().output_ordering()
+    }
+
     fn equivalence_properties(&self) -> &EquivalenceProperties {
         self.properties().equivalence_properties()
     }
@@ -519,20 +523,21 @@ fn execution_mode_from_children<'a>(
     result
 }
 
-/// Stores the plan properties used in query optimization.
+/// Stores certain, often expensive to compute, plan properties used in query
+/// optimization.
 ///
-/// These properties are in a single structure to permit this information to be computed
-/// once and then those cached results used multiple times without recomputation (aka a cache)
+/// These properties are stored a single structure to permit this information to
+/// be computed once and then those cached results used multiple times without
+/// recomputation (aka a cache)
 #[derive(Debug, Clone)]
 pub struct PlanProperties {
-    /// Stores the [`EquivalenceProperties`] of the [`ExecutionPlan`].
+    /// See [ExecutionPlanProperties::equivalence_properties]
     pub eq_properties: EquivalenceProperties,
-    /// Stores the output [`Partitioning`] of the [`ExecutionPlan`].
+    /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
-    /// Stores the [`ExecutionMode`] of the [`ExecutionPlan`].
-    pub exec_mode: ExecutionMode,
-    /// Stores output ordering of the [`ExecutionPlan`]. A `None` value represents
-    /// no ordering.
+    /// See [ExecutionPlanProperties::execution_mode]
+    pub execution_mode: ExecutionMode,
+    /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
 
@@ -541,14 +546,14 @@ impl PlanProperties {
     pub fn new(
         eq_properties: EquivalenceProperties,
         partitioning: Partitioning,
-        exec_mode: ExecutionMode,
+        execution_mode: ExecutionMode,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.oeq_class().output_ordering();
         Self {
             eq_properties,
             partitioning,
-            exec_mode,
+            execution_mode,
             output_ordering,
         }
     }
@@ -560,8 +565,8 @@ impl PlanProperties {
     }
 
     /// Overwrite the execution Mode with its new value.
-    pub fn with_exec_mode(mut self, exec_mode: ExecutionMode) -> Self {
-        self.exec_mode = exec_mode;
+    pub fn with_execution_mode(mut self, execution_mode: ExecutionMode) -> Self {
+        self.execution_mode = execution_mode;
         self
     }
 
@@ -587,7 +592,7 @@ impl PlanProperties {
     }
 
     pub fn execution_mode(&self) -> ExecutionMode {
-        self.exec_mode
+        self.execution_mode
     }
 
     /// Get schema of the node.
