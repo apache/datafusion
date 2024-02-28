@@ -90,14 +90,25 @@ pub mod macros;
 pub mod core;
 make_stub_package!(core, "core_expressions");
 
-make_package!(
-    encoding,
-    "encoding_expressions",
-    "Hex and binary `encode` and `decode` functions."
-);
+/// Encoding expressions.
+/// Contains Hex and binary `encode` and `decode` functions.
+/// Enabled via feature flag `encoding_expressions`
+#[cfg(feature = "encoding_expressions")]
+pub mod encoding;
+make_stub_package!(encoding, "encoding_expressions");
 
-make_package!(math, "math_expressions", "Mathematical functions.");
-make_package!(regex, "regex_expressions", "Regex functions");
+/// Mathematical functions.
+/// Enabled via feature flag `math_expressions`
+#[cfg(feature = "math_expressions")]
+pub mod math;
+make_stub_package!(math, "math_expressions");
+
+/// Regular expression functions.
+/// Enabled via feature flag `regex_expressions`
+#[cfg(feature = "regex_expressions")]
+pub mod regex;
+make_stub_package!(regex, "regex_expressions");
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
