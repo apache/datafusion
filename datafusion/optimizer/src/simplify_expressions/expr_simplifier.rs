@@ -103,6 +103,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_common::Result;
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
     /// use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
+    /// use datafusion_common::DFSchema;
+    /// use std::sync::Arc;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
@@ -124,6 +126,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
     ///     Ok(DataType::Int32)
     ///   }
+    ///   fn schema(&self) -> Option<Arc<DFSchema>> { None }
     /// }
     ///
     /// // Create the simplifier
