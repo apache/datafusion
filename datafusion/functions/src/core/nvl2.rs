@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::Array;
+use arrow::compute::is_not_null;
+use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{utils, ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use arrow::compute::kernels::zip::zip;
-use arrow::compute::is_not_null;
-use arrow::array::Array;
 
 #[derive(Debug)]
 pub(super) struct NVL2Func {
@@ -30,10 +30,7 @@ pub(super) struct NVL2Func {
 impl NVL2Func {
     pub fn new() -> Self {
         Self {
-            signature:
-            Signature::variadic_equal(
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_equal(Volatility::Immutable),
         }
     }
 }
@@ -87,14 +84,13 @@ fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
     if is_array {
-        let args = args.iter().map(|arg| match arg {
-            ColumnarValue::Scalar(scalar) => {
-                scalar.to_array_of_size(len)
-            }
-            ColumnarValue::Array(array) => {
-                Ok(array.clone())
-            }
-        }).collect::<Result<Vec<_>>>()?;
+        let args = args
+            .iter()
+            .map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len),
+                ColumnarValue::Array(array) => Ok(array.clone()),
+            })
+            .collect::<Result<Vec<_>>>()?;
         let to_apply = is_not_null(&args[0])?;
         let value = zip(&to_apply, &args[1], &args[2])?;
         Ok(ColumnarValue::Array(value))
