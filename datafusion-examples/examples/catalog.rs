@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
     // so any key in the hashmap will now  be a queryable in our datafusion context.
     let tables = {
         let tables = schema_a.tables.read().unwrap();
-        tables.keys().take(5).cloned().collect::<Vec<_>>()
+        tables.keys().take(3).cloned().collect::<Vec<_>>()
     };
     for table in tables {
         log::info!("querying table {table} from schema_a");
