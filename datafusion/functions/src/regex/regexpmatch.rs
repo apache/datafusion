@@ -20,16 +20,16 @@ use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use datafusion_common::ScalarValue;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
 use datafusion_common::exec_err;
+use datafusion_common::ScalarValue;
 use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -107,12 +107,8 @@ impl ScalarUDFImpl for RegexpMatchFunc {
 }
 fn regexp_match_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Utf8 => {
-            regexp_match::<i32>(args)
-        }
-        DataType::LargeUtf8 => {
-            regexp_match::<i64>(args)
-        }
+        DataType::Utf8 => regexp_match::<i32>(args),
+        DataType::LargeUtf8 => regexp_match::<i64>(args),
         other => {
             internal_err!("Unsupported data type {other:?} for function regexp_match")
         }
