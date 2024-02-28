@@ -49,7 +49,7 @@ CREATE TABLE test(
 
 # Arrays tests
 query I
-SELECT NVL2(int_field, 2, 3) FROM test;
+SELECT NVL2(int_field, 2, 3) FROM test ORDER BY more_ints;;
 ----
 2
 2
@@ -60,7 +60,7 @@ SELECT NVL2(int_field, 2, 3) FROM test;
 
 
 query B
-SELECT NVL2(bool_field, false, true) FROM test;
+SELECT NVL2(bool_field, false, true) FROM test ORDER BY more_ints;;
 ----
 false
 false
@@ -71,7 +71,7 @@ false
 
 
 query T
-SELECT NVL2(text_field, 'zxb', 'xyz') FROM test;
+SELECT NVL2(text_field, 'zxb', 'xyz') FROM test ORDER BY more_ints;;
 ----
 zxb
 zxb
@@ -82,7 +82,7 @@ xyz
 
 
 query I
-SELECT NVL2(int_field, more_ints, 10) FROM test;
+SELECT NVL2(int_field, more_ints, 10) FROM test ORDER BY more_ints;;
 ----
 2
 2
@@ -93,7 +93,7 @@ SELECT NVL2(int_field, more_ints, 10) FROM test;
 
 
 query I
-SELECT NVL2(3, int_field, more_ints) FROM test;
+SELECT NVL2(3, int_field, more_ints) FROM test ORDER BY more_ints;;
 ----
 1
 2
