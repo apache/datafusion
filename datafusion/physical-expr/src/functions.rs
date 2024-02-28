@@ -261,7 +261,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
         BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
         BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),

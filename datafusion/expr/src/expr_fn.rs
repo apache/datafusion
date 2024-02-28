@@ -530,7 +530,6 @@ scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
-scalar_expr!(Asin, asin, num, "inverse sine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
@@ -1337,7 +1336,6 @@ mod test {
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Tanh, tanh);
-        test_unary_scalar_expr!(Asin, asin);
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
