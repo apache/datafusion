@@ -1297,6 +1297,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// in generic dialect, so dialect should be changed to `PostgreSQL`
 ///
 /// ```rust, no_run
+/// # use datafusion::execution::config::SessionConfig;
 /// SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
 /// ```
 #[async_trait]
