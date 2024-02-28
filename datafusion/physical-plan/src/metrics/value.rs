@@ -28,7 +28,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows

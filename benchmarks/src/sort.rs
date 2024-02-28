@@ -25,7 +25,7 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::test_util::parquet::TestParquetFile;
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;

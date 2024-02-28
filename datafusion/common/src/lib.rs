@@ -34,6 +34,7 @@ pub mod display;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
+pub mod instant;
 pub mod parsers;
 pub mod rounding;
 pub mod scalar;
@@ -41,7 +42,6 @@ pub mod stats;
 pub mod test_util;
 pub mod tree_node;
 pub mod utils;
-pub mod wasm;
 
 /// Reexport arrow crate
 pub use arrow;

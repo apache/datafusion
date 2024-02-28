@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use std::fs;
 use std::path::{Path, PathBuf};
 

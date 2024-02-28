@@ -25,7 +25,7 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};

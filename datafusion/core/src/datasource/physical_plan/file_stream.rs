@@ -39,7 +39,7 @@ use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
 
 use futures::future::BoxFuture;

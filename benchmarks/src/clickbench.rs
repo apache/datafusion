@@ -23,7 +23,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::exec_datafusion_err;
-use datafusion_common::wasm::Instant;
+use datafusion_common::instant::Instant;
 use structopt::StructOpt;
 
 use crate::{BenchmarkRun, CommonOpt};
