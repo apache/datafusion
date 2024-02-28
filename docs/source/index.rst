@@ -15,7 +15,7 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
-.. image:: _static/images/DataFusion-Logo-Background-White.png
+.. image:: _static/images/2x_bgwhite_original.png
   :alt: DataFusion Logo
 
 =======================
