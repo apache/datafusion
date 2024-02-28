@@ -47,7 +47,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acos, acosh, array_dims, array_distinct, array_element, array_empty, array_except,
+    acosh, array_dims, array_distinct, array_element, array_empty, array_except,
     array_has, array_has_all, array_has_any, array_intersect, array_length, array_ndims,
     array_pop_back, array_pop_front, array_position, array_positions, array_remove,
     array_remove_all, array_remove_n, array_repeat, array_replace, array_replace_all,
