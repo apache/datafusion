@@ -23,7 +23,7 @@ use crate::{
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{ExprSchema, Result};
+use datafusion_common::{DFSchemaRef, ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -173,8 +173,8 @@ impl ScalarUDF {
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
-    pub fn simplify(&self, args: &[Expr]) -> Result<Simplified> {
-        self.inner.simplify(args)
+    pub fn simplify(&self, args: &[Expr], schema: DFSchemaRef) -> Result<Simplified> {
+        self.inner.simplify(args, schema)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -355,8 +355,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(None)
     }
 
-    // Do the function rewrite
-    fn simplify(&self, _args: &[Expr]) -> Result<Simplified> {
+    // Do the function rewrite.
+    // 'args': The arguments of the function
+    // 'schema': The schema of the function
+    fn simplify(&self, _args: &[Expr], _schema: DFSchemaRef) -> Result<Simplified> {
         Ok(Simplified::Original)
     }
 }

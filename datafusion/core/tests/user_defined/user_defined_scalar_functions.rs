@@ -24,11 +24,11 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
+use datafusion_common::DFSchemaRef;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{DFField, DFSchema};
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Simplified, Volatility,
@@ -36,7 +36,6 @@ use datafusion_expr::{
 
 use rand::{thread_rng, Rng};
 use std::any::Any;
-use std::collections::HashMap;
 use std::iter;
 use std::sync::Arc;
 
@@ -546,13 +545,9 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
     // Wrap with Expr::Cast() to Int64
-    fn simplify(&self, args: &[Expr]) -> Result<Simplified> {
-        let dfs = DFSchema::new_with_metadata(
-            vec![DFField::new(Some("t"), "x", DataType::Float32, true)],
-            HashMap::default(),
-        )?;
+    fn simplify(&self, args: &[Expr], schema: DFSchemaRef) -> Result<Simplified> {
         let e = args[0].to_owned();
-        let casted_expr = e.cast_to(&DataType::Int64, &dfs)?;
+        let casted_expr = e.cast_to(&DataType::Int64, schema.as_ref())?;
         Ok(Simplified::Rewritten(casted_expr))
     }
     // Casting should be done in `simplify`, so we just return the first argument

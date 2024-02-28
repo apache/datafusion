@@ -21,7 +21,6 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Int32Array};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::common::DFSchema;
-use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
@@ -34,6 +33,10 @@ use datafusion_optimizer::simplify_expressions::{
 };
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
+use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
+use datafusion_common::{DFSchemaRef, ToDFSchema};
+use datafusion_expr::{Expr, ExprSchemable};
+use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.
@@ -42,7 +45,7 @@ use std::sync::Arc;
 /// objects or from some other implementation
 struct MyInfo {
     /// The input schema
-    schema: DFSchema,
+    schema: DFSchemaRef,
 
     /// Execution specific details needed for constant evaluation such
     /// as the current time for `now()` and [VariableProviders]
@@ -51,11 +54,14 @@ struct MyInfo {
 
 impl SimplifyInfo for MyInfo {
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        Ok(matches!(expr.get_type(&self.schema)?, DataType::Boolean))
+        Ok(matches!(
+            expr.get_type(self.schema.as_ref())?,
+            DataType::Boolean
+        ))
     }
 
     fn nullable(&self, expr: &Expr) -> Result<bool> {
-        expr.nullable(&self.schema)
+        expr.nullable(self.schema.as_ref())
     }
 
     fn execution_props(&self) -> &ExecutionProps {
@@ -63,12 +69,16 @@ impl SimplifyInfo for MyInfo {
     }
 
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        expr.get_type(&self.schema)
+        expr.get_type(self.schema.as_ref())
+    }
+
+    fn schema(&self) -> Option<DFSchemaRef> {
+        Some(self.schema.clone())
     }
 }
 
-impl From<DFSchema> for MyInfo {
-    fn from(schema: DFSchema) -> Self {
+impl From<DFSchemaRef> for MyInfo {
+    fn from(schema: DFSchemaRef) -> Self {
         Self {
             schema,
             execution_props: ExecutionProps::new(),
@@ -81,13 +91,13 @@ impl From<DFSchema> for MyInfo {
 /// a: Int32 (possibly with nulls)
 /// b: Int32
 /// s: Utf8
-fn schema() -> DFSchema {
+fn schema() -> DFSchemaRef {
     Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, false),
         Field::new("s", DataType::Utf8, false),
     ])
-    .try_into()
+    .to_dfschema_ref()
     .unwrap()
 }
 

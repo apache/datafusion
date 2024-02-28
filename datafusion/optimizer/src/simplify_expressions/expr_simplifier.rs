@@ -145,7 +145,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
-        let mut function_simplifier = FunctionSimplifier::new();
+        let mut function_simplifier = FunctionSimplifier::new(&self.info);
 
         let expr = if self.canonicalize {
             expr.rewrite(&mut Canonicalizer::new())?

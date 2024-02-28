@@ -41,6 +41,9 @@ pub trait SimplifyInfo {
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
+
+    /// Return the schema for function simplifier
+    fn schema(&self) -> Option<DFSchemaRef>;
 }
 
 /// Provides simplification information based on DFSchema and
@@ -97,6 +100,10 @@ impl<'a> SimplifyContext<'a> {
 }
 
 impl<'a> SimplifyInfo for SimplifyContext<'a> {
+    fn schema(&self) -> Option<DFSchemaRef> {
+        self.schema.clone()
+    }
+
     /// returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         for schema in &self.schema {
