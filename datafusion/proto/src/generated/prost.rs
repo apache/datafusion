@@ -2637,7 +2637,7 @@ pub enum ScalarFunction {
     ///   The first enum value must be zero for open enums
     Unknown = 0,
     ///   1 was Acos
-    Asin = 2,
+    ///   2 was Asin
     Atan = 3,
     Ascii = 4,
     Ceil = 5,
@@ -2779,7 +2779,6 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Asin => "Asin",
             ScalarFunction::Atan => "Atan",
             ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
@@ -2914,7 +2913,6 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Asin" => Some(Self::Asin),
             "Atan" => Some(Self::Atan),
             "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
