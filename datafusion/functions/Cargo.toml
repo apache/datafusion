@@ -61,7 +61,7 @@ itertools = { workspace = true }
 log = "0.4.20"
 rand = { workspace = true }
 rstest = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [dev-dependencies]
 criterion = "0.5"
