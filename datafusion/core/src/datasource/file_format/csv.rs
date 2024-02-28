@@ -539,6 +539,7 @@ mod tests {
     use crate::test_util::arrow_test_data;
 
     use arrow::compute::concat_batches;
+    use arrow::util::pretty::print_batches;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::stats::Precision;
     use datafusion_common::{internal_err, FileType, GetExt};
@@ -546,7 +547,6 @@ mod tests {
 
     use bytes::Bytes;
     use chrono::DateTime;
-    use datafusion_common::parsers::CompressionTypeVariant;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -1204,27 +1204,6 @@ mod tests {
             "+---------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
-
-        Ok(())
-    }
-
-
-    #[tokio::test]
-    async fn test_sql() -> Result<()> {
-        let config = SessionConfig::new();
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql("create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar'); ")
-            .await?.collect().await?;
-        ctx.sql("COPY source_table
-                to '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table_csv_with_options'
-                (format csv,
-                'format.csv.has_header' false,
-                'format.csv.compression' uncompressed,
-                'format.csv.datetime_format' '%FT%H:%M:%S.%9f',
-                 'format.csv.quote' '3',
-                'format.csv.delimiter' ';',
-                'format.csv.null_value' 'NULLVAL');")
-            .await?.collect().await?;
 
         Ok(())
     }

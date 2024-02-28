@@ -24,11 +24,6 @@ pub mod file_type;
 pub mod json_writer;
 #[cfg(feature = "parquet")]
 pub mod parquet_writer;
-pub(crate) mod parse_utils;
-
-use std::str::FromStr;
-
-use crate::FileType;
 
 #[cfg(test)]
 #[cfg(feature = "parquet")]

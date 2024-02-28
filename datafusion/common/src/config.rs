@@ -570,7 +570,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u64, default = 20
+        pub default_filter_selectivity: u8, default = 20
     }
 }
 
@@ -937,20 +937,26 @@ impl ConfigField for u8 {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if value.is_empty() {
-            return Err(DataFusionError::Configuration(format!("Input string for {} key is empty", key)));
+            return Err(DataFusionError::Configuration(format!(
+                "Input string for {} key is empty",
+                key
+            )));
         }
         // Check if the string is a valid number
-        if let Ok(_) = value.parse::<u8>() {
-            return Err(DataFusionError::Configuration(format!("u8 type is reserved for byte input. Please use u64 for numeric input for {}", key)));
+        if let Ok(num) = value.parse::<u8>() {
+            // TODO: Let's decide how we treat the numerical strings.
+            *self = num;
         } else {
             let bytes = value.as_bytes();
             // Check if the first character is ASCII (single byte)
             if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
-                return Err(DataFusionError::Configuration(format!("Error parsing {} as u8. Non-ASCII string provided", value)));
+                return Err(DataFusionError::Configuration(format!(
+                    "Error parsing {} as u8. Non-ASCII string provided",
+                    value
+                )));
             }
             *self = bytes[0];
         }
-
         Ok(())
     }
 }
@@ -1480,76 +1486,82 @@ config_namespace! {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct KafkaConfig {
-    /// Should "foo" be replaced by "bar"?
-    pub properties: HashMap<String, String>,
-}
-
-impl ExtensionOptions for KafkaConfig {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        Box::new(self.clone())
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
-        assert_eq!(key, "kafka");
-        self.properties.insert(rem.to_owned(), value.to_owned());
-        println!("key: {}, value: {}", rem, value);
-        Ok(())
-    }
-
-    fn entries(&self) -> Vec<ConfigEntry> {
-        self.properties
-            .iter()
-            .map(|(k, v)| ConfigEntry {
-                key: k.into(),
-                value: Some(v.into()),
-                description: "",
-            })
-            .collect()
-    }
-}
-
-impl ConfigExtension for KafkaConfig {
-    const PREFIX: &'static str = "kafka";
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::config::{Extensions, KafkaConfig, TableOptions};
+    #[derive(Default, Debug, Clone)]
+    pub struct TestExtensionConfig {
+        /// Should "foo" be replaced by "bar"?
+        pub properties: HashMap<String, String>,
+    }
+
+    impl ExtensionOptions for TestExtensionConfig {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn cloned(&self) -> Box<dyn ExtensionOptions> {
+            Box::new(self.clone())
+        }
+
+        fn set(&mut self, key: &str, value: &str) -> crate::Result<()> {
+            let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+            assert_eq!(key, "test");
+            self.properties.insert(rem.to_owned(), value.to_owned());
+            Ok(())
+        }
+
+        fn entries(&self) -> Vec<ConfigEntry> {
+            self.properties
+                .iter()
+                .map(|(k, v)| ConfigEntry {
+                    key: k.into(),
+                    value: Some(v.into()),
+                    description: "",
+                })
+                .collect()
+        }
+    }
+
+    impl ConfigExtension for TestExtensionConfig {
+        const PREFIX: &'static str = "test";
+    }
+
+    use crate::config::{
+        ConfigEntry, ConfigExtension, ExtensionOptions, Extensions, TableOptions,
+    };
+    use std::any::Any;
+    use std::collections::HashMap;
 
     #[test]
     fn create_table_config() {
         let mut extension = Extensions::new();
-        extension.insert(KafkaConfig::default());
+        extension.insert(TestExtensionConfig::default());
         let table_config = TableOptions::new().with_extensions(extension);
-        let kafka_config = table_config.extensions.get::<KafkaConfig>();
+        let kafka_config = table_config.extensions.get::<TestExtensionConfig>();
         assert!(kafka_config.is_some())
     }
 
     #[test]
     fn alter_kafka_config() {
         let mut extension = Extensions::new();
-        extension.insert(KafkaConfig::default());
+        extension.insert(TestExtensionConfig::default());
         let mut table_config = TableOptions::new().with_extensions(extension);
         table_config
             .set("format.parquet.write_batch_size", "10")
             .unwrap();
         assert_eq!(table_config.format.parquet.global.write_batch_size, 10);
-        table_config.set("kafka.bootstrap.servers", "mete").unwrap();
-        let kafka_config = table_config.extensions.get::<KafkaConfig>().unwrap();
+        table_config.set("test.bootstrap.servers", "asd").unwrap();
+        let kafka_config = table_config
+            .extensions
+            .get::<TestExtensionConfig>()
+            .unwrap();
         assert_eq!(
             kafka_config.properties.get("bootstrap.servers").unwrap(),
-            "mete"
+            "asd"
         );
     }
 
@@ -1564,6 +1576,17 @@ mod tests {
                 .bloom_filter_enabled,
             Some(true)
         );
+    }
+
+    #[test]
+    fn csv_u8_table_options() {
+        let mut table_config = TableOptions::new();
+        table_config.set("format.csv.delimiter", ";").unwrap();
+        assert_eq!(table_config.format.csv.delimiter as char, ';');
+        table_config.set("format.csv.escape", "\"").unwrap();
+        assert_eq!(table_config.format.csv.escape.unwrap() as char, '"');
+        table_config.set("format.csv.escape", "\'").unwrap();
+        assert_eq!(table_config.format.csv.escape.unwrap() as char, '\'');
     }
 
     #[test]

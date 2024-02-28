@@ -46,7 +46,6 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError,
     UnnestOptions,

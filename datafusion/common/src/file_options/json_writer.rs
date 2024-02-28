@@ -17,8 +17,6 @@
 
 //! Options related to how json files should be written
 
-use std::str::FromStr;
-
 use crate::{
     config::JsonOptions,
     error::{DataFusionError, Result},

@@ -1388,14 +1388,10 @@ pub fn try_infer_file_type(
 pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
     let partition_by = options.remove("partition_by");
     match partition_by {
-        Some(part_cols) => {
-            part_cols
-                .split(',')
-                .map(|s| s.trim().replace("''", "'"))
-                .collect::<Vec<_>>()
-        }
+        Some(part_cols) => part_cols
+            .split(',')
+            .map(|s| s.trim().replace("''", "'"))
+            .collect::<Vec<_>>(),
         None => vec![],
     }
 }
-
-

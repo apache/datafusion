@@ -63,7 +63,6 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::DataType;
-use crate::config::ConfigOptions;
 
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
@@ -89,12 +88,6 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// The Apache Parquet `FileFormat` implementation
-///
-/// Note it is recommended these are instead configured on the [`ConfigOptions`]
-/// associated with the [`SessionState`] instead of overridden on a format-basis
-///
-/// TODO: Deprecate and remove overrides
-/// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug)]
 pub struct ParquetFormat {
     options: TableParquetOptions,

@@ -17,12 +17,9 @@
 
 //! Options related to how parquet files should be written
 
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::WriterProperties;
 
-use crate::{
-    config::{ConfigOptions, TableParquetOptions},
-    DataFusionError, Result,
-};
+use crate::{config::TableParquetOptions, DataFusionError, Result};
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
@@ -46,69 +43,6 @@ impl ParquetWriterOptions {
     pub fn writer_options(&self) -> &WriterProperties {
         &self.writer_options
     }
-}
-
-/// Constructs a default Parquet WriterPropertiesBuilder using
-/// Session level ConfigOptions to initialize settings
-pub fn default_builder(options: &ConfigOptions) -> Result<WriterPropertiesBuilder> {
-    let parquet_session_options = &options.execution.parquet;
-    let mut builder = WriterProperties::builder()
-        .set_data_page_size_limit(parquet_session_options.data_pagesize_limit)
-        .set_write_batch_size(parquet_session_options.write_batch_size)
-        .set_writer_version(parse_version_string(
-            &parquet_session_options.writer_version,
-        )?)
-        .set_dictionary_page_size_limit(
-            parquet_session_options.dictionary_page_size_limit,
-        )
-        .set_max_row_group_size(parquet_session_options.max_row_group_size)
-        .set_created_by(parquet_session_options.created_by.clone())
-        .set_column_index_truncate_length(
-            parquet_session_options.column_index_truncate_length,
-        )
-        .set_data_page_row_count_limit(parquet_session_options.data_page_row_count_limit)
-        .set_bloom_filter_enabled(parquet_session_options.bloom_filter_enabled);
-
-    builder = match &parquet_session_options.encoding {
-        Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.dictionary_enabled {
-        Some(enabled) => builder.set_dictionary_enabled(*enabled),
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.compression {
-        Some(compression) => {
-            builder.set_compression(parse_compression_string(compression)?)
-        }
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.statistics_enabled {
-        Some(statistics) => {
-            builder.set_statistics_enabled(parse_statistics_string(statistics)?)
-        }
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.max_statistics_size {
-        Some(size) => builder.set_max_statistics_size(*size),
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.bloom_filter_fpp {
-        Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
-        None => builder,
-    };
-
-    builder = match &parquet_session_options.bloom_filter_ndv {
-        Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
-        None => builder,
-    };
-
-    Ok(builder)
 }
 
 impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
@@ -374,17 +308,5 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
             "Unknown or unsupported parquet statistics setting {str_setting} \
             valid options are none, page, and chunk"
         ))),
-    }
-}
-
-pub(crate) fn split_option_and_column_path(
-    str_setting: &str,
-) -> (String, Option<ColumnPath>) {
-    match str_setting.replace('\'', "").split_once("::") {
-        Some((s1, s2)) => {
-            let col_path = ColumnPath::new(s2.split('.').map(|s| s.to_owned()).collect());
-            (s1.to_owned(), Some(col_path))
-        }
-        None => (str_setting.to_owned(), None),
     }
 }
