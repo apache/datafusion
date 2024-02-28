@@ -20,6 +20,7 @@
 set -ex
 cd datafusion-examples/examples/
 cargo fmt --all -- --check
+cargo check --examples
 
 files=$(ls .)
 for filename in $files

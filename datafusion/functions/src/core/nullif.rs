@@ -18,15 +18,15 @@
 //! Encoding expressions
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::ScalarValue;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 
 #[derive(Debug)]
 pub(super) struct NullIfFunc {
@@ -58,7 +58,7 @@ impl NullIfFunc {
         Self {
             signature:
             Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(),
-                Volatility::Immutable,
+                               Volatility::Immutable,
             )
         }
     }
@@ -81,7 +81,7 @@ impl ScalarUDFImpl for NullIfFunc {
         let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
         coerced_types.map(|typs| typs[0].clone())
             .map_err(|e| e.context("Failed to coerce arguments for NULLIF")
-        )
+            )
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -90,14 +90,13 @@ impl ScalarUDFImpl for NullIfFunc {
 }
 
 
-
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "{:?} args were supplied but NULLIF takes exactly two args",
             args.len()
         );

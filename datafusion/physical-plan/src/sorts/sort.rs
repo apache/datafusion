@@ -27,7 +27,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::{spawn_buffered, IPCWriter, SpawnedTask};
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -56,7 +56,6 @@ use datafusion_physical_expr::EquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
-use tokio::task;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -604,8 +603,8 @@ async fn spill_sorted_batches(
     schema: SchemaRef,
 ) -> Result<()> {
     let path: PathBuf = path.into();
-    let handle = task::spawn_blocking(move || write_sorted(batches, path, schema));
-    match handle.await {
+    let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
+    match task.join().await {
         Ok(r) => r,
         Err(e) => exec_err!("Error occurred while spilling {e}"),
     }

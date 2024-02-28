@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-
-use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
+use DataType::*;
 
 use arrow::compute::{can_cast_types, kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
@@ -41,7 +41,7 @@ const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 #[derive(Debug, Clone)]
 pub struct CastExpr {
     /// The expression to cast
-    expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
     /// Cast options
@@ -75,6 +75,26 @@ impl CastExpr {
     /// The cast options
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
+    }
+    pub fn is_bigger_cast(&self, src: DataType) -> bool {
+        if src == self.cast_type {
+            return true;
+        }
+        matches!(
+            (src, &self.cast_type),
+            (Int8, Int16 | Int32 | Int64)
+                | (Int16, Int32 | Int64)
+                | (Int32, Int64)
+                | (UInt8, UInt16 | UInt32 | UInt64)
+                | (UInt16, UInt32 | UInt64)
+                | (UInt32, UInt64)
+                | (
+                    Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32,
+                    Float32 | Float64
+                )
+                | (Int64 | UInt64, Float64)
+                | (Utf8, LargeUtf8)
+        )
     }
 }
 

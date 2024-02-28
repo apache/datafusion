@@ -88,6 +88,7 @@ async fn run_tests() -> Result<()> {
     // modifying shared state like `/tmp/`)
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
+            #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
             tokio::task::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
                 if options.complete {

@@ -3257,13 +3257,13 @@ ProjectionExec: expr=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_da
 --------ProjectionExec: expr=[CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 as CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a, a@1 as a, d@4 as d, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 ----------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------CoalesceBatchesExec: target_batch_size=4096
---------------RepartitionExec: partitioning=Hash([b@2, a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------RepartitionExec: partitioning=Hash([b@2, a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[PartiallySorted([0])]
 ------------------CoalesceBatchesExec: target_batch_size=4096
---------------------RepartitionExec: partitioning=Hash([a@1, d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------------RepartitionExec: partitioning=Hash([a@1, d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------------------CoalesceBatchesExec: target_batch_size=4096
---------------------------RepartitionExec: partitioning=Hash([a@1, b@2], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------------------RepartitionExec: partitioning=Hash([a@1, b@2], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------------------ProjectionExec: expr=[CAST(a@0 AS Int64) as CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a, a@0 as a, b@1 as b, c@2 as c, d@3 as d]
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------------------------StreamingTableExec: partition_sizes=1, projection=[a, b, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
@@ -4102,3 +4102,110 @@ ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRE
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id) as x,
+       lag(a, 1, null) ignore nulls over (order by id) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id) as x2,
+       lag(a) respect nulls over (order by id) as x3,
+       lag(a, 1, null) respect nulls over (order by id) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+NULL NULL def NULL NULL NULL
+b b b b b b
+b b b NULL NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id desc) as x,
+       lag(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a) respect nulls over (order by id desc) as x3,
+       lag(a, 1, null) respect nulls over (order by id desc) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+x x x x x x
+x x x NULL NULL NULL
+b b b b b b
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset
+query TTTT
+select lag(a, 2, null) ignore nulls over (order by id) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id) as x2,
+       lag(a, 2, null) respect nulls over (order by id) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def
+NULL def NULL def
+NULL def NULL NULL
+NULL def b b
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+query TTTT
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def
+NULL def NULL def
+NULL def x x
+x x NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
+# To trigger WindowAggExec, we added a sum window function with all of the ranges.
+statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+statement error Execution error: IGNORE NULLS mode for LEAD is not supported for BoundedWindowAggExec
+select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a, 2, null) respect nulls over (order by id desc) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+
+statement ok
+set datafusion.execution.batch_size = 1000;
+
+query I
+SELECT LAG(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78
+63
+3
+24
+14
+
+# result should be same with above, when lag algorithm work with pruned data.
+# decreasing batch size, causes data to be produced in smaller chunks at the source.
+# Hence sliding window algorithm is used during calculations.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query I
+SELECT LAG(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78
+63
+3
+24
+14

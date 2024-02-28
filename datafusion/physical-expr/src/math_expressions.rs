@@ -17,25 +17,20 @@
 
 //! Math expressions
 
-use arrow::array::ArrayRef;
-use arrow::array::{
-    BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array,
-};
-use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
-use datafusion_common::ScalarValue;
-use datafusion_common::ScalarValue::{Float32, Int64};
-use datafusion_common::{internal_err, not_impl_err};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use rand::{thread_rng, Rng};
 use std::any::type_name;
 use std::iter;
 use std::mem::swap;
 use std::sync::Arc;
 
-type MathArrayFunction = fn(&[ArrayRef]) -> Result<ArrayRef>;
+use arrow::array::ArrayRef;
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int64Array};
+use arrow::datatypes::DataType;
+use rand::{thread_rng, Rng};
+
+use datafusion_common::ScalarValue::{Float32, Int64};
+use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
@@ -46,7 +41,7 @@ macro_rules! downcast_compute_op {
                     arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
                 Ok(Arc::new(res))
             }
-            _ => internal_err!("Invalid data type for {}", $NAME),
+            _ => exec_err!("Invalid data type for {}", $NAME),
         }
     }};
 }
@@ -63,11 +58,9 @@ macro_rules! unary_primitive_array_op {
                     let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array);
                     Ok(ColumnarValue::Array(result?))
                 }
-                other => internal_err!(
-                    "Unsupported data type {:?} for function {}",
-                    other,
-                    $NAME
-                ),
+                other => {
+                    exec_err!("Unsupported data type {:?} for function {}", other, $NAME)
+                }
             },
             ColumnarValue::Scalar(a) => match a {
                 ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(
@@ -76,7 +69,7 @@ macro_rules! unary_primitive_array_op {
                 ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Float64(a.map(|x| x.$FUNC())),
                 )),
-                _ => internal_err!(
+                _ => exec_err!(
                     "Unsupported data type {:?} for function {}",
                     ($VALUE).data_type(),
                     $NAME
@@ -176,7 +169,6 @@ math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
-math_unary_function!("abs", abs);
 math_unary_function!("signum", signum);
 math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
@@ -194,7 +186,7 @@ pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { |value: i64| { (1..=value).product() } }
         )) as ArrayRef),
-        other => internal_err!("Unsupported data type {other:?} for function factorial."),
+        other => exec_err!("Unsupported data type {other:?} for function factorial."),
     }
 }
 
@@ -241,7 +233,7 @@ pub fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_gcd }
         )) as ArrayRef),
-        other => internal_err!("Unsupported data type {other:?} for function gcd"),
+        other => exec_err!("Unsupported data type {other:?} for function gcd"),
     }
 }
 
@@ -267,7 +259,7 @@ pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_lcm }
         )) as ArrayRef),
-        other => internal_err!("Unsupported data type {other:?} for function lcm"),
+        other => exec_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
 
@@ -312,7 +304,7 @@ pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             )) as ArrayRef)
         }
 
-        other => internal_err!("Unsupported data type {other:?} for function nanvl"),
+        other => exec_err!("Unsupported data type {other:?} for function nanvl"),
     }
 }
 
@@ -335,7 +327,7 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::is_nan }
         )) as ArrayRef),
 
-        other => internal_err!("Unsupported data type {other:?} for function isnan"),
+        other => exec_err!("Unsupported data type {other:?} for function isnan"),
     }
 }
 
@@ -358,14 +350,14 @@ pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
             { |x: f32| { x == 0_f32 } }
         )) as ArrayRef),
 
-        other => internal_err!("Unsupported data type {other:?} for function iszero"),
+        other => exec_err!("Unsupported data type {other:?} for function iszero"),
     }
 }
 
 /// Pi SQL function
 pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if !matches!(&args[0], ColumnarValue::Array(_)) {
-        return internal_err!("Expect pi function to take no param");
+        return exec_err!("Expect pi function to take no param");
     }
     let array = Float64Array::from_value(std::f64::consts::PI, 1);
     Ok(ColumnarValue::Array(Arc::new(array)))
@@ -375,7 +367,7 @@ pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
         ColumnarValue::Array(array) => array.len(),
-        _ => return internal_err!("Expect random function to take no param"),
+        _ => return exec_err!("Expect random function to take no param"),
     };
     let mut rng = thread_rng();
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
@@ -386,7 +378,7 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Round SQL function
 pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "round function requires one or two arguments, got {}",
             args.len()
         );
@@ -430,9 +422,9 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 }
             )) as ArrayRef),
-            _ => internal_err!(
-                "round function requires a scalar or array for decimal_places"
-            ),
+            _ => {
+                exec_err!("round function requires a scalar or array for decimal_places")
+            }
         },
 
         DataType::Float32 => match decimal_places {
@@ -466,12 +458,12 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 }
             )) as ArrayRef),
-            _ => internal_err!(
-                "round function requires a scalar or array for decimal_places"
-            ),
+            _ => {
+                exec_err!("round function requires a scalar or array for decimal_places")
+            }
         },
 
-        other => internal_err!("Unsupported data type {other:?} for function round"),
+        other => exec_err!("Unsupported data type {other:?} for function round"),
     }
 }
 
@@ -496,7 +488,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             { i64::pow }
         )) as ArrayRef),
 
-        other => internal_err!("Unsupported data type {other:?} for function power"),
+        other => exec_err!("Unsupported data type {other:?} for function power"),
     }
 }
 
@@ -521,7 +513,7 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::atan2 }
         )) as ArrayRef),
 
-        other => internal_err!("Unsupported data type {other:?} for function atan2"),
+        other => exec_err!("Unsupported data type {other:?} for function atan2"),
     }
 }
 
@@ -554,7 +546,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Float64Array,
                 { f64::log }
             )) as ArrayRef),
-            _ => internal_err!("log function requires a scalar or array for base"),
+            _ => exec_err!("log function requires a scalar or array for base"),
         },
 
         DataType::Float32 => match base {
@@ -572,10 +564,10 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Float32Array,
                 { f32::log }
             )) as ArrayRef),
-            _ => internal_err!("log function requires a scalar or array for base"),
+            _ => exec_err!("log function requires a scalar or array for base"),
         },
 
-        other => internal_err!("Unsupported data type {other:?} for function log"),
+        other => exec_err!("Unsupported data type {other:?} for function log"),
     }
 }
 
@@ -596,7 +588,7 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
             { compute_cot32 }
         )) as ArrayRef),
 
-        other => internal_err!("Unsupported data type {other:?} for function cot"),
+        other => exec_err!("Unsupported data type {other:?} for function cot"),
     }
 }
 
@@ -613,7 +605,7 @@ fn compute_cot64(x: f64) -> f64 {
 /// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
 pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "truncate function requires one or two arguments, got {}",
             args.len()
         );
@@ -642,7 +634,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate64 }
             )) as ArrayRef),
-            _ => internal_err!("trunc function requires a scalar or array for precision"),
+            _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         DataType::Float32 => match precision {
             ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
@@ -657,9 +649,9 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate32 }
             )) as ArrayRef),
-            _ => internal_err!("trunc function requires a scalar or array for precision"),
+            _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
-        other => internal_err!("Unsupported data type {other:?} for function trunc"),
+        other => exec_err!("Unsupported data type {other:?} for function trunc"),
     }
 }
 
@@ -673,96 +665,15 @@ fn compute_truncate64(x: f64, y: i64) -> f64 {
     (x * factor).round() / factor
 }
 
-macro_rules! make_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array.unary(|x| x.abs());
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-macro_rules! make_try_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array.try_unary(|x| {
-                x.checked_abs().ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
-                        "{} overflow on abs({})",
-                        stringify!($ARRAY_TYPE),
-                        x
-                    ))
-                })
-            })?;
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-macro_rules! make_decimal_abs_function {
-    ($ARRAY_TYPE:ident) => {{
-        |args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
-            let res: $ARRAY_TYPE = array
-                .unary(|x| x.wrapping_abs())
-                .with_data_type(args[0].data_type().clone());
-            Ok(Arc::new(res) as ArrayRef)
-        }
-    }};
-}
-
-/// Abs SQL function
-/// Return different implementations based on input datatype to reduce branches during execution
-pub(super) fn create_abs_function(
-    input_data_type: &DataType,
-) -> Result<MathArrayFunction> {
-    match input_data_type {
-        DataType::Float32 => Ok(make_abs_function!(Float32Array)),
-        DataType::Float64 => Ok(make_abs_function!(Float64Array)),
-
-        // Types that may overflow, such as abs(-128_i8).
-        DataType::Int8 => Ok(make_try_abs_function!(Int8Array)),
-        DataType::Int16 => Ok(make_try_abs_function!(Int16Array)),
-        DataType::Int32 => Ok(make_try_abs_function!(Int32Array)),
-        DataType::Int64 => Ok(make_try_abs_function!(Int64Array)),
-
-        // Types of results are the same as the input.
-        DataType::Null
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => Ok(|args: &[ArrayRef]| Ok(args[0].clone())),
-
-        // Decimal types
-        DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
-        DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
-
-        other => not_impl_err!("Unsupported data type {other:?} for function abs"),
-    }
-}
-
-/// abs() SQL function implementation
-pub fn abs_invoke(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return internal_err!("abs function requires 1 argument, got {}", args.len());
-    }
-
-    let input_data_type = args[0].data_type();
-    let abs_fun = create_abs_function(input_data_type)?;
-
-    abs_fun(args)
-}
-
 #[cfg(test)]
 mod tests {
-
-    use super::*;
     use arrow::array::{Float64Array, NullArray};
+
     use datafusion_common::cast::{
         as_boolean_array, as_float32_array, as_float64_array, as_int64_array,
     };
+
+    use super::*;
 
     #[test]
     fn test_random_expression() {

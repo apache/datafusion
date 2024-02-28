@@ -41,8 +41,8 @@ use object_store::path::Path;
 
 use rand::distributions::DistString;
 
+use datafusion_physical_plan::common::SpawnedTask;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
 type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
@@ -76,15 +76,15 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
+    let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
     let single_file_output = !base_output_path.is_collection();
-    let task: JoinHandle<std::result::Result<(), DataFusionError>> = match partition_by {
+    let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
             // bound this channel without risking a deadlock.
-            tokio::spawn(async move {
+            SpawnedTask::spawn(async move {
                 hive_style_partitions_demuxer(
                     tx,
                     input,
@@ -96,7 +96,7 @@ pub(crate) fn start_demuxer_task(
                 .await
             })
         }
-        None => tokio::spawn(async move {
+        None => SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
                 input,
@@ -391,21 +391,23 @@ fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
     partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
-    let end_idx = parted_batch.num_columns() - partition_by.len();
-    let non_part_cols = &parted_batch.columns()[..end_idx];
-
     let partition_names: Vec<_> = partition_by.iter().map(|(s, _)| s).collect();
-    let non_part_schema = Schema::new(
-        parted_batch
-            .schema()
-            .fields()
-            .iter()
-            .filter(|f| !partition_names.contains(&f.name()))
-            .map(|f| (**f).clone())
-            .collect::<Vec<_>>(),
-    );
+    let (non_part_cols, non_part_fields): (Vec<_>, Vec<_>) = parted_batch
+        .columns()
+        .iter()
+        .zip(parted_batch.schema().fields())
+        .filter_map(|(a, f)| {
+            if !partition_names.contains(&f.name()) {
+                Some((a.clone(), (**f).clone()))
+            } else {
+                None
+            }
+        })
+        .unzip();
+
+    let non_part_schema = Schema::new(non_part_fields);
     let final_batch_to_send =
-        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols.into())?;
+        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols)?;
 
     Ok(final_batch_to_send)
 }
