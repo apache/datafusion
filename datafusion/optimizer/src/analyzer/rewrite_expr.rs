@@ -177,7 +177,7 @@ fn rewrite_array_concat_operator_to_func(
         ) if ["array_append", "array_prepend", "array_concat"]
             .contains(&left_fun.name()) =>
         {
-            Some(array_append(vec![left.clone(), right.clone()]))
+            Some(array_append(left.clone(), right.clone()))
         }
         // array || array -> array concat
         (
@@ -200,7 +200,7 @@ fn rewrite_array_concat_operator_to_func(
             }),
             _right_scalar,
         ) if left_fun.name() == "make_array" => {
-            Some(array_append(vec![left.clone(), right.clone()]))
+            Some(array_append(left.clone(), right.clone()))
         }
         // scalar || array -> array prepend
         (
@@ -210,7 +210,7 @@ fn rewrite_array_concat_operator_to_func(
                 args: _right_args,
             }),
         ) if right_fun.name() == "make_array" => {
-            Some(array_prepend(vec![left.clone(), right.clone()]))
+            Some(array_prepend(left.clone(), right.clone()))
         }
 
         _ => None,
@@ -247,7 +247,7 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let d = schema.field_from_column(c)?.data_type();
             let ndim = list_ndims(d);
             match ndim {
-                0 => Ok(Some(array_append(vec![left.clone(), right.clone()]))),
+                0 => Ok(Some(array_append(left.clone(), right.clone()))),
                 _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }
@@ -258,8 +258,8 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let ndim1 = list_ndims(d1);
             let ndim2 = list_ndims(d2);
             match (ndim1, ndim2) {
-                (0, _) => Ok(Some(array_prepend(vec![left.clone(), right.clone()]))),
-                (_, 0) => Ok(Some(array_append(vec![left.clone(), right.clone()]))),
+                (0, _) => Ok(Some(array_prepend(left.clone(), right.clone()))),
+                (_, 0) => Ok(Some(array_append(left.clone(), right.clone()))),
                 _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }

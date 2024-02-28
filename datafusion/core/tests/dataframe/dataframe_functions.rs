@@ -874,7 +874,7 @@ async fn test_fn_decode() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_array_to_string() -> Result<()> {
-    let expr = array_to_string(vec![col("l"), lit("***")]);
+    let expr = array_to_string(col("l"), lit("***"));
 
     let expected = [
         "+-------------------------------------+",

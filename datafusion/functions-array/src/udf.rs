@@ -36,7 +36,7 @@ use crate::kernels::make_scalar_function_with_hints;
 make_udf_function!(
     ArrayToString,
     array_to_string,
-    args,                                                // arg name
+    array delimiter,                                                // arg name
     "converts each element to its text representation.", // doc
     array_to_string_udf                                  // internal function name
 );
@@ -44,7 +44,7 @@ make_udf_function!(
 make_udf_function!(
     ArrayAppend,
     array_append,
-    args,                                         // arg name
+    array element,                                         // arg name
     "appends an element to the end of an array.", // doc
     array_append_udf                              // internal function name
 );
@@ -52,7 +52,7 @@ make_udf_function!(
 make_udf_function!(
     ArrayPrepend,
     array_prepend,
-    args,                                                // arg name
+    element array,                                                // arg name
     "Prepends an element to the beginning of an array.", // doc
     array_prepend_udf                                    // internal function name
 );
@@ -60,7 +60,6 @@ make_udf_function!(
 make_udf_function!(
     ArrayConcat,
     array_concat,
-    args,                   // arg name
     "Concatenates arrays.", // doc
     array_concat_udf        // internal function name
 );
@@ -68,7 +67,6 @@ make_udf_function!(
 make_udf_function!(
     MakeArray,
     make_array,
-    args,                                                            // arg name
     "Returns an Arrow array using the specified input expressions.", // doc
     make_array_udf // internal function name
 );
