@@ -16,10 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, TableReference,
-};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
 mod join;
@@ -98,6 +96,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.plan_table_with_joins(*table_with_joins, planner_context)?,
                 alias,
             ),
+            TableFactor::UNNEST {
+                alias,
+                array_exprs,
+                with_offset: false,
+                with_offset_alias: None,
+            } => {
+                // Unnest table factor has empty input
+                let schema = DFSchema::empty();
+                let input = LogicalPlanBuilder::empty(true).build()?;
+                let exprs = array_exprs
+                    .into_iter()
+                    .map(|expr| {
+                        self.sql_expr_to_logical_expr(expr, &schema, planner_context)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Self::check_unnest_args(&exprs, &schema)?;
+                let unnest_expr = Expr::Unnest(Unnest { exprs });
+                let logical_plan = self.try_process_unnest(input, vec![unnest_expr])?;
+                (logical_plan, alias)
+            }
+            TableFactor::UNNEST { .. } => {
+                return not_impl_err!(
+                    "UNNEST table factor with offset is not supported yet"
+                );
+            }
             // @todo Support TableFactory::TableFunction?
             _ => {
                 return not_impl_err!(

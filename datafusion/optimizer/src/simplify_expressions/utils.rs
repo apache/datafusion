@@ -18,7 +18,7 @@
 //! Utility functions for expression simplification
 
 use crate::simplify_expressions::SimplifyInfo;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},

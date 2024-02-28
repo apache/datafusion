@@ -25,7 +25,7 @@ pub use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
 use std::sync::Arc;
 

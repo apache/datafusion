@@ -93,8 +93,8 @@ make_package!(
 );
 
 make_package!(math, "math_expressions", "Mathematical functions.");
-
 make_package!(datetime, "datetime_expressions", "Date and time functions.");
+make_package!(regex, "regex_expressions", "Regex functions");
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
@@ -106,6 +106,8 @@ pub mod expr_fn {
     pub use super::encoding::expr_fn::*;
     #[cfg(feature = "math_expressions")]
     pub use super::math::expr_fn::*;
+    #[cfg(feature = "regex_expressions")]
+    pub use super::regex::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -114,7 +116,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .into_iter()
         .chain(datetime::functions())
         .chain(encoding::functions())
-        .chain(math::functions());
+        .chain(math::functions())
+        .chain(regex::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

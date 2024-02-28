@@ -31,8 +31,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;

@@ -530,7 +530,6 @@ scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
-scalar_expr!(Asin, asin, num, "inverse sine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
@@ -853,11 +852,6 @@ nary_scalar_expr!(
     RegexpLike,
     regexp_like,
     "matches a regular expression against a string and returns true or false if there was at least one match or not"
-);
-nary_scalar_expr!(
-    RegexpMatch,
-    regexp_match,
-    "matches a regular expression against a string and returns matched substrings."
 );
 nary_scalar_expr!(
     RegexpReplace,
@@ -1312,7 +1306,6 @@ mod test {
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Tanh, tanh);
-        test_unary_scalar_expr!(Asin, asin);
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
@@ -1355,8 +1348,6 @@ mod test {
         test_scalar_expr!(OctetLength, octet_length, string);
         test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern);
         test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern, flags);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,

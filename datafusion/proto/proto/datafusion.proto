@@ -549,7 +549,7 @@ enum ScalarFunction {
   //  The first enum value must be zero for open enums
   unknown = 0;
   //  1 was Acos
-  Asin = 2;
+  //  2 was Asin
   Atan = 3;
   Ascii = 4;
   Ceil = 5;
@@ -568,7 +568,7 @@ enum ScalarFunction {
   Tan = 18;
   Trunc = 19;
   Array = 20;
-  RegexpMatch = 21;
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;

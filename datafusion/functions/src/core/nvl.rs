@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::is_not_null;

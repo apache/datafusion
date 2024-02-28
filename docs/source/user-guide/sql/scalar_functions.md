@@ -570,6 +570,7 @@ trunc(numeric_expression[, decimal_places])
 - [coalesce](#coalesce)
 - [nullif](#nullif)
 - [nvl](#nvl)
+- [nvl2](#nvl2)
 - [ifnull](#ifnull)
 
 ### `coalesce`
@@ -618,6 +619,23 @@ nvl(expression1, expression2)
 - **expression1**: return if expression1 not is NULL.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression2**: return if expression1 is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl2`
+
+Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.
+
+```
+nvl2(expression1, expression2, expression3)
+```
+
+#### Arguments
+
+- **expression1**: conditional expression.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is not NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression3**: return if expression1 is NULL.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `ifnull`
@@ -3030,7 +3048,7 @@ _Alias of [array_slice](#array_slice)._
 
 ### `list_to_string`
 
-_Alias of [list_to_string](#list_to_string)._
+_Alias of [array_to_string](#array_to_string)._
 
 ### `make_array`
 

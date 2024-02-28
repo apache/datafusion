@@ -27,9 +27,7 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, ColumnStatistics, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 
 /// The shared context used during the analysis of an expression. Includes
