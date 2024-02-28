@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
+//! Math function: `isnan()`.
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};

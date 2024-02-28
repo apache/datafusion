@@ -103,6 +103,21 @@ async fn test_udwf() {
     assert_eq!(test_state.evaluate_all_called(), 2);
 }
 
+#[tokio::test]
+async fn test_deregister_udwf() -> Result<()> {
+    let test_state = Arc::new(TestState::new());
+    let mut ctx = SessionContext::new();
+    OddCounter::register(&mut ctx, Arc::clone(&test_state));
+
+    assert!(ctx.state().window_functions().contains_key("odd_counter"));
+
+    ctx.deregister_udwf("odd_counter");
+
+    assert!(!ctx.state().window_functions().contains_key("odd_counter"));
+
+    Ok(())
+}
+
 /// Basic user defined window function with bounded window
 #[tokio::test]
 async fn test_udwf_bounded_window_ignores_frame() {
