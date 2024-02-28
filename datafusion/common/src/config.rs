@@ -570,7 +570,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u8, default = 20
+        pub default_filter_selectivity: u64, default = 20
     }
 }
 
@@ -935,8 +935,22 @@ impl ConfigField for u8 {
         v.some(key, self, description)
     }
 
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = value.as_bytes()[0];
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if value.is_empty() {
+            return Err(DataFusionError::Configuration(format!("Input string for {} key is empty", key)));
+        }
+        // Check if the string is a valid number
+        if let Ok(_) = value.parse::<u8>() {
+            return Err(DataFusionError::Configuration(format!("u8 type is reserved for byte input. Please use u64 for numeric input for {}", key)));
+        } else {
+            let bytes = value.as_bytes();
+            // Check if the first character is ASCII (single byte)
+            if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
+                return Err(DataFusionError::Configuration(format!("Error parsing {} as u8. Non-ASCII string provided", value)));
+            }
+            *self = bytes[0];
+        }
+
         Ok(())
     }
 }

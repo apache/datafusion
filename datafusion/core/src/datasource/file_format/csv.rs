@@ -1207,4 +1207,25 @@ mod tests {
 
         Ok(())
     }
+
+
+    #[tokio::test]
+    async fn test_sql() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql("create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar'); ")
+            .await?.collect().await?;
+        ctx.sql("COPY source_table
+                to '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/table_csv_with_options'
+                (format csv,
+                'format.csv.has_header' false,
+                'format.csv.compression' uncompressed,
+                'format.csv.datetime_format' '%FT%H:%M:%S.%9f',
+                 'format.csv.quote' '3',
+                'format.csv.delimiter' ';',
+                'format.csv.null_value' 'NULLVAL');")
+            .await?.collect().await?;
+
+        Ok(())
+    }
 }
