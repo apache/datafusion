@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! WASM-compatible `Instant` warpper.
+//! WASM-compatible `Instant` wrapper.
 
 #[cfg(target_family = "wasm")]
 /// DataFusion wrapper around [`std::time::Instant`]. Uses [`instant::Instant`]
