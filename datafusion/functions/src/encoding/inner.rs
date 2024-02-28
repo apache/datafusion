@@ -53,7 +53,7 @@ impl EncodeFunc {
                     Exact(vec![LargeBinary, Utf8]),
                 ],
                 Volatility::Immutable,
-            )
+            ),
         }
     }
 }
@@ -107,7 +107,7 @@ impl DecodeFunc {
                     Exact(vec![LargeBinary, Utf8]),
                 ],
                 Volatility::Immutable,
-            )
+            ),
         }
     }
 }
@@ -272,8 +272,8 @@ impl Encoding {
     }
 
     fn encode_binary_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-        where
-            T: OffsetSizeTrait,
+    where
+        T: OffsetSizeTrait,
     {
         let input_value = as_generic_binary_array::<T>(value)?;
         let array: ArrayRef = match self {
@@ -284,8 +284,8 @@ impl Encoding {
     }
 
     fn encode_utf8_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-        where
-            T: OffsetSizeTrait,
+    where
+        T: OffsetSizeTrait,
     {
         let input_value = as_generic_string_array::<T>(value)?;
         let array: ArrayRef = match self {
@@ -352,8 +352,8 @@ impl Encoding {
     }
 
     fn decode_binary_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-        where
-            T: OffsetSizeTrait,
+    where
+        T: OffsetSizeTrait,
     {
         let input_value = as_generic_binary_array::<T>(value)?;
         let array: ArrayRef = match self {
@@ -364,8 +364,8 @@ impl Encoding {
     }
 
     fn decode_utf8_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-        where
-            T: OffsetSizeTrait,
+    where
+        T: OffsetSizeTrait,
     {
         let input_value = as_generic_string_array::<T>(value)?;
         let array: ArrayRef = match self {
