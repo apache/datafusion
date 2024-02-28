@@ -333,8 +333,8 @@ impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
     #[deprecated(
-    since = "32.0.0",
-    note = "please use TypeSignature::supports_zero_argument instead"
+        since = "32.0.0",
+        note = "please use TypeSignature::supports_zero_argument instead"
     )]
     pub fn supports_zero_argument(&self) -> bool {
         self.signature().type_signature.supports_zero_argument()
