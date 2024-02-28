@@ -1207,19 +1207,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_sql() -> Result<()> {
-        let config = SessionConfig::new();
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql("create table test (\"'test'\" varchar, \"'test2'\" varchar, \"'test3'\" varchar); ")
-            .await?.collect().await?;
-        ctx.sql("insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')")
-            .await?.collect().await?;
-        ctx.sql("copy test to '/Users/metehanyildirim/Documents/Synnada/Coding/datafusion-upstream/datafusion/sqllogictest/test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')")
-            .await?.collect().await?;
-
-        Ok(())
-    }
-
 }
