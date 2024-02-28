@@ -315,7 +315,7 @@ mod tests {
 
         assert!(schema.table(location).await.is_err());
     }
-    #[not(cfg(target_family = "windows"))]
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_substitute_tilde() {
         use std::env;
