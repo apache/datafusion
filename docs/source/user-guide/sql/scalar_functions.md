@@ -1956,6 +1956,7 @@ from_unixtime(expression)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
+- [flatten](#flatten)
 - [generate_series](#generate_series)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
@@ -3029,7 +3030,7 @@ _Alias of [array_slice](#array_slice)._
 
 ### `list_to_string`
 
-_Alias of [list_to_string](#list_to_string)._
+_Alias of [array_to_string](#array_to_string)._
 
 ### `make_array`
 

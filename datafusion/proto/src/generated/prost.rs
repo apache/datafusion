@@ -2636,7 +2636,7 @@ pub enum ScalarFunction {
     ///   0 was Abs before
     ///   The first enum value must be zero for open enums
     Unknown = 0,
-    Acos = 1,
+    ///   1 was Acos
     Asin = 2,
     Atan = 3,
     Ascii = 4,
@@ -2656,7 +2656,7 @@ pub enum ScalarFunction {
     Tan = 18,
     Trunc = 19,
     Array = 20,
-    RegexpMatch = 21,
+    /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
     CharacterLength = 24,
@@ -2779,7 +2779,6 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Acos => "Acos",
             ScalarFunction::Asin => "Asin",
             ScalarFunction::Atan => "Atan",
             ScalarFunction::Ascii => "Ascii",
@@ -2799,7 +2798,6 @@ impl ScalarFunction {
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
-            ScalarFunction::RegexpMatch => "RegexpMatch",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
@@ -2916,7 +2914,6 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Acos" => Some(Self::Acos),
             "Asin" => Some(Self::Asin),
             "Atan" => Some(Self::Atan),
             "Ascii" => Some(Self::Ascii),
@@ -2936,7 +2933,6 @@ impl ScalarFunction {
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
-            "RegexpMatch" => Some(Self::RegexpMatch),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),

@@ -15,28 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "math" DataFusion functions
+//! "regx" DataFusion functions
 
-mod abs;
-mod acos;
-mod nans;
+mod regexpmatch;
+// create UDFs
+make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 
-// create  UDFs
-make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
-make_udf_function!(abs::AbsFunc, ABS, abs);
-make_udf_function!(acos::AcosFunc, ACOS, acos);
-
-// Export the functions out of this package, both as expr_fn as well as a list of functions
-export_functions!(
-    (
-        isnan,
-        num,
-        "returns true if a given number is +NaN or -NaN otherwise returns false"
-    ),
-    (abs, num, "returns the absolute value of a given number"),
-    (
-        acos,
-        num,
-        "returns the arc cosine or inverse cosine of a number"
-    )
-);
+export_functions!((
+    regexp_match,
+    input_arg1
+    input_arg2,
+    "returns a list of regular expression matches in a string. "
+));

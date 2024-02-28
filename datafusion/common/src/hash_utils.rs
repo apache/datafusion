@@ -31,7 +31,7 @@ use crate::cast::{
     as_large_list_array, as_list_array, as_primitive_array, as_string_array,
     as_struct_array,
 };
-use crate::error::{DataFusionError, Result, _internal_err};
+use crate::error::{Result, _internal_err};
 
 // Combines two hashes into one hash
 #[inline]

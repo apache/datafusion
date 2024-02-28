@@ -22322,7 +22322,6 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Acos => "Acos",
             Self::Asin => "Asin",
             Self::Atan => "Atan",
             Self::Ascii => "Ascii",
@@ -22342,7 +22341,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Tan => "Tan",
             Self::Trunc => "Trunc",
             Self::Array => "Array",
-            Self::RegexpMatch => "RegexpMatch",
             Self::BitLength => "BitLength",
             Self::Btrim => "Btrim",
             Self::CharacterLength => "CharacterLength",
@@ -22465,7 +22463,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Acos",
             "Asin",
             "Atan",
             "Ascii",
@@ -22485,7 +22482,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Tan",
             "Trunc",
             "Array",
-            "RegexpMatch",
             "BitLength",
             "Btrim",
             "CharacterLength",
@@ -22637,7 +22633,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Acos" => Ok(ScalarFunction::Acos),
                     "Asin" => Ok(ScalarFunction::Asin),
                     "Atan" => Ok(ScalarFunction::Atan),
                     "Ascii" => Ok(ScalarFunction::Ascii),
@@ -22657,7 +22652,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Tan" => Ok(ScalarFunction::Tan),
                     "Trunc" => Ok(ScalarFunction::Trunc),
                     "Array" => Ok(ScalarFunction::Array),
-                    "RegexpMatch" => Ok(ScalarFunction::RegexpMatch),
                     "BitLength" => Ok(ScalarFunction::BitLength),
                     "Btrim" => Ok(ScalarFunction::Btrim),
                     "CharacterLength" => Ok(ScalarFunction::CharacterLength),
