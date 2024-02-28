@@ -579,6 +579,18 @@ impl DFSchema {
         }
     }
 
+    /// Find the field with the given qualified column
+    pub fn qualifier_and_field_from_column(
+        &self,
+        column: &Column,
+    ) -> Option<(Option<OwnedTableReference>, Arc<Field>)> {
+        self.iter()
+            .find(|&(q, f)| {
+                column.relation == q.cloned() && column.name == f.name().clone()
+            })
+            .map(|(q, f)| (q.cloned(), f.clone()))
+    }
+
     /// Find if the field exists with the given name
     pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
         self.fields().iter().any(|field| field.name() == name)

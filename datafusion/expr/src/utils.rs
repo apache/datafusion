@@ -853,8 +853,20 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
-            let field = plan.schema().field_from_column(col)?;
-            Ok(Expr::Column(field.qualified_column()))
+            let maybe_field = plan
+                .schema()
+                .iter()
+                .find(|&(qu, fi)| {
+                    col.relation == qu.cloned() && col.name == fi.name().clone()
+                })
+                .map(|(q, f)| (q.clone(), f.clone()));
+            if let Some(field) = maybe_field {
+                Ok(Expr::Column(Column::new(field.0, field.1.name())))
+            } else {
+                Err(DataFusionError::Internal(
+                    "A column for the expression could not be found".to_string(),
+                ))
+            }
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }

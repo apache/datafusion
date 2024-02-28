@@ -1768,12 +1768,7 @@ impl Projection {
 
     /// Create a new Projection using the specified output schema
     pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
-        let expr: Vec<Expr> = schema
-            .fields()
-            .iter()
-            .map(|field| field.qualified_column())
-            .map(Expr::Column)
-            .collect();
+        let expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
         Self {
             expr,
             input,
