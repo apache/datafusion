@@ -19,7 +19,7 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::TypeSignature::Exact;
