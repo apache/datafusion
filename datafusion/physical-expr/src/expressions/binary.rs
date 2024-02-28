@@ -20,8 +20,8 @@ mod kernels;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::array_expressions::array_has_all;
 use crate::expressions::datum::{apply, apply_cmp};
+use crate::expressions::Literal;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
@@ -43,6 +43,7 @@ use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
+use datafusion_functions_array::expr_fn::array_has_all;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -602,7 +603,9 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => binary_string_array_op!(left, right, concat_elements),
-            AtArrow => array_has_all(&[left, right]),
+            AtArrow => {
+                array_has_all(&[left, right])
+            },
             ArrowAt => array_has_all(&[right, left]),
         }
     }
