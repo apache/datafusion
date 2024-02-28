@@ -44,10 +44,6 @@ pub mod expr_fn {
     pub use super::udf::array_prepend;
     pub use super::udf::array_to_string;
     pub use super::udf::make_array;
-
-    pub use super::udf::array_append_udf;
-    pub use super::udf::array_concat_udf;
-    pub use super::udf::array_prepend_udf;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]

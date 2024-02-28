@@ -30,11 +30,8 @@ use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::Operator;
 use datafusion_expr::ScalarFunctionDefinition;
-use datafusion_expr::ScalarUDF;
 use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
-use datafusion_functions_array::expr_fn::array_append_udf;
-use datafusion_functions_array::expr_fn::array_concat_udf;
-use datafusion_functions_array::expr_fn::array_prepend_udf;
+use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
 
 use super::AnalyzerRule;
 
@@ -106,7 +103,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                 op,
                 ref right,
             }) => {
-                if let Some(fun) = rewrite_array_concat_operator_to_func_for_column(
+                if let Some(expr) = rewrite_array_concat_operator_to_func_for_column(
                     left.as_ref(),
                     op,
                     right.as_ref(),
@@ -119,13 +116,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                         right.as_ref(),
                     )
                 }) {
-                    // Convert &Box<Expr> -> Expr
-                    let left = (**left).clone();
-                    let right = (**right).clone();
-                    return Ok(Expr::ScalarFunction(ScalarFunction {
-                        func_def: ScalarFunctionDefinition::UDF(fun),
-                        args: vec![left, right],
-                    }));
+                    return Ok(expr);
                 }
 
                 Ok(expr)
@@ -150,7 +141,7 @@ fn rewrite_array_concat_operator_to_func(
     left: &Expr,
     op: Operator,
     right: &Expr,
-) -> Option<Arc<ScalarUDF>> {
+) -> Option<Expr> {
     // Convert `Array StringConcat Array` to ScalarFunction::ArrayConcat
 
     if op != Operator::StringConcat {
@@ -173,7 +164,7 @@ fn rewrite_array_concat_operator_to_func(
             .contains(&left_fun.name())
             && right_fun.name() == "make_array" =>
         {
-            Some(array_concat_udf())
+            Some(array_concat(vec![left.clone(), right.clone()]))
         }
         // Chain concat operator (a || b) || scalar,
         // (arry concat, array append, array prepend) || scalar -> array append
@@ -186,7 +177,7 @@ fn rewrite_array_concat_operator_to_func(
         ) if ["array_append", "array_prepend", "array_concat"]
             .contains(&left_fun.name()) =>
         {
-            Some(array_append_udf())
+            Some(array_append(vec![left.clone(), right.clone()]))
         }
         // array || array -> array concat
         (
@@ -199,7 +190,7 @@ fn rewrite_array_concat_operator_to_func(
                 args: _right_args,
             }),
         ) if left_fun.name() == "make_array" && right_fun.name() == "make_array" => {
-            Some(array_concat_udf())
+            Some(array_concat(vec![left.clone(), right.clone()]))
         }
         // array || scalar -> array append
         (
@@ -208,7 +199,9 @@ fn rewrite_array_concat_operator_to_func(
                 args: _left_args,
             }),
             _right_scalar,
-        ) if left_fun.name() == "make_array" => Some(array_append_udf()),
+        ) if left_fun.name() == "make_array" => {
+            Some(array_append(vec![left.clone(), right.clone()]))
+        }
         // scalar || array -> array prepend
         (
             _left_scalar,
@@ -216,7 +209,9 @@ fn rewrite_array_concat_operator_to_func(
                 func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) if right_fun.name() == "make_array" => Some(array_prepend_udf()),
+        ) if right_fun.name() == "make_array" => {
+            Some(array_prepend(vec![left.clone(), right.clone()]))
+        }
 
         _ => None,
     }
@@ -232,7 +227,7 @@ fn rewrite_array_concat_operator_to_func_for_column(
     op: Operator,
     right: &Expr,
     schema: &DFSchema,
-) -> Result<Option<Arc<ScalarUDF>>> {
+) -> Result<Option<Expr>> {
     if op != Operator::StringConcat {
         return Ok(None);
     }
@@ -252,8 +247,8 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let d = schema.field_from_column(c)?.data_type();
             let ndim = list_ndims(d);
             match ndim {
-                0 => Ok(Some(array_append_udf())),
-                _ => Ok(Some(array_concat_udf())),
+                0 => Ok(Some(array_append(vec![left.clone(), right.clone()]))),
+                _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }
         // 2) select column1 || column2
@@ -263,9 +258,9 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let ndim1 = list_ndims(d1);
             let ndim2 = list_ndims(d2);
             match (ndim1, ndim2) {
-                (0, _) => Ok(Some(array_prepend_udf())),
-                (_, 0) => Ok(Some(array_append_udf())),
-                _ => Ok(Some(array_concat_udf())),
+                (0, _) => Ok(Some(array_prepend(vec![left.clone(), right.clone()]))),
+                (_, 0) => Ok(Some(array_append(vec![left.clone(), right.clone()]))),
+                _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }
         _ => Ok(None),

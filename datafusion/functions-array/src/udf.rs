@@ -19,6 +19,7 @@
 
 use arrow::datatypes::DataType;
 use arrow_schema::Field;
+use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::get_wider_type;
@@ -233,25 +234,6 @@ impl ArrayConcat {
             ],
         }
     }
-
-    /// Returns the dimension [`DataType`] of [`DataType::List`] if
-    /// treated as a N-dimensional array.
-    ///
-    /// ## Examples:
-    ///
-    /// * `Int64` has dimension 1
-    /// * `List(Int64)` has dimension 2
-    /// * `List(List(Int64))` has dimension 3
-    /// * etc.
-    fn return_dimension(&self, input_expr_type: &DataType) -> u64 {
-        let mut result: u64 = 1;
-        let mut current_data_type = input_expr_type;
-        while let DataType::List(field) = current_data_type {
-            current_data_type = field.data_type();
-            result += 1;
-        }
-        result
-    }
 }
 
 impl ScalarUDFImpl for ArrayConcat {
@@ -274,7 +256,7 @@ impl ScalarUDFImpl for ArrayConcat {
             match arg_type {
                 DataType::List(field) => {
                     if !field.data_type().equals_datatype(&DataType::Null) {
-                        let dims = self.return_dimension(arg_type);
+                        let dims = list_ndims(arg_type);
                         expr_type = match max_dims.cmp(&dims) {
                             Ordering::Greater => expr_type,
                             Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
