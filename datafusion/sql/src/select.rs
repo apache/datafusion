@@ -277,7 +277,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     // Try converting Expr::Unnest to LogicalPlan::Unnest if possible, otherwise do the final projection
-    fn try_process_unnest(
+    pub(super) fn try_process_unnest(
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,

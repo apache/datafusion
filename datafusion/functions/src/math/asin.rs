@@ -15,42 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Math function: `isnan()`.
+//! Math function: `asin()`.
 
+use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result, plan_datafusion_err};
+use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-
-use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility, utils::generate_signature_error_msg};
+use datafusion_expr::{
+    utils::generate_signature_error_msg, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct IsNanFunc {
+pub struct AsinFunc {
     signature: Signature,
 }
 
-impl IsNanFunc {
+impl AsinFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature:
-            Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
+            signature: Signature::uniform(
+                1,
+                vec![Float64, Float32],
                 Volatility::Immutable,
-            )
+            ),
         }
     }
 }
 
-impl ScalarUDFImpl for IsNanFunc {
+impl ScalarUDFImpl for AsinFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
     fn name(&self) -> &str {
-        "isnan"
+        "asin"
     }
 
     fn signature(&self) -> &Signature {
@@ -69,32 +69,41 @@ impl ScalarUDFImpl for IsNanFunc {
             ));
         }
 
-        Ok(DataType::Boolean)
+        let arg_type = &arg_types[0];
+
+        match arg_type {
+            DataType::Float64 => Ok(DataType::Float64),
+            DataType::Float32 => Ok(DataType::Float32),
+
+            // For other types (possible values null/int), use Float 64
+            _ => Ok(DataType::Float64),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => {
-                Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float64Array,
-                                BooleanArray,
-                                { f64::is_nan }
-                            ))
+            DataType::Float64 => Arc::new(make_function_scalar_inputs_return_type!(
+                &args[0],
+                self.name(),
+                Float64Array,
+                Float64Array,
+                { f64::asin }
+            )),
+            DataType::Float32 => Arc::new(make_function_scalar_inputs_return_type!(
+                &args[0],
+                self.name(),
+                Float32Array,
+                Float32Array,
+                { f32::asin }
+            )),
+            other => {
+                return exec_err!(
+                    "Unsupported data type {other:?} for function {}",
+                    self.name()
+                )
             }
-            DataType::Float32 => {
-                Arc::new(make_function_scalar_inputs_return_type!(
-                            &args[0],
-                            self.name(),
-                            Float32Array,
-                            BooleanArray,
-                            { f32::is_nan }
-                        ))
-            }
-            other => return exec_err!("Unsupported data type {other:?} for function {}", self.name()),
         };
         Ok(ColumnarValue::Array(arr))
     }

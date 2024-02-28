@@ -52,8 +52,8 @@ use datafusion_expr::{
     array_length, array_ndims, array_pop_back, array_pop_front, array_position,
     array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
     array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
-    array_slice, array_sort, array_union, arrow_typeof, ascii, asin, asinh, atan, atan2,
-    atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
+    array_slice, array_sort, array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh,
+    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
     date_part, date_trunc, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
@@ -449,7 +449,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
@@ -1359,7 +1358,6 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Asinh => Ok(asinh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acosh => Ok(acosh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Array => Ok(array(
