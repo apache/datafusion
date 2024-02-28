@@ -568,7 +568,7 @@ enum ScalarFunction {
   Tan = 18;
   Trunc = 19;
   Array = 20;
-  RegexpMatch = 21;
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;
