@@ -18,7 +18,7 @@
 //! Encoding expressions
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::Array;
@@ -98,7 +98,7 @@ impl ScalarUDFImpl for NullIfFunc {
 ///
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "{:?} args were supplied but NULLIF takes exactly two args",
             args.len()
         );

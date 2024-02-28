@@ -66,6 +66,33 @@ pub trait FunctionRegistry {
     fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         not_impl_err!("Registering WindowUDF")
     }
+
+    /// Deregisters a [`ScalarUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udf(&mut self, _name: &str) -> Result<Option<Arc<ScalarUDF>>> {
+        not_impl_err!("Deregistering ScalarUDF")
+    }
+
+    /// Deregisters a [`AggregateUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udaf(&mut self, _name: &str) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Deregistering AggregateUDF")
+    }
+
+    /// Deregisters a [`WindowUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udwf(&mut self, _name: &str) -> Result<Option<Arc<WindowUDF>>> {
+        not_impl_err!("Deregistering WindowUDF")
+    }
 }
 
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].

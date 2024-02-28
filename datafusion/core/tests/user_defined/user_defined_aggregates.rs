@@ -256,6 +256,29 @@ async fn simple_udaf() -> Result<()> {
 }
 
 #[tokio::test]
+async fn deregister_udaf() -> Result<()> {
+    let ctx = SessionContext::new();
+    let my_avg = create_udaf(
+        "my_avg",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg.clone());
+
+    assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    ctx.deregister_udaf("my_avg");
+
+    assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
