@@ -133,7 +133,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 
@@ -166,7 +166,7 @@ pub(crate) mod tests {
             let actual = aggregate_new(&batch, agg)?;
             assert_eq!($EXPECTED, &actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 

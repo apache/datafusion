@@ -27,7 +27,7 @@ use datafusion::execution::context::{ExecutionProps, SessionState};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{plan_err, DataFusionError, ScalarValue};
+use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::{Expr, TableType};
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use std::fs::File;

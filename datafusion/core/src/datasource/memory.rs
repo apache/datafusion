@@ -28,9 +28,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{
-    not_impl_err, plan_err, Constraints, DFSchema, DataFusionError, SchemaExt,
-};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_execution::TaskContext;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
@@ -370,6 +368,7 @@ mod tests {
     use arrow::array::{AsArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
+    use datafusion_common::DataFusionError;
     use datafusion_expr::LogicalPlanBuilder;
     use futures::StreamExt;
     use std::collections::HashMap;

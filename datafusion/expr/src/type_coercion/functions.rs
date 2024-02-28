@@ -22,9 +22,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
-use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
 use super::binary::comparison_coercion;
 

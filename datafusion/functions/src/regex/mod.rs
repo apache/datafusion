@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::Operator;
-use sqlparser::ast::JsonOperator;
+//! "regx" DataFusion functions
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(crate) fn parse_sql_json_access(&self, op: JsonOperator) -> Result<Operator> {
-        match op {
-            JsonOperator::AtArrow => Ok(Operator::AtArrow),
-            JsonOperator::ArrowAt => Ok(Operator::ArrowAt),
-            _ => not_impl_err!("Unsupported SQL json operator {op:?}"),
-        }
-    }
-}
+mod regexpmatch;
+// create UDFs
+make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
+
+export_functions!((
+    regexp_match,
+    input_arg1
+    input_arg2,
+    "returns a list of regular expression matches in a string. "
+));

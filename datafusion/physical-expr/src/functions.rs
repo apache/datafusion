@@ -42,7 +42,7 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
@@ -243,7 +243,6 @@ where
             .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
-
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
@@ -619,29 +618,6 @@ pub fn create_physical_fun(
                 exec_err!("Unsupported data type {other:?} for function regexp_like")
             }
         }),
-        BuiltinScalarFunction::RegexpMatch => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
-                        regexp_match,
-                        i32,
-                        "regexp_match"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                DataType::LargeUtf8 => {
-                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
-                        regexp_match,
-                        i64,
-                        "regexp_match"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                other => {
-                    exec_err!("Unsupported data type {other:?} for function regexp_match")
-                }
-            })
-        }
         BuiltinScalarFunction::RegexpReplace => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
@@ -1022,7 +998,7 @@ mod tests {
     };
     use datafusion_common::cast::{as_boolean_array, as_uint64_array};
     use datafusion_common::{exec_err, internal_err, plan_err};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
 
@@ -3181,90 +3157,6 @@ mod tests {
 
         // value is correct
         assert!(result.value(0));
-
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "regex_expressions")]
-    fn test_regexp_match() -> Result<()> {
-        use datafusion_common::cast::{as_list_array, as_string_array};
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let execution_props = ExecutionProps::new();
-
-        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
-        let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![col_value];
-        let expr = create_physical_expr_with_type_coercion(
-            &BuiltinScalarFunction::RegexpMatch,
-            &[col("a", &schema)?, pattern],
-            &schema,
-            &execution_props,
-        )?;
-
-        // type is correct
-        assert_eq!(
-            expr.data_type(&schema)?,
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
-        );
-
-        // evaluate works
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-
-        // downcast works
-        let result = as_list_array(&result)?;
-        let first_row = result.value(0);
-        let first_row = as_string_array(&first_row)?;
-
-        // value is correct
-        let expected = "555".to_string();
-        assert_eq!(first_row.value(0), expected);
-
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "regex_expressions")]
-    fn test_regexp_match_all_literals() -> Result<()> {
-        use datafusion_common::cast::{as_list_array, as_string_array};
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let execution_props = ExecutionProps::new();
-
-        let col_value = lit("aaa-555");
-        let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
-        let expr = create_physical_expr_with_type_coercion(
-            &BuiltinScalarFunction::RegexpMatch,
-            &[col_value, pattern],
-            &schema,
-            &execution_props,
-        )?;
-
-        // type is correct
-        assert_eq!(
-            expr.data_type(&schema)?,
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
-        );
-
-        // evaluate works
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-
-        // downcast works
-        let result = as_list_array(&result)?;
-        let first_row = result.value(0);
-        let first_row = as_string_array(&first_row)?;
-
-        // value is correct
-        let expected = "555".to_string();
-        assert_eq!(first_row.value(0), expected);
 
         Ok(())
     }

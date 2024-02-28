@@ -19,7 +19,7 @@
 
 use arrow::array::*;
 use arrow::datatypes::Field;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 

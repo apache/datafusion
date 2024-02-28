@@ -24,7 +24,7 @@ use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
-    plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
+    plan_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,

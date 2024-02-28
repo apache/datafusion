@@ -18,7 +18,7 @@
 //! Encoding expressions
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::Array;

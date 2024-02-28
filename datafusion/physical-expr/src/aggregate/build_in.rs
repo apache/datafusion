@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use datafusion_expr::AggregateFunction;
 
 use crate::aggregate::regr::RegrType;
@@ -416,7 +416,7 @@ pub fn create_aggregate_expr(
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
-    use datafusion_common::{plan_err, ScalarValue};
+    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::NUMERICS;
     use datafusion_expr::{type_coercion, Signature};
 

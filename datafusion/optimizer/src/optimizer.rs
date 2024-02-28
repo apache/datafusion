@@ -458,9 +458,7 @@ mod tests {
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
-    use datafusion_common::{
-        plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
-    };
+    use datafusion_common::{plan_err, DFField, DFSchema, DFSchemaRef, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
