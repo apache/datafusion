@@ -17,6 +17,8 @@
 
 //! An optimizer rule that detects aggregate operations that could use a limited bucket count
 
+use std::sync::Arc;
+
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -24,14 +26,15 @@ use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
+
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 pub struct TopKAggregation {}
@@ -86,7 +89,7 @@ impl TopKAggregation {
 
         let children = sort.children();
         let child = children.iter().exactly_one().ok()?;
-        let order = sort.output_ordering()?;
+        let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;
 

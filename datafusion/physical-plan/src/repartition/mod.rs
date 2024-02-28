@@ -24,33 +24,33 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
+use super::common::SharedMemoryReservation;
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::{
+    DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
+};
+use crate::common::{transpose, SpawnedTask};
+use crate::hash_utils::create_hashes;
+use crate::metrics::BaselineMetrics;
+use crate::repartition::distributor_channels::{
+    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+};
+use crate::sorts::streaming_merge;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
+
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-
-use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
-use crate::common::{transpose, SpawnedTask};
-use crate::hash_utils::create_hashes;
-use crate::metrics::BaselineMetrics;
-use crate::repartition::distributor_channels::{channels, partition_aware_channels};
-use crate::sorts::streaming_merge;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-
-use super::common::SharedMemoryReservation;
-use super::expressions::PhysicalSortExpr;
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
-
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 mod distributor_channels;
 
@@ -294,19 +294,17 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-
     /// Partitioning scheme to use
     partitioning: Partitioning,
-
     /// Inner state that is initialized when the first output stream is created.
     state: Arc<Mutex<RepartitionExecState>>,
-
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 #[derive(Debug, Clone)]
@@ -412,9 +410,8 @@ impl ExecutionPlan for RepartitionExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -433,45 +430,12 @@ impl ExecutionPlan for RepartitionExec {
         Ok(Arc::new(repartition))
     }
 
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.partitioning.clone()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.maintains_input_order()[0] {
-            self.input().output_ordering()
-        } else {
-            None
-        }
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
-        if self.preserve_order {
-            vec![true]
-        } else {
-            // We preserve ordering when input partitioning is 1
-            vec![self.input().output_partitioning().partition_count() <= 1]
-        }
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut result = self.input.equivalence_properties();
-        // If the ordering is lost, reset the ordering equivalence class.
-        if !self.maintains_input_order()[0] {
-            result.clear_orderings();
-        }
-        result
+        Self::maintains_input_order_helper(self.input(), self.preserve_order)
     }
 
     fn execute(
@@ -631,6 +595,9 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
+        let preserve_order = false;
+        let cache =
+            Self::compute_properties(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
             partitioning,
@@ -639,8 +606,46 @@ impl RepartitionExec {
                 abort_helper: Arc::new(Vec::new()),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
-            preserve_order: false,
+            preserve_order,
+            cache,
         })
+    }
+
+    fn maintains_input_order_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> Vec<bool> {
+        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
+        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
+    }
+
+    fn eq_properties_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> EquivalenceProperties {
+        // Equivalence Properties
+        let mut eq_properties = input.equivalence_properties().clone();
+        // If the ordering is lost, reset the ordering equivalence class:
+        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
+            eq_properties.clear_orderings();
+        }
+        eq_properties
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        preserve_order: bool,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = Self::eq_properties_helper(input, preserve_order);
+
+        PlanProperties::new(
+            eq_properties,          // Equivalence Properties
+            partitioning,           // Output Partitioning
+            input.execution_mode(), // Execution Mode
+        )
     }
 
     /// Specify if this reparititoning operation should preserve the order of
@@ -657,6 +662,8 @@ impl RepartitionExec {
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
+        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
+        self.cache = self.cache.with_eq_properties(eq_properties);
         self
     }
 
@@ -919,17 +926,7 @@ impl RecordBatchStream for PerPartitionStream {
 mod tests {
     use std::collections::HashSet;
 
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use futures::FutureExt;
-    use tokio::task::JoinHandle;
-
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-
+    use super::*;
     use crate::{
         test::{
             assert_is_pending,
@@ -941,7 +938,15 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use super::*;
+    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+
+    use futures::FutureExt;
+    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

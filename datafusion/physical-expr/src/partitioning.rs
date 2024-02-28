@@ -142,12 +142,12 @@ impl Partitioning {
         }
     }
 
-    /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
-    /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
-    pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
+    /// Returns true when the guarantees made by this [`Partitioning`] are sufficient to
+    /// satisfy the partitioning scheme mandated by the `required` [`Distribution`].
+    pub fn satisfy(
         &self,
-        required: Distribution,
-        eq_properties: F,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
     ) -> bool {
         match required {
             Distribution::UnspecifiedDistribution => true,
@@ -159,11 +159,10 @@ impl Partitioning {
                     // then we need to have the partition count and hash functions validation.
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
-                            physical_exprs_equal(&required_exprs, partition_exprs);
+                            physical_exprs_equal(required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
                         // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
-                            let eq_properties = eq_properties();
                             let eq_groups = eq_properties.eq_group();
                             if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
@@ -222,14 +221,14 @@ pub enum Distribution {
 
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
-    pub fn create_partitioning(&self, partition_count: usize) -> Partitioning {
+    pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
         match self {
             Distribution::UnspecifiedDistribution => {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
-                Partitioning::Hash(expr.clone(), partition_count)
+                Partitioning::Hash(expr, partition_count)
             }
         }
     }
@@ -273,24 +272,15 @@ mod tests {
         let round_robin_partition = Partitioning::RoundRobinBatch(10);
         let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
         let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
+        let eq_properties = EquivalenceProperties::new(schema);
 
         for distribution in distribution_types {
             let result = (
-                single_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                unspecified_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                round_robin_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                hash_partition1.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                hash_partition2.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
+                single_partition.satisfy(&distribution, &eq_properties),
+                unspecified_partition.satisfy(&distribution, &eq_properties),
+                round_robin_partition.satisfy(&distribution, &eq_properties),
+                hash_partition1.satisfy(&distribution, &eq_properties),
+                hash_partition2.satisfy(&distribution, &eq_properties),
             );
 
             match distribution {

@@ -66,8 +66,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, InputOrderMode,
-    Partitioning, PhysicalExpr, WindowExpr,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan,
+    ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -1990,30 +1990,36 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::convert::TryFrom;
+    use std::fmt::{self, Debug};
+    use std::ops::{BitAnd, Not};
+
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::{expressions, DisplayFormatType, Partitioning};
-    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
+    use crate::physical_plan::{
+        expressions, DisplayAs, DisplayFormatType, ExecutionMode, Partitioning,
+        PlanProperties, SendableRecordBatchStream,
+    };
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
+
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_contains, TableReference};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_common::{
+        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
-    use fmt::Debug;
-    use std::collections::HashMap;
-    use std::convert::TryFrom;
-    use std::ops::{BitAnd, Not};
-    use std::{any::Any, fmt};
+    use datafusion_physical_expr::EquivalenceProperties;
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2575,7 +2581,26 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        schema: SchemaRef,
+        cache: PlanProperties,
+    }
+
+    impl NoOpExecutionPlan {
+        fn new(schema: SchemaRef) -> Self {
+            let cache = Self::compute_properties(schema.clone());
+            Self { cache }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
+            let eq_properties = EquivalenceProperties::new(schema);
+            PlanProperties::new(
+                eq_properties,
+                // Output Partitioning
+                Partitioning::UnknownPartitioning(1),
+                // Execution Mode
+                ExecutionMode::Bounded,
+            )
+        }
     }
 
     impl DisplayAs for NoOpExecutionPlan {
@@ -2594,16 +2619,8 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.schema.clone()
-        }
-
-        fn output_partitioning(&self) -> Partitioning {
-            Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            None
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -2641,13 +2658,9 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Ok(Some(Arc::new(NoOpExecutionPlan {
-                schema: SchemaRef::new(Schema::new(vec![Field::new(
-                    "b",
-                    DataType::Int32,
-                    false,
-                )])),
-            })))
+            Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
+                Schema::new(vec![Field::new("b", DataType::Int32, false)]),
+            )))))
         }
     }
 
