@@ -84,7 +84,11 @@ use log::debug;
 #[macro_use]
 pub mod macros;
 
-make_package!(core, "core_expressions", "Core datafusion expressions");
+/// Core datafusion expressions
+/// Enabled via feature flag `core_expressions`
+#[cfg(feature = "core_expressions")]
+pub mod core;
+make_stub_package!(core, "core_expressions");
 
 make_package!(
     encoding,
