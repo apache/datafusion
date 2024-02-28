@@ -69,6 +69,8 @@ impl Debug for ScalarFunctionExpr {
             .field("name", &self.name)
             .field("args", &self.args)
             .field("return_type", &self.return_type)
+            .field("monotonicity", &self.monotonicity)
+            .field("supports_zero_argument", &self.supports_zero_argument)
             .finish()
     }
 }

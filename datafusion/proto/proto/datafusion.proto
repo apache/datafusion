@@ -320,13 +320,14 @@ message DistinctOnNode {
 }
 
 message CopyToNode {
-  LogicalPlanNode input = 1;
-  string output_url = 2;
-  oneof CopyOptions {
-    SQLOptions sql_options = 4;
-    FileTypeWriterOptions writer_options = 5;
-  }
-  string file_type = 6;
+    LogicalPlanNode input = 1;
+    string output_url = 2;
+    oneof CopyOptions {
+        SQLOptions sql_options = 4;
+        FileTypeWriterOptions writer_options = 5;
+    }
+    string file_type = 6;
+    repeated string partition_by = 7;
 }
 
 message SQLOptions {
@@ -334,8 +335,8 @@ message SQLOptions {
 }
 
 message SQLOption {
-  string key = 1;
-  string value = 2;
+    string key = 1;
+    string value = 2;
 }
 
 message UnionNode {
@@ -544,8 +545,10 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs = 0;
-  Acos = 1;
+  //  0 was Abs before
+  //  The first enum value must be zero for open enums
+  unknown = 0;
+  //  1 was Acos
   Asin = 2;
   Atan = 3;
   Ascii = 4;
@@ -1225,7 +1228,7 @@ message JsonWriterOptions {
 }
 
 message ParquetWriterOptions {
-  WriterProperties writer_properties = 1;
+    WriterProperties writer_properties = 1;
 }
 
 message CsvWriterOptions {

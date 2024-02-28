@@ -569,6 +569,8 @@ trunc(numeric_expression[, decimal_places])
 
 - [coalesce](#coalesce)
 - [nullif](#nullif)
+- [nvl](#nvl)
+- [ifnull](#ifnull)
 
 ### `coalesce`
 
@@ -602,6 +604,25 @@ nullif(expression1, expression2)
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression2**: Expression to compare to expression1.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl`
+
+Returns _expression2_ if _expression1_ is NULL; otherwise it returns _expression1_.
+
+```
+nvl(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: return if expression1 not is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `ifnull`
+
+_Alias of [nvl](#nvl)._
 
 ## String Functions
 
@@ -1935,6 +1956,8 @@ from_unixtime(expression)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
+- [flatten](#flatten)
+- [generate_series](#generate_series)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
 - [list_cat](#list_cat)
@@ -2881,6 +2904,10 @@ empty(array)
 +------------------+
 ```
 
+### `generate_series`
+
+_Alias of [range](#range)._
+
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
@@ -3089,6 +3116,10 @@ Step can not be 0 (then the range will be nonsense.).
 - **start**: start of the range
 - **end**: end of the range (not included)
 - **step**: increase by step (can not be 0)
+
+#### Aliases
+
+- generate_series
 
 ## Struct Functions
 
