@@ -37,13 +37,13 @@ use arrow::{
 use uuid::Uuid;
 
 use datafusion_common::utils::datafusion_strsim;
+use datafusion_common::Result;
 use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
     exec_err, ScalarValue,
 };
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to

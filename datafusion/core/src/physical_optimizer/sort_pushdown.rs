@@ -31,7 +31,7 @@ use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
+use datafusion_common::{plan_err, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{

@@ -18,9 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{plan_datafusion_err, plan_err, Result, ScalarValue};
 
 /// Types of the field access expression of a nested type, such as `Field` or `List`
 pub enum GetFieldAccessSchema {

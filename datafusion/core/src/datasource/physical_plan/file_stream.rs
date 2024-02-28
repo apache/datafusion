@@ -530,7 +530,7 @@ mod tests {
     };
 
     use arrow_schema::Schema;
-    use datafusion_common::{internal_err, DataFusionError, Statistics};
+    use datafusion_common::{internal_err, Statistics};
 
     use bytes::Bytes;
     use futures::StreamExt;

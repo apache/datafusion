@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, PhysicalSortRequirement,

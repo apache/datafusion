@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::is_not_null;
@@ -73,11 +73,7 @@ impl ScalarUDFImpl for NVLFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NVL has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
-        coerced_types.map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NVL")
-        )
+        Ok(arg_types[0].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

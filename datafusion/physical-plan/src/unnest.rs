@@ -35,7 +35,7 @@ use arrow::datatypes::{
     ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
+use datafusion_common::{exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 

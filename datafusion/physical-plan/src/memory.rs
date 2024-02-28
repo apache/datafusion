@@ -30,7 +30,7 @@ use super::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, project_schema, DataFusionError, Result};
+use datafusion_common::{internal_err, project_schema, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 

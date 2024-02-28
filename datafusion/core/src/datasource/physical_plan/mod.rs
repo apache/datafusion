@@ -50,7 +50,7 @@ use std::{
 };
 
 use super::listing::ListingTableUrl;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
     datasource::{

@@ -30,7 +30,7 @@ use super::{
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single

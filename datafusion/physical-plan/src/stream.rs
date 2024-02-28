@@ -25,7 +25,7 @@ use std::task::Poll;
 use crate::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::internal_err;
-use datafusion_common::DataFusionError;
+
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;

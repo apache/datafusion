@@ -31,7 +31,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 

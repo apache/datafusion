@@ -29,7 +29,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProp
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 

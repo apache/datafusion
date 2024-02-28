@@ -14,29 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//! Verifies [Macro Hygene]
+//!
+//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+mod plan_err {
+    // NO other imports!
+    use datafusion_common::plan_err;
 
-//! "math" DataFusion functions
+    #[test]
+    fn test_macro() {
+        // need type annotation for Ok variant
+        let _res: Result<(), _> = plan_err!("foo");
+    }
+}
 
-mod abs;
-mod acos;
-mod nans;
+mod plan_datafusion_err {
+    // NO other imports!
+    use datafusion_common::plan_datafusion_err;
 
-// create  UDFs
-make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
-make_udf_function!(abs::AbsFunc, ABS, abs);
-make_udf_function!(acos::AcosFunc, ACOS, acos);
-
-// Export the functions out of this package, both as expr_fn as well as a list of functions
-export_functions!(
-    (
-        isnan,
-        num,
-        "returns true if a given number is +NaN or -NaN otherwise returns false"
-    ),
-    (abs, num, "returns the absolute value of a given number"),
-    (
-        acos,
-        num,
-        "returns the arc cosine or inverse cosine of a number"
-    )
-);
+    #[test]
+    fn test_macro() {
+        plan_datafusion_err!("foo");
+    }
+}
