@@ -70,7 +70,7 @@ use arrow::{
 };
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
-    common::{internal_err, DFSchemaRef},
+    common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -81,9 +81,10 @@ use datafusion::{
         UserDefinedLogicalNodeCore,
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
+    physical_expr::EquivalenceProperties,
     physical_plan::{
-        expressions::PhysicalSortExpr, DisplayAs, DisplayFormatType, Distribution,
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+        DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
+        Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
         Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
@@ -91,7 +92,6 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
-use datafusion_common::arrow_datafusion_err;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -395,10 +395,10 @@ impl ExtensionPlanner for TopKPlanner {
                 assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
                 assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
                 // figure out input name
-                Some(Arc::new(TopKExec {
-                    input: physical_inputs[0].clone(),
-                    k: topk_node.k,
-                }))
+                Some(Arc::new(TopKExec::new(
+                    physical_inputs[0].clone(),
+                    topk_node.k,
+                )))
             } else {
                 None
             },
@@ -412,6 +412,25 @@ struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maxium number of values
     k: usize,
+    cache: PlanProperties,
+}
+
+impl TopKExec {
+    fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> Self {
+        let cache = Self::compute_properties(input.schema());
+        Self { input, k, cache }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
+    }
 }
 
 impl Debug for TopKExec {
@@ -441,16 +460,8 @@ impl ExecutionPlan for TopKExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -465,10 +476,7 @@ impl ExecutionPlan for TopKExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TopKExec {
-            input: children[0].clone(),
-            k: self.k,
-        }))
+        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
     }
 
     /// Execute one partition and return an iterator over RecordBatch
