@@ -2906,7 +2906,7 @@ empty(array)
 
 ### `generate_series`
 
-similar as range function, but include the upper bound
+Similar to the range function, but it includes the upper bound. 
 
 ```
 generate_series(start, stop, step)
@@ -2915,7 +2915,7 @@ generate_series(start, stop, step)
 #### Arguments
 
 - **start**: start of the range
-- **end**: end of the range (not included)
+- **end**: end of the range (included)
 - **step**: increase by step (can not be 0)
 
 #### Example
