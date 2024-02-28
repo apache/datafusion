@@ -3030,7 +3030,7 @@ _Alias of [array_slice](#array_slice)._
 
 ### `list_to_string`
 
-_Alias of [list_to_string](#list_to_string)._
+_Alias of [array_to_string](#array_to_string)._
 
 ### `make_array`
 
