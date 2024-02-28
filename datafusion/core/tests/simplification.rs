@@ -154,6 +154,7 @@ fn fold_and_simplify() {
 }
 
 #[test]
+/// Ensure that timestamp expressions are folded so they aren't invoked on each row
 fn to_timestamp_expr_folded() -> Result<()> {
     let table_scan = test_table_scan();
     let proj = vec![to_timestamp_expr("2020-09-08T12:00:00+00:00")];
