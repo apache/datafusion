@@ -38,7 +38,7 @@
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
-<img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
+<img src="./docs/source/_static/images/2x_bgwhite_original.png" width="256" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
