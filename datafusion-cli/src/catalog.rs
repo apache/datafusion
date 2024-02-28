@@ -317,18 +317,40 @@ mod tests {
     }
 
     #[test]
-    fn test_substitute_tilde_with_home() {
+    fn test_substitute_tilde() {
         use std::env;
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", "/home/user");
+        use std::path::MAIN_SEPARATOR;
+        let original_home = home_dir();
+        let test_home_path = if cfg!(windows) {
+            "C:\\Users\\user"
+        } else {
+            "/home/user"
+        };
+        env::set_var(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            test_home_path,
+        );
         let input =
             "~/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
-        let expected = "/home/user/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = format!(
+            "{}{}Code{}arrow-datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            test_home_path,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR
+        );
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);
         match original_home {
-            Some(value) => env::set_var("HOME", value),
-            None => env::remove_var("HOME"),
+            Some(home_path) => env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                home_path.to_str().unwrap(),
+            ),
+            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
         }
     }
 }
