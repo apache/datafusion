@@ -1431,7 +1431,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
             BuiltinScalarFunction::Tanh => Self::Tanh,
-            BuiltinScalarFunction::Asin => Self::Asin,
             BuiltinScalarFunction::Atan => Self::Atan,
             BuiltinScalarFunction::Asinh => Self::Asinh,
             BuiltinScalarFunction::Acosh => Self::Acosh,
