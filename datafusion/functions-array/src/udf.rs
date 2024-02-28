@@ -88,7 +88,7 @@ impl ScalarUDFImpl for ArrayToString {
 make_udf_function!(
     Range,
     range,
-    input diamilter,
+    start stop step,
     "create a list of values in the range between start and stop",
     range_udf
 );
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for Range {
 make_udf_function!(
     GenSeries,
     gen_series,
-    input diamilter,
+    start stop step,
     "create a list of values in the range between start and stop, include upper bound",
     gen_series_udf
 );
