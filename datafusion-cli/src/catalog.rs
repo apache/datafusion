@@ -26,6 +26,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
@@ -160,7 +161,8 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let table_url = ListingTableUrl::parse(name)?;
+        let optimized_name = substitute_tilde(name.to_owned());
+        let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let url: &Url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
@@ -198,6 +200,16 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
     }
+}
+fn substitute_tilde(cur: String) -> String {
+    if let Some(usr_dir_path) = home_dir() {
+        if let Some(usr_dir) = usr_dir_path.to_str() {
+            if cur.starts_with('~') && !usr_dir.is_empty() {
+                return cur.replacen('~', usr_dir, 1);
+            }
+        }
+    }
+    cur
 }
 
 #[cfg(test)]
@@ -302,5 +314,21 @@ mod tests {
         let (_ctx, schema) = setup_context();
 
         assert!(schema.table(location).await.is_err());
+    }
+
+    #[test]
+    fn test_substitute_tilde_with_home() {
+        use std::env;
+        let original_home = env::var("HOME").ok();
+        env::set_var("HOME", "/home/user");
+        let input =
+            "~/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = "/home/user/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let actual = substitute_tilde(input.to_string());
+        assert_eq!(actual, expected);
+        match original_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
     }
 }
