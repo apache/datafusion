@@ -1289,6 +1289,16 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 /// Crates and registers a function from [CreateFunction] statement
+///
+/// It is intended to handle `CREATE FUNCTION` statements
+/// and interact with [SessionState] to registers new udfs.
+///
+/// Datafusion `SQL` dialect does not support `CREATE FUNCTION`
+/// in generic dialect, so dialect should be changed to `PostgreSQL`
+///
+/// ```rust, no_run
+/// SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+/// ```
 #[async_trait]
 pub trait FunctionFactory: Sync + Send {
     // TODO: I don't like having RwLock Leaking here, who ever implements it
@@ -1297,15 +1307,16 @@ pub trait FunctionFactory: Sync + Send {
     //
     //       Not sure if there is better approach.
     //
-    /// Crates and registers a function from [CreateFunction] statement
+
+    /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
         state: Arc<RwLock<SessionState>>,
         statement: CreateFunction,
     ) -> Result<()>;
 
-    /// Removes function from [SessionState]
-    // drop would make more sense but its already occupied in rust
+    /// Drops user defined function from [SessionState]
+    // Naming it `drop`` would make more sense but its already occupied in rust
     async fn remove(
         &self,
         state: Arc<RwLock<SessionState>>,
@@ -1356,8 +1367,11 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
-    // TODO: I don't like having `function_factory` here but i see no better place for
-    //       it. Moving it somewhere else may introduce circular dependency,
+    /// [FunctionFactory] to support pluggable user defined function handler.
+    /// It is invoked on `CREATE FUNCTION` and `DROP FUNCTION` statements.
+    ///
+    /// Datafusion generic SQL dialect does not support `CRETE FUNCTION` statement
+    /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
 }
 
@@ -1622,8 +1636,8 @@ impl SessionState {
         self
     }
 
-    /// Set create function handler
-    // TODO: Add more details to method docs
+    /// Registers `CREATE FUNCTION` statement handler implementing
+    /// [`FunctionFactory`] trait.
     pub fn with_function_factory(
         mut self,
         create_function_hook: Arc<dyn FunctionFactory>,
