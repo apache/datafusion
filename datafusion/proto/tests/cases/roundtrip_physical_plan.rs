@@ -16,10 +16,6 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::vec;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
@@ -52,6 +48,7 @@ use datafusion::physical_plan::expressions::{
     StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::functions;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -66,7 +63,7 @@ use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    functions, udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -82,6 +79,9 @@ use datafusion_expr::{
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -600,10 +600,10 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
     let execution_props = ExecutionProps::new();
 
     let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Acos, &execution_props)?;
+        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
 
     let expr = ScalarFunctionExpr::new(
-        "acos",
+        "sin",
         fun_expr,
         vec![col("a", &schema)?],
         DataType::Float64,
