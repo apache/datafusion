@@ -21,7 +21,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::execution::context::{FunctionFactory, SessionState};
+use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
@@ -34,7 +34,7 @@ use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, DropFunction,
     ExprSchemable, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
@@ -652,9 +652,9 @@ impl FunctionFactory for MockFunctionFactory {
     #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
     async fn create(
         &self,
-        state: Arc<RwLock<SessionState>>,
+        _config: &SessionConfig,
         statement: CreateFunction,
-    ) -> datafusion::error::Result<()> {
+    ) -> datafusion::error::Result<RegisterFunction> {
         // this function is a mock for testing
         // `CreateFunction` should be used to derive this function
 
@@ -691,22 +691,25 @@ impl FunctionFactory for MockFunctionFactory {
         // it has been parsed
         *self.captured_expr.lock() = statement.params.return_;
 
-        // we may need other infrastructure provided by state, for example:
-        // state.config().get_extension()
-
-        // register mock udf for testing
-        state.write().register_udf(mock_udf.into())?;
-        Ok(())
+        Ok(RegisterFunction::Scalar(Arc::new(mock_udf)))
     }
 
     async fn remove(
         &self,
-        _state: Arc<RwLock<SessionState>>,
+        _config: &SessionConfig,
         _statement: DropFunction,
-    ) -> datafusion::error::Result<()> {
-        // at the moment state does not support unregister
-        // ignoring for now
-        Ok(())
+    ) -> datafusion::error::Result<RegisterFunction> {
+        // TODO: I don't like that remove returns RegisterFunction
+        //       we have to keep two states in FunctionFactory iml and
+        //       SessionState
+        //
+        //      It would be better to return (function_name, function type) tuple
+
+        // at the moment state does not support unregister user defined functions
+
+        Err(DataFusionError::NotImplemented(
+            "remove function has not been implemented".into(),
+        ))
     }
 }
 
@@ -738,15 +741,14 @@ async fn create_scalar_function_from_sql_statement() {
         .await
         .unwrap();
 
-    // sql expression should be convert to datafusion expression
-    // in this case
+    // check if we sql expr has been converted to datafusion expr
     let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
 
     // is there some better way to test this
     assert_eq!("$1 + $2", captured_expression.to_string());
-    println!("{:?}", captured_expression);
 
-    ctx.sql("drop function better_add").await.unwrap();
+    // no support at the moment
+    // ctx.sql("drop function better_add").await.unwrap();
 }
 
 fn create_udf_context() -> SessionContext {

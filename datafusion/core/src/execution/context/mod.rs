@@ -798,28 +798,48 @@ impl SessionContext {
     }
 
     async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
-        let function_factory = self.state.read().function_factory.clone();
+        let function = {
+            let state = self.state.read().clone();
+            let function_factory = &state.function_factory;
 
-        match function_factory {
-            Some(f) => f.create(self.state.clone(), stmt).await?,
-            None => Err(DataFusionError::Configuration(
-                "Function factory has not been configured".into(),
-            ))?,
+            match function_factory {
+                Some(f) => f.create(state.config(), stmt).await?,
+                _ => Err(DataFusionError::Configuration(
+                    "Function factory has not been configured".into(),
+                ))?,
+            }
+        };
+
+        match function {
+            RegisterFunction::Scalar(f) => {
+                self.state.write().register_udf(f)?;
+            }
+            RegisterFunction::Aggregate(f) => {
+                self.state.write().register_udaf(f)?;
+            }
+            RegisterFunction::Window(f) => {
+                self.state.write().register_udwf(f)?;
+            }
+            RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
         };
 
         self.return_empty_dataframe()
     }
 
     async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
-        let function_factory = self.state.read().function_factory.clone();
+        let _function = {
+            let state = self.state.read().clone();
+            let function_factory = &state.function_factory;
 
-        match function_factory {
-            Some(f) => f.remove(self.state.clone(), stmt).await?,
-            None => Err(DataFusionError::Configuration(
-                "Function factory has not been configured".into(),
-            ))?,
+            match function_factory {
+                Some(f) => f.remove(state.config(), stmt).await?,
+                None => Err(DataFusionError::Configuration(
+                    "Function factory has not been configured".into(),
+                ))?,
+            }
         };
 
+        // TODO: Once we have unregister UDF we need to implement it here
         self.return_empty_dataframe()
     }
 
@@ -1304,27 +1324,32 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// ```
 #[async_trait]
 pub trait FunctionFactory: Sync + Send {
-    // TODO: I don't like having RwLock Leaking here, who ever implements it
-    //       has to depend ot `parking_lot`. I'f we expose &mut SessionState it
-    //       may keep lock of too long.
-    //
-    //       Not sure if there is better approach.
-    //
-
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
-        state: Arc<RwLock<SessionState>>,
+        state: &SessionConfig,
         statement: CreateFunction,
-    ) -> Result<()>;
+    ) -> Result<RegisterFunction>;
 
     /// Drops user defined function from [SessionState]
-    // Naming it `drop`` would make more sense but its already occupied in rust
+    // Naming it `drop` would make more sense but its already occupied in rust
     async fn remove(
         &self,
-        state: Arc<RwLock<SessionState>>,
+        state: &SessionConfig,
         statement: DropFunction,
-    ) -> Result<()>;
+    ) -> Result<RegisterFunction>;
+}
+
+/// Type of function to create
+pub enum RegisterFunction {
+    /// Scalar user defined function
+    Scalar(Arc<ScalarUDF>),
+    /// Aggregate user defined function
+    Aggregate(Arc<AggregateUDF>),
+    /// Window user defined function
+    Window(Arc<WindowUDF>),
+    /// Table user defined function
+    Table(String, Arc<dyn TableFunctionImpl>),
 }
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
@@ -1643,9 +1668,9 @@ impl SessionState {
     /// [`FunctionFactory`] trait.
     pub fn with_function_factory(
         mut self,
-        create_function_hook: Arc<dyn FunctionFactory>,
+        function_factory: Arc<dyn FunctionFactory>,
     ) -> Self {
-        self.function_factory = Some(create_function_hook);
+        self.function_factory = Some(function_factory);
         self
     }
 
