@@ -2924,7 +2924,28 @@ empty(array)
 
 ### `generate_series`
 
-_Alias of [range](#range)._
+Similar to the range function, but it includes the upper bound.
+
+```
+generate_series(start, stop, step)
+```
+
+#### Arguments
+
+- **start**: start of the range
+- **end**: end of the range (included)
+- **step**: increase by step (can not be 0)
+
+#### Example
+
+```
+❯ select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
+```
 
 ### `list_append`
 
