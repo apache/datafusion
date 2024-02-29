@@ -317,7 +317,6 @@ fn test_const_evaluator() {
     // (foo != foo) OR (c = 1) --> false OR (c = 1)
     test_evaluate(
         (lit("foo").not_eq(lit("foo"))).or(col("c").eq(lit(1))),
-        // lit(false).or(col("c").eq(lit(1))),
         col("c").eq(lit(1)),
     );
 }
