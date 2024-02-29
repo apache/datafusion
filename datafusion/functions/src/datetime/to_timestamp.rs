@@ -35,7 +35,6 @@ use itertools::Either;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarType, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_physical_expr::expressions::cast_column;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
@@ -144,13 +143,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32 | DataType::Int64 => cast_column(
-                &cast_column(&args[0], &Timestamp(Second, None), None)?,
-                &Timestamp(Nanosecond, None),
-                None,
-            ),
+            DataType::Int32 | DataType::Int64 => args[0]
+                .cast_to(&Timestamp(Second, None), None)?
+                .cast_to(&Timestamp(Nanosecond, None), None),
             DataType::Null | DataType::Float64 | Timestamp(_, None) => {
-                cast_column(&args[0], &Timestamp(Nanosecond, None), None)
+                args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
@@ -201,7 +198,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                cast_column(&args[0], &Timestamp(Second, None), None)
+                args[0].cast_to(&Timestamp(Second, None), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
@@ -252,7 +249,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                cast_column(&args[0], &Timestamp(Millisecond, None), None)
+                args[0].cast_to(&Timestamp(Millisecond, None), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
@@ -303,7 +300,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                cast_column(&args[0], &Timestamp(Microsecond, None), None)
+                args[0].cast_to(&Timestamp(Microsecond, None), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
@@ -354,7 +351,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         match args[0].data_type() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
-                cast_column(&args[0], &Timestamp(Nanosecond, None), None)
+                args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")

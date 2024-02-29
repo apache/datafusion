@@ -53,8 +53,6 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use crate::expressions::cast_column;
-
 /// Create an implementation of `now()` that always returns the
 /// specified timestamp.
 ///
@@ -328,9 +326,9 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let is_scalar = len.is_none();
     let array_size = if is_scalar { 1 } else { len.unwrap() };
 
-    let years = cast_column(&args[0], &DataType::Int32, None)?;
-    let months = cast_column(&args[1], &DataType::Int32, None)?;
-    let days = cast_column(&args[2], &DataType::Int32, None)?;
+    let years = args[0].cast_to(&DataType::Int32, None)?;
+    let months = args[1].cast_to(&DataType::Int32, None)?;
+    let days = args[2].cast_to(&DataType::Int32, None)?;
 
     // since the epoch for the date32 datatype is the unix epoch
     // we need to subtract the unix epoch from the current date
@@ -1154,7 +1152,7 @@ pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match args[0].data_type() {
         DataType::Int64 => {
-            cast_column(&args[0], &DataType::Timestamp(TimeUnit::Second, None), None)
+            args[0].cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)
         }
         other => {
             exec_err!(
