@@ -704,10 +704,10 @@ impl FunctionFactory for MockFunctionFactory {
         //       SessionState
         //
         //      It would be better to return (function_name, function type) tuple
-
+        //
         // at the moment state does not support unregister user defined functions
 
-        Err(DataFusionError::NotImplemented(
+        Err(datafusion_common::DataFusionError::NotImplemented(
             "remove function has not been implemented".into(),
         ))
     }
