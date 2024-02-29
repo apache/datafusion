@@ -105,15 +105,31 @@ macro_rules! handle_transform_recursion_down {
 /// continuation and [`TreeNodeRecursion`] state propagation.
 #[macro_export]
 macro_rules! handle_transform_recursion {
-    ($F_DOWN:expr, $F_SELF:expr, $F_UP:expr) => {
-        $F_DOWN?.try_transform_node_with(
-            |n| {
-                n.map_children($F_SELF)?
-                    .try_transform_node_with($F_UP, Some(TreeNodeRecursion::Jump))
-            },
-            Some(TreeNodeRecursion::Continue),
-        )
-    };
+    ($F_DOWN:expr, $F_SELF:expr, $F_UP:expr) => {{
+        let pre_visited = $F_DOWN?;
+        match pre_visited.tnr {
+            TreeNodeRecursion::Continue => {
+                let with_updated_children = pre_visited
+                    .data
+                    .map_children($F_SELF)?
+                    .try_transform_node_with($F_UP, Some(TreeNodeRecursion::Jump))?;
+                Ok(Transformed {
+                    transformed: with_updated_children.transformed
+                        || pre_visited.transformed,
+                    ..with_updated_children
+                })
+            }
+            TreeNodeRecursion::Jump => {
+                let post_visited = $F_UP(pre_visited.data)?;
+                Ok(Transformed::new(
+                    post_visited.data,
+                    post_visited.transformed || pre_visited.transformed,
+                    TreeNodeRecursion::Continue,
+                ))
+            }
+            TreeNodeRecursion::Stop => Ok(pre_visited),
+        }
+    }};
 }
 
 /// This macro is used to determine continuation during bottom-up transforming traversals.
@@ -213,34 +229,9 @@ pub trait TreeNode: Sized {
         self,
         rewriter: &mut R,
     ) -> Result<Transformed<Self>> {
-        let pre_visited = rewriter.f_down(self)?;
-        match pre_visited.tnr {
-            TreeNodeRecursion::Continue => {
-                let with_updated_children = pre_visited
-                    .data
-                    .map_children(|c| c.rewrite(rewriter))?
-                    .try_transform_node_with(
-                        |n| rewriter.f_up(n),
-                        Some(TreeNodeRecursion::Jump),
-                    )?;
-                Ok(Transformed {
-                    transformed: with_updated_children.transformed
-                        || pre_visited.transformed,
-                    ..with_updated_children
-                })
-            }
-            TreeNodeRecursion::Jump => {
-                let pre_visited_transformed = pre_visited.transformed;
-                let post_visited = rewriter.f_up(pre_visited.data)?;
-
-                Ok(Transformed {
-                    tnr: TreeNodeRecursion::Continue,
-                    transformed: post_visited.transformed || pre_visited_transformed,
-                    data: post_visited.data,
-                })
-            }
-            TreeNodeRecursion::Stop => Ok(pre_visited),
-        }
+        handle_transform_recursion!(rewriter.f_down(self), |c| c.rewrite(rewriter), |n| {
+            rewriter.f_up(n)
+        })
     }
 
     /// Applies `f` to the node and its children. `f` is applied in a preoder way,
@@ -909,21 +900,6 @@ mod tests {
         .into_iter()
         .map(|s| s.to_string())
         .collect()
-    }
-
-    fn f_down_jump_on_a_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
-        let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
-        let node_c =
-            TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
-        let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
-        let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
-        let node_f =
-            TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
-        let node_i = TestTreeNode::new(vec![node_f], "f_up(f_down(i))".to_string());
-        TestTreeNode::new(vec![node_i], "f_up(f_down(j))".to_string())
     }
 
     fn f_down_jump_on_a_transformed_down_tree() -> TestTreeNode<String> {
