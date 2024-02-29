@@ -59,17 +59,6 @@ impl ScalarUDFImpl for IsNanFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return Err(plan_datafusion_err!(
-                "{}",
-                generate_signature_error_msg(
-                    self.name(),
-                    self.signature().clone(),
-                    arg_types,
-                )
-            ));
-        }
-
         Ok(DataType::Boolean)
     }
 

@@ -58,17 +58,6 @@ impl ScalarUDFImpl for AcosFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return Err(plan_datafusion_err!(
-                "{}",
-                generate_signature_error_msg(
-                    self.name(),
-                    self.signature().clone(),
-                    arg_types,
-                )
-            ));
-        }
-
         let arg_type = &arg_types[0];
 
         match arg_type {
