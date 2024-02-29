@@ -40,8 +40,6 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// asin
-    Asin,
     /// atan
     Atan,
     /// atan2
@@ -172,8 +170,6 @@ pub enum BuiltinScalarFunction {
     ArrayResize,
     /// Flatten
     Flatten,
-    /// Range
-    Range,
 
     // struct functions
     /// struct
@@ -349,7 +345,6 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
             BuiltinScalarFunction::Atan2 => Volatility::Immutable,
             BuiltinScalarFunction::Acosh => Volatility::Immutable,
@@ -411,7 +406,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
-            BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
@@ -569,9 +563,6 @@ impl BuiltinScalarFunction {
                     (dt, DataType::Null) => Ok(dt),
                     (dt, _) => Ok(dt),
                 }
-            }
-            BuiltinScalarFunction::Range => {
-                Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
             BuiltinScalarFunction::ArrayExcept => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
@@ -779,8 +770,7 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "levenshtein")
             }
 
-            BuiltinScalarFunction::Asin
-            | BuiltinScalarFunction::Atan
+            BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
             | BuiltinScalarFunction::Atanh
@@ -874,14 +864,6 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
 
-            BuiltinScalarFunction::Range => Signature::one_of(
-                vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Struct => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
@@ -1229,8 +1211,7 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Asin
-            | BuiltinScalarFunction::Atan
+            BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
             | BuiltinScalarFunction::Atanh
@@ -1321,7 +1302,6 @@ impl BuiltinScalarFunction {
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
             BuiltinScalarFunction::Acosh => &["acosh"],
-            BuiltinScalarFunction::Asin => &["asin"],
             BuiltinScalarFunction::Asinh => &["asinh"],
             BuiltinScalarFunction::Atan => &["atan"],
             BuiltinScalarFunction::Atanh => &["atanh"],
@@ -1484,7 +1464,6 @@ impl BuiltinScalarFunction {
                 &["array_intersect", "list_intersect"]
             }
             BuiltinScalarFunction::OverLay => &["overlay"],
-            BuiltinScalarFunction::Range => &["range", "generate_series"],
 
             // struct functions
             BuiltinScalarFunction::Struct => &["struct"],

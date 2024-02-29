@@ -24,10 +24,7 @@ use std::{
 
 use super::{get_projected_output_ordering, FileGroupPartitioner};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use crate::{error::Result, scalar::ScalarValue};
 
 use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;

@@ -18,15 +18,18 @@
 //! A special-case optimizer rule that pushes limit into a grouped aggregation
 //! which has no aggregate expressions or sorting requirements
 
+use std::sync::Arc;
+
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
 /// rows in the group to be processed for correctness. Example queries fitting this description are:
@@ -188,6 +191,8 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::error::Result;
     use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
@@ -198,6 +203,7 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
+
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -206,13 +212,10 @@ mod tests {
     use arrow_schema::SchemaRef;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::cast;
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr::{expressions, PhysicalExpr};
+    use datafusion_physical_expr::expressions::{cast, col};
+    use datafusion_physical_expr::{expressions, PhysicalExpr, PhysicalSortExpr};
     use datafusion_physical_plan::aggregates::AggregateMode;
     use datafusion_physical_plan::displayable;
-    use std::sync::Arc;
 
     fn mock_data() -> Result<Arc<MemoryExec>> {
         let schema = Arc::new(Schema::new(vec![

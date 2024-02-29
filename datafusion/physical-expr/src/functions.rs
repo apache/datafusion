@@ -42,7 +42,7 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
@@ -260,7 +260,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
         BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
         BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),
@@ -396,9 +395,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
-        BuiltinScalarFunction::Range => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::gen_range)(args)
         }),
         BuiltinScalarFunction::Cardinality => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::cardinality)(args)
@@ -986,7 +982,7 @@ mod tests {
     };
     use datafusion_common::cast::{as_boolean_array, as_uint64_array};
     use datafusion_common::{exec_err, internal_err, plan_err};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
 

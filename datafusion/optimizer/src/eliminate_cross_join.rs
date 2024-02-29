@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,

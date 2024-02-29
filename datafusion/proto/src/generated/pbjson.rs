@@ -22322,7 +22322,6 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Asin => "Asin",
             Self::Atan => "Atan",
             Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
@@ -22432,7 +22431,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
-            Self::Range => "Range",
             Self::ArrayExcept => "ArrayExcept",
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
@@ -22459,7 +22457,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Asin",
             "Atan",
             "Ascii",
             "Ceil",
@@ -22569,7 +22566,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
-            "Range",
             "ArrayExcept",
             "ArrayPopFront",
             "Levenshtein",
@@ -22625,7 +22621,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Asin" => Ok(ScalarFunction::Asin),
                     "Atan" => Ok(ScalarFunction::Atan),
                     "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
@@ -22735,7 +22730,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
-                    "Range" => Ok(ScalarFunction::Range),
                     "ArrayExcept" => Ok(ScalarFunction::ArrayExcept),
                     "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),

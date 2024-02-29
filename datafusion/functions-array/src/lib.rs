@@ -45,6 +45,8 @@ pub mod expr_fn {
     pub use super::udf::array_prepend;
     pub use super::udf::array_to_string;
     pub use super::udf::make_array;
+    pub use super::udf::gen_series;
+    pub use super::udf::range;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -55,6 +57,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_prepend_udf(),
         udf::array_concat_udf(),
         udf::make_array_udf(),
+        udf::range_udf(),
+        udf::gen_series_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

@@ -27,7 +27,6 @@ mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 pub use file_groups::FileGroupPartitioner;
-use futures::StreamExt;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
@@ -37,7 +36,6 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
-use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
@@ -52,7 +50,7 @@ use std::{
 };
 
 use super::listing::ListingTableUrl;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
     datasource::{
@@ -71,11 +69,10 @@ use arrow::{
 use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_plan::ExecutionPlan;
 
+use futures::StreamExt;
 use log::debug;
-use object_store::ObjectMeta;
-use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
+use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -487,20 +484,6 @@ fn get_projected_output_ordering(
     all_orderings
 }
 
-/// Get output (un)boundedness information for the given `plan`.
-pub fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    if plan.children().is_empty() {
-        plan.unbounded_output(&[])
-    } else {
-        let children_unbounded_output = plan
-            .children()
-            .iter()
-            .map(is_plan_streaming)
-            .collect::<Result<Vec<_>>>();
-        plan.unbounded_output(&children_unbounded_output?)
-    }
-}
-
 /// Represents the possible outcomes of a range calculation.
 ///
 /// This enum is used to encapsulate the result of calculating the range of
@@ -604,6 +587,9 @@ async fn find_first_newline(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
+
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
     use arrow_array::{
@@ -611,11 +597,8 @@ mod tests {
         UInt64Array,
     };
     use arrow_schema::Field;
+
     use chrono::Utc;
-
-    use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
-
-    use super::*;
 
     #[test]
     fn schema_mapping_map_batch() {

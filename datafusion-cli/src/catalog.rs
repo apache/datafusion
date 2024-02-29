@@ -19,13 +19,14 @@ use crate::object_storage::get_object_store;
 use async_trait::async_trait;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
-use datafusion::common::{plan_datafusion_err, DataFusionError};
+use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
@@ -160,7 +161,8 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let table_url = ListingTableUrl::parse(name)?;
+        let optimized_name = substitute_tilde(name.to_owned());
+        let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let url: &Url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
@@ -198,6 +200,16 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
     }
+}
+fn substitute_tilde(cur: String) -> String {
+    if let Some(usr_dir_path) = home_dir() {
+        if let Some(usr_dir) = usr_dir_path.to_str() {
+            if cur.starts_with('~') && !usr_dir.is_empty() {
+                return cur.replacen('~', usr_dir, 1);
+            }
+        }
+    }
+    cur
 }
 
 #[cfg(test)]
@@ -302,5 +314,43 @@ mod tests {
         let (_ctx, schema) = setup_context();
 
         assert!(schema.table(location).await.is_err());
+    }
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_substitute_tilde() {
+        use std::env;
+        use std::path::MAIN_SEPARATOR;
+        let original_home = home_dir();
+        let test_home_path = if cfg!(windows) {
+            "C:\\Users\\user"
+        } else {
+            "/home/user"
+        };
+        env::set_var(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            test_home_path,
+        );
+        let input =
+            "~/Code/arrow-datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = format!(
+            "{}{}Code{}arrow-datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            test_home_path,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR
+        );
+        let actual = substitute_tilde(input.to_string());
+        assert_eq!(actual, expected);
+        match original_home {
+            Some(home_path) => env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                home_path.to_str().unwrap(),
+            ),
+            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        }
     }
 }

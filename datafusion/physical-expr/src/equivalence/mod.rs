@@ -68,7 +68,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
     use arrow_schema::{SchemaRef, SortOptions};
-    use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+    use datafusion_common::{plan_datafusion_err, Result};
     use itertools::izip;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;

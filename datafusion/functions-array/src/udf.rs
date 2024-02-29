@@ -20,11 +20,13 @@
 use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use datafusion_common::utils::list_ndims;
+// use arrow::datatypes::Field;
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::get_wider_type;
 use datafusion_expr::Expr;
 use datafusion_expr::TypeSignature::{Any as expr_Any, VariadicEqual};
+use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::cmp::Ordering;
@@ -69,6 +71,22 @@ make_udf_function!(
     make_array,
     "Returns an Arrow array using the specified input expressions.", // doc
     make_array_udf // internal function name
+);
+
+make_udf_function!(
+    Range,
+    range,
+    start stop step,
+    "create a list of values in the range between start and stop",
+    range_udf
+);
+
+make_udf_function!(
+    GenSeries,
+    gen_series,
+    start stop step,
+    "create a list of values in the range between start and stop, include upper bound",
+    gen_series_udf
 );
 
 #[derive(Debug)]
@@ -341,6 +359,110 @@ impl ScalarUDFImpl for MakeArray {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         make_scalar_function_with_hints(crate::kernels::make_array)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct Range {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl Range {
+    pub fn new() -> Self {
+        use DataType::*;
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Int64]),
+                    Exact(vec![Int64, Int64]),
+                    Exact(vec![Int64, Int64, Int64]),
+                ],
+                Volatility::Immutable,
+            ),
+            aliases: vec![String::from("range")],
+        }
+    }
+}
+impl ScalarUDFImpl for Range {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "range"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct GenSeries {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl GenSeries {
+    pub fn new() -> Self {
+        use DataType::*;
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Int64]),
+                    Exact(vec![Int64, Int64]),
+                    Exact(vec![Int64, Int64, Int64]),
+                ],
+                Volatility::Immutable,
+            ),
+            aliases: vec![String::from("generate_series")],
+        }
+    }
+}
+impl ScalarUDFImpl for GenSeries {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "generate_series"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {
