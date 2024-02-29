@@ -677,6 +677,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.12.4
 <li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> to test</p></li>
 <li><p>etc.</p></li>
 </ul>
+<p>Note that running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--</span> <span class="pre">--test-threads=1</span></code>. For more information see <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/5347">this issue</a>.</p>
 <p>Testing setup:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion uses the latest stable release of rust</p></li>
