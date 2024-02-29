@@ -25,7 +25,9 @@ AS VALUES
     ([1,2,3], [7], 1),
     ([4,5], [8,9,10], 2),
     ([6], [11,12], 3),
-    ([12], [null, 42, null], null)
+    ([12], [null, 42, null], null),
+    -- null array to verify the `preserve_nulls` option
+    (null, null, null)
 ;
 
 ## Basic unnest expression in select list
@@ -103,6 +105,19 @@ select unnest(column1), column3 from unnest_table;
 5 2
 6 3
 12 NULL
+
+query ?II
+select column1, unnest(column2), column3 from unnest_table;
+----
+[1, 2, 3] 7 1
+[4, 5] 8 2
+[4, 5] 9 2
+[4, 5] 10 2
+[6] 11 3
+[6] 12 3
+[12] NULL NULL
+[12] 42 NULL
+[12] NULL NULL
 
 
 ## Unnest column with scalars

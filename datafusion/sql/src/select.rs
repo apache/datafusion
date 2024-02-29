@@ -306,7 +306,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return not_impl_err!("Only support single unnest expression for now");
             }
             let unnest_column = unnest_columns.pop().unwrap();
-            // Set preserve_nulls to false to compatible with DuckDB and PostgreSQL
+            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
             LogicalPlanBuilder::from(input)
                 .project(projection_exprs)?
