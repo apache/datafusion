@@ -25,7 +25,6 @@ use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_scan_config::PartitionColumnProjector;
@@ -39,6 +38,7 @@ use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
 
 use futures::future::BoxFuture;

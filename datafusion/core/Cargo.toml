@@ -141,6 +141,7 @@ test-utils = { path = "../../test-utils" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 tokio-postgres = "0.7.7"
+
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.28.0", features = ["fs"] }
 
