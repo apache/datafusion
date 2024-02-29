@@ -112,7 +112,7 @@ impl RowGroupPruningTest {
 async fn prune_timestamps_nanos() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Timestamps)
-        .with_query("SELECT * FROM t where nanos < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Nanosecond, None)')")
+        .with_query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .with_expected_errors(Some(0))
         .with_pruned_by_stats(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
@@ -126,7 +126,7 @@ async fn prune_timestamps_micros() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Timestamps)
         .with_query(
-            "SELECT * FROM t where micros < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Microsecond, None)')",
+            "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
         .with_pruned_by_stats(Some(1))
@@ -141,7 +141,7 @@ async fn prune_timestamps_millis() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Timestamps)
         .with_query(
-            "SELECT * FROM t where millis < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Millisecond, None)')",
+            "SELECT * FROM t where micros < to_timestamp_millis('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
         .with_pruned_by_stats(Some(1))
@@ -156,7 +156,7 @@ async fn prune_timestamps_seconds() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Timestamps)
         .with_query(
-            "SELECT * FROM t where seconds < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Second, None)')",
+            "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
         .with_pruned_by_stats(Some(1))
@@ -209,7 +209,7 @@ async fn prune_date64() {
 async fn prune_disabled() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Timestamps)
-        .with_query("SELECT * FROM t where nanos < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Nanosecond, None)')")
+        .with_query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .with_expected_errors(Some(0))
         .with_pruned_by_stats(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
@@ -218,7 +218,7 @@ async fn prune_disabled() {
         .await;
 
     // test without pruning
-    let query = "SELECT * FROM t where nanos < arrow_cast('2020-01-02T01:01:11', 'Timestamp(Nanosecond, None)')";
+    let query = "SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')";
     let expected_rows = 10;
     let config = SessionConfig::new().with_parquet_pruning(false);
 
