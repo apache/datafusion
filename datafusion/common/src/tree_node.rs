@@ -90,7 +90,7 @@ macro_rules! handle_transform_recursion_down {
     ($F_DOWN:expr, $F_SELF:expr) => {
         $F_DOWN?.try_transform_node_with(
             |n| n.map_children($F_SELF),
-            Some(TreeNodeRecursion::Continue),
+            TreeNodeRecursion::Continue,
         )
     };
 }
@@ -108,26 +108,18 @@ macro_rules! handle_transform_recursion {
     ($F_DOWN:expr, $F_SELF:expr, $F_UP:expr) => {{
         let pre_visited = $F_DOWN?;
         match pre_visited.tnr {
-            TreeNodeRecursion::Continue => {
-                let with_updated_children = pre_visited
-                    .data
-                    .map_children($F_SELF)?
-                    .try_transform_node_with($F_UP, Some(TreeNodeRecursion::Jump))?;
-                Ok(Transformed {
-                    transformed: with_updated_children.transformed
-                        || pre_visited.transformed,
-                    ..with_updated_children
-                })
+            TreeNodeRecursion::Continue => pre_visited
+                .data
+                .map_children($F_SELF)?
+                .try_transform_node_with($F_UP, TreeNodeRecursion::Jump),
+            TreeNodeRecursion::Jump =>
+            {
+                #[allow(clippy::redundant_closure_call)]
+                $F_UP(pre_visited.data)
             }
-            TreeNodeRecursion::Jump => {
-                let post_visited = $F_UP(pre_visited.data)?;
-                Ok(Transformed {
-                    transformed: post_visited.transformed || pre_visited.transformed,
-                    ..post_visited
-                })
-            }
-            TreeNodeRecursion::Stop => Ok(pre_visited),
+            TreeNodeRecursion::Stop => return Ok(pre_visited),
         }
+        .map(|post_visited| post_visited.update_transformed(pre_visited.transformed))
     }};
 }
 
@@ -141,7 +133,7 @@ macro_rules! handle_transform_recursion_up {
     ($NODE:expr, $F_SELF:expr, $F_UP:expr) => {
         $NODE
             .map_children($F_SELF)?
-            .try_transform_node_with($F_UP, Some(TreeNodeRecursion::Jump))
+            .try_transform_node_with($F_UP, TreeNodeRecursion::Jump)
     };
 }
 
@@ -522,46 +514,56 @@ impl<T> Transformed<T> {
         Transformed::new(f(self.data), self.transformed, self.tnr)
     }
 
+    /// Updates the transformed state based on the current and the new state.
+    pub fn update_transformed(self, transformed: bool) -> Self {
+        Self {
+            transformed: self.transformed || transformed,
+            ..self
+        }
+    }
+
+    /// Sets a new [`TreeNodeRecursion`].
+    pub fn update_tnr(self, tnr: TreeNodeRecursion) -> Self {
+        Self { tnr, ..self }
+    }
+
     /// Maps the data of [`Transformed`] object to the result of the given `f`.
     pub fn map_data<U, F: FnOnce(T) -> Result<U>>(self, f: F) -> Result<Transformed<U>> {
         f(self.data).map(|data| Transformed::new(data, self.transformed, self.tnr))
     }
 
-    /// According to the TreeNodeRecursion condition on the node, the function decides
-    /// applying the given `f` to the node's data. Handling [`TreeNodeRecursion::Continue`]
-    /// and [`TreeNodeRecursion::Stop`] is straightforward, but [`TreeNodeRecursion::Jump`]
-    /// can behave differently when we are traversing down or up on a tree. If `return_if_jump`
-    /// is `Some`, `jump` condition on the node would stop the recursion with the given
-    /// [`TreeNodeRecursion`] statement.
+    /// Handling [`TreeNodeRecursion::Continue`] and [`TreeNodeRecursion::Stop`] is
+    /// straightforward, but [`TreeNodeRecursion::Jump`] can behave differently when we
+    /// are traversing down or up on a tree.
+    /// If [`TreeNodeRecursion`] of the node is [`TreeNodeRecursion::Jump`] recursion is
+    /// stopped with the given `return_if_jump` [`TreeNodeRecursion`] statement.
     fn try_transform_node_with<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
-        return_if_jump: Option<TreeNodeRecursion>,
+        return_if_jump: TreeNodeRecursion,
     ) -> Result<Transformed<T>> {
         match self.tnr {
-            TreeNodeRecursion::Continue => {}
-            TreeNodeRecursion::Jump => {
-                if let Some(tnr) = return_if_jump {
-                    return Ok(Transformed { tnr, ..self });
-                }
+            TreeNodeRecursion::Continue => {
+                f(self.data).map(|t| t.update_transformed(self.transformed))
             }
-            TreeNodeRecursion::Stop => return Ok(self),
-        };
-        let t = f(self.data)?;
-        Ok(Transformed {
-            transformed: t.transformed || self.transformed,
-            ..t
-        })
+            TreeNodeRecursion::Jump => Ok(self.update_tnr(return_if_jump)),
+            TreeNodeRecursion::Stop => Ok(self),
+        }
     }
 
-    /// More simple version of [`Self::try_transform_node_with`]. If [`TreeNodeRecursion`]
-    /// of the node is [`TreeNodeRecursion::Continue`] or [`TreeNodeRecursion::Jump`],
-    /// transformation is applied to the node. Otherwise, it remains as it is.
+    /// If [`TreeNodeRecursion`] of the node is [`TreeNodeRecursion::Continue`] or
+    /// [`TreeNodeRecursion::Jump`], transformation is applied to the node. Otherwise, it
+    /// remains as it is.
     pub fn try_transform_node<F: FnOnce(T) -> Result<Transformed<T>>>(
         self,
         f: F,
     ) -> Result<Transformed<T>> {
-        self.try_transform_node_with(f, None)
+        match self.tnr {
+            TreeNodeRecursion::Continue => {}
+            TreeNodeRecursion::Jump => {}
+            TreeNodeRecursion::Stop => return Ok(self),
+        };
+        f(self.data).map(|t| t.update_transformed(self.transformed))
     }
 }
 
