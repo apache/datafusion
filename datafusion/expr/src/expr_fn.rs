@@ -882,6 +882,11 @@ scalar_expr!(
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
 nary_scalar_expr!(
+    ToDate,
+    to_date,
+    "converts string to date according to the given format"
+);
+nary_scalar_expr!(
     ToTimestamp,
     to_timestamp,
     "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
