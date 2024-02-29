@@ -15,20 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use datafusion::prelude::*;
 
-use arrow_array::ArrowNativeTypeOp;
-use datafusion::{
-    execution::context::{FunctionFactory, SessionState},
-    logical_expr::{CreateFunction, DropFunction},
-    prelude::*,
-};
-use datafusion_execution::{
-    runtime_env::{RuntimeConfig, RuntimeEnv},
-    FunctionRegistry,
-};
-
-use parking_lot::RwLock;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -50,99 +38,6 @@ async fn unsupported_ddl_returns_error() {
     // allow ddl
     let options = options.with_allow_ddl(true);
     ctx.sql_with_options(sql, options).await.unwrap();
-}
-
-struct MockFunctionFactory;
-#[async_trait::async_trait]
-impl FunctionFactory for MockFunctionFactory {
-    #[doc = r" Crates and registers a function from [CreateFunction] statement"]
-    #[must_use]
-    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
-    async fn create(
-        &self,
-        state: Arc<RwLock<SessionState>>,
-        statement: CreateFunction,
-    ) -> datafusion::error::Result<()> {
-        // this function is a mock for testing
-        // `CreateFunction` should be used to derive this function
-
-        let mock_add = Arc::new(|args: &[datafusion_expr::ColumnarValue]| {
-            let args = datafusion_expr::ColumnarValue::values_to_arrays(args)?;
-            let base =
-                datafusion_common::cast::as_float64_array(&args[0]).expect("cast failed");
-            let exponent =
-                datafusion_common::cast::as_float64_array(&args[1]).expect("cast failed");
-
-            let array = base
-                .iter()
-                .zip(exponent.iter())
-                .map(|(base, exponent)| match (base, exponent) {
-                    (Some(base), Some(exponent)) => Some(base.add_wrapping(exponent)),
-                    _ => None,
-                })
-                .collect::<arrow_array::Float64Array>();
-            Ok(datafusion_expr::ColumnarValue::from(
-                Arc::new(array) as arrow_array::ArrayRef
-            ))
-        });
-
-        let args = statement.args.unwrap();
-        let mock_udf = create_udf(
-            &statement.name,
-            vec![args[0].data_type.clone(), args[1].data_type.clone()],
-            Arc::new(statement.return_type.unwrap()),
-            datafusion_expr::Volatility::Immutable,
-            mock_add,
-        );
-
-        // we may need other infrastructure provided by state, for example:
-        // state.config().get_extension()
-
-        // register mock udf for testing
-        state.write().register_udf(mock_udf.into())?;
-        Ok(())
-    }
-
-    async fn remove(
-        &self,
-        _state: Arc<RwLock<SessionState>>,
-        _statement: DropFunction,
-    ) -> datafusion::error::Result<()> {
-        // at the moment state does not support unregister
-        // ignoring for now
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn create_user_defined_function_statement() {
-    let function_factory = Arc::new(MockFunctionFactory {});
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
-    let session_config =
-        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-
-    let state =
-        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-            .with_function_factory(function_factory);
-
-    let ctx = SessionContext::new_with_state(state);
-
-    let sql = r#"
-    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
-        RETURNS DOUBLE
-        RETURN $1 + $2
-    "#;
-    let _ = ctx.sql(sql).await.unwrap();
-
-    ctx.sql("select better_add(2.0, 2.0)")
-        .await
-        .unwrap()
-        .show()
-        .await
-        .unwrap();
-
-    ctx.sql("drop function better_add").await.unwrap();
 }
 
 #[tokio::test]

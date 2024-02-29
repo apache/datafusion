@@ -28,8 +28,9 @@ pub use builder::{
     LogicalPlanBuilder, UNNAMED_TABLE,
 };
 pub use ddl::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DdlStatement, DropCatalogSchema, DropTable, DropView,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+    CreateFunctionBody, CreateMemoryTable, CreateView, DdlStatement, DropCatalogSchema,
+    DropFunction, DropTable, DropView, OperateFunctionArg,
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
@@ -40,8 +41,7 @@ pub use plan::{
     TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    CreateFunction, DropFunction, OperateFunctionArg, SetVariable, Statement,
-    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart,
 };
 

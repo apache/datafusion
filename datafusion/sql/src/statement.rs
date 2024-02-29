@@ -43,13 +43,13 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateMemoryTable,
-    CreateView, DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable,
-    DropView, EmptyRelation, Explain, ExprSchemable, Filter, LogicalPlan,
-    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
+    CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
+    CreateMemoryTable, CreateView, DescribeTable, DmlStatement, DropCatalogSchema,
+    DropFunction, DropTable, DropView, EmptyRelation, Explain, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    WriteOp,
+    Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -639,22 +639,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Some(t) => Some(self.convert_data_type(&t)?),
                     None => None,
                 };
+                let mut planner_context = PlannerContext::new();
+                let empty_schema = &DFSchema::empty();
 
                 let args = match args {
-                    Some(a) => {
-                        let a = a
+                    Some(function_args) => {
+                        let function_args = function_args
                             .into_iter()
-                            .map(|a| {
-                                let data_type = self.convert_data_type(&a.data_type)?;
+                            .map(|arg| {
+                                let data_type = self.convert_data_type(&arg.data_type)?;
+
+                                let default_expr = match arg.default_expr {
+                                    Some(expr) => Some(self.sql_to_expr(
+                                        expr,
+                                        empty_schema,
+                                        &mut planner_context,
+                                    )?),
+                                    None => None,
+                                };
                                 Ok(OperateFunctionArg {
-                                    mode: a.mode,
-                                    name: a.name,
-                                    default_expr: a.default_expr,
+                                    name: arg.name,
+                                    default_expr,
                                     data_type,
                                 })
                             })
                             .collect::<Result<Vec<OperateFunctionArg>>>();
-                        Some(a?)
+                        Some(function_args?)
                     }
                     None => None,
                 };
@@ -669,7 +679,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|i| i.value)
                     .collect::<Vec<String>>()
                     .join(".");
-                let statement = PlanStatement::CreateFunction(CreateFunction {
+
+                //
+                // convert resulting expression to data fusion expression
+                //
+                let arg_types = args.as_ref().map(|arg| {
+                    arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
+                });
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(arg_types.unwrap_or_default());
+
+                let result_expression = match params.return_ {
+                    Some(r) => Some(self.sql_to_expr(
+                        r,
+                        &DFSchema::empty(),
+                        &mut planner_context,
+                    )?),
+                    None => None,
+                };
+
+                let params = CreateFunctionBody {
+                    language: params.language,
+                    behavior: params.behavior.map(|b| match b {
+                        ast::FunctionBehavior::Immutable => Volatility::Immutable,
+                        ast::FunctionBehavior::Stable => Volatility::Stable,
+                        ast::FunctionBehavior::Volatile => Volatility::Volatile,
+                    }),
+                    as_: params.as_.map(|m| m.into()),
+                    return_: result_expression,
+                };
+
+                let statement = DdlStatement::CreateFunction(CreateFunction {
                     or_replace,
                     temporary,
                     name,
@@ -679,7 +719,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 });
 
-                Ok(LogicalPlan::Statement(statement))
+                Ok(LogicalPlan::Ddl(statement))
             }
             Statement::DropFunction {
                 if_exists,
@@ -702,12 +742,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .map(|i| i.value.to_owned())
                         .collect::<Vec<String>>()
                         .join(".");
-                    let statement = PlanStatement::DropFunction(DropFunction {
+                    let statement = DdlStatement::DropFunction(DropFunction {
                         if_exists,
                         name,
                         schema: DFSchemaRef::new(DFSchema::empty()),
                     });
-                    Ok(LogicalPlan::Statement(statement))
+                    Ok(LogicalPlan::Ddl(statement))
                 } else {
                     Err(DataFusionError::Execution(
                         "Function name not provided".into(),

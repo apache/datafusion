@@ -490,36 +490,12 @@ impl SessionContext {
                 DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
                 DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
                 DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
+                DdlStatement::CreateFunction(cmd) => self.create_function(cmd).await,
+                DdlStatement::DropFunction(cmd) => self.drop_function(cmd).await,
             },
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
-            }
-
-            LogicalPlan::Statement(Statement::CreateFunction(stmt)) => {
-                let function_factory = self.state.read().function_factory.clone();
-
-                match function_factory {
-                    Some(f) => f.create(self.state.clone(), stmt).await?,
-                    None => Err(DataFusionError::Configuration(
-                        "Function factory has not been configured".into(),
-                    ))?,
-                };
-
-                self.return_empty_dataframe()
-            }
-
-            LogicalPlan::Statement(Statement::DropFunction(stmt)) => {
-                let function_factory = self.state.read().function_factory.clone();
-
-                match function_factory {
-                    Some(f) => f.remove(self.state.clone(), stmt).await?,
-                    None => Err(DataFusionError::Configuration(
-                        "Function factory has not been configured".into(),
-                    ))?,
-                };
-
-                self.return_empty_dataframe()
             }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
@@ -819,6 +795,32 @@ impl SessionContext {
         }
 
         Ok(false)
+    }
+
+    async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
+        let function_factory = self.state.read().function_factory.clone();
+
+        match function_factory {
+            Some(f) => f.create(self.state.clone(), stmt).await?,
+            None => Err(DataFusionError::Configuration(
+                "Function factory has not been configured".into(),
+            ))?,
+        };
+
+        self.return_empty_dataframe()
+    }
+
+    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
+        let function_factory = self.state.read().function_factory.clone();
+
+        match function_factory {
+            Some(f) => f.remove(self.state.clone(), stmt).await?,
+            None => Err(DataFusionError::Configuration(
+                "Function factory has not been configured".into(),
+            ))?,
+        };
+
+        self.return_empty_dataframe()
     }
 
     /// Registers a variable provider within this context.
