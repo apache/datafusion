@@ -35,8 +35,8 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    InputOrderMode, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-    Statistics, WindowExpr,
+    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
 use arrow::{
@@ -58,9 +58,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use ahash::RandomState;
 use futures::stream::Stream;
@@ -91,6 +89,8 @@ pub struct BoundedWindowAggExec {
     // `ordered_partition_by_indices` would be 0, 1.
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl BoundedWindowAggExec {
@@ -121,6 +121,7 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
+        let cache = Self::compute_properties(&input, &schema, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -129,6 +130,7 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
+            cache,
         })
     }
 
@@ -179,6 +181,28 @@ impl BoundedWindowAggExec {
             }
         })
     }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: &SchemaRef,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = window_equivalence_properties(schema, input, window_expr);
+
+        // As we can have repartitioning using the partition keys, this can
+        // be either one or more than one, depending on the presence of
+        // repartitioning.
+        let output_partitioning = input.output_partitioning().clone();
+
+        // Construct properties cache
+        PlanProperties::new(
+            eq_properties,          // Equivalence Properties
+            output_partitioning,    // Output Partitioning
+            input.execution_mode(), // Execution Mode
+        )
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -216,28 +240,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // As we can have repartitioning using the partition keys, this can
-        // be either one or more than one, depending on the presence of
-        // repartitioning.
-        self.input.output_partitioning()
-    }
-
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input().output_ordering()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -263,11 +271,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         } else {
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -1114,21 +1117,23 @@ fn get_aggregate_result_out_column(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::common::collect;
     use crate::memory::MemoryExec;
     use crate::windows::{BoundedWindowAggExec, InputOrderMode};
     use crate::{get_plan_string, ExecutionPlan};
+
     use arrow_array::RecordBatch;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::expressions::NthValue;
-    use datafusion_physical_expr::window::BuiltInWindowExpr;
-    use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
-    use std::sync::Arc;
+    use datafusion_physical_expr::expressions::{col, NthValue};
+    use datafusion_physical_expr::window::{
+        BuiltInWindowExpr, BuiltInWindowFunctionExpr,
+    };
 
     // Tests NTH_VALUE(negative index) with memoize feature.
     // To be able to trigger memoize feature for NTH_VALUE we need to

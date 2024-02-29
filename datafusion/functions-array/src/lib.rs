@@ -40,11 +40,17 @@ use std::sync::Arc;
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::udf::array_to_string;
+    pub use super::udf::gen_series;
+    pub use super::udf::range;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<ScalarUDF>> = vec![udf::array_to_string_udf()];
+    let functions: Vec<Arc<ScalarUDF>> = vec![
+        udf::array_to_string_udf(),
+        udf::range_udf(),
+        udf::gen_series_udf(),
+    ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
         if let Some(existing_udf) = existing_udf {

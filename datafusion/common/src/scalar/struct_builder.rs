@@ -18,7 +18,7 @@
 //! [`ScalarStructBuilder`] for building [`ScalarValue::Struct`]
 
 use crate::error::_internal_err;
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::{Result, ScalarValue};
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, FieldRef, Fields};
 use arrow_schema::Field;

@@ -20,8 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
-use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
+use super::{
+    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -29,8 +31,9 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
 #[derive(Debug)]
@@ -39,6 +42,8 @@ pub struct ValuesExec {
     schema: SchemaRef,
     /// The data
     data: Vec<RecordBatch>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl ValuesExec {
@@ -85,7 +90,7 @@ impl ValuesExec {
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(schema.clone(), arr)?;
         let data: Vec<RecordBatch> = vec![batch];
-        Ok(Self { schema, data })
+        Self::try_new_from_batches(schema, data)
     }
 
     /// Create a new plan using the provided schema and batches.
@@ -109,15 +114,28 @@ impl ValuesExec {
             }
         }
 
+        let cache = Self::compute_properties(schema.clone());
         Ok(ValuesExec {
             schema,
             data: batches,
+            cache,
         })
     }
 
     /// provides the data
     pub fn data(&self) -> Vec<RecordBatch> {
         self.data.clone()
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -141,30 +159,20 @@ impl ExecutionPlan for ValuesExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ValuesExec {
-            schema: self.schema.clone(),
-            data: self.data.clone(),
-        }))
+        ValuesExec::try_new_from_batches(self.schema.clone(), self.data.clone())
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(

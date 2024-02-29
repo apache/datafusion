@@ -28,7 +28,7 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{IntervalUnit, TimeUnit};
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 
 macro_rules! get_extreme_value {
     ($extreme:ident, $value:expr) => {

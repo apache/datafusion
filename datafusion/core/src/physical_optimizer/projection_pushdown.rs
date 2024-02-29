@@ -39,7 +39,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::{Distribution, ExecutionPlan};
+use crate::physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;

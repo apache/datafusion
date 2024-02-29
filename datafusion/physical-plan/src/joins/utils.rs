@@ -432,15 +432,15 @@ fn check_join_set_is_valid(
 /// Calculate the OutputPartitioning for Partitioned Join
 pub fn partitioned_join_output_partitioning(
     join_type: JoinType,
-    left_partitioning: Partitioning,
-    right_partitioning: Partitioning,
+    left_partitioning: &Partitioning,
+    right_partitioning: &Partitioning,
     left_columns_len: usize,
 ) -> Partitioning {
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            left_partitioning
+            left_partitioning.clone()
         }
-        JoinType::RightSemi | JoinType::RightAnti => right_partitioning,
+        JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
         JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)
         }
@@ -452,21 +452,18 @@ pub fn partitioned_join_output_partitioning(
 
 /// Adjust the right out partitioning to new Column Index
 pub fn adjust_right_output_partitioning(
-    right_partitioning: Partitioning,
+    right_partitioning: &Partitioning,
     left_columns_len: usize,
 ) -> Partitioning {
     match right_partitioning {
-        Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(size),
-        Partitioning::UnknownPartitioning(size) => {
-            Partitioning::UnknownPartitioning(size)
-        }
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
-                .into_iter()
-                .map(|expr| add_offset_to_expr(expr, left_columns_len))
+                .iter()
+                .map(|expr| add_offset_to_expr(expr.clone(), left_columns_len))
                 .collect();
-            Partitioning::Hash(new_exprs, size)
+            Partitioning::Hash(new_exprs, *size)
         }
+        result => result.clone(),
     }
 }
 

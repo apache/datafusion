@@ -17,24 +17,10 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use futures::StreamExt;
-use log::debug;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
-
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
-use datafusion_common::{
-    not_impl_err, plan_err, Constraints, DFSchema, DataFusionError, SchemaExt,
-};
-use datafusion_execution::TaskContext;
-use parking_lot::Mutex;
-use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
@@ -42,10 +28,25 @@ use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::{common, SendableRecordBatchStream};
-use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::{
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, SendableRecordBatchStream,
+};
 use crate::physical_planner::create_physical_sort_expr;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use futures::StreamExt;
+use log::debug;
+use parking_lot::Mutex;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -168,7 +169,7 @@ impl MemTable {
 
             // execute and collect results
             let mut output_partitions = vec![];
-            for i in 0..exec.output_partitioning().partition_count() {
+            for i in 0..exec.properties().output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
                 let task_ctx = state.task_ctx();
                 let mut stream = exec.execute(i, task_ctx)?;
@@ -363,16 +364,20 @@ impl DataSink for MemSink {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::datasource::provider_as_source;
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
+
     use arrow::array::{AsArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
+    use datafusion_common::DataFusionError;
     use datafusion_expr::LogicalPlanBuilder;
+
     use futures::StreamExt;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {

@@ -28,8 +28,7 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, DataFusionError,
-    ExprSchema, Result,
+    internal_err, plan_datafusion_err, plan_err, Column, DFField, ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

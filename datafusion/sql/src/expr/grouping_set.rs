@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::plan_err;
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{Expr, GroupingSet};
 use sqlparser::ast::Expr as SQLExpr;
 
