@@ -84,28 +84,14 @@ macro_rules! make_udf_function {
     };
 }
 
-/// Macro creates the named module if the feature is enabled
-/// otherwise creates a stub
-///
-/// Which returns:
-///
-/// 1. The list of actual function implementation when the relevant
-/// feature is activated,
-///
-/// 2. A list of stub function when the feature is not activated that produce
-/// a runtime error (and explain what feature flag is needed to activate them).
+/// Macro creates a sub module if the feature is not enabled
 ///
 /// The rationale for providing stub functions is to help users to configure datafusion
 /// properly (so they get an error telling them why a function is not available)
 /// instead of getting a cryptic "no function found" message at runtime.
 
-macro_rules! make_package {
-    ($name:ident, $feature:literal, $DOC:expr) => {
-        #[cfg(feature = $feature)]
-        #[doc = $DOC ]
-        #[doc = concat!("Enabled via feature flag `", $feature, "`")]
-        pub mod $name;
-
+macro_rules! make_stub_package {
+    ($name:ident, $feature:literal) => {
         #[cfg(not(feature = $feature))]
         #[doc = concat!("Disabled. Enable via feature flag `", $feature, "`")]
         pub mod $name {

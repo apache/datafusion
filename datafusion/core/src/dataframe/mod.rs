@@ -24,15 +24,12 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
-use crate::execution::{
-    context::{SessionState, TaskContext},
-    FunctionRegistry,
-};
+use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
     col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
@@ -41,6 +38,7 @@ use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
 };
+use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
@@ -55,7 +53,6 @@ use datafusion_expr::{
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
-use crate::prelude::SessionContext;
 use async_trait::async_trait;
 
 /// Contains options that control how data is
@@ -1512,7 +1509,7 @@ mod tests {
         WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -2165,6 +2162,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn sendable() {
         let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
@@ -2899,7 +2897,7 @@ mod tests {
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
             physical_plan.output_partitioning(),
-            Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
+            Partitioning::UnknownPartitioning(partition_count) if *partition_count == default_partition_count * 2));
         Ok(())
     }
 
@@ -2948,7 +2946,7 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(left_exprs, default_partition_count)
+                        &Partitioning::Hash(left_exprs, default_partition_count)
                     );
                 }
                 JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
@@ -2958,13 +2956,13 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(right_exprs, default_partition_count)
+                        &Partitioning::Hash(right_exprs, default_partition_count)
                     );
                 }
                 JoinType::Full => {
                     assert!(matches!(
                         out_partitioning,
-                    Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                    &Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
         }

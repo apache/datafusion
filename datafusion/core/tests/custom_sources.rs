@@ -30,7 +30,6 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -39,25 +38,16 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use async_trait::async_trait;
-use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use futures::stream::Stream;
 
 /// Also run all tests that are found in the `custom_sources_cases` directory
 mod custom_sources_cases;
 
-//--- Custom source dataframe tests ---//
-
-struct CustomTableProvider;
-#[derive(Debug, Clone)]
-struct CustomExecutionPlan {
-    projection: Option<Vec<usize>>,
-}
-struct TestCustomRecordBatchStream {
-    /// the nb of batches of TEST_CUSTOM_RECORD_BATCH generated
-    nb_batch: i32,
-}
 macro_rules! TEST_CUSTOM_SCHEMA_REF {
     () => {
         Arc::new(Schema::new(vec![
@@ -76,6 +66,41 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
             ],
         )
     };
+}
+
+//--- Custom source dataframe tests ---//
+
+struct CustomTableProvider;
+#[derive(Debug, Clone)]
+struct CustomExecutionPlan {
+    projection: Option<Vec<usize>>,
+    cache: PlanProperties,
+}
+
+impl CustomExecutionPlan {
+    fn new(projection: Option<Vec<usize>>) -> Self {
+        let schema = TEST_CUSTOM_SCHEMA_REF!();
+        let schema =
+            project_schema(&schema, projection.as_ref()).expect("projected schema");
+        let cache = Self::compute_properties(schema);
+        Self { projection, cache }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanProperties::new(
+            eq_properties,
+            // Output Partitioning
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
+    }
+}
+
+struct TestCustomRecordBatchStream {
+    /// the nb of batches of TEST_CUSTOM_RECORD_BATCH generated
+    nb_batch: i32,
 }
 
 impl RecordBatchStream for TestCustomRecordBatchStream {
@@ -119,17 +144,8 @@ impl ExecutionPlan for CustomExecutionPlan {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        let schema = TEST_CUSTOM_SCHEMA_REF!();
-        project_schema(&schema, self.projection.as_ref()).expect("projected schema")
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -197,9 +213,7 @@ impl TableProvider for CustomTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExecutionPlan {
-            projection: projection.cloned(),
-        }))
+        Ok(Arc::new(CustomExecutionPlan::new(projection.cloned())))
     }
 }
 

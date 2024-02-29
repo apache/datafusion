@@ -29,7 +29,7 @@ use crate::{built_in_window_function, udaf};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
-use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, Result, ScalarValue};
 use sqlparser::ast::NullTreatment;
 use std::collections::HashSet;
 use std::fmt;
@@ -2030,11 +2030,6 @@ mod test {
         // BuiltIn
         assert!(
             ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
-                .is_volatile()
-                .unwrap()
-        );
-        assert!(
-            !ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Abs)
                 .is_volatile()
                 .unwrap()
         );

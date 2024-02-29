@@ -21,18 +21,20 @@
 
 //! Unicode expressions
 
+use std::cmp::{max, Ordering};
+use std::sync::Arc;
+
 use arrow::{
     array::{ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     datatypes::{ArrowNativeType, ArrowPrimitiveType},
 };
+use hashbrown::HashMap;
+use unicode_segmentation::UnicodeSegmentation;
+
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    exec_err, internal_err, DataFusionError, Result,
+    exec_err, Result,
 };
-use hashbrown::HashMap;
-use std::cmp::{max, Ordering};
-use std::sync::Arc;
-use unicode_segmentation::UnicodeSegmentation;
 
 /// Returns number of characters in the string.
 /// character_length('josé') = 4
@@ -312,7 +314,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => internal_err!(
+        other => exec_err!(
             "rpad was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -407,7 +409,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            internal_err!("substr was called with {other} arguments. It requires 2 or 3.")
+            exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
         }
     }
 }
@@ -463,7 +465,7 @@ pub fn translate<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
 pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 3 {
-        return internal_err!(
+        return exec_err!(
             "substr_index was called with {} arguments. It requires 3.",
             args.len()
         );
@@ -528,7 +530,7 @@ where
     T::Native: OffsetSizeTrait,
 {
     if args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "find_in_set was called with {} arguments. It requires 2.",
             args.len()
         );

@@ -290,7 +290,7 @@ impl DataSink for ArrowFileSink {
             }
         }
 
-        match demux_task.await {
+        match demux_task.join().await {
             Ok(r) => r?,
             Err(e) => {
                 if e.is_panic() {

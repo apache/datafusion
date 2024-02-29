@@ -20,21 +20,18 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::Partitioning;
-
-use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
-
-use super::expressions::PhysicalSortExpr;
-
 use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use crate::memory::MemoryStream;
+use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties};
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{internal_err, Result};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
@@ -85,16 +82,20 @@ pub struct WorkTableExec {
     work_table: Arc<WorkTable>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
     pub fn new(name: String, schema: SchemaRef) -> Self {
+        let cache = Self::compute_properties(schema.clone());
         Self {
             name,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
+            cache,
         }
     }
 
@@ -104,7 +105,19 @@ impl WorkTableExec {
             schema: self.schema.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
+            cache: self.cache.clone(),
         }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -127,16 +140,12 @@ impl ExecutionPlan for WorkTableExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -145,10 +154,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

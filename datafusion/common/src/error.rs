@@ -495,7 +495,13 @@ macro_rules! make_error {
                 #[macro_export]
                 macro_rules! $NAME_DF_ERR {
                     ($d($d args:expr),*) => {
-                        DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into())
+                        $crate::DataFusionError::$ERR(
+                            format!(
+                                "{}{}",
+                                format!($d($d args),*),
+                                $crate::DataFusionError::get_back_trace(),
+                            ).into()
+                        )
                     }
                 }
 
@@ -503,7 +509,13 @@ macro_rules! make_error {
                 #[macro_export]
                 macro_rules! $NAME_ERR {
                     ($d($d args:expr),*) => {
-                        Err(DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into()))
+                        Err($crate::DataFusionError::$ERR(
+                            format!(
+                                "{}{}",
+                                format!($d($d args),*),
+                                $crate::DataFusionError::get_back_trace(),
+                            ).into()
+                        ))
                     }
                 }
             }

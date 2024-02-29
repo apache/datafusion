@@ -59,12 +59,12 @@ use crate::physical_plan::windows::{
 };
 use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
+use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion_physical_plan::unbounded_output;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -208,7 +208,7 @@ fn replace_with_partial_sort(
     let plan_any = plan.as_any();
     if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
         let child = sort_plan.children()[0].clone();
-        if !unbounded_output(&child) {
+        if !child.execution_mode().is_unbounded() {
             return Ok(plan);
         }
 
@@ -391,7 +391,7 @@ fn analyze_immediate_sort_removal(
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
-            .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
+            .ordering_satisfy(sort_exec.properties().output_ordering().unwrap_or(&[]))
         {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -574,7 +574,7 @@ fn remove_corresponding_sort_from_sub_plan(
         {
             node.plan = Arc::new(RepartitionExec::try_new(
                 node.children[0].plan.clone(),
-                repartition.output_partitioning(),
+                repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
     };

@@ -545,9 +545,11 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs = 0;
-  Acos = 1;
-  Asin = 2;
+  //  0 was Abs before
+  //  The first enum value must be zero for open enums
+  unknown = 0;
+  //  1 was Acos
+  //  2 was Asin
   Atan = 3;
   Ascii = 4;
   Ceil = 5;
@@ -566,7 +568,7 @@ enum ScalarFunction {
   Tan = 18;
   Trunc = 19;
   Array = 20;
-  RegexpMatch = 21;
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;
@@ -665,7 +667,7 @@ enum ScalarFunction {
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Range = 122;
+  /// 122 is Range
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;

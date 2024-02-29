@@ -33,7 +33,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, ArrayRef, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 use datafusion_common::utils::{array_into_list_array, get_row_at_idx};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi

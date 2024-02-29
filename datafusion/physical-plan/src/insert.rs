@@ -22,9 +22,9 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
 use super::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
@@ -33,9 +33,11 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    Distribution, EquivalenceProperties, PhysicalSortRequirement,
+};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -86,6 +88,7 @@ pub struct FileSinkExec {
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
     sort_order: Option<Vec<PhysicalSortRequirement>>,
+    cache: PlanProperties,
 }
 
 impl fmt::Debug for FileSinkExec {
@@ -102,12 +105,15 @@ impl FileSinkExec {
         sink_schema: SchemaRef,
         sort_order: Option<Vec<PhysicalSortRequirement>>,
     ) -> Self {
+        let count_schema = make_count_schema();
+        let cache = Self::create_schema(&input, count_schema);
         Self {
             input,
             sink,
             sink_schema,
             count_schema: make_count_schema(),
             sort_order,
+            cache,
         }
     }
 
@@ -170,6 +176,18 @@ impl FileSinkExec {
     pub fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
     }
+
+    fn create_schema(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            input.execution_mode(),
+        )
+    }
 }
 
 impl DisplayAs for FileSinkExec {
@@ -193,17 +211,8 @@ impl ExecutionPlan for FileSinkExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.count_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -240,17 +249,12 @@ impl ExecutionPlan for FileSinkExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children[0].clone(),
-            sink: self.sink.clone(),
-            sink_schema: self.sink_schema.clone(),
-            count_schema: self.count_schema.clone(),
-            sort_order: self.sort_order.clone(),
-        }))
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(_children[0])
+        Ok(Arc::new(Self::new(
+            children[0].clone(),
+            self.sink.clone(),
+            self.sink_schema.clone(),
+            self.sort_order.clone(),
+        )))
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for

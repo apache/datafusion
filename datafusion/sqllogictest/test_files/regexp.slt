@@ -220,6 +220,12 @@ SELECT regexp_match('(?<=[A-Z]\w )Smith', 'John Smith', 'i');
 ----
 NULL
 
+# ported test
+query ?
+SELECT regexp_match('aaa-555', '.*-(\d*)');
+----
+[555]
+
 #
 # regexp_replace tests
 #

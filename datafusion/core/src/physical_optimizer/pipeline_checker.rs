@@ -24,14 +24,13 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::config::OptimizerOptions;
+use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::tree_node::PlanContext;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
 /// pipeline-breaking operators on infinite input(s).
@@ -51,10 +50,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = PipelineStatePropagator::new_default(plan);
-        let state = pipeline
-            .transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))?;
-        Ok(state.plan)
+        plan.transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))
     }
 
     fn name(&self) -> &str {
@@ -66,21 +62,13 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 }
 
-/// This object propagates the [`ExecutionPlan`] pipelining information.
-pub type PipelineStatePropagator = PlanContext<bool>;
-
-/// Collects unboundedness flags of all the children of the plan in `pipeline`.
-pub fn children_unbounded(pipeline: &PipelineStatePropagator) -> Vec<bool> {
-    pipeline.children.iter().map(|c| c.data).collect()
-}
-
 /// This function propagates finiteness information and rejects any plan with
 /// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
-    mut input: PipelineStatePropagator,
+    input: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
-) -> Result<Transformed<PipelineStatePropagator>> {
-    if let Some(exec) = input.plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
         {
@@ -88,13 +76,14 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    input
-        .plan
-        .unbounded_output(&children_unbounded(&input))
-        .map(|value| {
-            input.data = value;
-            Transformed::Yes(input)
-        })
+    if !input.execution_mode().pipeline_friendly() {
+        plan_err!(
+            "Cannot execute pipeline breaking queries, operator: {:?}",
+            input
+        )
+    } else {
+        Ok(Transformed::No(input))
+    }
 }
 
 /// This function returns whether a given symmetric hash join is amenable to
@@ -141,7 +130,7 @@ mod sql_tests {
             sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "Join Error".to_string(),
+            error_operator: "operator: HashJoinExec".to_string(),
         };
 
         case.run().await?;
@@ -166,7 +155,7 @@ mod sql_tests {
             sql: "SELECT t2.c1 FROM left as t1 RIGHT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "Join Error".to_string(),
+            error_operator: "operator: HashJoinExec".to_string(),
         };
 
         case.run().await?;
@@ -216,7 +205,7 @@ mod sql_tests {
             sql: "SELECT t2.c1 FROM left as t1 FULL JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "Join Error".to_string(),
+            error_operator: "operator: HashJoinExec".to_string(),
         };
 
         case.run().await?;
@@ -236,7 +225,7 @@ mod sql_tests {
         let case = QueryCase {
             sql: "SELECT c1, MIN(c4) FROM test GROUP BY c1".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Aggregate Error".to_string(),
+            error_operator: "operator: AggregateExec".to_string(),
         };
 
         case.run().await?;
@@ -260,7 +249,7 @@ mod sql_tests {
                   FROM test
                   LIMIT 5".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Sort Error".to_string()
+            error_operator: "operator: SortExec".to_string()
         };
 
         case.run().await?;
@@ -283,7 +272,7 @@ mod sql_tests {
                         SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
                   FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Sort Error".to_string()
+            error_operator: "operator: SortExec".to_string()
         };
         case.run().await?;
         Ok(())
@@ -315,7 +304,7 @@ mod sql_tests {
                 Arc::new(test3),
                 Arc::new(test4),
             ],
-            error_operator: "Cross Join Error".to_string(),
+            error_operator: "operator: CrossJoinExec".to_string(),
         };
 
         case.run().await?;

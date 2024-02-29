@@ -19,30 +19,29 @@
 //! type, conceptually is like joining each row with all the values in the list column.
 use std::{any::Any, sync::Arc};
 
-use super::DisplayAs;
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
-    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
+    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, PhysicalExpr,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, LargeListArray, ListArray,
-    PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, GenericListArray,
+    LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels;
 use arrow::datatypes::{
     ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_array::{GenericListArray, OffsetSizeTrait};
-use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
+use datafusion_common::{exec_err, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use log::trace;
-
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 
 /// Unnest the given column by joining the row with each value in the
 /// nested type.
@@ -60,6 +59,8 @@ pub struct UnnestExec {
     options: UnnestOptions,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl UnnestExec {
@@ -70,13 +71,29 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
+        let cache = Self::compute_properties(&input, schema.clone());
         UnnestExec {
             input,
             schema,
             column,
             options,
             metrics: Default::default(),
+            cache,
         }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        PlanProperties::new(
+            eq_properties,
+            input.output_partitioning().clone(),
+            input.execution_mode(),
+        )
     }
 }
 
@@ -99,19 +116,12 @@ impl ExecutionPlan for UnnestExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
     }
 
     fn with_new_children(
@@ -128,14 +138,6 @@ impl ExecutionPlan for UnnestExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn execute(

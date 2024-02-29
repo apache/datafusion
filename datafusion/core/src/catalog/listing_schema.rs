@@ -175,12 +175,16 @@ impl SchemaProvider for ListingSchemaProvider {
             .collect()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        Ok(self
+            .tables
             .lock()
             .expect("Can't lock tables")
             .get(name)
-            .cloned()
+            .cloned())
     }
 
     fn register_table(
