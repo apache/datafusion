@@ -570,8 +570,7 @@ impl<T> Transformed<T> {
 pub trait TransformedIterator: Iterator {
     fn map_until_stop_and_collect<F>(self, f: F) -> Result<Transformed<Vec<Self::Item>>>
     where
-        F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>,
-        Self: Sized;
+        F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>;
 }
 
 impl<I: Iterator> TransformedIterator for I {
