@@ -404,10 +404,10 @@ fn unary_string_to_primitive_function<'a, T, O, F>(
     op: F,
     name: &str,
 ) -> Result<PrimitiveArray<O>>
-    where
-        O: ArrowPrimitiveType,
-        T: OffsetSizeTrait,
-        F: Fn(&'a str) -> Result<O::Native>,
+where
+    O: ArrowPrimitiveType,
+    T: OffsetSizeTrait,
+    F: Fn(&'a str) -> Result<O::Native>,
 {
     if args.len() != 1 {
         return exec_err!(
@@ -428,10 +428,10 @@ fn handle<'a, O, F, S>(
     op: F,
     name: &str,
 ) -> Result<ColumnarValue>
-    where
-        O: ArrowPrimitiveType,
-        S: ScalarType<O::Native>,
-        F: Fn(&'a str) -> Result<O::Native>,
+where
+    O: ArrowPrimitiveType,
+    S: ScalarType<O::Native>,
+    F: Fn(&'a str) -> Result<O::Native>,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
@@ -467,11 +467,11 @@ fn strings_to_primitive_function<'a, T, O, F, F2>(
     op2: F2,
     name: &str,
 ) -> Result<PrimitiveArray<O>>
-    where
-        O: ArrowPrimitiveType,
-        T: OffsetSizeTrait,
-        F: Fn(&'a str, &'a str) -> Result<O::Native>,
-        F2: Fn(O::Native) -> O::Native,
+where
+    O: ArrowPrimitiveType,
+    T: OffsetSizeTrait,
+    F: Fn(&'a str, &'a str) -> Result<O::Native>,
+    F2: Fn(O::Native) -> O::Native,
 {
     if args.len() < 2 {
         return exec_err!(
@@ -548,11 +548,11 @@ fn handle_multiple<'a, O, F, S, M>(
     op2: M,
     name: &str,
 ) -> Result<ColumnarValue>
-    where
-        O: ArrowPrimitiveType,
-        S: ScalarType<O::Native>,
-        F: Fn(&'a str, &'a str) -> Result<O::Native>,
-        M: Fn(O::Native) -> O::Native,
+where
+    O: ArrowPrimitiveType,
+    S: ScalarType<O::Native>,
+    F: Fn(&'a str, &'a str) -> Result<O::Native>,
+    M: Fn(O::Native) -> O::Native,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
