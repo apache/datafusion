@@ -31,7 +31,7 @@ rust-version = "1.72"
 [dependencies]
 async-recursion = "1.0"
 chrono = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 prost = "0.12"
