@@ -520,20 +520,12 @@ impl<T> Transformed<T> {
 
     /// Applies the given `f` to the data of [`Transformed`] object.
     pub fn update_data<U, F: FnOnce(T) -> U>(self, f: F) -> Transformed<U> {
-        Transformed {
-            data: f(self.data),
-            transformed: self.transformed,
-            tnr: self.tnr,
-        }
+        Transformed::new(f(self.data), self.transformed, self.tnr)
     }
 
     /// Maps the data of [`Transformed`] object to the result of the given `f`.
     pub fn map_data<U, F: FnOnce(T) -> Result<U>>(self, f: F) -> Result<Transformed<U>> {
-        f(self.data).map(|data| Transformed {
-            data,
-            transformed: self.transformed,
-            tnr: self.tnr,
-        })
+        f(self.data).map(|data| Transformed::new(data, self.transformed, self.tnr))
     }
 
     /// According to the TreeNodeRecursion condition on the node, the function decides
@@ -608,11 +600,7 @@ impl<I: Iterator> TransformedIterator for I {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Transformed {
-            data: new_data,
-            transformed: new_transformed,
-            tnr: new_tnr,
-        })
+        Ok(Transformed::new(new_data, new_transformed, new_tnr))
     }
 }
 
