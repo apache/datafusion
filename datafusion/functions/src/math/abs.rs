@@ -24,10 +24,8 @@ use arrow::array::Int32Array;
 use arrow::array::Int64Array;
 use arrow::array::Int8Array;
 use arrow::datatypes::DataType;
-use datafusion_common::plan_datafusion_err;
 use datafusion_common::{exec_err, not_impl_err};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::utils;
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};

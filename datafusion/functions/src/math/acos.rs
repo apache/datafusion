@@ -19,11 +19,9 @@
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::{
-    utils::generate_signature_error_msg, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
