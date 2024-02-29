@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use datafusion_common::utils::list_ndims;
 // use arrow::datatypes::Field;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::get_wider_type;
 use datafusion_expr::Expr;

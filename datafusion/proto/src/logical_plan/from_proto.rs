@@ -52,7 +52,7 @@ use datafusion_expr::{
     array_pop_back, array_pop_front, array_position, array_positions, array_remove,
     array_remove_all, array_remove_n, array_repeat, array_replace, array_replace_all,
     array_replace_n, array_resize, array_slice, array_sort, array_union, arrow_typeof,
-    ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    ascii, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
     current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
     ends_with, exp,

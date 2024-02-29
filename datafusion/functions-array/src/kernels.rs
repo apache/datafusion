@@ -26,7 +26,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::DataType;
-use arrow_array::{new_null_array, NullArray};
+use arrow_array::{new_null_array, ListArray, NullArray};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use arrow_schema::Field;
 use datafusion_common::cast::{
@@ -265,9 +265,6 @@ pub(super) fn array_to_string(args: &[ArrayRef]) -> datafusion_common::Result<Ar
     Ok(Arc::new(string_arr))
 }
 
-use arrow::array::ListArray;
-use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::Field;
 /// Generates an array of integers from start to stop with a given step.
 ///
 /// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
