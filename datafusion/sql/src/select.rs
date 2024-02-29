@@ -287,9 +287,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let projection_exprs = select_exprs
             .into_iter()
             .map(|expr| {
-                if let Expr::Unnest(Unnest { exprs }) = expr {
-                    unnest_columns.push(exprs[0].display_name()?);
-                    Ok(exprs[0].clone())
+                if let Expr::Unnest(Unnest { ref exprs }) = expr {
+                    let column_name = expr.display_name()?;
+                    unnest_columns.push(column_name.clone());
+                    // Add alias for the argument expression, to avoid naming conflicts with other expressions
+                    // in the select list. For example: `select unnest(col1), col1 from t`.
+                    Ok(exprs[0].clone().alias(column_name))
                 } else {
                     Ok(expr)
                 }
