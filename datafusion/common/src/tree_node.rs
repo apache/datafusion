@@ -121,11 +121,10 @@ macro_rules! handle_transform_recursion {
             }
             TreeNodeRecursion::Jump => {
                 let post_visited = $F_UP(pre_visited.data)?;
-                Ok(Transformed::new(
-                    post_visited.data,
-                    post_visited.transformed || pre_visited.transformed,
-                    TreeNodeRecursion::Continue,
-                ))
+                Ok(Transformed {
+                    transformed: post_visited.transformed || pre_visited.transformed,
+                    ..post_visited
+                })
             }
             TreeNodeRecursion::Stop => Ok(pre_visited),
         }
