@@ -31,9 +31,11 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::Operator;
 use datafusion_expr::ScalarFunctionDefinition;
 use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
-use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
+use datafusion_optimizer::analyzer::AnalyzerRule;
 
-use super::AnalyzerRule;
+use crate::udf::array_append;
+use crate::udf::array_concat;
+use crate::udf::array_prepend;
 
 #[derive(Default)]
 pub struct OperatorToFunction {}

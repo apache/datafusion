@@ -47,6 +47,7 @@ use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_functions_array::optimizer::analyzer::rewrite_expr::OperatorToFunction;
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -106,7 +107,10 @@ use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_optimizer::{
-    analyzer::{Analyzer, AnalyzerRule},
+    analyzer::{
+        count_wildcard_rule::CountWildcardRule, inline_table_scan::InlineTableScan,
+        type_coercion::TypeCoercion, Analyzer, AnalyzerRule,
+    },
     OptimizerConfig,
 };
 use datafusion_sql::planner::object_name_to_table_reference;
@@ -1398,10 +1402,22 @@ impl SessionState {
         datafusion_functions::register_all(&mut new_self)
             .expect("can not register built in functions");
 
-        // register crate of array expressions (if enabled)
+        // register crate of array expressions && add array analyzer rule (if enabled)
         #[cfg(feature = "array_expressions")]
-        datafusion_functions_array::register_all(&mut new_self)
-            .expect("can not register array expressions");
+        {
+            datafusion_functions_array::register_all(&mut new_self)
+                .expect("can not register array expressions");
+            // we need keep the analyzer order
+            let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+                Arc::new(InlineTableScan::new()),
+                // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
+                // and TypeCoercion may cast the argument types from Scalar to List.
+                Arc::new(OperatorToFunction::new()),
+                Arc::new(TypeCoercion::new()),
+                Arc::new(CountWildcardRule::new()),
+            ];
+            new_self = new_self.with_analyzer_rules(rules);
+        }
 
         new_self
     }
