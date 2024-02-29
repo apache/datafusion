@@ -617,7 +617,7 @@ pub trait DynTreeNode {
         &self,
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
-    ) -> Result<Transformed<Arc<Self>>>;
+    ) -> Result<Arc<Self>>;
 }
 
 /// Blanket implementation for Arc for any tye that implements
@@ -647,10 +647,8 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
             // along with the node containing transformed children.
             if new_children.transformed {
                 let arc_self = Arc::clone(&self);
-                new_children.map_data(|children| {
-                    self.with_new_arc_children(arc_self, children)
-                        .map(|new| new.data)
-                })
+                new_children
+                    .map_data(|children| self.with_new_arc_children(arc_self, children))
             } else {
                 Ok(Transformed::no(self))
             }
@@ -671,7 +669,7 @@ pub trait ConcreteTreeNode: Sized {
     fn take_children(self) -> (Self, Vec<Self>);
 
     /// Reattaches updated child nodes to the node, returning the updated node.
-    fn with_new_children(self, children: Vec<Self>) -> Result<Transformed<Self>>;
+    fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
 }
 
 impl<T: ConcreteTreeNode> TreeNode for T {
@@ -698,13 +696,11 @@ impl<T: ConcreteTreeNode> TreeNode for T {
             if new_children.transformed {
                 // Propagate up `t.transformed` and `t.tnr` along with
                 // the node containing transformed children.
-                new_children.map_data(|children| {
-                    new_self.with_new_children(children).map(|new| new.data)
-                })
+                new_children.map_data(|children| new_self.with_new_children(children))
             } else {
-                Ok(Transformed::no(
-                    new_self.with_new_children(new_children.data)?.data,
-                ))
+                new_self
+                    .with_new_children(new_children.data)
+                    .map(Transformed::no)
             }
         } else {
             Ok(Transformed::no(new_self))

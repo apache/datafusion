@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::{displayable, with_new_children_if_necessary, ExecutionPlan};
 
-use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode, Transformed};
+use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
 use datafusion_common::Result;
 
 impl DynTreeNode for dyn ExecutionPlan {
@@ -34,7 +34,7 @@ impl DynTreeNode for dyn ExecutionPlan {
         &self,
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
-    ) -> Result<Transformed<Arc<Self>>> {
+    ) -> Result<Arc<Self>> {
         with_new_children_if_necessary(arc_self, new_children)
     }
 }
@@ -61,11 +61,11 @@ impl<T> PlanContext<T> {
         }
     }
 
-    pub fn update_plan_from_children(mut self) -> Result<Transformed<Self>> {
+    pub fn update_plan_from_children(mut self) -> Result<Self> {
         let children_plans = self.children.iter().map(|c| c.plan.clone()).collect();
         let t = with_new_children_if_necessary(self.plan, children_plans)?;
-        self.plan = t.data;
-        Ok(Transformed::new(self, t.transformed, t.tnr))
+        self.plan = t;
+        Ok(self)
     }
 }
 
@@ -95,7 +95,7 @@ impl<T> ConcreteTreeNode for PlanContext<T> {
         (self, children)
     }
 
-    fn with_new_children(mut self, children: Vec<Self>) -> Result<Transformed<Self>> {
+    fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
         self.children = children;
         self.update_plan_from_children()
     }

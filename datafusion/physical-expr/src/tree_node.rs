@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::{with_new_children_if_necessary, PhysicalExpr};
 
-use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode, Transformed};
+use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
 use datafusion_common::Result;
 
 impl DynTreeNode for dyn PhysicalExpr {
@@ -34,7 +34,7 @@ impl DynTreeNode for dyn PhysicalExpr {
         &self,
         arc_self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
-    ) -> Result<Transformed<Arc<Self>>> {
+    ) -> Result<Arc<Self>> {
         with_new_children_if_necessary(arc_self, new_children)
     }
 }
@@ -61,11 +61,11 @@ impl<T> ExprContext<T> {
         }
     }
 
-    pub fn update_expr_from_children(mut self) -> Result<Transformed<Self>> {
+    pub fn update_expr_from_children(mut self) -> Result<Self> {
         let children_expr = self.children.iter().map(|c| c.expr.clone()).collect();
         let t = with_new_children_if_necessary(self.expr, children_expr)?;
-        self.expr = t.data;
-        Ok(Transformed::new(self, t.transformed, t.tnr))
+        self.expr = t;
+        Ok(self)
     }
 }
 
@@ -94,7 +94,7 @@ impl<T> ConcreteTreeNode for ExprContext<T> {
         (self, children)
     }
 
-    fn with_new_children(mut self, children: Vec<Self>) -> Result<Transformed<Self>> {
+    fn with_new_children(mut self, children: Vec<Self>) -> Result<Self> {
         self.children = children;
         self.update_expr_from_children()
     }

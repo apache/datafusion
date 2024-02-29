@@ -138,7 +138,7 @@ fn plan_with_order_preserving_variants(
         }
     }
 
-    sort_input.update_plan_from_children().map(|t| t.data)
+    sort_input.update_plan_from_children()
 }
 
 /// Calculates the updated plan by replacing operators that preserve ordering
@@ -184,7 +184,7 @@ fn plan_with_order_breaking_variants(
         let coalesce = CoalescePartitionsExec::new(child);
         sort_input.plan = Arc::new(coalesce) as _;
     } else {
-        return sort_input.update_plan_from_children().map(|t| t.data);
+        return sort_input.update_plan_from_children();
     }
 
     sort_input.children[0].data = false;

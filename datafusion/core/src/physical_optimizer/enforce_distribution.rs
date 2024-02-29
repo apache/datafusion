@@ -1022,7 +1022,7 @@ fn replace_order_preserving_variants(
         }
     }
 
-    context.update_plan_from_children().map(|t| t.data)
+    context.update_plan_from_children()
 }
 
 /// This utility function adds a [`SortExec`] above an operator according to the
