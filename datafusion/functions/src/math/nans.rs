@@ -18,12 +18,14 @@
 //! Math function: `isnan()`.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result, plan_datafusion_err};
+use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility, utils::generate_signature_error_msg};
+use datafusion_expr::{
+    utils::generate_signature_error_msg, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -36,11 +38,10 @@ impl IsNanFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature:
-            Signature::one_of(
+            signature: Signature::one_of(
                 vec![Exact(vec![Float32]), Exact(vec![Float64])],
                 Volatility::Immutable,
-            )
+            ),
         }
     }
 }
@@ -76,25 +77,26 @@ impl ScalarUDFImpl for IsNanFunc {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => {
-                Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float64Array,
-                                BooleanArray,
-                                { f64::is_nan }
-                            ))
+            DataType::Float64 => Arc::new(make_function_scalar_inputs_return_type!(
+                &args[0],
+                self.name(),
+                Float64Array,
+                BooleanArray,
+                { f64::is_nan }
+            )),
+            DataType::Float32 => Arc::new(make_function_scalar_inputs_return_type!(
+                &args[0],
+                self.name(),
+                Float32Array,
+                BooleanArray,
+                { f32::is_nan }
+            )),
+            other => {
+                return exec_err!(
+                    "Unsupported data type {other:?} for function {}",
+                    self.name()
+                )
             }
-            DataType::Float32 => {
-                Arc::new(make_function_scalar_inputs_return_type!(
-                            &args[0],
-                            self.name(),
-                            Float32Array,
-                            BooleanArray,
-                            { f32::is_nan }
-                        ))
-            }
-            other => return exec_err!("Unsupported data type {other:?} for function {}", self.name()),
         };
         Ok(ColumnarValue::Array(arr))
     }

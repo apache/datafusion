@@ -249,6 +249,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("physical_plan_tpch_all", |b| {
         b.iter(|| {
             for sql in &all_tpch_sql_queries {
+                physical_plan(&ctx, sql)
+            }
+        })
+    });
+
+    c.bench_function("logical_plan_tpch_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpch_sql_queries {
                 logical_plan(&ctx, sql)
             }
         })

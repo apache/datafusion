@@ -764,12 +764,6 @@ scalar_expr!(
     "Returns an array of the elements in the intersection of array1 and array2."
 );
 
-nary_scalar_expr!(
-    Range,
-    gen_range,
-    "Returns a list of values in the range between start and stop with step."
-);
-
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
@@ -886,6 +880,11 @@ scalar_expr!(
     to_char,
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
+);
+nary_scalar_expr!(
+    ToDate,
+    to_date,
+    "converts string to date according to the given format"
 );
 nary_scalar_expr!(
     ToTimestamp,

@@ -2755,7 +2755,7 @@ pub enum ScalarFunction {
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
-    Range = 122,
+    /// / 122 is Range
     ArrayExcept = 123,
     ArrayPopFront = 124,
     Levenshtein = 125,
@@ -2770,6 +2770,7 @@ pub enum ScalarFunction {
     ArrayReverse = 134,
     RegexpLike = 135,
     ToChar = 136,
+    ToDate = 137,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2892,7 +2893,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::Range => "Range",
             ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
@@ -2907,6 +2907,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayReverse => "ArrayReverse",
             ScalarFunction::RegexpLike => "RegexpLike",
             ScalarFunction::ToChar => "ToChar",
+            ScalarFunction::ToDate => "ToDate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3026,7 +3027,6 @@ impl ScalarFunction {
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
-            "Range" => Some(Self::Range),
             "ArrayExcept" => Some(Self::ArrayExcept),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
@@ -3041,6 +3041,7 @@ impl ScalarFunction {
             "ArrayReverse" => Some(Self::ArrayReverse),
             "RegexpLike" => Some(Self::RegexpLike),
             "ToChar" => Some(Self::ToChar),
+            "ToDate" => Some(Self::ToDate),
             _ => None,
         }
     }

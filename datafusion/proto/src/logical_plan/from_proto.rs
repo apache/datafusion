@@ -57,8 +57,8 @@ use datafusion_expr::{
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
     date_part, date_trunc, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
-    instr, iszero, lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, instr, iszero,
+    lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, regexp_like, regexp_replace, repeat, replace, reverse, right, round, rpad,
@@ -507,7 +507,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::DatePart => Self::DatePart,
@@ -571,6 +570,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Levenshtein => Self::Levenshtein,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
             ScalarFunction::FindInSet => Self::FindInSet,
+            ScalarFunction::ToDate => Self::ToDate,
         }
     }
 }
@@ -1462,12 +1462,6 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry)?,
                     parse_expr(&args[3], registry)?,
                 )),
-                ScalarFunction::Range => Ok(gen_range(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
                 ScalarFunction::Cardinality => {
                     Ok(cardinality(parse_expr(&args[0], registry)?))
                 }
@@ -1816,6 +1810,16 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ToDate => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToDate,
+                        args,
+                    )))
                 }
             }
         }
