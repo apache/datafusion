@@ -157,6 +157,8 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
+Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/arrow-datafusion/issues/5347).
+
 Testing setup:
 
 - `rustup update stable` DataFusion uses the latest stable release of rust
