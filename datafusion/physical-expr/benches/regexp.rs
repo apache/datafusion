@@ -23,15 +23,12 @@ use std::sync::Arc;
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_functions::regex::regexplike::regexp_like;
+use datafusion_physical_expr::regex_expressions::{regexp_match, regexp_replace};
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
-
-use datafusion_physical_expr::regex_expressions::{
-    regexp_like, regexp_match, regexp_replace,
-};
-
 fn data(rng: &mut ThreadRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {

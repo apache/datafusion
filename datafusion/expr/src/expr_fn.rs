@@ -843,11 +843,6 @@ nary_scalar_expr!(
     "fill up a string to the length by appending the characters"
 );
 nary_scalar_expr!(
-    RegexpLike,
-    regexp_like,
-    "matches a regular expression against a string and returns true or false if there was at least one match or not"
-);
-nary_scalar_expr!(
     RegexpReplace,
     regexp_replace,
     "replace strings that match a regular expression"
@@ -1340,8 +1335,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern);
-        test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern, flags);
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,

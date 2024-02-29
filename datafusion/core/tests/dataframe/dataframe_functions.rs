@@ -446,7 +446,7 @@ async fn test_fn_md5() -> Result<()> {
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_like() -> Result<()> {
-    let expr = regexp_like(vec![col("a"), lit("[a-z]")]);
+    let expr = regexp_like(col("a"), lit("[a-z]"));
 
     let expected = [
         "+-----------------------------------+",

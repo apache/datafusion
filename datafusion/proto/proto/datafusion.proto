@@ -681,7 +681,7 @@ enum ScalarFunction {
   InStr = 132;
   MakeDate = 133;
   ArrayReverse = 134;
-  RegexpLike = 135;
+  /// 135 is RegexpLike
   ToChar = 136;
   /// 137 was ToDate
 }

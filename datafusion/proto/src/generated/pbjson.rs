@@ -22442,7 +22442,6 @@ impl serde::Serialize for ScalarFunction {
             Self::InStr => "InStr",
             Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
-            Self::RegexpLike => "RegexpLike",
             Self::ToChar => "ToChar",
         };
         serializer.serialize_str(variant)
@@ -22576,7 +22575,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "InStr",
             "MakeDate",
             "ArrayReverse",
-            "RegexpLike",
             "ToChar",
         ];
 
@@ -22739,7 +22737,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "InStr" => Ok(ScalarFunction::InStr),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
-                    "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     "ToChar" => Ok(ScalarFunction::ToChar),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
