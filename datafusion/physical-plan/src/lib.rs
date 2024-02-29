@@ -464,6 +464,24 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     }
 }
 
+impl ExecutionPlanProperties for &dyn ExecutionPlan {
+    fn output_partitioning(&self) -> &Partitioning {
+        self.properties().output_partitioning()
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        self.properties().execution_mode()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.properties().output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> &EquivalenceProperties {
+        self.properties().equivalence_properties()
+    }
+}
+
 /// Describes the execution mode of an operator's resulting stream with respect
 /// to its size and behavior. There are three possible execution modes: `Bounded`,
 /// `Unbounded` and `PipelineBreaking`.
