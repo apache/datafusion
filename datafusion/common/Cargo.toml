@@ -52,7 +52,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
-half = { version = "2.1", default-features = false }
+half = { workspace = true }
 libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
@@ -64,4 +64,4 @@ sqlparser = { workspace = true }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 
 [dev-dependencies]
-rand = "0.8.4"
+rand = { workspace = true }
