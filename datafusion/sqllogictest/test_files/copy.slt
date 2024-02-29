@@ -21,13 +21,13 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'format.parquet.compression' 'zstd(10)');
+COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'parquet.compression' 'zstd(10)');
 ----
 2
 
 # Copy to directory as partitioned files
 query IT
-COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, 'format.parquet.compression' 'zstd(10)', partition_by 'col2');
+COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, 'parquet.compression' 'zstd(10)', partition_by 'col2');
 ----
 2
 
@@ -55,7 +55,7 @@ select * from validate_partitioned_parquet_bar order by col1;
 # Copy to directory as partitioned files
 query ITT
 COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
-(format parquet, partition_by 'column2, column3', 'format.parquet.compression' 'zstd(10)');
+(format parquet, partition_by 'column2, column3', 'parquet.compression' 'zstd(10)');
 ----
 3
 
@@ -83,7 +83,7 @@ select * from validate_partitioned_parquet_a_x order by column1;
 # Copy to directory as partitioned files
 query TTT
 COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
-(format parquet, 'format.parquet.compression' 'zstd(10)', partition_by 'column1, column3');
+(format parquet, 'parquet.compression' 'zstd(10)', partition_by 'column1, column3');
 ----
 3
 
@@ -139,10 +139,10 @@ LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'te
 #select * from validate_partitioned_escape_quote;
 
 query TT
-EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'format.parquet.compression' 'zstd(10)');
+EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'parquet.compression' 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.parquet.compression zstd(10))
+CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (parquet.compression zstd(10))
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
@@ -261,30 +261,30 @@ query IT
 COPY source_table
 TO 'test_files/scratch/copy/table_with_options/'
 (format parquet,
-'format.parquet.compression' snappy,
-'format.parquet.compression::col1' 'zstd(5)',
-'format.parquet.compression::col2' snappy,
-'format.parquet.max_row_group_size' 12345,
-'format.parquet.data_pagesize_limit' 1234,
-'format.parquet.write_batch_size' 1234,
-'format.parquet.writer_version' 2.0,
-'format.parquet.dictionary_page_size_limit' 123,
-'format.parquet.created_by' 'DF copy.slt',
-'format.parquet.column_index_truncate_length' 123,
-'format.parquet.data_page_row_count_limit' 1234,
-'format.parquet.bloom_filter_enabled' true,
-'format.parquet.bloom_filter_enabled::col1' false,
-'format.parquet.bloom_filter_fpp::col2' 0.456,
-'format.parquet.bloom_filter_ndv::col2' 456,
-'format.parquet.encoding' plain,
-'format.parquet.encoding::col1' DELTA_BINARY_PACKED,
-'format.parquet.dictionary_enabled::col2' true,
-'format.parquet.dictionary_enabled' false,
-'format.parquet.statistics_enabled' page,
-'format.parquet.statistics_enabled::col2' none,
-'format.parquet.max_statistics_size' 123,
-'format.parquet.bloom_filter_fpp' 0.001,
-'format.parquet.bloom_filter_ndv' 100
+'parquet.compression' snappy,
+'parquet.compression::col1' 'zstd(5)',
+'parquet.compression::col2' snappy,
+'parquet.max_row_group_size' 12345,
+'parquet.data_pagesize_limit' 1234,
+'parquet.write_batch_size' 1234,
+'parquet.writer_version' 2.0,
+'parquet.dictionary_page_size_limit' 123,
+'parquet.created_by' 'DF copy.slt',
+'parquet.column_index_truncate_length' 123,
+'parquet.data_page_row_count_limit' 1234,
+'parquet.bloom_filter_enabled' true,
+'parquet.bloom_filter_enabled::col1' false,
+'parquet.bloom_filter_fpp::col2' 0.456,
+'parquet.bloom_filter_ndv::col2' 456,
+'parquet.encoding' plain,
+'parquet.encoding::col1' DELTA_BINARY_PACKED,
+'parquet.dictionary_enabled::col2' true,
+'parquet.dictionary_enabled' false,
+'parquet.statistics_enabled' page,
+'parquet.statistics_enabled::col2' none,
+'parquet.max_statistics_size' 123,
+'parquet.bloom_filter_fpp' 0.001,
+'parquet.bloom_filter_ndv' 100
 )
 ----
 2
@@ -317,7 +317,7 @@ select * from validate_parquet_single;
 
 # copy from table to folder of compressed json files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, 'format.json.compression' gzip);
+COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, 'json.compression' gzip);
 ----
 2
 
@@ -333,7 +333,7 @@ select * from validate_json_gz;
 
 # copy from table to folder of compressed csv files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, 'format.csv.has_header' false, 'format.csv.compression' gzip);
+COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, 'csv.has_header' false, 'csv.compression' gzip);
 ----
 2
 
@@ -400,11 +400,11 @@ query IT
 COPY source_table
 to 'test_files/scratch/copy/table_csv_with_options'
 (format csv,
-'format.csv.has_header' false,
-'format.csv.compression' uncompressed,
-'format.csv.datetime_format' '%FT%H:%M:%S.%9f',
-'format.csv.delimiter' ';',
-'format.csv.null_value' 'NULLVAL');
+'csv.has_header' false,
+'csv.compression' uncompressed,
+'csv.datetime_format' '%FT%H:%M:%S.%9f',
+'csv.delimiter' ';',
+'csv.null_value' 'NULLVAL');
 ----
 2
 
@@ -480,7 +480,7 @@ select * from validate_arrow;
 
 # Copy from table with options
 query error DataFusion error: Internal error: Config value "row_group_size" not found on JsonOptions.
-COPY source_table  to 'test_files/scratch/copy/table.json' ('format.json.row_group_size' 55);
+COPY source_table  to 'test_files/scratch/copy/table.json' ('json.row_group_size' 55);
 
 # Incomplete statement
 query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)

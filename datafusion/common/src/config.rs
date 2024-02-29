@@ -18,7 +18,8 @@
 //! Runtime configuration, via [`ConfigOptions`]
 use crate::error::_internal_err;
 use crate::parsers::CompressionTypeVariant;
-use crate::{DataFusionError, Result};
+use crate::{DataFusionError, FileType, Result};
+use core::fmt;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
@@ -1107,22 +1108,28 @@ macro_rules! extensions_options {
 
 #[derive(Debug, Clone, Default)]
 pub struct TableOptions {
-    /// Catalog options
-    pub format: FormatOptions,
+    pub csv: CsvOptions,
+    pub parquet: TableParquetOptions,
+    pub json: JsonOptions,
+    pub current_format: Option<FileType>,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
 }
 
 impl ConfigField for TableOptions {
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        self.format.visit(v, "format", "");
+        self.csv.visit(v, "csv", "");
+        self.parquet.visit(v, "parquet", "");
+        self.json.visit(v, "json", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
-            "format" => self.format.set(rem, value),
+            "csv" => self.csv.set(rem, value),
+            "parquet" => self.parquet.set(rem, value),
+            "json" => self.json.set(rem, value),
             _ => _internal_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
@@ -1134,9 +1141,13 @@ impl TableOptions {
         Self::default()
     }
 
+    pub fn set_file_format(&mut self, format: FileType) {
+        self.current_format = Some(format);
+    }
+
     pub fn default_from_session_config(config: &ConfigOptions) -> Self {
         let mut initial = TableOptions::default();
-        initial.format.parquet.global = config.execution.parquet.clone();
+        initial.parquet.global = config.execution.parquet.clone();
         initial
     }
 
@@ -1154,9 +1165,31 @@ impl TableOptions {
             )
         })?;
 
-        // Since we do not have a global prefix for all default options,
-        // we do not split the prefix from the key value.
-        if prefix == "format" {
+        if prefix == "csv" || prefix == "json" || prefix == "parquet" {
+            if let Some(format) = &self.current_format {
+                match format {
+                    FileType::CSV if prefix != "csv" => {
+                        return Err(DataFusionError::External(
+                            format!("Key \"{key}\" is not applicable for CSV format")
+                                .into(),
+                        ))
+                    }
+                    #[cfg(feature = "parquet")]
+                    FileType::PARQUET if prefix != "parquet" => {
+                        return Err(DataFusionError::External(
+                            format!("Key \"{key}\" is not applicable for PARQUET format")
+                                .into(),
+                        ))
+                    }
+                    FileType::JSON if prefix != "json" => {
+                        return Err(DataFusionError::External(
+                            format!("Key \"{key}\" is not applicable for JSON format")
+                                .into(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
             return ConfigField::set(self, key, value);
         }
 
@@ -1224,19 +1257,12 @@ impl TableOptions {
         }
 
         let mut v = Visitor(vec![]);
-        self.visit(&mut v, "format", "");
+        self.visit(&mut v, "csv", "");
+        self.visit(&mut v, "json", "");
+        self.visit(&mut v, "parquet", "");
 
         v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
         v.0
-    }
-}
-
-config_namespace! {
-    /// Options controlling the ser/de formats
-    pub struct FormatOptions {
-        pub csv: CsvOptions, default = Default::default()
-        pub parquet: TableParquetOptions, default = Default::default()
-        pub json: JsonOptions, default = Default::default()
     }
 }
 
@@ -1245,7 +1271,7 @@ pub struct TableParquetOptions {
     /// Global parquet options that propagates all columns
     pub global: ParquetOptions,
     /// Column specific options.
-    /// Default usage is format.parquet.XX::column.
+    /// Default usage is parquet.XX::column.
     pub column_specific_options: HashMap<String, ColumnOptions>,
 }
 
@@ -1486,6 +1512,67 @@ config_namespace! {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum FormatOptions {
+    CSV(CsvOptions),
+    JSON(JsonOptions),
+    PARQUET(TableParquetOptions),
+    AVRO,
+    ARROW,
+}
+impl Display for FormatOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let out = match self {
+            FormatOptions::CSV(_) => "csv",
+            FormatOptions::JSON(_) => "json",
+            #[cfg(feature = "parquet")]
+            FormatOptions::PARQUET(_) => "parquet",
+            FormatOptions::AVRO => "avro",
+            FormatOptions::ARROW => "arrow",
+        };
+        write!(f, "{}", out)
+    }
+}
+
+impl FormatOptions {
+    /// Tries to extract ParquetWriterOptions from this FileTypeWriterOptions enum.
+    /// Returns an error if a different type from parquet is set.
+    #[cfg(feature = "parquet")]
+    pub fn try_into_parquet(&self) -> Result<&TableParquetOptions> {
+        match self {
+            FormatOptions::PARQUET(opt) => Ok(opt),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected parquet options but found options for: {:?}",
+                self
+            ))),
+        }
+    }
+
+    /// Tries to extract CsvWriterOptions from this FileTypeWriterOptions enum.
+    /// Returns an error if a different type from csv is set.
+    pub fn try_into_csv(&self) -> Result<&CsvOptions> {
+        match self {
+            FormatOptions::CSV(opt) => Ok(opt),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected csv options but found options for {:?}",
+                self
+            ))),
+        }
+    }
+
+    /// Tries to extract JsonWriterOptions from this FileTypeWriterOptions enum.
+    /// Returns an error if a different type from json is set.
+    pub fn try_into_json(&self) -> Result<&JsonOptions> {
+        match self {
+            FormatOptions::JSON(opt) => Ok(opt),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected json options but found options for {:?}",
+                self,
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[derive(Default, Debug, Clone)]
@@ -1550,10 +1637,8 @@ mod tests {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
         let mut table_config = TableOptions::new().with_extensions(extension);
-        table_config
-            .set("format.parquet.write_batch_size", "10")
-            .unwrap();
-        assert_eq!(table_config.format.parquet.global.write_batch_size, 10);
+        table_config.set("parquet.write_batch_size", "10").unwrap();
+        assert_eq!(table_config.parquet.global.write_batch_size, 10);
         table_config.set("test.bootstrap.servers", "asd").unwrap();
         let kafka_config = table_config
             .extensions
@@ -1569,11 +1654,10 @@ mod tests {
     fn parquet_table_options() {
         let mut table_config = TableOptions::new();
         table_config
-            .set("format.parquet.bloom_filter_enabled::col1", "true")
+            .set("parquet.bloom_filter_enabled::col1", "true")
             .unwrap();
         assert_eq!(
-            table_config.format.parquet.column_specific_options["col1"]
-                .bloom_filter_enabled,
+            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
             Some(true)
         );
     }
@@ -1581,24 +1665,24 @@ mod tests {
     #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
-        table_config.set("format.csv.delimiter", ";").unwrap();
-        assert_eq!(table_config.format.csv.delimiter as char, ';');
-        table_config.set("format.csv.escape", "\"").unwrap();
-        assert_eq!(table_config.format.csv.escape.unwrap() as char, '"');
-        table_config.set("format.csv.escape", "\'").unwrap();
-        assert_eq!(table_config.format.csv.escape.unwrap() as char, '\'');
+        table_config.set("csv.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter as char, ';');
+        table_config.set("csv.escape", "\"").unwrap();
+        assert_eq!(table_config.csv.escape.unwrap() as char, '"');
+        table_config.set("csv.escape", "\'").unwrap();
+        assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
     }
 
     #[test]
     fn parquet_table_options_config_entry() {
         let mut table_config = TableOptions::new();
         table_config
-            .set("format.parquet.bloom_filter_enabled::col1", "true")
+            .set("parquet.bloom_filter_enabled::col1", "true")
             .unwrap();
         let entries = table_config.entries();
         assert!(entries
             .iter()
-            .find(|item| item.key == "format.parquet.bloom_filter_enabled::col1")
+            .find(|item| item.key == "parquet.bloom_filter_enabled::col1")
             .is_some())
     }
 }

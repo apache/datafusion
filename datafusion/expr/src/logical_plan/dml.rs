@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion_common::config::FormatOptions;
-use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
+use datafusion_common::{DFSchemaRef, OwnedTableReference};
 
 use crate::LogicalPlan;
 
@@ -34,8 +34,6 @@ pub struct CopyTo {
     pub input: Arc<LogicalPlan>,
     /// The location to write the file(s)
     pub output_url: String,
-    /// The file format to output (explicitly defined or inferred from file extension)
-    pub file_format: FileType,
     /// Determines which, if any, columns should be used for hive-style partitioned writes
     pub partition_by: Vec<String>,
     /// Arbitrary options as tuples
@@ -47,9 +45,7 @@ pub struct CopyTo {
 // Implement PartialEq manually
 impl PartialEq for CopyTo {
     fn eq(&self, other: &Self) -> bool {
-        self.input == other.input
-            && self.output_url == other.output_url
-            && self.file_format == other.file_format
+        self.input == other.input && self.output_url == other.output_url
     }
 }
 
@@ -61,7 +57,6 @@ impl Hash for CopyTo {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.input.hash(state);
         self.output_url.hash(state);
-        self.file_format.hash(state);
     }
 }
 

@@ -31,13 +31,14 @@ use crate::datasource::listing::{
 };
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
-use crate::execution::context::{create_table_options_from_cmd, SessionState};
+use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
+use datafusion_common::config::TableOptions;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -57,23 +58,32 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let table_config = create_table_options_from_cmd(state.config_options(), &cmd)?;
+        let mut table_options =
+            TableOptions::default_from_session_config(state.config_options());
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
-
+        table_options.set_file_format(file_type.clone());
+        table_options.alter_with_string_hash_map(&cmd.options)?;
         let file_extension = get_extension(cmd.location.as_str());
-
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default().with_options(table_config.format.csv.clone()),
-            ),
+            FileType::CSV => {
+                let mut csv_options = table_options.csv.clone();
+                csv_options.has_header = cmd.has_header;
+                csv_options.delimiter = cmd.delimiter as u8;
+                csv_options.compression = cmd.file_compression_type;
+                Arc::new(CsvFormat::default().with_options(csv_options))
+            }
             #[cfg(feature = "parquet")]
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_options(table_config.format.json.clone()),
+            FileType::PARQUET => Arc::new(
+                ParquetFormat::default().with_options(table_options.parquet.clone()),
             ),
+            FileType::AVRO => Arc::new(AvroFormat),
+            FileType::JSON => {
+                let mut json_options = table_options.json.clone();
+                json_options.compression = cmd.file_compression_type;
+                Arc::new(JsonFormat::default().with_options(json_options))
+            }
             FileType::ARROW => Arc::new(ArrowFormat),
         };
 

@@ -18,8 +18,7 @@
 use datafusion_common::config::{FormatOptions, TableOptions, TableParquetOptions};
 
 use super::{
-    DataFrame, DataFrameWriteOptions, DataFusionError, FileType, LogicalPlanBuilder,
-    RecordBatch,
+    DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
 
 impl DataFrame {
@@ -61,17 +60,12 @@ impl DataFrame {
         let config_options = self.session_state.config_options();
         let table_options = TableOptions::default_from_session_config(config_options);
 
-        let props =
-            writer_options.unwrap_or_else(|| table_options.format.parquet.clone());
-
-        let mut copy_options = FormatOptions::default();
-        copy_options.parquet = props;
+        let props = writer_options.unwrap_or_else(|| table_options.parquet.clone());
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::PARQUET,
-            copy_options,
+            FormatOptions::PARQUET(props),
             Default::default(),
             options.partition_by,
         )?

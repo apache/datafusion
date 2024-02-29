@@ -43,6 +43,7 @@ use crate::prelude::SessionContext;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError,
@@ -1163,16 +1164,12 @@ impl DataFrame {
         let config_options = self.session_state.config_options();
         let table_options = TableOptions::default_from_session_config(config_options);
 
-        let props = writer_options.unwrap_or_else(|| table_options.format.csv.clone());
-
-        let mut copy_options = FormatOptions::default();
-        copy_options.csv = props;
+        let props = writer_options.unwrap_or_else(|| table_options.csv.clone());
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::CSV,
-            copy_options,
+            FormatOptions::CSV(props),
             HashMap::new(),
             options.partition_by,
         )?
@@ -1218,15 +1215,12 @@ impl DataFrame {
         let config_options = self.session_state.config_options();
         let table_options = TableOptions::default_from_session_config(config_options);
 
-        let props = writer_options.unwrap_or_else(|| table_options.format.json.clone());
+        let props = writer_options.unwrap_or_else(|| table_options.json.clone());
 
-        let mut copy_options = FormatOptions::default();
-        copy_options.json = props;
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            FileType::JSON,
-            copy_options,
+            FormatOptions::JSON(props),
             Default::default(),
             options.partition_by,
         )?

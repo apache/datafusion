@@ -41,7 +41,6 @@ use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
-    FileType,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -52,7 +51,6 @@ pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
-use std::str::FromStr;
 use std::string::String;
 use std::sync::Arc;
 use std::{
@@ -107,7 +105,6 @@ use url::Url;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use datafusion_common::config::TableOptions;
 use datafusion_optimizer::{
     analyzer::{Analyzer, AnalyzerRule},
     OptimizerConfig,
@@ -2210,31 +2207,6 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             _ => Ok(VisitRecursion::Continue),
         }
     }
-}
-
-pub fn create_table_options_from_cmd(
-    session_config: &ConfigOptions,
-    cmd: &CreateExternalTable,
-) -> Result<TableOptions> {
-    let mut table_config = TableOptions::default_from_session_config(session_config);
-    table_config.alter_with_string_hash_map(&cmd.options)?;
-    let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
-        DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
-    })?;
-    match file_type {
-        FileType::CSV => {
-            table_config.format.csv.has_header = cmd.has_header;
-            table_config.format.csv.delimiter = cmd.delimiter as u8;
-            table_config.format.csv.compression = cmd.file_compression_type;
-        }
-        #[cfg(feature = "parquet")]
-        FileType::PARQUET => {}
-        FileType::AVRO | FileType::ARROW => {}
-        FileType::JSON => {
-            table_config.format.json.compression = cmd.file_compression_type
-        }
-    };
-    Ok(table_config)
 }
 
 #[cfg(test)]

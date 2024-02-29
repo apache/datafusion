@@ -30,7 +30,7 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
-use datafusion_common::config::TableOptions;
+use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
@@ -738,13 +738,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let config_options = self.context_provider.options();
         let mut table_options = TableOptions::default_from_session_config(config_options);
+        table_options.set_file_format(file_type.clone());
         table_options.alter_with_string_hash_map(&options)?;
+
+        let format_options = match file_type {
+            FileType::ARROW => FormatOptions::ARROW,
+            FileType::AVRO => FormatOptions::AVRO,
+            FileType::PARQUET => FormatOptions::PARQUET(table_options.parquet.clone()),
+            FileType::CSV => FormatOptions::CSV(table_options.csv.clone()),
+            FileType::JSON => FormatOptions::JSON(table_options.json.clone()),
+        };
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format: file_type,
-            format_options: table_options.format,
+            format_options,
             partition_by,
             source_option_tuples: options,
         }))

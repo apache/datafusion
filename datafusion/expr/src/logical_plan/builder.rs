@@ -52,7 +52,7 @@ use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
@@ -263,7 +263,6 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        file_format: FileType,
         format_options: FormatOptions,
         source_option_tuples: HashMap<String, String>,
         partition_by: Vec<String>,
@@ -271,7 +270,6 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            file_format,
             format_options,
             source_option_tuples,
             partition_by,

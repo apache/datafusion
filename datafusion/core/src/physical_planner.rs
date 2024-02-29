@@ -76,7 +76,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -95,6 +95,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_common::config::FormatOptions;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -566,7 +567,6 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Copy(CopyTo{
                     input,
                     output_url,
-                    file_format,
                     format_options,
                     partition_by,
                     ..
@@ -594,13 +594,13 @@ impl DefaultPhysicalPlanner {
                         overwrite: false,
                     };
 
-                    let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default().with_options(format_options.csv.clone())),
+                    let sink_format: Arc<dyn FileFormat> = match format_options {
+                        FormatOptions::CSV(options) => Arc::new(CsvFormat::default().with_options(options.clone())),
+                        FormatOptions::JSON(options) => Arc::new(JsonFormat::default().with_options(options.clone())),
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default().with_options(format_options.parquet.clone())),
-                        FileType::JSON => Arc::new(JsonFormat::default().with_options(format_options.json.clone())),
-                        FileType::AVRO => Arc::new(AvroFormat {} ),
-                        FileType::ARROW => Arc::new(ArrowFormat {}),
+                        FormatOptions::PARQUET(options) => Arc::new(ParquetFormat::default().with_options(options.clone())),
+                        FormatOptions::AVRO => Arc::new(AvroFormat {} ),
+                        FormatOptions::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await

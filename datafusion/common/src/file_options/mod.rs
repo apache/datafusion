@@ -49,67 +49,39 @@ mod tests {
     #[test]
     fn test_writeroptions_parquet_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
+        option_map.insert("parquet.max_row_group_size".to_owned(), "123".to_owned());
+        option_map.insert("parquet.data_pagesize_limit".to_owned(), "123".to_owned());
+        option_map.insert("parquet.write_batch_size".to_owned(), "123".to_owned());
+        option_map.insert("parquet.writer_version".to_owned(), "2.0".to_owned());
         option_map.insert(
-            "format.parquet.max_row_group_size".to_owned(),
+            "parquet.dictionary_page_size_limit".to_owned(),
             "123".to_owned(),
         );
         option_map.insert(
-            "format.parquet.data_pagesize_limit".to_owned(),
-            "123".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.write_batch_size".to_owned(),
-            "123".to_owned(),
-        );
-        option_map.insert("format.parquet.writer_version".to_owned(), "2.0".to_owned());
-        option_map.insert(
-            "format.parquet.dictionary_page_size_limit".to_owned(),
-            "123".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.created_by".to_owned(),
+            "parquet.created_by".to_owned(),
             "df write unit test".to_owned(),
         );
         option_map.insert(
-            "format.parquet.column_index_truncate_length".to_owned(),
+            "parquet.column_index_truncate_length".to_owned(),
             "123".to_owned(),
         );
         option_map.insert(
-            "format.parquet.data_page_row_count_limit".to_owned(),
+            "parquet.data_page_row_count_limit".to_owned(),
             "123".to_owned(),
         );
-        option_map.insert(
-            "format.parquet.bloom_filter_enabled".to_owned(),
-            "true".to_owned(),
-        );
-        option_map.insert("format.parquet.encoding".to_owned(), "plain".to_owned());
-        option_map.insert(
-            "format.parquet.dictionary_enabled".to_owned(),
-            "true".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.compression".to_owned(),
-            "zstd(4)".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.statistics_enabled".to_owned(),
-            "page".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.bloom_filter_fpp".to_owned(),
-            "0.123".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.bloom_filter_ndv".to_owned(),
-            "123".to_owned(),
-        );
+        option_map.insert("parquet.bloom_filter_enabled".to_owned(), "true".to_owned());
+        option_map.insert("parquet.encoding".to_owned(), "plain".to_owned());
+        option_map.insert("parquet.dictionary_enabled".to_owned(), "true".to_owned());
+        option_map.insert("parquet.compression".to_owned(), "zstd(4)".to_owned());
+        option_map.insert("parquet.statistics_enabled".to_owned(), "page".to_owned());
+        option_map.insert("parquet.bloom_filter_fpp".to_owned(), "0.123".to_owned());
+        option_map.insert("parquet.bloom_filter_ndv".to_owned(), "123".to_owned());
 
         let config = ConfigOptions::new();
         let mut table_config = TableOptions::default_from_session_config(&config);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let parquet_options =
-            ParquetWriterOptions::try_from(&table_config.format.parquet)?;
+        let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
         let properties = parquet_options.writer_options();
 
         // Verify the expected options propagated down to parquet crate WriterProperties struct
@@ -162,59 +134,50 @@ mod tests {
         let mut option_map: HashMap<String, String> = HashMap::new();
 
         option_map.insert(
-            "format.parquet.bloom_filter_enabled::col1".to_owned(),
+            "parquet.bloom_filter_enabled::col1".to_owned(),
             "true".to_owned(),
         );
         option_map.insert(
-            "format.parquet.bloom_filter_enabled::col2.nested".to_owned(),
+            "parquet.bloom_filter_enabled::col2.nested".to_owned(),
+            "true".to_owned(),
+        );
+        option_map.insert("parquet.encoding::col1".to_owned(), "plain".to_owned());
+        option_map.insert("parquet.encoding::col2.nested".to_owned(), "rle".to_owned());
+        option_map.insert(
+            "parquet.dictionary_enabled::col1".to_owned(),
             "true".to_owned(),
         );
         option_map.insert(
-            "format.parquet.encoding::col1".to_owned(),
-            "plain".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.encoding::col2.nested".to_owned(),
-            "rle".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.dictionary_enabled::col1".to_owned(),
+            "parquet.dictionary_enabled::col2.nested".to_owned(),
             "true".to_owned(),
         );
+        option_map.insert("parquet.compression::col1".to_owned(), "zstd(4)".to_owned());
         option_map.insert(
-            "format.parquet.dictionary_enabled::col2.nested".to_owned(),
-            "true".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.compression::col1".to_owned(),
-            "zstd(4)".to_owned(),
-        );
-        option_map.insert(
-            "format.parquet.compression::col2.nested".to_owned(),
+            "parquet.compression::col2.nested".to_owned(),
             "zstd(10)".to_owned(),
         );
         option_map.insert(
-            "format.parquet.statistics_enabled::col1".to_owned(),
+            "parquet.statistics_enabled::col1".to_owned(),
             "page".to_owned(),
         );
         option_map.insert(
-            "format.parquet.statistics_enabled::col2.nested".to_owned(),
+            "parquet.statistics_enabled::col2.nested".to_owned(),
             "none".to_owned(),
         );
         option_map.insert(
-            "format.parquet.bloom_filter_fpp::col1".to_owned(),
+            "parquet.bloom_filter_fpp::col1".to_owned(),
             "0.123".to_owned(),
         );
         option_map.insert(
-            "format.parquet.bloom_filter_fpp::col2.nested".to_owned(),
+            "parquet.bloom_filter_fpp::col2.nested".to_owned(),
             "0.456".to_owned(),
         );
         option_map.insert(
-            "format.parquet.bloom_filter_ndv::col1".to_owned(),
+            "parquet.bloom_filter_ndv::col1".to_owned(),
             "123".to_owned(),
         );
         option_map.insert(
-            "format.parquet.bloom_filter_ndv::col2.nested".to_owned(),
+            "parquet.bloom_filter_ndv::col2.nested".to_owned(),
             "456".to_owned(),
         );
 
@@ -222,8 +185,7 @@ mod tests {
         let mut table_config = TableOptions::default_from_session_config(&config);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let parquet_options =
-            ParquetWriterOptions::try_from(&table_config.format.parquet)?;
+        let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
         let properties = parquet_options.writer_options();
 
         let col1 = ColumnPath::from(vec!["col1".to_owned()]);
@@ -313,20 +275,20 @@ mod tests {
     // for StatementOptions
     fn test_writeroptions_csv_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
-        option_map.insert("format.csv.has_header".to_owned(), "true".to_owned());
-        option_map.insert("format.csv.date_format".to_owned(), "123".to_owned());
-        option_map.insert("format.csv.datetime_format".to_owned(), "123".to_owned());
-        option_map.insert("format.csv.timestamp_format".to_owned(), "2.0".to_owned());
-        option_map.insert("format.csv.time_format".to_owned(), "123".to_owned());
-        option_map.insert("format.csv.null_value".to_owned(), "123".to_owned());
-        option_map.insert("format.csv.compression".to_owned(), "gzip".to_owned());
-        option_map.insert("format.csv.delimiter".to_owned(), ";".to_owned());
+        option_map.insert("csv.has_header".to_owned(), "true".to_owned());
+        option_map.insert("csv.date_format".to_owned(), "123".to_owned());
+        option_map.insert("csv.datetime_format".to_owned(), "123".to_owned());
+        option_map.insert("csv.timestamp_format".to_owned(), "2.0".to_owned());
+        option_map.insert("csv.time_format".to_owned(), "123".to_owned());
+        option_map.insert("csv.null_value".to_owned(), "123".to_owned());
+        option_map.insert("csv.compression".to_owned(), "gzip".to_owned());
+        option_map.insert("csv.delimiter".to_owned(), ";".to_owned());
 
         let config = ConfigOptions::new();
         let mut table_config = TableOptions::default_from_session_config(&config);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let csv_options = CsvWriterOptions::try_from(&table_config.format.csv)?;
+        let csv_options = CsvWriterOptions::try_from(&table_config.csv)?;
 
         let builder = csv_options.writer_options;
         assert!(builder.header());
@@ -342,13 +304,13 @@ mod tests {
     // for StatementOptions
     fn test_writeroptions_json_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
-        option_map.insert("format.json.compression".to_owned(), "gzip".to_owned());
+        option_map.insert("json.compression".to_owned(), "gzip".to_owned());
 
         let config = ConfigOptions::new();
         let mut table_config = TableOptions::default_from_session_config(&config);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let json_options = JsonWriterOptions::try_from(&table_config.format.json)?;
+        let json_options = JsonWriterOptions::try_from(&table_config.json)?;
         assert_eq!(json_options.compression, CompressionTypeVariant::GZIP);
 
         Ok(())

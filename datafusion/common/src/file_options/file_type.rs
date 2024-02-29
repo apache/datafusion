@@ -106,7 +106,7 @@ impl FromStr for FileType {
 #[cfg(feature = "parquet")]
 mod tests {
     use crate::error::DataFusionError;
-    use crate::file_options::FileType;
+    use crate::FileType;
     use std::str::FromStr;
 
     #[test]

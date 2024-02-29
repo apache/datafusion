@@ -613,14 +613,12 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                file_format,
                 format_options,
                 source_option_tuples,
                 partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                file_format: file_format.clone(),
                 format_options: format_options.clone(),
                 source_option_tuples: source_option_tuples.clone(),
                 partition_by: partition_by.clone(),
@@ -1552,7 +1550,7 @@ impl LogicalPlan {
                     LogicalPlan::Copy(CopyTo {
                         input: _,
                         output_url,
-                        file_format,
+                        format_options,
                         source_option_tuples,
                         ..
                     }) => {
@@ -1561,7 +1559,8 @@ impl LogicalPlan {
                             .map(|(k, v)| format!("{k} {v}"))
                             .collect::<Vec<String>>()
                             .join(", ");
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} options: ({op_str})")
+
+                        write!(f, "CopyTo: format={format_options} output_url={output_url} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
