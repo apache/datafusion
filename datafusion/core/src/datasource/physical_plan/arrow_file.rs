@@ -20,6 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::FileGroupPartitioner;
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
@@ -34,13 +36,12 @@ use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
-
-use super::FileGroupPartitioner;
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
@@ -52,6 +53,7 @@ pub struct ArrowExec {
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
 }
 
 impl ArrowExec {
@@ -59,18 +61,52 @@ impl ArrowExec {
     pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = Self::compute_properties(
+            projected_schema.clone(),
+            &projected_output_ordering,
+            &base_config,
+        );
         Self {
             base_config,
             projected_schema,
             projected_statistics,
             projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
     }
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        projected_output_ordering: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties =
+            EquivalenceProperties::new_with_orderings(schema, projected_output_ordering);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            ExecutionMode::Bounded,                             // Execution Mode
+        )
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
     }
 }
 
@@ -90,25 +126,8 @@ impl ExecutionPlan for ArrowExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -133,12 +152,14 @@ impl ExecutionPlan for ArrowExec {
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_preserve_order_within_groups(
+                self.properties().output_ordering().is_some(),
+            )
             .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
             return Ok(Some(Arc::new(new_plan)));
         }
         Ok(None)

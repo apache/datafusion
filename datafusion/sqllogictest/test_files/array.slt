@@ -5544,13 +5544,15 @@ select range(5),
 ----
 [0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4]
 
-query ???
+query ?????
 select generate_series(5),
        generate_series(2, 5),
-       generate_series(2, 10, 3)
+       generate_series(2, 10, 3),
+       generate_series(1, 5, 1),
+       generate_series(5, 1, -1)      
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8]
+[0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1]
 
 ## array_except
 

@@ -23,11 +23,12 @@ use arrow::array::{
     StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
+use datafusion_common::cast::{
+    as_int64_array, as_large_list_array, as_list_array, as_string_array,
+};
 use datafusion_common::{exec_err, DataFusionError};
 use std::any::type_name;
 use std::sync::Arc;
-
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -251,4 +252,70 @@ pub(super) fn array_to_string(args: &[ArrayRef]) -> datafusion_common::Result<Ar
     };
 
     Ok(Arc::new(string_arr))
+}
+
+use arrow::array::ListArray;
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::Field;
+/// Generates an array of integers from start to stop with a given step.
+///
+/// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
+/// It returns a `Result<ArrayRef>` representing the resulting ListArray after the operation.
+///
+/// # Arguments
+///
+/// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+///
+/// # Examples
+///
+/// gen_range(3) => [0, 1, 2]
+/// gen_range(1, 4) => [1, 2, 3]
+/// gen_range(1, 7, 2) => [1, 3, 5]
+pub fn gen_range(
+    args: &[ArrayRef],
+    include_upper: i64,
+) -> datafusion_common::Result<ArrayRef> {
+    let (start_array, stop_array, step_array) = match args.len() {
+        1 => (None, as_int64_array(&args[0])?, None),
+        2 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
+            None,
+        ),
+        3 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
+            Some(as_int64_array(&args[2])?),
+        ),
+        _ => return exec_err!("gen_range expects 1 to 3 arguments"),
+    };
+
+    let mut values = vec![];
+    let mut offsets = vec![0];
+    for (idx, stop) in stop_array.iter().enumerate() {
+        let mut stop = stop.unwrap_or(0);
+        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        if step == 0 {
+            return exec_err!("step can't be 0 for function range(start [, stop, step]");
+        }
+        if step < 0 {
+            // Decreasing range
+            stop -= include_upper;
+            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
+        } else {
+            // Increasing range
+            stop += include_upper;
+            values.extend((start..stop).step_by(step as usize));
+        }
+
+        offsets.push(values.len() as i32);
+    }
+    let arr = Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(Int64Array::from(values)),
+        None,
+    )?);
+    Ok(arr)
 }

@@ -54,8 +54,8 @@ use datafusion_physical_expr::{
     PhysicalExprRef, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -427,31 +427,27 @@ where
     let join_key_pairs = extract_join_keys(on);
     let eq_properties = join_plan.plan.equivalence_properties();
 
-    if let Some((
+    let (
         JoinKeyPairs {
             left_keys,
             right_keys,
         },
-        new_positions,
-    )) = try_reorder(join_key_pairs.clone(), parent_required, &eq_properties)
-    {
-        if !new_positions.is_empty() {
+        positions,
+    ) = try_reorder(join_key_pairs, parent_required, eq_properties);
+
+    if let Some(positions) = positions {
+        if !positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
             let new_sort_options = (0..sort_options.len())
-                .map(|idx| sort_options[new_positions[idx]])
+                .map(|idx| sort_options[positions[idx]])
                 .collect();
             join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
-        let mut requirements = join_plan;
-        requirements.children[0].data = left_keys;
-        requirements.children[1].data = right_keys;
-        Ok(requirements)
-    } else {
-        let mut requirements = join_plan;
-        requirements.children[0].data = join_key_pairs.left_keys;
-        requirements.children[1].data = join_key_pairs.right_keys;
-        Ok(requirements)
     }
+
+    join_plan.children[0].data = left_keys;
+    join_plan.children[1].data = right_keys;
+    Ok(join_plan)
 }
 
 fn reorder_aggregate_keys(
@@ -605,32 +601,28 @@ pub(crate) fn reorder_join_keys_to_inputs(
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
         if matches!(mode, PartitionMode::Partitioned) {
-            let join_key_pairs = extract_join_keys(on);
-            if let Some((
-                JoinKeyPairs {
-                    left_keys,
-                    right_keys,
-                },
-                new_positions,
-            )) = reorder_current_join_keys(
-                join_key_pairs,
+            let (join_keys, positions) = reorder_current_join_keys(
+                extract_join_keys(on),
                 Some(left.output_partitioning()),
                 Some(right.output_partitioning()),
-                &left.equivalence_properties(),
-                &right.equivalence_properties(),
-            ) {
-                if !new_positions.is_empty() {
-                    let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                    return Ok(Arc::new(HashJoinExec::try_new(
-                        left.clone(),
-                        right.clone(),
-                        new_join_on,
-                        filter.clone(),
-                        join_type,
-                        PartitionMode::Partitioned,
-                        *null_equals_null,
-                    )?));
-                }
+                left.equivalence_properties(),
+                right.equivalence_properties(),
+            );
+            if positions.map_or(false, |idxs| !idxs.is_empty()) {
+                let JoinKeyPairs {
+                    left_keys,
+                    right_keys,
+                } = join_keys;
+                let new_join_on = new_join_conditions(&left_keys, &right_keys);
+                return Ok(Arc::new(HashJoinExec::try_new(
+                    left.clone(),
+                    right.clone(),
+                    new_join_on,
+                    filter.clone(),
+                    join_type,
+                    PartitionMode::Partitioned,
+                    *null_equals_null,
+                )?));
             }
         }
     } else if let Some(SortMergeJoinExec {
@@ -644,24 +636,22 @@ pub(crate) fn reorder_join_keys_to_inputs(
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
-        let join_key_pairs = extract_join_keys(on);
-        if let Some((
-            JoinKeyPairs {
-                left_keys,
-                right_keys,
-            },
-            new_positions,
-        )) = reorder_current_join_keys(
-            join_key_pairs,
+        let (join_keys, positions) = reorder_current_join_keys(
+            extract_join_keys(on),
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &left.equivalence_properties(),
-            &right.equivalence_properties(),
-        ) {
-            if !new_positions.is_empty() {
+            left.equivalence_properties(),
+            right.equivalence_properties(),
+        );
+        if let Some(positions) = positions {
+            if !positions.is_empty() {
+                let JoinKeyPairs {
+                    left_keys,
+                    right_keys,
+                } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
                 let new_sort_options = (0..sort_options.len())
-                    .map(|idx| sort_options[new_positions[idx]])
+                    .map(|idx| sort_options[positions[idx]])
                     .collect();
                 return SortMergeJoinExec::try_new(
                     left.clone(),
@@ -682,28 +672,28 @@ pub(crate) fn reorder_join_keys_to_inputs(
 /// Reorder the current join keys ordering based on either left partition or right partition
 fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
-    left_partition: Option<Partitioning>,
-    right_partition: Option<Partitioning>,
+    left_partition: Option<&Partitioning>,
+    right_partition: Option<&Partitioning>,
     left_equivalence_properties: &EquivalenceProperties,
     right_equivalence_properties: &EquivalenceProperties,
-) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    match (left_partition, right_partition.clone()) {
+) -> (JoinKeyPairs, Option<Vec<usize>>) {
+    match (left_partition, right_partition) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
-            try_reorder(join_keys.clone(), &left_exprs, left_equivalence_properties)
-                .or_else(|| {
-                    reorder_current_join_keys(
-                        join_keys,
-                        None,
-                        right_partition,
-                        left_equivalence_properties,
-                        right_equivalence_properties,
-                    )
-                })
+            match try_reorder(join_keys, left_exprs, left_equivalence_properties) {
+                (join_keys, None) => reorder_current_join_keys(
+                    join_keys,
+                    None,
+                    right_partition,
+                    left_equivalence_properties,
+                    right_equivalence_properties,
+                ),
+                result => result,
+            }
         }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
-            try_reorder(join_keys, &right_exprs, right_equivalence_properties)
+            try_reorder(join_keys, right_exprs, right_equivalence_properties)
         }
-        _ => None,
+        _ => (join_keys, None),
     }
 }
 
@@ -711,66 +701,65 @@ fn try_reorder(
     join_keys: JoinKeyPairs,
     expected: &[Arc<dyn PhysicalExpr>],
     equivalence_properties: &EquivalenceProperties,
-) -> Option<(JoinKeyPairs, Vec<usize>)> {
+) -> (JoinKeyPairs, Option<Vec<usize>>) {
     let eq_groups = equivalence_properties.eq_group();
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
     if join_keys.left_keys.len() != expected.len() {
-        return None;
+        return (join_keys, None);
     }
     if physical_exprs_equal(expected, &join_keys.left_keys)
         || physical_exprs_equal(expected, &join_keys.right_keys)
     {
-        return Some((join_keys, vec![]));
+        return (join_keys, Some(vec![]));
     } else if !equivalence_properties.eq_group().is_empty() {
         normalized_expected = expected
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
         if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
             || physical_exprs_equal(&normalized_expected, &normalized_right_keys)
         {
-            return Some((join_keys, vec![]));
+            return (join_keys, Some(vec![]));
         }
     }
 
-    let new_positions = expected_expr_positions(&join_keys.left_keys, expected)
+    let Some(positions) = expected_expr_positions(&join_keys.left_keys, expected)
         .or_else(|| expected_expr_positions(&join_keys.right_keys, expected))
         .or_else(|| expected_expr_positions(&normalized_left_keys, &normalized_expected))
         .or_else(|| {
             expected_expr_positions(&normalized_right_keys, &normalized_expected)
-        });
+        })
+    else {
+        return (join_keys, None);
+    };
 
-    new_positions.map(|positions| {
-        let mut new_left_keys = vec![];
-        let mut new_right_keys = vec![];
-        for pos in positions.iter() {
-            new_left_keys.push(join_keys.left_keys[*pos].clone());
-            new_right_keys.push(join_keys.right_keys[*pos].clone());
-        }
-        let pairs = JoinKeyPairs {
-            left_keys: new_left_keys,
-            right_keys: new_right_keys,
-        };
-        (pairs, positions)
-    })
+    let mut new_left_keys = vec![];
+    let mut new_right_keys = vec![];
+    for pos in positions.iter() {
+        new_left_keys.push(join_keys.left_keys[*pos].clone());
+        new_right_keys.push(join_keys.right_keys[*pos].clone());
+    }
+    let pairs = JoinKeyPairs {
+        left_keys: new_left_keys,
+        right_keys: new_right_keys,
+    };
+
+    (pairs, Some(positions))
 }
 
 /// Return the expected expressions positions.
@@ -883,12 +872,11 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
+    let dist = Distribution::HashPartitioned(hash_exprs);
     let satisfied = input
         .plan
         .output_partitioning()
-        .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
-            input.plan.equivalence_properties()
-        });
+        .satisfy(&dist, input.plan.equivalence_properties());
 
     // Add hash repartitioning when:
     // - The hash distribution requirement is not satisfied, or
@@ -901,7 +889,7 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        let partitioning = Partitioning::Hash(hash_exprs, n_target);
+        let partitioning = dist.create_partitioning(n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
         let plan = Arc::new(repartition) as _;
@@ -1077,7 +1065,7 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
-    let is_unbounded = unbounded_output(&dist_context.plan);
+    let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
@@ -1312,8 +1300,7 @@ pub(crate) mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::ParquetExec;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::{
@@ -1344,6 +1331,7 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, expressions::Column,
         LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
+    use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
@@ -1351,22 +1339,34 @@ pub(crate) mod tests {
     struct SortRequiredExec {
         input: Arc<dyn ExecutionPlan>,
         expr: LexOrdering,
+        cache: PlanProperties,
     }
 
     impl SortRequiredExec {
         fn new(input: Arc<dyn ExecutionPlan>) -> Self {
             let expr = input.output_ordering().unwrap_or(&[]).to_vec();
-            Self { input, expr }
+            Self::new_with_requirement(input, expr)
         }
 
         fn new_with_requirement(
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
         ) -> Self {
+            let cache = Self::compute_properties(&input);
             Self {
                 input,
                 expr: requirement,
+                cache,
             }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+            PlanProperties::new(
+                input.equivalence_properties().clone(), // Equivalence Properties
+                input.output_partitioning().clone(),    // Output Partitioning
+                input.execution_mode(),                 // Execution Mode
+            )
         }
     }
 
@@ -1389,20 +1389,12 @@ pub(crate) mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.input.schema()
-        }
-
-        fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
-            self.input.output_partitioning()
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
         }
 
         fn benefits_from_input_partitioning(&self) -> Vec<bool> {
             vec![false]
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            self.input.output_ordering()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -1412,6 +1404,7 @@ pub(crate) mod tests {
         // model that it requires the output ordering of its input
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
             vec![self
+                .properties()
                 .output_ordering()
                 .map(PhysicalSortRequirement::from_sort_exprs)]
         }

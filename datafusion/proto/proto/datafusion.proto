@@ -667,7 +667,7 @@ enum ScalarFunction {
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Range = 122;
+  /// 122 is Range
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;

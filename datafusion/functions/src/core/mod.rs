@@ -32,4 +32,3 @@ export_functions!(
     (nvl, arg_1 arg_2, "returns value2 if value1 is NULL; otherwise it returns value1"),
     (nvl2, arg_1 arg_2 arg_3, "Returns value2 if value1 is not NULL; otherwise, it returns value3.")
 );
-

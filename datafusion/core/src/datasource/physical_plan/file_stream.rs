@@ -28,9 +28,8 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    FileMeta, FileScanConfig, PartitionColumnProjector,
-};
+use crate::datasource::physical_plan::file_scan_config::PartitionColumnProjector;
+use crate::datasource::physical_plan::{FileMeta, FileScanConfig};
 use crate::error::Result;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
