@@ -267,7 +267,8 @@ fn test_expression_serialization_roundtrip() {
         let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
 
         let proto = LogicalExprNode::try_from(&expr).unwrap();
-        let deserialize = parse_expr(&proto, &ctx).unwrap();
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        let deserialize = parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
         let serialize_name = extract_function_name(&expr);
         let deserialize_name = extract_function_name(&deserialize);

@@ -76,6 +76,8 @@ use datafusion_expr::{
     expr::{Alias, Placeholder},
 };
 
+use super::LogicalExtensionCodec;
+
 #[derive(Debug)]
 pub enum Error {
     General(String),
@@ -985,6 +987,7 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
+    codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
     use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
 
@@ -999,7 +1002,7 @@ pub fn parse_expr(
             let operands = binary_expr
                 .operands
                 .iter()
-                .map(|expr| parse_expr(expr, registry))
+                .map(|expr| parse_expr(expr, registry, codec))
                 .collect::<Result<Vec<_>, _>>()?;
 
             if operands.len() < 2 {
@@ -1079,7 +1082,7 @@ pub fn parse_expr(
             let partition_by = expr
                 .partition_by
                 .iter()
-                .map(|e| parse_expr(e, registry))
+                .map(|e| parse_expr(e, registry, codec))
                 .collect::<Result<Vec<_>, _>>()?;
             let mut order_by = expr
                 .order_by
@@ -1830,8 +1833,15 @@ pub fn parse_expr(
                 }
             }
         }
-        ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
-            let scalar_fn = registry.udf(fun_name.as_str())?;
+        ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let scalar_fn = match fun_definition {
+                Some(buf) => codec.try_decode_udf(&fun_name, &buf)?,
+                None => registry.udf(fun_name.as_str())?,
+            };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 args.iter()

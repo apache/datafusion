@@ -749,6 +749,7 @@ message AggregateUDFExprNode {
 message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
 }
 
 enum BuiltInWindowFunction {
