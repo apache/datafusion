@@ -44,8 +44,8 @@ pub mod expr_fn {
     pub use super::udf::array_concat;
     pub use super::udf::array_prepend;
     pub use super::udf::array_to_string;
-    pub use super::udf::make_array;
     pub use super::udf::gen_series;
+    pub use super::udf::make_array;
     pub use super::udf::range;
 }
 
