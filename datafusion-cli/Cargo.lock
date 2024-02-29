@@ -1249,6 +1249,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-optimizer",
  "log",
  "paste",
 ]
@@ -1262,7 +1263,6 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-functions-array",
  "datafusion-physical-expr",
  "hashbrown 0.14.3",
  "itertools",
@@ -1341,7 +1341,6 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
- "datafusion-functions-array",
  "log",
  "sqlparser",
 ]

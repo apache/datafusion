@@ -47,6 +47,7 @@ use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+#[cfg(feature = "array_expressions")]
 use datafusion_functions_array::optimizer::analyzer::rewrite_expr::OperatorToFunction;
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -106,11 +107,13 @@ use url::Url;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+#[cfg(feature = "array_expressions")]
+use datafusion_optimizer::analyzer::{
+    count_wildcard_rule::CountWildcardRule, inline_table_scan::InlineTableScan,
+    type_coercion::TypeCoercion,
+};
 use datafusion_optimizer::{
-    analyzer::{
-        count_wildcard_rule::CountWildcardRule, inline_table_scan::InlineTableScan,
-        type_coercion::TypeCoercion, Analyzer, AnalyzerRule,
-    },
+    analyzer::{Analyzer, AnalyzerRule},
     OptimizerConfig,
 };
 use datafusion_sql::planner::object_name_to_table_reference;
