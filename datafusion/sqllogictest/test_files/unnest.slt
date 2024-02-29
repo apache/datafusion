@@ -27,7 +27,7 @@ AS VALUES
     ([6], [11,12], 3),
     ([12], [null, 42, null], null),
     -- null array to verify the `preserve_nulls` option
-    (null, null, null)
+    (null, null, 4)
 ;
 
 ## Basic unnest expression in select list
@@ -241,7 +241,7 @@ select * from unnest([1,2,(select sum(column3) from unnest_table)]);
 ----
 1
 2
-6
+10
 
 statement ok
 drop table unnest_table;
