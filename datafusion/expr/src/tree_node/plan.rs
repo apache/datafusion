@@ -62,10 +62,20 @@ impl TreeNode for LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
-        handle_visit_recursion_down!(visitor.f_down(self)?);
-        self.visit_subqueries(visitor)?;
-        handle_visit_recursion_up!(self.apply_children(&mut |n| n.visit(visitor))?);
-        visitor.f_up(self)
+        match visitor.f_down(self)? {
+            TreeNodeRecursion::Continue => {
+                self.visit_subqueries(visitor)?;
+                handle_visit_recursion_up!(
+                    self.apply_children(&mut |n| n.visit(visitor))?
+                );
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Jump => {
+                self.visit_subqueries(visitor)?;
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Stop => Ok(TreeNodeRecursion::Stop),
+        }
     }
 
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -85,28 +95,18 @@ impl TreeNode for LogicalPlan {
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
         let old_children = self.inputs();
-        let t = old_children
+        let new_children = old_children
             .iter()
             .map(|&c| c.clone())
-            .map_till_continue_and_collect(f)?;
-        // TODO: Currently `assert_eq!(t.transformed, t2)` fails as
-        //  `t.transformed` quality comes from if the transformation closures fill the
-        //   field correctly.
-        //  Once we trust `t.transformed` we can remove the additional check in
-        //  `t2`.
-        let t2 = old_children
-            .into_iter()
-            .zip(t.data.iter())
-            .any(|(c1, c2)| c1 != c2);
-
-        // Propagate up `t.transformed` and `t.tnr` along with the node containing
-        // transformed children.
-        if t2 {
-            t.flat_map_data(|new_children| {
+            .map_until_stop_and_collect(f)?;
+        // Propagate up `new_children.transformed` and `new_children.tnr`
+        // along with the node containing transformed children.
+        if new_children.transformed {
+            new_children.map_data(|new_children| {
                 self.with_new_exprs(self.expressions(), new_children)
             })
         } else {
-            Ok(t.map_data(|_| self))
+            Ok(new_children.update_data(|_| self))
         }
     }
 }

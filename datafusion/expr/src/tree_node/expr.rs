@@ -160,21 +160,22 @@ impl TreeNode for Expr {
                 expr,
                 relation,
                 name,
-            }) => f(*expr)?.map_data(|e| Expr::Alias(Alias::new(e, relation, name))),
+            }) => f(*expr)?.update_data(|e| Expr::Alias(Alias::new(e, relation, name))),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            }) => transform_box(expr, &mut f)?
-                .map_data(|be| Expr::InSubquery(InSubquery::new(be, subquery, negated))),
+            }) => transform_box(expr, &mut f)?.update_data(|be| {
+                Expr::InSubquery(InSubquery::new(be, subquery, negated))
+            }),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 transform_box(left, &mut f)?
-                    .map_data(|new_left| (new_left, right))
-                    .and_then_transform(|(new_left, right)| {
+                    .update_data(|new_left| (new_left, right))
+                    .try_transform_node(|(new_left, right)| {
                         Ok(transform_box(right, &mut f)?
-                            .map_data(|new_right| (new_left, new_right)))
+                            .update_data(|new_right| (new_left, new_right)))
                     })?
-                    .map_data(|(new_left, new_right)| {
+                    .update_data(|(new_left, new_right)| {
                         Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
                     })
             }
@@ -185,12 +186,12 @@ impl TreeNode for Expr {
                 escape_char,
                 case_insensitive,
             }) => transform_box(expr, &mut f)?
-                .map_data(|new_expr| (new_expr, pattern))
-                .and_then_transform(|(new_expr, pattern)| {
+                .update_data(|new_expr| (new_expr, pattern))
+                .try_transform_node(|(new_expr, pattern)| {
                     Ok(transform_box(pattern, &mut f)?
-                        .map_data(|new_pattern| (new_expr, new_pattern)))
+                        .update_data(|new_pattern| (new_expr, new_pattern)))
                 })?
-                .map_data(|(new_expr, new_pattern)| {
+                .update_data(|(new_expr, new_pattern)| {
                     Expr::Like(Like::new(
                         negated,
                         new_expr,
@@ -206,12 +207,12 @@ impl TreeNode for Expr {
                 escape_char,
                 case_insensitive,
             }) => transform_box(expr, &mut f)?
-                .map_data(|new_expr| (new_expr, pattern))
-                .and_then_transform(|(new_expr, pattern)| {
+                .update_data(|new_expr| (new_expr, pattern))
+                .try_transform_node(|(new_expr, pattern)| {
                     Ok(transform_box(pattern, &mut f)?
-                        .map_data(|new_pattern| (new_expr, new_pattern)))
+                        .update_data(|new_pattern| (new_expr, new_pattern)))
                 })?
-                .map_data(|(new_expr, new_pattern)| {
+                .update_data(|(new_expr, new_pattern)| {
                     Expr::SimilarTo(Like::new(
                         negated,
                         new_expr,
@@ -220,42 +221,46 @@ impl TreeNode for Expr {
                         case_insensitive,
                     ))
                 }),
-            Expr::Not(expr) => transform_box(expr, &mut f)?.map_data(Expr::Not),
+            Expr::Not(expr) => transform_box(expr, &mut f)?.update_data(Expr::Not),
             Expr::IsNotNull(expr) => {
-                transform_box(expr, &mut f)?.map_data(Expr::IsNotNull)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotNull)
             }
-            Expr::IsNull(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsNull),
-            Expr::IsTrue(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsTrue),
-            Expr::IsFalse(expr) => transform_box(expr, &mut f)?.map_data(Expr::IsFalse),
+            Expr::IsNull(expr) => transform_box(expr, &mut f)?.update_data(Expr::IsNull),
+            Expr::IsTrue(expr) => transform_box(expr, &mut f)?.update_data(Expr::IsTrue),
+            Expr::IsFalse(expr) => {
+                transform_box(expr, &mut f)?.update_data(Expr::IsFalse)
+            }
             Expr::IsUnknown(expr) => {
-                transform_box(expr, &mut f)?.map_data(Expr::IsUnknown)
+                transform_box(expr, &mut f)?.update_data(Expr::IsUnknown)
             }
             Expr::IsNotTrue(expr) => {
-                transform_box(expr, &mut f)?.map_data(Expr::IsNotTrue)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotTrue)
             }
             Expr::IsNotFalse(expr) => {
-                transform_box(expr, &mut f)?.map_data(Expr::IsNotFalse)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotFalse)
             }
             Expr::IsNotUnknown(expr) => {
-                transform_box(expr, &mut f)?.map_data(Expr::IsNotUnknown)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotUnknown)
             }
-            Expr::Negative(expr) => transform_box(expr, &mut f)?.map_data(Expr::Negative),
+            Expr::Negative(expr) => {
+                transform_box(expr, &mut f)?.update_data(Expr::Negative)
+            }
             Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
             }) => transform_box(expr, &mut f)?
-                .map_data(|new_expr| (new_expr, low, high))
-                .and_then_transform(|(new_expr, low, high)| {
+                .update_data(|new_expr| (new_expr, low, high))
+                .try_transform_node(|(new_expr, low, high)| {
                     Ok(transform_box(low, &mut f)?
-                        .map_data(|new_low| (new_expr, new_low, high)))
+                        .update_data(|new_low| (new_expr, new_low, high)))
                 })?
-                .and_then_transform(|(new_expr, new_low, high)| {
+                .try_transform_node(|(new_expr, new_low, high)| {
                     Ok(transform_box(high, &mut f)?
-                        .map_data(|new_high| (new_expr, new_low, new_high)))
+                        .update_data(|new_high| (new_expr, new_low, new_high)))
                 })?
-                .map_data(|(new_expr, new_low, new_high)| {
+                .update_data(|(new_expr, new_low, new_high)| {
                     Expr::Between(Between::new(new_expr, negated, new_low, new_high))
                 }),
             Expr::Case(Case {
@@ -263,42 +268,42 @@ impl TreeNode for Expr {
                 when_then_expr,
                 else_expr,
             }) => transform_option_box(expr, &mut f)?
-                .map_data(|new_expr| (new_expr, when_then_expr, else_expr))
-                .and_then_transform(|(new_expr, when_then_expr, else_expr)| {
+                .update_data(|new_expr| (new_expr, when_then_expr, else_expr))
+                .try_transform_node(|(new_expr, when_then_expr, else_expr)| {
                     Ok(when_then_expr
                         .into_iter()
-                        .map_till_continue_and_collect(|(when, then)| {
+                        .map_until_stop_and_collect(|(when, then)| {
                             transform_box(when, &mut f)?
-                                .map_data(|new_when| (new_when, then))
-                                .and_then_transform(|(new_when, then)| {
+                                .update_data(|new_when| (new_when, then))
+                                .try_transform_node(|(new_when, then)| {
                                     Ok(transform_box(then, &mut f)?
-                                        .map_data(|new_then| (new_when, new_then)))
+                                        .update_data(|new_then| (new_when, new_then)))
                                 })
                         })?
-                        .map_data(|new_when_then_expr| {
+                        .update_data(|new_when_then_expr| {
                             (new_expr, new_when_then_expr, else_expr)
                         }))
                 })?
-                .and_then_transform(|(new_expr, new_when_then_expr, else_expr)| {
-                    Ok(transform_option_box(else_expr, &mut f)?.map_data(
+                .try_transform_node(|(new_expr, new_when_then_expr, else_expr)| {
+                    Ok(transform_option_box(else_expr, &mut f)?.update_data(
                         |new_else_expr| (new_expr, new_when_then_expr, new_else_expr),
                     ))
                 })?
-                .map_data(|(new_expr, new_when_then_expr, new_else_expr)| {
+                .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                     Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
             Expr::Cast(Cast { expr, data_type }) => transform_box(expr, &mut f)?
-                .map_data(|be| Expr::Cast(Cast::new(be, data_type))),
+                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
             Expr::TryCast(TryCast { expr, data_type }) => transform_box(expr, &mut f)?
-                .map_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
+                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
             Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
             }) => transform_box(expr, &mut f)?
-                .map_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
+                .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                transform_vec(args, &mut f)?.flat_map_data(|new_args| match func_def {
+                transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
                     ScalarFunctionDefinition::BuiltIn(fun) => {
                         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
                     }
@@ -318,18 +323,20 @@ impl TreeNode for Expr {
                 window_frame,
                 null_treatment,
             }) => transform_vec(args, &mut f)?
-                .map_data(|new_args| (new_args, partition_by, order_by))
-                .and_then_transform(|(new_args, partition_by, order_by)| {
-                    Ok(transform_vec(partition_by, &mut f)?.map_data(
+                .update_data(|new_args| (new_args, partition_by, order_by))
+                .try_transform_node(|(new_args, partition_by, order_by)| {
+                    Ok(transform_vec(partition_by, &mut f)?.update_data(
                         |new_partition_by| (new_args, new_partition_by, order_by),
                     ))
                 })?
-                .and_then_transform(|(new_args, new_partition_by, order_by)| {
-                    Ok(transform_vec(order_by, &mut f)?.map_data(|new_order_by| {
-                        (new_args, new_partition_by, new_order_by)
-                    }))
+                .try_transform_node(|(new_args, new_partition_by, order_by)| {
+                    Ok(
+                        transform_vec(order_by, &mut f)?.update_data(|new_order_by| {
+                            (new_args, new_partition_by, new_order_by)
+                        }),
+                    )
                 })?
-                .map_data(|(new_args, new_partition_by, new_order_by)| {
+                .update_data(|(new_args, new_partition_by, new_order_by)| {
                     Expr::WindowFunction(WindowFunction::new(
                         fun,
                         new_args,
@@ -346,16 +353,16 @@ impl TreeNode for Expr {
                 filter,
                 order_by,
             }) => transform_vec(args, &mut f)?
-                .map_data(|new_args| (new_args, filter, order_by))
-                .and_then_transform(|(new_args, filter, order_by)| {
+                .update_data(|new_args| (new_args, filter, order_by))
+                .try_transform_node(|(new_args, filter, order_by)| {
                     Ok(transform_option_box(filter, &mut f)?
-                        .map_data(|new_filter| (new_args, new_filter, order_by)))
+                        .update_data(|new_filter| (new_args, new_filter, order_by)))
                 })?
-                .and_then_transform(|(new_args, new_filter, order_by)| {
+                .try_transform_node(|(new_args, new_filter, order_by)| {
                     Ok(transform_option_vec(order_by, &mut f)?
-                        .map_data(|new_order_by| (new_args, new_filter, new_order_by)))
+                        .update_data(|new_order_by| (new_args, new_filter, new_order_by)))
                 })?
-                .flat_map_data(|(new_args, new_filter, new_order_by)| match func_def {
+                .map_data(|(new_args, new_filter, new_order_by)| match func_def {
                     AggregateFunctionDefinition::BuiltIn(fun) => {
                         Ok(Expr::AggregateFunction(AggregateFunction::new(
                             fun,
@@ -380,13 +387,13 @@ impl TreeNode for Expr {
                 })?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => transform_vec(exprs, &mut f)?
-                    .map_data(|ve| Expr::GroupingSet(GroupingSet::Rollup(ve))),
+                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Rollup(ve))),
                 GroupingSet::Cube(exprs) => transform_vec(exprs, &mut f)?
-                    .map_data(|ve| Expr::GroupingSet(GroupingSet::Cube(ve))),
+                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Cube(ve))),
                 GroupingSet::GroupingSets(lists_of_exprs) => lists_of_exprs
                     .into_iter()
-                    .map_till_continue_and_collect(|exprs| transform_vec(exprs, &mut f))?
-                    .map_data(|new_lists_of_exprs| {
+                    .map_until_stop_and_collect(|exprs| transform_vec(exprs, &mut f))?
+                    .update_data(|new_lists_of_exprs| {
                         Expr::GroupingSet(GroupingSet::GroupingSets(new_lists_of_exprs))
                     }),
             },
@@ -395,17 +402,18 @@ impl TreeNode for Expr {
                 list,
                 negated,
             }) => transform_box(expr, &mut f)?
-                .map_data(|new_expr| (new_expr, list))
-                .and_then_transform(|(new_expr, list)| {
+                .update_data(|new_expr| (new_expr, list))
+                .try_transform_node(|(new_expr, list)| {
                     Ok(transform_vec(list, &mut f)?
-                        .map_data(|new_list| (new_expr, new_list)))
+                        .update_data(|new_list| (new_expr, new_list)))
                 })?
-                .map_data(|(new_expr, new_list)| {
+                .update_data(|(new_expr, new_list)| {
                     Expr::InList(InList::new(new_expr, new_list, negated))
                 }),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                transform_box(expr, &mut f)?
-                    .map_data(|be| Expr::GetIndexedField(GetIndexedField::new(be, field)))
+                transform_box(expr, &mut f)?.update_data(|be| {
+                    Expr::GetIndexedField(GetIndexedField::new(be, field))
+                })
             }
         })
     }
@@ -415,7 +423,7 @@ fn transform_box<F>(be: Box<Expr>, f: &mut F) -> Result<Transformed<Box<Expr>>>
 where
     F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    Ok(f(*be)?.map_data(Box::new))
+    Ok(f(*be)?.update_data(Box::new))
 }
 
 fn transform_option_box<F>(
@@ -426,7 +434,7 @@ where
     F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
     obe.map_or(Ok(Transformed::no(None)), |be| {
-        Ok(transform_box(be, f)?.map_data(Some))
+        Ok(transform_box(be, f)?.update_data(Some))
     })
 }
 
@@ -439,7 +447,7 @@ where
     F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
     ove.map_or(Ok(Transformed::no(None)), |ve| {
-        Ok(transform_vec(ve, f)?.map_data(Some))
+        Ok(transform_vec(ve, f)?.update_data(Some))
     })
 }
 
@@ -448,5 +456,5 @@ fn transform_vec<F>(ve: Vec<Expr>, f: &mut F) -> Result<Transformed<Vec<Expr>>>
 where
     F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    ve.into_iter().map_till_continue_and_collect(f)
+    ve.into_iter().map_until_stop_and_collect(f)
 }

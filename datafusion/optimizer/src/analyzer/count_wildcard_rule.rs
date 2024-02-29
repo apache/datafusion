@@ -174,7 +174,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 .as_ref()
                 .clone()
                 .transform_down(&analyze_internal)?
-                .map_data(|new_plan| {
+                .update_data(|new_plan| {
                     ScalarSubquery(Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns,
@@ -189,7 +189,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 .as_ref()
                 .clone()
                 .transform_down(&analyze_internal)?
-                .map_data(|new_plan| {
+                .update_data(|new_plan| {
                     Expr::InSubquery(InSubquery::new(
                         expr,
                         Subquery {
@@ -204,7 +204,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 .as_ref()
                 .clone()
                 .transform_down(&analyze_internal)?
-                .map_data(|new_plan| {
+                .update_data(|new_plan| {
                     Expr::Exists(expr::Exists {
                         subquery: Subquery {
                             subquery: Arc::new(new_plan),

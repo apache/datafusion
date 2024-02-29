@@ -642,21 +642,20 @@ impl ExprIdentifierVisitor<'_> {
 
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> (usize, Identifier) {
+    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier)> {
         let mut desc = String::new();
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(idx) => {
-                    return (idx, desc);
+                    return Some((idx, desc));
                 }
                 VisitRecord::ExprItem(s) => {
                     desc.push_str(&s);
                 }
             }
         }
-
-        unreachable!("Enter mark should paired with node number");
+        None
     }
 }
 
@@ -680,7 +679,12 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         self.series_number += 1;
 
-        let (idx, sub_expr_desc) = self.pop_enter_mark();
+        let (idx, sub_expr_desc) =
+            if let Some((idx, sub_expr_desc)) = self.pop_enter_mark() {
+                (idx, sub_expr_desc)
+            } else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
         // skip exprs should not be recognize.
         if self.expr_mask.ignores(expr) {
             self.id_array[idx].0 = self.series_number;
