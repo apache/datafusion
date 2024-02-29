@@ -253,6 +253,14 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+
+    c.bench_function("logical_plan_tpch_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpch_sql_queries {
+                logical_plan(&ctx, sql)
+            }
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
