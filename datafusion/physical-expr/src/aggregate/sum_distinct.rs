@@ -31,7 +31,7 @@ use std::collections::HashSet;
 use crate::aggregate::sum::downcast_sum;
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
 use datafusion_expr::Accumulator;
 

@@ -36,7 +36,7 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }

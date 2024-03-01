@@ -32,11 +32,12 @@ rust-version = { workspace = true }
 # enable core functions
 core_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
-default = ["core_expressions", "encoding_expressions", "math_expressions"]
+default = ["core_expressions", "encoding_expressions", "math_expressions", "regex_expressions"]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
+regex_expressions = []
 
 [lib]
 name = "datafusion_functions"
@@ -47,8 +48,8 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 base64 = { version = "0.21", optional = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
-log = "0.4.20"
+log = { workspace = true }

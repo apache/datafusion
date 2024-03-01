@@ -23,7 +23,7 @@ use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -44,9 +44,10 @@ use std::sync::Arc;
 ///
 /// For more information, please see [the examples]:
 ///
-/// 1. For simple (less performant) use cases, use [`create_udaf`] and [`simple_udaf.rs`].
+/// 1. For simple use cases, use [`create_udaf`] (examples in [`simple_udaf.rs`]).
 ///
-/// 2. For advanced use cases, use [`AggregateUDFImpl`] and [`advanced_udaf.rs`].
+/// 2. For advanced use cases, use [`AggregateUDFImpl`] which provides full API
+/// access (examples in [`advanced_udaf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `AggregateUDFImpl` to maintain backwards

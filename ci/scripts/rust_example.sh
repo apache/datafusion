@@ -27,9 +27,6 @@ for filename in $files
 do
   example_name=`basename $filename ".rs"`
   # Skip tests that rely on external storage and flight
-  # todo: Currently, catalog.rs is placed in the external-dependence directory because there is a problem parsing
-  # the parquet file of the external parquet-test that it currently relies on.
-  # We will wait for this issue[https://github.com/apache/arrow-datafusion/issues/8041] to be resolved.
   if [ ! -d $filename ]; then
      cargo run --example $example_name
   fi

@@ -23,13 +23,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::{
-    ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    Column, DisplayFormatType, ExecutionPlan, Partitioning,
+    Column, DisplayFormatType, ExecutionPlan,
 };
 
 use arrow::compute::filter_record_batch;
@@ -44,8 +44,7 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, EquivalenceProperties, ExprBoundaries,
-    PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -63,6 +62,7 @@ pub struct FilterExec {
     metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 all rows
     default_selectivity: u8,
+    cache: PlanProperties,
 }
 
 impl FilterExec {
@@ -72,12 +72,18 @@ impl FilterExec {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
-            DataType::Boolean => Ok(Self {
-                predicate,
-                input: input.clone(),
-                metrics: ExecutionPlanMetricsSet::new(),
-                default_selectivity: 20,
-            }),
+            DataType::Boolean => {
+                let default_selectivity = 20;
+                let cache =
+                    Self::compute_properties(&input, &predicate, default_selectivity)?;
+                Ok(Self {
+                    predicate,
+                    input: input.clone(),
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    default_selectivity,
+                    cache,
+                })
+            }
             other => {
                 plan_err!("Filter predicate must return boolean values, not {other:?}")
             }
@@ -109,6 +115,80 @@ impl FilterExec {
     pub fn default_selectivity(&self) -> u8 {
         self.default_selectivity
     }
+
+    /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
+    fn statistics_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        predicate: &Arc<dyn PhysicalExpr>,
+        default_selectivity: u8,
+    ) -> Result<Statistics> {
+        let input_stats = input.statistics()?;
+        let schema = input.schema();
+        if !check_support(predicate, &schema) {
+            let selectivity = default_selectivity as f64 / 100.0;
+            let mut stats = input_stats.into_inexact();
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+            return Ok(stats);
+        }
+
+        let num_rows = input_stats.num_rows;
+        let total_byte_size = input_stats.total_byte_size;
+        let input_analysis_ctx = AnalysisContext::try_from_statistics(
+            &input.schema(),
+            &input_stats.column_statistics,
+        )?;
+
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
+
+        // Estimate (inexact) selectivity of predicate
+        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
+
+        let column_statistics = collect_new_statistics(
+            &input_stats.column_statistics,
+            analysis_ctx.boundaries,
+        );
+        Ok(Statistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+        })
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        predicate: &Arc<dyn PhysicalExpr>,
+        default_selectivity: u8,
+    ) -> Result<PlanProperties> {
+        // Combine the equal predicates with the input equivalence properties
+        // to construct the equivalence properties:
+        let stats = Self::statistics_helper(input, predicate, default_selectivity)?;
+        let mut eq_properties = input.equivalence_properties().clone();
+        let (equal_pairs, _) = collect_columns_from_predicate(predicate);
+        for (lhs, rhs) in equal_pairs {
+            let lhs_expr = Arc::new(lhs.clone()) as _;
+            let rhs_expr = Arc::new(rhs.clone()) as _;
+            eq_properties.add_equal_conditions(&lhs_expr, &rhs_expr)
+        }
+        // Add the columns that have only one viable value (singleton) after
+        // filtering to constants.
+        let constants = collect_columns(predicate)
+            .into_iter()
+            .filter(|column| stats.column_statistics[column.index()].is_singleton())
+            .map(|column| Arc::new(column) as _);
+        eq_properties = eq_properties.add_constants(constants);
+
+        Ok(PlanProperties::new(
+            eq_properties,
+            input.output_partitioning().clone(), // Output Partitioning
+            input.execution_mode(),              // Execution Mode
+        ))
+    }
 }
 
 impl DisplayAs for FilterExec {
@@ -131,53 +211,17 @@ impl ExecutionPlan for FilterExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        // The filter operator does not make any changes to the schema of its input
-        self.input.schema()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
 
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let stats = self.statistics().unwrap();
-        // Combine the equal predicates with the input equivalence properties
-        let mut result = self.input.equivalence_properties();
-        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
-        for (lhs, rhs) in equal_pairs {
-            let lhs_expr = Arc::new(lhs.clone()) as _;
-            let rhs_expr = Arc::new(rhs.clone()) as _;
-            result.add_equal_conditions(&lhs_expr, &rhs_expr)
-        }
-        // Add the columns that have only one value (singleton) after filtering to constants.
-        let constants = collect_columns(self.predicate())
-            .into_iter()
-            .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as _);
-        result.add_constants(constants)
     }
 
     fn with_new_children(
@@ -214,43 +258,7 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
-        let predicate = self.predicate();
-
-        let input_stats = self.input.statistics()?;
-        let schema = self.schema();
-        if !check_support(predicate, &schema) {
-            let selectivity = self.default_selectivity as f64 / 100.0;
-            let mut stats = input_stats.into_inexact();
-            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
-            stats.total_byte_size = stats
-                .total_byte_size
-                .with_estimated_selectivity(selectivity);
-            return Ok(stats);
-        }
-
-        let num_rows = input_stats.num_rows;
-        let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &self.input.schema(),
-            &input_stats.column_statistics,
-        )?;
-
-        let analysis_ctx = analyze(predicate, input_analysis_ctx, &self.schema())?;
-
-        // Estimate (inexact) selectivity of predicate
-        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = num_rows.with_estimated_selectivity(selectivity);
-        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
-
-        let column_statistics = collect_new_statistics(
-            &input_stats.column_statistics,
-            analysis_ctx.boundaries,
-        );
-        Ok(Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics,
-        })
+        Self::statistics_helper(&self.input, self.predicate(), self.default_selectivity)
     }
 }
 

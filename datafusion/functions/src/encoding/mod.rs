@@ -17,7 +17,6 @@
 
 mod inner;
 
-
 // create `encode` and `decode` UDFs
 make_udf_function!(inner::EncodeFunc, ENCODE, encode);
 make_udf_function!(inner::DecodeFunc, DECODE, decode);
@@ -27,4 +26,3 @@ export_functions!(
     (encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex"),
     (decode, input encoding, "decode the `input`, using the `encoding`. encoding can be base64 or hex")
 );
-

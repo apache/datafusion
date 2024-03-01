@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, DataFusionError};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use arrow::compute::kernels::zip::zip;
-use arrow::compute::is_not_null;
 use arrow::array::Array;
+use arrow::compute::is_not_null;
+use arrow::compute::kernels::zip::zip;
+use arrow::datatypes::DataType;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub(super) struct NVLFunc {
@@ -50,8 +50,9 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
 impl NVLFunc {
     pub fn new() -> Self {
         Self {
-            signature:
-            Signature::uniform(2, SUPPORTED_NVL_TYPES.to_vec(),
+            signature: Signature::uniform(
+                2,
+                SUPPORTED_NVL_TYPES.to_vec(),
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("ifnull")],
@@ -73,11 +74,7 @@ impl ScalarUDFImpl for NVLFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NVL has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(arg_types, &self.signature);
-        coerced_types.map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NVL")
-        )
+        Ok(arg_types[0].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -199,8 +196,11 @@ mod tests {
         let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
 
-        let expected =
-            Arc::new(BooleanArray::from(vec![Some(true), Some(false), Some(false)])) as ArrayRef;
+        let expected = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            Some(false),
+        ])) as ArrayRef;
 
         assert_eq!(expected.as_ref(), result.as_ref());
         Ok(())
@@ -255,7 +255,9 @@ mod tests {
         let b_null = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
 
         let result_null = nvl_func(&[a_null, b_null])?;
-        let result_null = result_null.into_array(1).expect("Failed to convert to array");
+        let result_null = result_null
+            .into_array(1)
+            .expect("Failed to convert to array");
 
         let expected_null = Arc::new(Int32Array::from(vec![Some(2i32)])) as ArrayRef;
 
