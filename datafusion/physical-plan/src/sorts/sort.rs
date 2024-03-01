@@ -45,6 +45,8 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, SortField};
+use arrow_array::{Array, UInt32Array};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
@@ -582,12 +584,55 @@ pub(crate) fn sort_batch(
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
+    // Ref: https://github.com/apache/arrow-rs/pull/2929
+    if expressions.len() > 1 {
+        return sort_batch_with_multi_columns(batch, expressions, fetch);
+    }
+
     let sort_columns = expressions
         .iter()
         .map(|expr| expr.evaluate_to_sort_column(batch))
         .collect::<Result<Vec<_>>>()?;
 
     let indices = lexsort_to_indices(&sort_columns, fetch)?;
+
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|c| take(c.as_ref(), &indices, None))
+        .collect::<Result<_, _>>()?;
+
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+}
+
+pub(crate) fn sort_batch_with_multi_columns(
+    batch: &RecordBatch,
+    expressions: &[PhysicalSortExpr],
+    fetch: Option<usize>,
+) -> Result<RecordBatch> {
+    let mut fields = Vec::with_capacity(expressions.len());
+    let mut columns = Vec::with_capacity(expressions.len());
+    for expr in expressions {
+        let sort_column = expr.evaluate_to_sort_column(batch)?;
+        fields.push(SortField::new_with_options(
+            sort_column.values.data_type().clone(),
+            sort_column.options.unwrap_or_default(),
+        ));
+        columns.push(sort_column.values);
+    }
+
+    // TODO reuse converter and rows, refer to TopK.
+    let converter = RowConverter::new(fields)?;
+    let rows = converter.convert_columns(&columns)?;
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+    let mut len = rows.num_rows();
+    if let Some(limit) = fetch {
+        len = limit.min(len);
+    }
+    let indices =
+        UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
 
     let columns = batch
         .columns()
@@ -1154,6 +1199,82 @@ mod tests {
         // explicitlty ensure the metadata is present
         assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lex_sort_by_mixed_types() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(2), None, Some(1), Some(2)])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(3)]),
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(6), None]),
+                    Some(vec![Some(5)]),
+                ])),
+            ],
+        )?;
+
+        let sort_exec = Arc::new(SortExec::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: col("a", &schema)?,
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: true,
+                    },
+                },
+                PhysicalSortExpr {
+                    expr: col("b", &schema)?,
+                    options: SortOptions {
+                        descending: true,
+                        nulls_first: false,
+                    },
+                },
+            ],
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None)?),
+        ));
+
+        assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
+        assert_eq!(
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            *sort_exec.schema().field(1).data_type()
+        );
+
+        let result: Vec<RecordBatch> = collect(sort_exec.clone(), task_ctx).await?;
+        let metrics = sort_exec.metrics().unwrap();
+        assert!(metrics.elapsed_compute().unwrap() > 0);
+        assert_eq!(metrics.output_rows().unwrap(), 4);
+        assert_eq!(result.len(), 1);
+
+        let expected = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(1), Some(2), Some(2)])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(6), None]),
+                    Some(vec![Some(5)]),
+                    Some(vec![Some(3)]),
+                ])),
+            ],
+        )?;
+
+        assert_eq!(expected, result[0]);
 
         Ok(())
     }
