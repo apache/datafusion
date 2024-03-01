@@ -260,7 +260,7 @@ impl EquivalenceGroup {
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
-            .transform_up(&|expr| {
+            .transform(&|expr| {
                 for cls in self.iter() {
                     if cls.contains(&expr) {
                         return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
@@ -450,7 +450,7 @@ impl EquivalenceGroup {
                         // Rewrite rhs to point to the right side of the join:
                         let new_rhs = rhs
                             .clone()
-                            .transform_up(&|expr| {
+                            .transform(&|expr| {
                                 if let Some(column) =
                                     expr.as_any().downcast_ref::<Column>()
                                 {

@@ -1234,7 +1234,7 @@ impl LogicalPlan {
         expr: Expr,
         param_values: &ParamValues,
     ) -> Result<Expr> {
-        expr.transform_up(&|expr| {
+        expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder(Placeholder { id, .. }) => {
                     let value = param_values.get_placeholders_with_values(id)?;
@@ -3303,7 +3303,7 @@ digraph {
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs
         let plan = plan
-            .transform_up(&|plan| match plan {
+            .transform(&|plan| match plan {
                 LogicalPlan::TableScan(table) => {
                     let filter = Filter::try_new(
                         external_filter.clone(),

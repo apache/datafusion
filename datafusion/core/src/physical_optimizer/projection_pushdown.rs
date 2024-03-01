@@ -1038,7 +1038,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             (*on)
                 .clone()
-                .transform_up(&|expr| {
+                .transform(&|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs

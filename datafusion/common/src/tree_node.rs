@@ -238,6 +238,16 @@ pub trait TreeNode: Sized {
         self.apply_children(&mut |n| n.apply(f))
     }
 
+    /// Convenience utils for writing optimizers rule: recursively apply the given `f` to the node tree.
+    /// When `f` does not apply to a given node, it is left unchanged.
+    /// The default tree traversal direction is transform_up(Postorder Traversal).
+    fn transform<F>(self, f: &F) -> Result<Transformed<Self>>
+    where
+        F: Fn(Self) -> Result<Transformed<Self>>,
+    {
+        self.transform_up(f)
+    }
+
     /// Convenience utils for writing optimizers rule: recursively apply the given 'f' to the node and all of its
     /// children(Preorder Traversal).
     /// When the `f` does not apply to a given node, it is left unchanged.

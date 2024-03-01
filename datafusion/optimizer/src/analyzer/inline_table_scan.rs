@@ -74,7 +74,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             Transformed::yes(plan)
         }
         LogicalPlan::Filter(filter) => {
-            let new_expr = filter.predicate.transform_up(&rewrite_subquery)?.data;
+            let new_expr = filter.predicate.transform(&rewrite_subquery)?.data;
             Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                 new_expr,
                 filter.input,

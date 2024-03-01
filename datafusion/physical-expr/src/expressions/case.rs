@@ -960,7 +960,7 @@ mod tests {
 
         let expr2 = expr
             .clone()
-            .transform_up(&|e| {
+            .transform(&|e| {
                 let transformed =
                     match e.as_any().downcast_ref::<crate::expressions::Literal>() {
                         Some(lit_value) => match lit_value.value() {
