@@ -22372,10 +22372,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Strpos => "Strpos",
             Self::Substr => "Substr",
             Self::ToHex => "ToHex",
-            Self::ToTimestamp => "ToTimestamp",
-            Self::ToTimestampMillis => "ToTimestampMillis",
-            Self::ToTimestampMicros => "ToTimestampMicros",
-            Self::ToTimestampSeconds => "ToTimestampSeconds",
             Self::Now => "Now",
             Self::Translate => "Translate",
             Self::Trim => "Trim",
@@ -22431,7 +22427,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayPopBack => "ArrayPopBack",
             Self::StringToArray => "StringToArray",
-            Self::ToTimestampNanos => "ToTimestampNanos",
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
@@ -22449,7 +22444,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReverse => "ArrayReverse",
             Self::RegexpLike => "RegexpLike",
             Self::ToChar => "ToChar",
-            Self::ToDate => "ToDate",
         };
         serializer.serialize_str(variant)
     }
@@ -22512,10 +22506,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Strpos",
             "Substr",
             "ToHex",
-            "ToTimestamp",
-            "ToTimestampMillis",
-            "ToTimestampMicros",
-            "ToTimestampSeconds",
             "Now",
             "Translate",
             "Trim",
@@ -22571,7 +22561,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayEmpty",
             "ArrayPopBack",
             "StringToArray",
-            "ToTimestampNanos",
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
@@ -22589,7 +22578,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReverse",
             "RegexpLike",
             "ToChar",
-            "ToDate",
         ];
 
         struct GeneratedVisitor;
@@ -22681,10 +22669,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Strpos" => Ok(ScalarFunction::Strpos),
                     "Substr" => Ok(ScalarFunction::Substr),
                     "ToHex" => Ok(ScalarFunction::ToHex),
-                    "ToTimestamp" => Ok(ScalarFunction::ToTimestamp),
-                    "ToTimestampMillis" => Ok(ScalarFunction::ToTimestampMillis),
-                    "ToTimestampMicros" => Ok(ScalarFunction::ToTimestampMicros),
-                    "ToTimestampSeconds" => Ok(ScalarFunction::ToTimestampSeconds),
                     "Now" => Ok(ScalarFunction::Now),
                     "Translate" => Ok(ScalarFunction::Translate),
                     "Trim" => Ok(ScalarFunction::Trim),
@@ -22740,7 +22724,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayEmpty" => Ok(ScalarFunction::ArrayEmpty),
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
                     "StringToArray" => Ok(ScalarFunction::StringToArray),
-                    "ToTimestampNanos" => Ok(ScalarFunction::ToTimestampNanos),
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
@@ -22758,7 +22741,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     "ToChar" => Ok(ScalarFunction::ToChar),
-                    "ToDate" => Ok(ScalarFunction::ToDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
