@@ -20,7 +20,7 @@
 use crate::expr::{Alias, Sort};
 use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
@@ -133,7 +133,7 @@ fn rewrite_in_terms_of_projection(
 
         Ok(Transformed::no(expr))
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// Does the underlying expr match e?

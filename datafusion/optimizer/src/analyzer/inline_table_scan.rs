@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
@@ -42,7 +42,7 @@ impl InlineTableScan {
 
 impl AnalyzerRule for InlineTableScan {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_up(&analyze_internal).map(|t| t.data)
+        plan.transform_up(&analyze_internal).data()
     }
 
     fn name(&self) -> &str {

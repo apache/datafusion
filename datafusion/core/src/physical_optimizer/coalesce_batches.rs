@@ -27,7 +27,7 @@ use crate::{
         repartition::RepartitionExec, Partitioning,
     },
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use std::sync::Arc;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
@@ -79,7 +79,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                 Ok(Transformed::no(plan))
             }
         })
-        .map(|t| t.data)
+        .data()
     }
 
     fn name(&self) -> &str {

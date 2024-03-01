@@ -204,6 +204,7 @@ mod tests {
     use super::*;
 
     use arrow::datatypes::DataType;
+    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::{tree_node::TreeNode, ScalarValue};
     use datafusion_expr::{col, lit, Operator};
 
@@ -224,12 +225,12 @@ mod tests {
 
         // x IS NULL => guaranteed false
         let expr = col("x").is_null();
-        let output = expr.clone().rewrite(&mut rewriter).map(|t| t.data).unwrap();
+        let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
         assert_eq!(output, lit(false));
 
         // x IS NOT NULL => guaranteed true
         let expr = col("x").is_not_null();
-        let output = expr.clone().rewrite(&mut rewriter).map(|t| t.data).unwrap();
+        let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
         assert_eq!(output, lit(true));
     }
 
@@ -239,7 +240,7 @@ mod tests {
         T: Clone,
     {
         for (expr, expected_value) in cases {
-            let output = expr.clone().rewrite(rewriter).map(|t| t.data).unwrap();
+            let output = expr.clone().rewrite(rewriter).data().unwrap();
             let expected = lit(ScalarValue::from(expected_value.clone()));
             assert_eq!(
                 output, expected,
@@ -251,7 +252,7 @@ mod tests {
 
     fn validate_unchanged_cases(rewriter: &mut GuaranteeRewriter, cases: &[Expr]) {
         for expr in cases {
-            let output = expr.clone().rewrite(rewriter).map(|t| t.data).unwrap();
+            let output = expr.clone().rewrite(rewriter).data().unwrap();
             assert_eq!(
                 &output, expr,
                 "{} was simplified to {}, but expected it to be unchanged",
@@ -481,7 +482,7 @@ mod tests {
             let guarantees = vec![(col("x"), NullableInterval::from(scalar.clone()))];
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
-            let output = col("x").rewrite(&mut rewriter).map(|t| t.data).unwrap();
+            let output = col("x").rewrite(&mut rewriter).data().unwrap();
             assert_eq!(output, Expr::Literal(scalar.clone()));
         }
     }
@@ -525,7 +526,7 @@ mod tests {
                     .collect(),
                 *negated,
             );
-            let output = expr.clone().rewrite(&mut rewriter).map(|t| t.data).unwrap();
+            let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
             let expected_list = expected_list
                 .iter()
                 .map(|v| lit(ScalarValue::Int32(Some(*v))))

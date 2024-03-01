@@ -22,7 +22,7 @@ mod properties;
 use crate::expressions::Column;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 pub use class::{EquivalenceClass, EquivalenceGroup};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
@@ -54,7 +54,7 @@ pub fn add_offset_to_expr(
         )))),
         None => Ok(Transformed::no(e)),
     })
-    .map(|t| t.data)
+    .data()
     .unwrap()
     // Note that we can safely unwrap here since our transform always returns
     // an `Ok` value.

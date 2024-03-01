@@ -26,7 +26,7 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
@@ -114,7 +114,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 Transformed::no(plan)
             })
         })
-        .map(|t| t.data)
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -191,7 +191,7 @@ fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalEx
                 Transformed::no(expr)
             })
         })
-        .map(|t| t.data)
+        .data()
         .unwrap_or(group_expr)
 }
 

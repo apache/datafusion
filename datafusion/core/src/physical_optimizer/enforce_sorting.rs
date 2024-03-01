@@ -60,7 +60,7 @@ use crate::physical_plan::windows::{
 use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
@@ -193,7 +193,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         adjusted
             .plan
             .transform_up(&|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
-            .map(|t| t.data)
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -687,7 +687,7 @@ mod tests {
             {
                 let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
                 let adjusted = plan_requirements
-                    .transform_up(&ensure_sorting).map(|t| t.data)
+                    .transform_up(&ensure_sorting).data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
@@ -695,7 +695,7 @@ mod tests {
                     let plan_with_coalesce_partitions =
                         PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
                     let parallel = plan_with_coalesce_partitions
-                        .transform_up(&parallelize_sorts).map(|t| t.data)
+                        .transform_up(&parallelize_sorts).data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     parallel.plan
@@ -712,14 +712,14 @@ mod tests {
                             true,
                             state.config_options(),
                         )
-                    }).map(|t| t.data)
+                    }).data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
                 let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
                 assign_initial_requirements(&mut sort_pushdown);
                 sort_pushdown
-                    .transform_down(&pushdown_sorts).map(|t| t.data)
+                    .transform_down(&pushdown_sorts).data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }

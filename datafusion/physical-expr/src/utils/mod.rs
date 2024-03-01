@@ -29,7 +29,9 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
@@ -239,7 +241,7 @@ pub fn reassign_predicate_columns(
         }
         Ok(Transformed::no(expr))
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window

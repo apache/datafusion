@@ -29,7 +29,7 @@ use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -120,11 +120,7 @@ impl TopKAggregation {
             }
             Ok(Transformed::no(plan))
         };
-        let child = child
-            .clone()
-            .transform_down_mut(&mut closure)
-            .map(|t| t.data)
-            .ok()?;
+        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());

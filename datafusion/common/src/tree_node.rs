@@ -604,6 +604,28 @@ impl<I: Iterator> TransformedIterator for I {
     }
 }
 
+pub trait TransformedResult<T> {
+    fn data(self) -> Result<T>;
+
+    fn transformed(self) -> Result<bool>;
+
+    fn tnr(self) -> Result<TreeNodeRecursion>;
+}
+
+impl<T> TransformedResult<T> for Result<Transformed<T>> {
+    fn data(self) -> Result<T> {
+        self.map(|t| t.data)
+    }
+
+    fn transformed(self) -> Result<bool> {
+        self.map(|t| t.transformed)
+    }
+
+    fn tnr(self) -> Result<TreeNodeRecursion> {
+        self.map(|t| t.tnr)
+    }
+}
+
 /// Helper trait for implementing [`TreeNode`] that have children stored as Arc's
 ///
 /// If some trait object, such as `dyn T`, implements this trait,

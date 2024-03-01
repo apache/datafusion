@@ -29,7 +29,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -203,7 +203,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
                         Ok(Transformed::no(plan))
                     }
                 })
-                .map(|t| t.data),
+                .data(),
         }
     }
 

@@ -476,7 +476,7 @@ mod tests {
     use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::tree_node::TreeNode;
+    use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
@@ -730,7 +730,7 @@ mod tests {
         let mut expr_rewriter = UnwrapCastExprRewriter {
             schema: schema.clone(),
         };
-        expr.rewrite(&mut expr_rewriter).map(|t| t.data).unwrap()
+        expr.rewrite(&mut expr_rewriter).data().unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {

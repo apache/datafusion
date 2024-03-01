@@ -22,7 +22,9 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, JoinConstraint,
     Result,
@@ -999,7 +1001,7 @@ pub fn replace_cols_by_name(
             Transformed::no(expr)
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// check whether the expression uses the columns in `check_map`.

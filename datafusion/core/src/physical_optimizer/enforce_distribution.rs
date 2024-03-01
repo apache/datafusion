@@ -1326,6 +1326,7 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
@@ -1787,7 +1788,7 @@ pub(crate) mod tests {
                     let plan_requirements =
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
-                        .transform_down(&adjust_input_keys_ordering).map(|t| t.data)
+                        .transform_down(&adjust_input_keys_ordering).data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
@@ -1802,7 +1803,7 @@ pub(crate) mod tests {
                 DistributionContext::new_default(adjusted)
                     .transform_up(&|distribution_context| {
                         ensure_distribution(distribution_context, &config)
-                    }).map(|t| t.data)
+                    }).data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }

@@ -17,7 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
@@ -103,7 +103,7 @@ impl MyAnalyzerRule {
                 _ => Transformed::no(plan),
             })
         })
-        .map(|t| t.data)
+        .data()
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
@@ -119,7 +119,7 @@ impl MyAnalyzerRule {
                 _ => Transformed::no(expr),
             })
         })
-        .map(|t| t.data)
+        .data()
     }
 }
 
@@ -185,7 +185,7 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
             _ => Transformed::no(expr),
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 #[derive(Default)]

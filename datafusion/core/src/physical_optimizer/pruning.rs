@@ -36,6 +36,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::cast::AsArray;
+use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     internal_err, plan_err,
     tree_node::{Transformed, TreeNode},
@@ -1040,7 +1041,7 @@ fn rewrite_column_expr(
 
         Ok(Transformed::no(expr))
     })
-    .map(|t| t.data)
+    .data()
 }
 
 fn reverse_operator(op: Operator) -> Result<Operator> {

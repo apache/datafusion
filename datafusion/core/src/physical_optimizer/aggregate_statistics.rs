@@ -27,7 +27,7 @@ use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics
 use crate::scalar::ScalarValue;
 
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 
@@ -88,11 +88,11 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 plan.map_children(|child| {
                     self.optimize(child, _config).map(Transformed::yes)
                 })
-                .map(|t| t.data)
+                .data()
             }
         } else {
             plan.map_children(|child| self.optimize(child, _config).map(Transformed::yes))
-                .map(|t| t.data)
+                .data()
         }
     }
 

@@ -21,7 +21,7 @@ use crate::expressions::Column;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
 /// Stores the mapping between source expressions and target expressions for a
@@ -72,7 +72,7 @@ impl ProjectionMapping {
                         }
                         None => Ok(Transformed::no(e)),
                     })
-                    .map(|t| t.data)
+                    .data()
                     .map(|source_expr| (source_expr, target_expr))
             })
             .collect::<Result<Vec<_>>>()

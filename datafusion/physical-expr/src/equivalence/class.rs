@@ -22,7 +22,7 @@ use crate::{
     LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{tree_node::Transformed, JoinType};
 use std::sync::Arc;
 
@@ -268,7 +268,7 @@ impl EquivalenceGroup {
                 }
                 Ok(Transformed::no(expr))
             })
-            .map(|t| t.data)
+            .data()
             .unwrap_or(expr)
     }
 
@@ -464,7 +464,7 @@ impl EquivalenceGroup {
 
                                 Ok(Transformed::no(expr))
                             })
-                            .map(|t| t.data)
+                            .data()
                             .unwrap();
                         result.add_equal_conditions(&new_lhs, &new_rhs);
                     }

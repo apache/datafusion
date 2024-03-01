@@ -25,7 +25,8 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    TreeNodeVisitor,
 };
 use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -839,7 +840,7 @@ fn replace_common_expr(
         max_series_number: 0,
         curr_index: 0,
     })
-    .map(|t| t.data)
+    .data()
 }
 
 #[cfg(test)]

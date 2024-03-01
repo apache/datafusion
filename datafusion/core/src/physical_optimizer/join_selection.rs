@@ -37,7 +37,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
@@ -261,7 +261,7 @@ impl PhysicalOptimizerRule for JoinSelection {
                     collect_threshold_num_rows,
                 )
             })
-            .map(|t| t.data)
+            .data()
     }
 
     fn name(&self) -> &str {

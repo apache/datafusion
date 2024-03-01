@@ -31,7 +31,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{TreeNode, TreeNodeRewriter},
@@ -161,7 +161,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .rewrite(&mut const_evaluator)?
             .data
             .rewrite(&mut simplifier)
-            .map(|t| t.data)
+            .data()
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -177,7 +177,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
-        expr.rewrite(&mut expr_rewrite).map(|t| t.data)
+        expr.rewrite(&mut expr_rewrite).data()
     }
 
     /// Input guarantees about the values of columns.
@@ -1477,7 +1477,7 @@ mod tests {
         let evaluated_expr = input_expr
             .clone()
             .rewrite(&mut const_evaluator)
-            .map(|t| t.data)
+            .data()
             .expect("successfully evaluated");
 
         assert_eq!(

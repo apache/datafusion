@@ -30,7 +30,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -327,7 +327,7 @@ fn assign_work_table(
             Ok(Transformed::no(plan))
         }
     })
-    .map(|t| t.data)
+    .data()
 }
 
 impl Stream for RecursiveQueryStream {

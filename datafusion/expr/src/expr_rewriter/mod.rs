@@ -20,7 +20,9 @@
 use crate::expr::{Alias, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
+};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -43,7 +45,7 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
             }
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
@@ -68,7 +70,7 @@ pub fn normalize_col_with_schemas(
             }
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
@@ -98,7 +100,7 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
             }
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// Recursively normalize all [`Column`] expressions in a list of expression trees
@@ -127,7 +129,7 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
             }
         })
     })
-    .map(|t| t.data)
+    .data()
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -149,7 +151,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
             }
         })
     })
-    .map(|t| t.data)
+    .data()
     .expect("Unnormalize is infallable")
 }
 
@@ -188,7 +190,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
             }
         })
     })
-    .map(|t| t.data)
+    .data()
     .expect("strip_outer_reference is infallable")
 }
 
@@ -324,7 +326,7 @@ mod test {
         let rewritten = col("state")
             .eq(lit("foo"))
             .transform_up(&transformer)
-            .map(|t| t.data)
+            .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
@@ -332,7 +334,7 @@ mod test {
         let rewritten = col("state")
             .eq(lit("baz"))
             .transform_up(&transformer)
-            .map(|t| t.data)
+            .data()
             .unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }

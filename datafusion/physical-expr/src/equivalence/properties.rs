@@ -36,7 +36,7 @@ use crate::{
 };
 
 use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -848,7 +848,7 @@ impl EquivalenceProperties {
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
-            .map(|t| t.data)
+            .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
     }

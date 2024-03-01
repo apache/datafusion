@@ -40,7 +40,7 @@ use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
@@ -390,5 +390,5 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
             }
             Ok(Transformed::no(node))
         })
-        .map(|t| t.data)
+        .data()
 }

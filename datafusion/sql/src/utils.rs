@@ -20,7 +20,7 @@
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use sqlparser::ast::Ident;
 
 use datafusion_common::{exec_err, internal_err, plan_err};
@@ -46,7 +46,7 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
                 }
             }
         })
-        .map(|t| t.data)
+        .data()
 }
 
 /// Rebuilds an `Expr` as a projection on top of a collection of `Expr`'s.
@@ -76,7 +76,7 @@ pub(crate) fn rebase_expr(
                 Ok(Transformed::no(nested_expr))
             }
         })
-        .map(|t| t.data)
+        .data()
 }
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
@@ -185,7 +185,7 @@ pub(crate) fn resolve_aliases_to_exprs(
             }
             _ => Ok(Transformed::no(nested_expr)),
         })
-        .map(|t| t.data)
+        .data()
 }
 
 /// given a slice of window expressions sharing the same sort key, find their common partition

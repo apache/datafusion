@@ -27,7 +27,7 @@ use crate::{aggregate_function, ExprSchemable};
 use crate::{built_in_function, BuiltinScalarFunction};
 use crate::{built_in_window_function, udaf};
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, Result, ScalarValue};
 use sqlparser::ast::NullTreatment;
@@ -1277,7 +1277,7 @@ impl Expr {
             }
             Ok(Transformed::yes(expr))
         })
-        .map(|t| t.data)
+        .data()
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated

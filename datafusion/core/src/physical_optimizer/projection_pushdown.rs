@@ -43,7 +43,9 @@ use crate::physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties}
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
@@ -73,8 +75,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections)
-            .map(|t| t.data)
+        plan.transform_down(&remove_unnecessary_projections).data()
     }
 
     fn name(&self) -> &str {
@@ -931,7 +932,7 @@ fn update_expr(
                     )
             }
         })
-        .map(|t| t.data);
+        .data();
 
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
@@ -1062,7 +1063,7 @@ fn new_columns_for_join_on(
                         Ok(Transformed::no(expr))
                     }
                 })
-                .map(|t| t.data)
+                .data()
                 .ok()
         })
         .collect::<Vec<_>>();

@@ -46,7 +46,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
@@ -1252,7 +1252,7 @@ impl LogicalPlan {
                 _ => Ok(Transformed::no(expr)),
             }
         })
-        .map(|t| t.data)
+        .data()
     }
 }
 
@@ -3314,7 +3314,7 @@ digraph {
                 }
                 x => Ok(Transformed::no(x)),
             })
-            .map(|t| t.data)
+            .data()
             .unwrap();
 
         let expected = "Explain\
