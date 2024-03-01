@@ -29,7 +29,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::{Result, ScalarValue, SpawnedTask};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,

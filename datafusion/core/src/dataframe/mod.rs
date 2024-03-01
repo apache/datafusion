@@ -1509,7 +1509,8 @@ mod tests {
 
     use arrow::array::{self, Int32Array};
     use arrow::datatypes::DataType;
-    use datafusion_common::{Constraint, Constraints, SpawnedTask};
+    use datafusion_common::{Constraint, Constraints};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,

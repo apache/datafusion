@@ -27,9 +27,8 @@ use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
 
-use datafusion_common::{
-    exec_datafusion_err, exec_err, DataFusionError, Result, SpawnedTask,
-};
+use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";

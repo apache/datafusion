@@ -1112,6 +1112,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
@@ -1191,6 +1192,12 @@ dependencies = [
  "object_store",
  "parquet",
  "sqlparser",
+]
+
+[[package]]
+name = "datafusion-common-runtime"
+version = "36.0.0"
+dependencies = [
  "tokio",
 ]
 
@@ -1314,6 +1321,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",

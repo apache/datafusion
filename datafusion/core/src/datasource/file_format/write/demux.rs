@@ -32,8 +32,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{exec_datafusion_err, DataFusionError, SpawnedTask};
-
+use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use futures::StreamExt;

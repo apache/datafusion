@@ -29,9 +29,8 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, SpawnedTask,
-};
+use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;

@@ -264,7 +264,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// [`spawn`]: tokio::task::spawn
     /// [`JoinSet`]: tokio::task::JoinSet
-    /// [`SpawnedTask`]: datafusion_common::SpawnedTask
+    /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     ///
     /// # Implementation Examples

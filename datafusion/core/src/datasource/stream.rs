@@ -30,7 +30,8 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use datafusion_common::{plan_err, Constraints, DataFusionError, Result, SpawnedTask};
+use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};

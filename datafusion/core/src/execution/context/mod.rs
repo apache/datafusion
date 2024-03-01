@@ -2222,7 +2222,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
     use async_trait::async_trait;
-    use datafusion_common::SpawnedTask;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
     use std::env;
     use std::path::PathBuf;
