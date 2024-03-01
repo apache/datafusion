@@ -87,10 +87,11 @@ impl GetFieldAccessSchema {
             Self::ListRange { start_dt, stop_dt, stride_dt } => {
                 match (data_type, start_dt, stop_dt, stride_dt) {
                     (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
-                    (DataType::List(_), _, _, _) => plan_err!(
+                    (DataType::LargeList(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("large_list", data_type.clone(), true)),
+                    (DataType::List(_), _, _, _) | (DataType::LargeList(_), _, _, _)=> plan_err!(
                         "Only ints are valid as an indexed field in a list"
                     ),
-                    (other, _, _, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
+                    (other, _, _, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `LargeList` or `Struct` types, got {other}"),
                 }
             }
         }
