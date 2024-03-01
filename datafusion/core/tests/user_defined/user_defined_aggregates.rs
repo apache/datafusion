@@ -42,10 +42,10 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err, Column};
+use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
-    create_udaf, create_udaf_with_ordering, expr::Sort, AggregateUDFImpl, Expr,
-    GroupsAccumulator, SimpleAggregateUDF,
+    create_udaf, create_udaf_with_ordering, AggregateUDFImpl, Expr, GroupsAccumulator,
+    SimpleAggregateUDF,
 };
 use datafusion_physical_expr::expressions::{self, FirstValueAccumulator};
 use datafusion_physical_expr::{expressions::AvgAccumulator, PhysicalSortExpr};
@@ -278,12 +278,6 @@ async fn simple_udaf_order() -> Result<()> {
         Volatility::Immutable,
         Arc::new(create_accumulator),
         Arc::new(vec![DataType::Int32, DataType::Int32, DataType::Boolean]),
-        vec![Expr::Sort(Sort {
-            expr: Box::new(Expr::Column(Column::new(Some("t"), "a"))),
-            asc: false,
-            nulls_first: false,
-        })],
-        Some(&schema),
     );
 
     ctx.register_udaf(my_first);

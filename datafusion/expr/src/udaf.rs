@@ -294,16 +294,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
-
-    /// Return the ordering expressions for the accumulator
-    fn sort_exprs(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    /// Return the schema for the accumulator
-    fn schema(&self) -> Option<&Schema> {
-        None
-    }
 }
 
 /// Implementation of [`AggregateUDFImpl`] that wraps the function style pointers

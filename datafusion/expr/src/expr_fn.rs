@@ -1027,8 +1027,6 @@ pub fn create_udaf_with_ordering(
     volatility: Volatility,
     accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
-    ordering_req: Vec<Expr>,
-    schema: Option<&Schema>,
 ) -> AggregateUDF {
     let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
     let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
@@ -1040,8 +1038,6 @@ pub fn create_udaf_with_ordering(
         volatility,
         accumulator,
         state_type,
-        ordering_req,
-        schema,
     ))
 }
 
@@ -1144,8 +1140,6 @@ pub struct SimpleOrderedAggregateUDF {
     return_type: DataType,
     accumulator: AccumulatorFactoryFunction,
     state_type: Vec<DataType>,
-    ordering_req: Vec<Expr>,
-    schema: Option<Schema>,
 }
 
 impl Debug for SimpleOrderedAggregateUDF {
@@ -1169,8 +1163,6 @@ impl SimpleOrderedAggregateUDF {
         volatility: Volatility,
         accumulator: AccumulatorFactoryFunction,
         state_type: Vec<DataType>,
-        ordering_req: Vec<Expr>,
-        schema: Option<&Schema>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -1180,8 +1172,6 @@ impl SimpleOrderedAggregateUDF {
             return_type,
             accumulator,
             state_type,
-            ordering_req,
-            schema: schema.cloned(),
         }
     }
 }
@@ -1214,14 +1204,6 @@ impl AggregateUDFImpl for SimpleOrderedAggregateUDF {
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
         Ok(self.state_type.clone())
-    }
-
-    fn sort_exprs(&self) -> Vec<Expr> {
-        self.ordering_req.clone()
-    }
-
-    fn schema(&self) -> Option<&Schema> {
-        self.schema.as_ref()
     }
 }
 
