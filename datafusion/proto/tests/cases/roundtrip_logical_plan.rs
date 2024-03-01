@@ -67,7 +67,6 @@ use datafusion_proto::bytes::{
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
-use regex::Regex;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -770,21 +769,18 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 #[derive(Debug)]
 struct MyRegexUdf {
     signature: Signature,
-    // compiled regex
-    _regex: Regex,
     // regex as original string
     pattern: String,
 }
 
 impl MyRegexUdf {
-    fn new(_regex: Regex, pattern: String) -> Self {
+    fn new(pattern: String) -> Self {
         Self {
             signature: Signature::uniform(
                 1,
                 vec![DataType::Int32],
                 Volatility::Immutable,
             ),
-            _regex,
             pattern,
         }
     }
@@ -848,14 +844,9 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
 
     fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if let Ok(proto) = proto::MyRegexUdfNode::decode(buf) {
-            let regex = Regex::new(&proto.pattern).map_err(|_err| ..);
-            match regex {
-                Ok(regex) => Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
-                    regex,
-                    proto.pattern,
-                )))),
-                Err(e) => internal_err!("unsupported regex pattern {e:?}"),
-            }
+            Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
+                proto.pattern,
+            ))))
         } else {
             not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
         }
@@ -1785,8 +1776,7 @@ fn roundtrip_scalar_udf() {
 #[test]
 fn roundtrip_scalar_udf_extension_codec() {
     let pattern = ".*";
-    let regex = Regex::new(pattern).unwrap();
-    let udf = ScalarUDF::from(MyRegexUdf::new(regex, pattern.to_string()));
+    let udf = ScalarUDF::from(MyRegexUdf::new(pattern.to_string()));
     let test_expr =
         Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf.clone()), vec![]));
 
