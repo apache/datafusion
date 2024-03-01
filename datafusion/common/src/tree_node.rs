@@ -160,19 +160,18 @@ pub trait TreeNode: Sized {
     ///
     /// The nodes are visited using the following order
     /// ```text
-    /// pre_visit(ParentNode)
-    /// pre_visit(ChildNode1)
-    /// post_visit(ChildNode1)
-    /// pre_visit(ChildNode2)
-    /// post_visit(ChildNode2)
-    /// post_visit(ParentNode)
+    /// TreeNodeVisitor::f_down(ParentNode)
+    /// TreeNodeVisitor::f_down(ChildNode1)
+    /// TreeNodeVisitor::f_up(ChildNode1)
+    /// TreeNodeVisitor::f_down(ChildNode2)
+    /// TreeNodeVisitor::f_up(ChildNode2)
+    /// TreeNodeVisitor::f_up(ParentNode)
     /// ```
     ///
-    /// If an Err result is returned, recursion is stopped immediately
+    /// See [`TreeNodeRecursion`] for more details on how the traversal can be controlled.
     ///
-    /// If [`TreeNodeRecursion::Stop`] is returned on a call to pre_visit, no
-    /// children of that node will be visited, nor is post_visit
-    /// called on that node. Details see [`TreeNodeVisitor`]
+    /// If [`TreeNodeVisitor::f_down()`] or [`TreeNodeVisitor::f_up()`] returns [`Err`],
+    /// recursion is stopped immediately.
     ///
     /// If using the default [`TreeNodeVisitor::f_up`] that does
     /// nothing, [`Self::apply`] should be preferred.
@@ -475,6 +474,21 @@ pub enum TreeNodeRecursion {
     Stop,
 }
 
+/// This struct is used with [`TreeNode::rewrite`], [`TreeNode::transform_down`],
+/// [`TreeNode::transform_down_mut`], [`TreeNode::transform_up`],
+/// [`TreeNode::transform_up_mut`] and [`TreeNode::transform_down_up`] methods to control
+/// transformations and return the transformed result.
+///
+/// API users can provide transformation closures and [`TreeNodeRewriter`]
+/// implementations to control transformation by specifying:
+/// - the possibly transformed node,
+/// - if any change was made to the node and
+/// - how to proceed with the recursion.
+///
+/// The APIs return this struct with the:
+/// - final possibly transformed tree,
+/// - if any change was made to any node and
+/// - how the recursion ended.
 #[derive(PartialEq, Debug)]
 pub struct Transformed<T> {
     pub data: T,
@@ -567,6 +581,7 @@ impl<T> Transformed<T> {
     }
 }
 
+/// Transformation helper to process tree nodes that are siblings.
 pub trait TransformedIterator: Iterator {
     fn map_until_stop_and_collect<F>(self, f: F) -> Result<Transformed<Vec<Self::Item>>>
     where
@@ -604,6 +619,7 @@ impl<I: Iterator> TransformedIterator for I {
     }
 }
 
+/// Transformation helper to access [`Transformed`] fields in a [`Result`] easily.
 pub trait TransformedResult<T> {
     fn data(self) -> Result<T>;
 
