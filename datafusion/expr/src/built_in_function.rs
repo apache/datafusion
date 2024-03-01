@@ -265,8 +265,6 @@ pub enum BuiltinScalarFunction {
     ToHex,
     /// from_unixtime
     FromUnixtime,
-    /// to_date
-    ToDate,
     ///now
     Now,
     ///current_date
@@ -459,7 +457,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
-            BuiltinScalarFunction::ToDate => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
@@ -764,7 +761,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
-            BuiltinScalarFunction::ToDate => Ok(Date32),
             BuiltinScalarFunction::Now => {
                 Ok(Timestamp(Nanosecond, Some("+00:00".into())))
             }
@@ -1035,7 +1031,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::ToDate => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Digest => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
@@ -1463,7 +1458,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
-            BuiltinScalarFunction::ToDate => &["to_date"],
 
             // hashing functions
             BuiltinScalarFunction::Digest => &["digest"],

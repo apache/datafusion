@@ -65,7 +65,6 @@ rand = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
-
 [[bench]]
 harness = false
 name = "to_timestamp"

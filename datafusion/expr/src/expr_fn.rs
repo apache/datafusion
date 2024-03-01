@@ -881,11 +881,6 @@ scalar_expr!(
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
-nary_scalar_expr!(
-    ToDate,
-    to_date,
-    "converts string to date according to the given format"
-);
 scalar_expr!(
     FromUnixtime,
     from_unixtime,

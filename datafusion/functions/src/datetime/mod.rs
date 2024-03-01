@@ -17,12 +17,16 @@
 
 //! date & time DataFusion functions
 
-use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
+use datafusion_expr::ScalarUDF;
+
+mod common;
+mod to_date;
 mod to_timestamp;
 
 // create UDFs
+make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
     to_timestamp::ToTimestampSecondsFunc,
@@ -50,6 +54,56 @@ make_udf_function!(
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
+
+    /// ```ignore
+    /// # use std::sync::Arc;
+    ///
+    /// # use datafusion_common::Result;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// #  use arrow::array::StringArray;
+    /// #  use arrow::datatypes::{DataType, Field, Schema};
+    /// #  use arrow::record_batch::RecordBatch;
+    /// #  use datafusion_expr::col;
+    /// #  use datafusion::prelude::*;
+    /// #  use datafusion_functions::expr_fn::to_date;
+    ///     
+    ///     // define a schema.
+    ///     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+    ///
+    ///     // define data.
+    ///     let batch = RecordBatch::try_new(
+    ///         schema,
+    ///         vec![Arc::new(StringArray::from(vec![
+    ///             "2020-09-08T13:42:29Z",
+    ///             "2020-09-08T13:42:29.190855-05:00",
+    ///             "2020-08-09 12:13:29",
+    ///             "2020-01-02",
+    ///         ]))],
+    ///     )?;
+    ///
+    ///     // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    ///     let ctx = SessionContext::new();
+    ///
+    ///     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ///     ctx.register_batch("t", batch)?;
+    ///     let df = ctx.table("t").await?;
+    ///
+    ///     // use to_date function to convert col 'a' to timestamp type using the default parsing
+    ///     let df = df.with_column("a", to_date(vec![col("a")]))?;
+    ///
+    ///     let df = df.select_columns(&["a"])?;
+    ///
+    ///     // print the results
+    ///     df.show().await?;
+    ///
+    ///     # Ok(())
+    /// # }
+    /// ```
+    pub fn to_date(args: Vec<Expr>) -> Expr {
+        super::to_date().call(args)
+    }
 
     #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
     pub fn to_timestamp(args: Vec<Expr>) -> Expr {
@@ -80,6 +134,7 @@ pub mod expr_fn {
 ///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        to_date(),
         to_timestamp(),
         to_timestamp_seconds(),
         to_timestamp_millis(),

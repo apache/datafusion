@@ -1237,13 +1237,10 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-physical-expr",
  "hex",
  "itertools",
  "log",
- "rand",
  "rstest 0.18.2",
- "tokio",
 ]
 
 [[package]]

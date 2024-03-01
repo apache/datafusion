@@ -565,7 +565,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Levenshtein => Self::Levenshtein,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
             ScalarFunction::FindInSet => Self::FindInSet,
-            ScalarFunction::ToDate => Self::ToDate,
         }
     }
 }
@@ -1755,16 +1754,6 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
-                }
-                ScalarFunction::ToDate => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToDate,
-                        args,
-                    )))
                 }
             }
         }
