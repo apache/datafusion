@@ -881,36 +881,6 @@ scalar_expr!(
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
-nary_scalar_expr!(
-    ToDate,
-    to_date,
-    "converts string to date according to the given format"
-);
-nary_scalar_expr!(
-    ToTimestamp,
-    to_timestamp,
-    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMillis,
-    to_timestamp_millis,
-    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMicros,
-    to_timestamp_micros,
-    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampNanos,
-    to_timestamp_nanos,
-    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampSeconds,
-    to_timestamp_seconds,
-    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
-);
 scalar_expr!(
     FromUnixtime,
     from_unixtime,

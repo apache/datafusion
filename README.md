@@ -78,6 +78,7 @@ Default features:
 - `array_expressions`: functions for working with arrays such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
+- `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`

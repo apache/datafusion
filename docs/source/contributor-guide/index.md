@@ -195,7 +195,7 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 
-Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability. While we are still in the process of [migrating some old sql_integration tests](https://github.com/apache/arrow-datafusion/issues/6195), all new tests should be written using sqllogictests if possible.
+Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
 ### Rust Integration Tests
 
