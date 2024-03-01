@@ -957,7 +957,7 @@ mod tests {
             expr.extend(ordering_req.iter().map(|item| item.expr.clone()));
         }
 
-        let mut values = expr
+        let values = expr
             .iter()
             .map(|e| {
                 e.evaluate(batch)
