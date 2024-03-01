@@ -790,7 +790,7 @@ impl MyRegexUdf {
     }
 }
 
-/// Implement the ScalarUDFImpl trait for AddOne
+/// Implement the ScalarUDFImpl trait for MyRegexUdf
 impl ScalarUDFImpl for MyRegexUdf {
     fn as_any(&self) -> &dyn Any {
         self
@@ -807,7 +807,6 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
         Ok(DataType::Int32)
     }
-    // The actual implementation would add one to the argument
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
         unimplemented!()
     }
