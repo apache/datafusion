@@ -51,10 +51,22 @@ impl<R: 'static> SpawnedTask<R> {
         Self { inner }
     }
 
+    /// Joins the task, returning the result of join (`Result<R, JoinError>`).
     pub async fn join(mut self) -> Result<R, JoinError> {
         self.inner
             .join_next()
             .await
             .expect("`SpawnedTask` instance always contains exactly 1 task")
+    }
+
+    /// Joins the task and unwinds the panic if it happens.
+    pub async fn join_unwind(self) -> R {
+        self.join().await.unwrap_or_else(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                unreachable!();
+            }
+        })
     }
 }
