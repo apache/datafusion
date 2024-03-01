@@ -862,14 +862,12 @@ mod test {
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
         let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
-            .err()
-            .unwrap();
-        assert_eq!(
-    "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float32]) failed.",
-    err.strip_backtrace()
-    );
+        let plan_err = Projection::try_new(vec![udf], empty)
+            .expect_err("Expected an error due to incorrect function input");
+
+        let expected_error = "Error during planning: No function matches the given name and argument types 'TestScalarUDF(Utf8)'. You might need to add explicit type casts.";
+
+        assert!(plan_err.to_string().starts_with(expected_error));
         Ok(())
     }
 

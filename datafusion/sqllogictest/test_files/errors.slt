@@ -84,7 +84,7 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error DataFusion error: Failed to coerce arguments for NULLIF
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.
 SELECT nullif(1);
 
 # error message for wrong function signature (Exact: exact number of args of an exact type)

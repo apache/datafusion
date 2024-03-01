@@ -39,7 +39,7 @@ unicode_expressions = []
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 log = { workspace = true }
 sqlparser = { workspace = true }
@@ -48,4 +48,4 @@ sqlparser = { workspace = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
-rstest = "0.18"
+rstest = { workspace = true }
