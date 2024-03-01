@@ -1672,7 +1672,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let order_by = match order_by {
+
+            let sort_exprs = order_by.clone().unwrap_or(vec![]);
+            let phy_order_by = match order_by {
                 Some(e) => Some(
                     e.iter()
                         .map(|expr| {
@@ -1691,7 +1693,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
-                    let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+                    let ordering_reqs = phy_order_by.clone().unwrap_or(vec![]);
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
                         *distinct,
@@ -1701,19 +1703,21 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         name,
                         ignore_nulls,
                     )?;
-                    (agg_expr, filter, order_by)
+                    (agg_expr, filter, phy_order_by)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let ordering_reqs: Vec<PhysicalSortExpr> =
-                        order_by.clone().unwrap_or(vec![]);
+                        phy_order_by.clone().unwrap_or(vec![]);
+
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
                         &args,
+                        &sort_exprs,
                         &ordering_reqs,
                         physical_input_schema,
                         name,
                     )?;
-                    (agg_expr, filter, order_by)
+                    (agg_expr, filter, phy_order_by)
                 }
                 AggregateFunctionDefinition::Name(_) => {
                     return internal_err!(
@@ -1721,7 +1725,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     )
                 }
             };
-            Ok((agg_expr, filter, order_by))
+            Ok((agg_expr, filter, phy_order_by))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }

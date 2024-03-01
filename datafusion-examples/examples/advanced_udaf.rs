@@ -89,8 +89,8 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     fn accumulator(
         &self,
         _arg: &DataType,
-        _sort_exprs: Vec<Expr>,
-        _schema: Option<&Schema>,
+        _sort_exprs: &[Expr],
+        _schema: &Schema,
     ) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }

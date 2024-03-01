@@ -1125,8 +1125,8 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     fn accumulator(
         &self,
         arg: &DataType,
-        sort_exprs: Vec<Expr>,
-        schema: Option<&Schema>,
+        sort_exprs: &[Expr],
+        schema: &Schema,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(arg, sort_exprs, schema)
     }
@@ -1206,8 +1206,8 @@ impl AggregateUDFImpl for SimpleOrderedAggregateUDF {
     fn accumulator(
         &self,
         arg: &DataType,
-        sort_exprs: Vec<Expr>,
-        schema: Option<&Schema>,
+        sort_exprs: &[Expr],
+        schema: &Schema,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(arg, sort_exprs, schema)
     }

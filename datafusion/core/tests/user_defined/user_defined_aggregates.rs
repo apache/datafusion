@@ -42,9 +42,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{
-    assert_contains, cast::as_primitive_array, exec_err, Column, DataFusionError,
-};
+use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err, Column};
 use datafusion_expr::{
     create_udaf, create_udaf_with_ordering, expr::Sort, AggregateUDFImpl, Expr,
     GroupsAccumulator, SimpleAggregateUDF,
@@ -234,12 +232,9 @@ async fn simple_udaf_order() -> Result<()> {
 
     fn create_accumulator(
         data_type: &DataType,
-        order_by: Vec<Expr>,
-        schema: Option<&Schema>,
+        order_by: &[Expr],
+        schema: &Schema,
     ) -> Result<Box<dyn Accumulator>> {
-        // test with ordering so schema is required
-        let schema = schema.unwrap();
-
         let mut all_sort_orders = vec![];
 
         // Construct PhysicalSortExpr objects from Expr objects:
@@ -265,16 +260,13 @@ async fn simple_udaf_order() -> Result<()> {
 
         let ordering_req = all_sort_orders;
 
-        let ordering_types = ordering_req
+        let ordering_dtypes = ordering_req
             .iter()
             .map(|e| e.expr.data_type(schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let acc = FirstValueAccumulator::try_new(
-            data_type,
-            ordering_types.as_slice(),
-            ordering_req,
-        )?;
+        let acc =
+            FirstValueAccumulator::try_new(data_type, &ordering_dtypes, ordering_req)?;
         Ok(Box::new(acc))
     }
 
@@ -369,7 +361,7 @@ async fn deregister_udaf() -> Result<()> {
         vec![DataType::Float64],
         Arc::new(DataType::Float64),
         Volatility::Immutable,
-        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(|_, _, _| Ok(Box::<AvgAccumulator>::default())),
         Arc::new(vec![DataType::UInt64, DataType::Float64]),
     );
 
@@ -791,8 +783,8 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
     fn accumulator(
         &self,
         _arg: &DataType,
-        _sort_exprs: Vec<Expr>,
-        _schema: Option<&Schema>,
+        _sort_exprs: &[Expr],
+        _schema: &Schema,
     ) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");
