@@ -948,7 +948,6 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     use futures::FutureExt;
-    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
