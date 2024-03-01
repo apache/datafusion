@@ -33,7 +33,7 @@ use arrow_array::types::{
 };
 use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
 use arrow_buffer::ArrowNativeType;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
 use datafusion_expr::{Accumulator, GroupsAccumulator};
 

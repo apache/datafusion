@@ -18,8 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Dependency,
-    Result,
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, Dependency, Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::function::suggest_valid_function;
@@ -81,36 +80,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if name.eq("unnest") {
             let exprs =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
-            // Currently only one argument is supported
-            let arg = match exprs.len() {
-                0 => {
-                    return plan_err!("unnest() requires at least one argument");
-                }
-                1 => &exprs[0],
-                _ => {
-                    return not_impl_err!(
-                        "unnest() does not support multiple arguments yet"
-                    );
-                }
-            };
-            // Check argument type, array types are supported
-            match arg.get_type(schema)? {
-                DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::FixedSizeList(_, _) => {}
-                DataType::Struct(_) => {
-                    return not_impl_err!("unnest() does not support struct yet");
-                }
-                DataType::Null => {
-                    return not_impl_err!("unnest() does not support null yet");
-                }
-                _ => {
-                    return plan_err!(
-                        "unnest() can only be applied to array, struct and null"
-                    );
-                }
-            }
-
+            Self::check_unnest_args(&exprs, schema)?;
             return Ok(Expr::Unnest(Unnest { exprs }));
         }
 
@@ -312,5 +282,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         args.into_iter()
             .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, planner_context))
             .collect::<Result<Vec<Expr>>>()
+    }
+
+    pub(crate) fn check_unnest_args(args: &[Expr], schema: &DFSchema) -> Result<()> {
+        // Currently only one argument is supported
+        let arg = match args.len() {
+            0 => {
+                return plan_err!("unnest() requires at least one argument");
+            }
+            1 => &args[0],
+            _ => {
+                return not_impl_err!("unnest() does not support multiple arguments yet");
+            }
+        };
+        // Check argument type, array types are supported
+        match arg.get_type(schema)? {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => Ok(()),
+            DataType::Struct(_) => {
+                not_impl_err!("unnest() does not support struct yet")
+            }
+            DataType::Null => {
+                not_impl_err!("unnest() does not support null yet")
+            }
+            _ => {
+                plan_err!("unnest() can only be applied to array, struct and null")
+            }
+        }
     }
 }

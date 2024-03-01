@@ -44,7 +44,7 @@ extern "C" {
 }
 
 #[wasm_bindgen]
-pub fn try_datafusion() {
+pub fn basic_exprs() {
     set_panic_hook();
     // Create a scalar value (from datafusion-common)
     let scalar = ScalarValue::from("Hello, World!");
@@ -61,10 +61,67 @@ pub fn try_datafusion() {
         ExprSimplifier::new(SimplifyContext::new(&execution_props).with_schema(schema));
     let simplified_expr = simplifier.simplify(expr).unwrap();
     log(&format!("Simplified Expr: {simplified_expr:?}"));
+}
 
+#[wasm_bindgen]
+pub fn basic_parse() {
     // Parse SQL (using datafusion-sql)
     let sql = "SELECT 2 + 37";
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast = Parser::parse_sql(&dialect, sql).unwrap();
     log(&format!("Parsed SQL: {ast:?}"));
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use datafusion::execution::context::SessionContext;
+    use datafusion_execution::{
+        config::SessionConfig,
+        disk_manager::DiskManagerConfig,
+        runtime_env::{RuntimeConfig, RuntimeEnv},
+    };
+    use datafusion_physical_plan::collect;
+    use datafusion_sql::parser::DFParser;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn datafusion_test() {
+        basic_exprs();
+        basic_parse();
+    }
+
+    #[wasm_bindgen_test]
+    async fn basic_execute() {
+        let sql = "SELECT 2 + 2;";
+
+        // Execute SQL (using datafusion)
+        let rt = Arc::new(
+            RuntimeEnv::new(
+                RuntimeConfig::new().with_disk_manager(DiskManagerConfig::Disabled),
+            )
+            .unwrap(),
+        );
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let session_context =
+            Arc::new(SessionContext::new_with_config_rt(session_config, rt));
+
+        let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
+
+        let logical_plan = session_context
+            .state()
+            .statement_to_plan(statement)
+            .await
+            .unwrap();
+        let data_frame = session_context
+            .execute_logical_plan(logical_plan)
+            .await
+            .unwrap();
+        let physical_plan = data_frame.create_physical_plan().await.unwrap();
+
+        let task_ctx = session_context.task_ctx();
+        let _ = collect(physical_plan, task_ctx).await.unwrap();
+    }
 }

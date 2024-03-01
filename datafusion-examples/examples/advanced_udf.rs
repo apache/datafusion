@@ -176,7 +176,6 @@ impl ScalarUDFImpl for PowUdf {
             }
             // if the types were not float, it is a bug in DataFusion
             _ => {
-                use datafusion_common::DataFusionError;
                 internal_err!("Invalid argument types to pow function")
             }
         }

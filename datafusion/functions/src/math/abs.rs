@@ -25,16 +25,14 @@ use arrow::array::Int64Array;
 use arrow::array::Int8Array;
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, not_impl_err};
-use datafusion_common::plan_datafusion_err;
-use datafusion_common::{Result, DataFusionError};
-use datafusion_expr::utils;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
+use arrow::array::{ArrayRef, Float32Array, Float64Array};
+use arrow::error::ArrowError;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::error::ArrowError;
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
@@ -80,9 +78,7 @@ macro_rules! make_decimal_abs_function {
 
 /// Abs SQL function
 /// Return different implementations based on input datatype to reduce branches during execution
-fn create_abs_function(
-    input_data_type: &DataType,
-) -> Result<MathArrayFunction> {
+fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> {
     match input_data_type {
         DataType::Float32 => Ok(make_abs_function!(Float32Array)),
         DataType::Float64 => Ok(make_abs_function!(Float64Array)),
@@ -115,7 +111,7 @@ pub(super) struct AbsFunc {
 impl AbsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable)
+            signature: Signature::any(1, Volatility::Immutable),
         }
     }
 }
@@ -133,16 +129,6 @@ impl ScalarUDFImpl for AbsFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return Err(plan_datafusion_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    self.name(),
-                    self.signature().clone(),
-                    arg_types,
-                )
-            ));
-        }
         match arg_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             DataType::Float64 => Ok(DataType::Float64),
@@ -155,9 +141,16 @@ impl ScalarUDFImpl for AbsFunc {
             DataType::UInt16 => Ok(DataType::UInt16),
             DataType::UInt32 => Ok(DataType::UInt32),
             DataType::UInt64 => Ok(DataType::UInt64),
-            DataType::Decimal128(precision, scale) => Ok(DataType::Decimal128(precision, scale)),
-            DataType::Decimal256(precision, scale) => Ok(DataType::Decimal256(precision, scale)),
-            _ => not_impl_err!("Unsupported data type {} for function abs", arg_types[0].to_string()),
+            DataType::Decimal128(precision, scale) => {
+                Ok(DataType::Decimal128(precision, scale))
+            }
+            DataType::Decimal256(precision, scale) => {
+                Ok(DataType::Decimal256(precision, scale))
+            }
+            _ => not_impl_err!(
+                "Unsupported data type {} for function abs",
+                arg_types[0].to_string()
+            ),
         }
     }
 
@@ -167,10 +160,10 @@ impl ScalarUDFImpl for AbsFunc {
         if args.len() != 1 {
             return exec_err!("abs function requires 1 argument, got {}", args.len());
         }
-    
+
         let input_data_type = args[0].data_type();
         let abs_fun = create_abs_function(input_data_type)?;
-    
+
         let arr = abs_fun(&args)?;
         Ok(ColumnarValue::Array(arr))
     }

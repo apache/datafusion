@@ -25,9 +25,7 @@ use arrow::datatypes::{
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;

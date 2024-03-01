@@ -17,19 +17,22 @@
 
 //! Defines the ANALYZE operator
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, time::Instant};
 
-use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{DisplayAs, Distribution, SendableRecordBatchStream};
-
+use super::{
+    DisplayAs, Distribution, ExecutionPlanProperties, PlanProperties,
+    SendableRecordBatchStream,
+};
 use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::instant::Instant;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::StreamExt;
 
@@ -45,6 +48,7 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
+    cache: PlanProperties,
 }
 
 impl AnalyzeExec {
@@ -55,11 +59,13 @@ impl AnalyzeExec {
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
+        let cache = Self::compute_properties(&input, schema.clone());
         AnalyzeExec {
             verbose,
             show_statistics,
             input,
             schema,
+            cache,
         }
     }
 
@@ -76,6 +82,17 @@ impl AnalyzeExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let output_partitioning = Partitioning::UnknownPartitioning(1);
+        let exec_mode = input.execution_mode();
+        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
     }
 }
 
@@ -99,8 +116,8 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -110,26 +127,6 @@ impl ExecutionPlan for AnalyzeExec {
     /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![]
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            internal_err!("Streaming execution of AnalyzeExec is not possible")
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(
@@ -252,9 +249,7 @@ fn create_output_batch(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema};
-    use futures::FutureExt;
-
+    use super::*;
     use crate::{
         collect,
         test::{
@@ -263,7 +258,8 @@ mod tests {
         },
     };
 
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {

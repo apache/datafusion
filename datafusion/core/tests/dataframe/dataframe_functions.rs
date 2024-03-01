@@ -467,7 +467,7 @@ async fn test_fn_regexp_like() -> Result<()> {
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
-    let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
+    let expr = regexp_match(col("a"), lit("[a-z]"));
 
     let expected = [
         "+------------------------------------+",

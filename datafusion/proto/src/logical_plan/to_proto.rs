@@ -1431,7 +1431,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
             BuiltinScalarFunction::Tanh => Self::Tanh,
-            BuiltinScalarFunction::Asin => Self::Asin,
             BuiltinScalarFunction::Atan => Self::Atan,
             BuiltinScalarFunction::Asinh => Self::Asinh,
             BuiltinScalarFunction::Acosh => Self::Acosh,
@@ -1489,7 +1488,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
-            BuiltinScalarFunction::Range => Self::Range,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
             BuiltinScalarFunction::DatePart => Self::DatePart,
@@ -1518,7 +1516,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Random => Self::Random,
             BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::RegexpLike => Self::RegexpLike,
-            BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
@@ -1552,6 +1549,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
             BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
             BuiltinScalarFunction::FindInSet => Self::FindInSet,
+            BuiltinScalarFunction::ToDate => Self::ToDate,
         };
 
         Ok(scalar_function)

@@ -52,20 +52,20 @@ use datafusion_expr::{
     array_length, array_ndims, array_pop_back, array_pop_front, array_position,
     array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
     array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
-    array_slice, array_sort, array_union, arrow_typeof, ascii, asin, asinh, atan, atan2,
-    atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
+    array_slice, array_sort, array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh,
+    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
     date_part, date_trunc, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, gen_range, initcap,
-    instr, iszero, lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, instr, iszero,
+    lcm, left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, regexp_like, regexp_match, regexp_replace, repeat, replace, reverse, right,
-    round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
-    substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    random, regexp_like, regexp_replace, repeat, replace, reverse, right, round, rpad,
+    rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
+    starts_with, string_to_array, strpos, struct_fun, substr, substr_index, substring,
+    tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction, Between,
+    BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
     GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
@@ -449,7 +449,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
@@ -508,7 +507,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::DatePart => Self::DatePart,
@@ -535,7 +533,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
             ScalarFunction::RegexpLike => Self::RegexpLike,
-            ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
@@ -573,6 +570,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Levenshtein => Self::Levenshtein,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
             ScalarFunction::FindInSet => Self::FindInSet,
+            ScalarFunction::ToDate => Self::ToDate,
         }
     }
 }
@@ -1360,7 +1358,6 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Asinh => Ok(asinh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acosh => Ok(acosh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Array => Ok(array(
@@ -1464,12 +1461,6 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                     parse_expr(&args[3], registry)?,
-                )),
-                ScalarFunction::Range => Ok(gen_range(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Cardinality => {
                     Ok(cardinality(parse_expr(&args[0], registry)?))
@@ -1633,12 +1624,6 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::RegexpLike => Ok(regexp_like(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::RegexpMatch => Ok(regexp_match(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
@@ -1825,6 +1810,16 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ToDate => {
+                    let args: Vec<_> = args
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<std::result::Result<_, _>>()?;
+                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        BuiltinScalarFunction::ToDate,
+                        args,
+                    )))
                 }
             }
         }

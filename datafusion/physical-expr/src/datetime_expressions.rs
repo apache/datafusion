@@ -54,7 +54,8 @@ use datafusion_common::cast::{
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{
-    exec_err, not_impl_err, DataFusionError, Result, ScalarType, ScalarValue,
+    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result, ScalarType,
+    ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -424,6 +425,84 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     }
 }
 
+/// # Examples
+///
+/// ```ignore
+/// # use std::sync::Arc;
+
+/// # use datafusion::arrow::array::StringArray;
+/// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion::arrow::record_batch::RecordBatch;
+/// # use datafusion::error::Result;
+/// # use datafusion::prelude::*;
+
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+///     // define a schema.
+///     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+///     // define data.
+///     let batch = RecordBatch::try_new(
+///         schema,
+///         vec![Arc::new(StringArray::from(vec![
+///             "2020-09-08T13:42:29Z",
+///             "2020-09-08T13:42:29.190855-05:00",
+///             "2020-08-09 12:13:29",
+///             "2020-01-02",
+///         ]))],
+///     )?;
+
+///     // declare a new context. In spark API, this corresponds to a new spark SQLsession
+///     let ctx = SessionContext::new();
+
+///     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+///     ctx.register_batch("t", batch)?;
+///     let df = ctx.table("t").await?;
+
+///     // use to_date function to convert col 'a' to timestamp type using the default parsing
+///     let df = df.with_column("a", to_date(vec![col("a")]))?;
+
+///     let df = df.select_columns(&["a"])?;
+
+///     // print the results
+///     df.show().await?;
+
+///     # Ok(())
+/// # }
+/// ```
+pub fn to_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    match args.len() {
+        1 => handle::<Date32Type, _, Date32Type>(
+            args,
+            |s| {
+                string_to_timestamp_nanos_shim(s)
+                    .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
+                    .and_then(|v| {
+                        v.try_into().map_err(|_| {
+                            internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
+                        })
+                    })
+            },
+            "to_date",
+        ),
+        n if n >= 2 => handle_multiple::<Date32Type, _, Date32Type, _>(
+            args,
+            |s, format| {
+                string_to_timestamp_nanos_formatted(s, format)
+                    .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
+                    .and_then(|v| {
+                        v.try_into().map_err(|_| {
+                            internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
+                        })
+                    })
+            },
+            |n| n,
+            "to_date",
+        ),
+        _ => exec_err!("Unsupported 0 argument count for function to_date"),
+    }
+}
+
 /// to_timestamp SQL function
 ///
 /// Note: `to_timestamp` returns `Timestamp(Nanosecond)` though its arguments are interpreted as **seconds**.
@@ -516,8 +595,8 @@ pub fn make_current_time(
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion_common::ScalarValue::TimestampNanosecond;
-/// # use std::sync::Arc;        
-/// # use arrow_array::{Date32Array, RecordBatch, StringArray};             
+/// # use std::sync::Arc;
+/// # use arrow_array::{Date32Array, RecordBatch, StringArray};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
@@ -1565,6 +1644,36 @@ fn validate_to_timestamp_data_types(
     }
 
     None
+}
+
+/// to_date SQL function implementation
+pub fn to_date_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.is_empty() {
+        return exec_err!(
+            "to_date function requires 1 or more arguments, got {}",
+            args.len()
+        );
+    }
+
+    // validate that any args after the first one are Utf8
+    if args.len() > 1 {
+        if let Some(value) = validate_to_timestamp_data_types(args, "to_date") {
+            return value;
+        }
+    }
+
+    match args[0].data_type() {
+        DataType::Int32
+        | DataType::Int64
+        | DataType::Null
+        | DataType::Float64
+        | DataType::Date32
+        | DataType::Date64 => cast_column(&args[0], &DataType::Date32, None),
+        DataType::Utf8 => to_date(args),
+        other => {
+            exec_err!("Unsupported data type {:?} for function to_date", other)
+        }
+    }
 }
 
 /// to_timestamp() SQL function implementation

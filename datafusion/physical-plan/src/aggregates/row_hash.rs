@@ -341,6 +341,7 @@ impl GroupedHashAggregateStream {
             .with_can_spill(true)
             .register(context.memory_pool());
         let (ordering, _) = agg
+            .properties()
             .equivalence_properties()
             .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(

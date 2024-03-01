@@ -37,9 +37,10 @@ use std::sync::Arc;
 /// functions you supply such name, type signature, return type, and actual
 /// implementation.
 ///
-/// 1. For simple (less performant) use cases, use [`create_udf`] and [`simple_udf.rs`].
+/// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
-/// 2. For advanced use cases, use  [`ScalarUDFImpl`] and [`advanced_udf.rs`].
+/// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
+/// access (examples in  [`advanced_udf.rs`]).
 ///
 /// # API Note
 ///

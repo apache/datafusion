@@ -22322,7 +22322,6 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Asin => "Asin",
             Self::Atan => "Atan",
             Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
@@ -22341,7 +22340,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Tan => "Tan",
             Self::Trunc => "Trunc",
             Self::Array => "Array",
-            Self::RegexpMatch => "RegexpMatch",
             Self::BitLength => "BitLength",
             Self::Btrim => "Btrim",
             Self::CharacterLength => "CharacterLength",
@@ -22437,7 +22435,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
-            Self::Range => "Range",
             Self::ArrayExcept => "ArrayExcept",
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
@@ -22452,6 +22449,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReverse => "ArrayReverse",
             Self::RegexpLike => "RegexpLike",
             Self::ToChar => "ToChar",
+            Self::ToDate => "ToDate",
         };
         serializer.serialize_str(variant)
     }
@@ -22464,7 +22462,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Asin",
             "Atan",
             "Ascii",
             "Ceil",
@@ -22483,7 +22480,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Tan",
             "Trunc",
             "Array",
-            "RegexpMatch",
             "BitLength",
             "Btrim",
             "CharacterLength",
@@ -22579,7 +22575,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
-            "Range",
             "ArrayExcept",
             "ArrayPopFront",
             "Levenshtein",
@@ -22594,6 +22589,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReverse",
             "RegexpLike",
             "ToChar",
+            "ToDate",
         ];
 
         struct GeneratedVisitor;
@@ -22635,7 +22631,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Asin" => Ok(ScalarFunction::Asin),
                     "Atan" => Ok(ScalarFunction::Atan),
                     "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
@@ -22654,7 +22649,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Tan" => Ok(ScalarFunction::Tan),
                     "Trunc" => Ok(ScalarFunction::Trunc),
                     "Array" => Ok(ScalarFunction::Array),
-                    "RegexpMatch" => Ok(ScalarFunction::RegexpMatch),
                     "BitLength" => Ok(ScalarFunction::BitLength),
                     "Btrim" => Ok(ScalarFunction::Btrim),
                     "CharacterLength" => Ok(ScalarFunction::CharacterLength),
@@ -22750,7 +22744,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
-                    "Range" => Ok(ScalarFunction::Range),
                     "ArrayExcept" => Ok(ScalarFunction::ArrayExcept),
                     "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
@@ -22765,6 +22758,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     "ToChar" => Ok(ScalarFunction::ToChar),
+                    "ToDate" => Ok(ScalarFunction::ToDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
