@@ -58,12 +58,12 @@ datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = "0.4.20"
-rand = { workspace = true }
-rstest = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [dev-dependencies]
 criterion = "0.5"
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+rand = { workspace = true }
 
 [[bench]]
 harness = false
