@@ -283,7 +283,6 @@ impl FirstValueAccumulator {
                     }
                 }
                 return Ok(None);
-
             } else {
                 // If not ignoring nulls, return the first value if it exists.
                 return Ok((!value.is_empty()).then_some(0));
@@ -751,13 +750,13 @@ mod tests {
 
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
 
+    use crate::expressions::{col, FirstValue};
+    use crate::{AggregateExpr, PhysicalSortExpr};
     use arrow::compute::concat;
     use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
-    use crate::expressions::{col, FirstValue};
-    use crate::{AggregateExpr, PhysicalSortExpr};
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
@@ -873,9 +872,7 @@ mod tests {
             Some(3),
             Some(9),
         ]));
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-        ]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let a_expr = col("a", &schema)?;
@@ -914,9 +911,7 @@ mod tests {
             Some(10),
             Some(9),
         ]));
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-        ]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let a_expr = col("a", &schema)?;
