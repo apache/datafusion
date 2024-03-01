@@ -2896,6 +2896,18 @@ impl ContextProvider for MockContextProvider {
     ) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
+
+    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
+        self.udfs.clone()
+    }
+
+    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
+        self.udafs.clone()
+    }
+
+    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
+        HashMap::new()
+    }
 }
 
 #[test]

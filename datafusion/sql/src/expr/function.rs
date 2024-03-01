@@ -20,19 +20,62 @@ use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, DFSchema, Dependency, Result,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest};
-use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    expr, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFunctionDefinition,
+    expr, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition,
+};
+use datafusion_expr::{
+    expr::{ScalarFunction, Unnest},
+    BuiltInWindowFunction, BuiltinScalarFunction,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
+use strum::IntoEnumIterator;
 
 use super::arrow_cast::ARROW_CAST_NAME;
+
+/// Suggest a valid function based on an invalid input function name
+pub fn suggest_valid_function(
+    input_function_name: &str,
+    is_window_func: bool,
+    ctx: &dyn ContextProvider,
+) -> String {
+    let valid_funcs = if is_window_func {
+        // All aggregate functions and builtin window functions
+        AggregateFunction::iter()
+            .map(|func| func.to_string())
+            .chain(BuiltInWindowFunction::iter().map(|func| func.to_string()))
+            .collect()
+    } else {
+        // All scalar functions and aggregate functions
+        let mut funcs = Vec::new();
+
+        funcs.extend(BuiltinScalarFunction::iter().map(|func| func.to_string()));
+        funcs.extend(ctx.udfs().into_keys());
+        funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
+        funcs.extend(ctx.udafs().into_keys());
+
+        funcs
+    };
+    find_closest_match(valid_funcs, input_function_name)
+}
+
+/// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitve)
+/// Input `candidates` must not be empty otherwise it will panic
+fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
+    let target = target.to_lowercase();
+    candidates
+        .into_iter()
+        .min_by_key(|candidate| {
+            datafusion_common::utils::datafusion_strsim::levenshtein(
+                &candidate.to_lowercase(),
+                &target,
+            )
+        })
+        .expect("No candidates provided.") // Panic if `candidates` argument is empty
+}
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
@@ -211,7 +254,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // Could not find the relevant function, so return an error
-        let suggested_func_name = suggest_valid_function(&name, is_function_window);
+        let suggested_func_name =
+            suggest_valid_function(&name, is_function_window, self.context_provider);
         plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
     }
 

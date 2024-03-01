@@ -2084,6 +2084,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn options(&self) -> &ConfigOptions {
         self.state.config_options()
     }
+
+    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
+        self.state.scalar_functions.clone()
+    }
+
+    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
+        self.state.aggregate_functions().clone()
+    }
+
+    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
+        self.state.window_functions().clone()
+    }
 }
 
 impl FunctionRegistry for SessionState {

@@ -955,6 +955,18 @@ mod tests {
         fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
             None
         }
+
+        fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
+            HashMap::new()
+        }
+
+        fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
+            HashMap::new()
+        }
+
+        fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
+            HashMap::new()
+        }
     }
 
     fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {

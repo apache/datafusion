@@ -30,6 +30,7 @@ use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn main() -> Result<()> {
@@ -225,6 +226,18 @@ impl ContextProvider for MyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
+        HashMap::new()
+    }
+
+    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
+        HashMap::new()
+    }
+
+    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
+        HashMap::new()
     }
 }
 
