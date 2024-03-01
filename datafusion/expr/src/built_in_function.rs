@@ -263,20 +263,8 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// to_hex
     ToHex,
-    /// to_timestamp
-    ToTimestamp,
-    /// to_timestamp_millis
-    ToTimestampMillis,
-    /// to_timestamp_micros
-    ToTimestampMicros,
-    /// to_timestamp_nanos
-    ToTimestampNanos,
-    /// to_timestamp_seconds
-    ToTimestampSeconds,
     /// from_unixtime
     FromUnixtime,
-    /// to_date
-    ToDate,
     ///now
     Now,
     ///current_date
@@ -463,18 +451,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::ToHex => Volatility::Immutable,
             BuiltinScalarFunction::ToChar => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampNanos => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
             BuiltinScalarFunction::MakeDate => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
-            BuiltinScalarFunction::ToDate => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
@@ -568,7 +550,7 @@ impl BuiltinScalarFunction {
                         _ => {
                             return plan_err!(
                                 "The {self} function can only accept list as the args."
-                            )
+                            );
                         }
                     }
                 }
@@ -778,13 +760,7 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
-            BuiltinScalarFunction::ToTimestamp
-            | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
-            BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
-            BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
-            BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
-            BuiltinScalarFunction::ToDate => Ok(Date32),
             BuiltinScalarFunction::Now => {
                 Ok(Timestamp(Nanosecond, Some("+00:00".into())))
             }
@@ -1052,17 +1028,9 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::ToTimestamp
-            | BuiltinScalarFunction::ToTimestampSeconds
-            | BuiltinScalarFunction::ToTimestampMillis
-            | BuiltinScalarFunction::ToTimestampMicros
-            | BuiltinScalarFunction::ToTimestampNanos => {
-                Signature::variadic_any(self.volatility())
-            }
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::ToDate => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Digest => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
@@ -1489,13 +1457,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
-            BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
-            BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
-            BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
-            BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
-            BuiltinScalarFunction::ToTimestampNanos => &["to_timestamp_nanos"],
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
-            BuiltinScalarFunction::ToDate => &["to_date"],
 
             // hashing functions
             BuiltinScalarFunction::Digest => &["digest"],

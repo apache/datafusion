@@ -1231,11 +1231,14 @@ name = "datafusion-functions"
 version = "36.0.0"
 dependencies = [
  "arrow",
+ "arrow-array",
  "base64",
+ "chrono",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
  "hex",
+ "itertools",
  "log",
 ]
 
