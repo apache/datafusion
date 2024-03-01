@@ -1939,7 +1939,7 @@ pub fn parse_expr(
             fun_definition,
         }) => {
             let scalar_fn = match fun_definition {
-                Some(buf) => codec.try_decode_udf(&fun_name, &buf)?,
+                Some(buf) => codec.try_decode_udf(fun_name, buf, registry)?,
                 None => registry.udf(fun_name.as_str())?,
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(

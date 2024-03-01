@@ -27,7 +27,9 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
+use datafusion::execution::FunctionRegistry;
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
+use datafusion_expr::{ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl};
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use prost::Message;
 
@@ -66,6 +68,8 @@ use datafusion_proto::bytes::{
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
+
+use self::proto::ScalarUDFProto;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -634,6 +638,12 @@ pub mod proto {
         #[prost(uint64, tag = "1")]
         pub k: u64,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ScalarUDFProto {
+        #[prost(message, tag = "1")]
+        pub expr: ::core::option::Option<datafusion_proto::protobuf::LogicalExprNode>,
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -756,6 +766,82 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         internal_err!("unsupported plan type")
+    }
+}
+
+#[derive(Debug)]
+pub struct ScalarUDFExtensionCodec {}
+
+impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+        _ctx: &SessionContext,
+    ) -> Result<Extension> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>> {
+        internal_err!("unsupported plan type")
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _node: Arc<dyn TableProvider>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        internal_err!("unsupported plan type")
+    }
+
+    fn try_decode_udf(
+        &self,
+        _name: &str,
+        buf: &[u8],
+        ctx: &dyn FunctionRegistry,
+    ) -> Result<Arc<ScalarUDF>> {
+        let msg = ScalarUDFProto::decode(buf).map_err(|_| {
+            DataFusionError::Internal("Error decoding test table".to_string())
+        })?;
+        if let Some(expr) = msg.expr.as_ref() {
+            let node = from_proto::parse_expr(expr, ctx, self)?;
+            match node {
+                Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) => {
+                    match func_def {
+                        ScalarFunctionDefinition::UDF(fun) => Ok(fun),
+                        _ => internal_err!("invalid plan, no udf"),
+                    }
+                }
+                _ => internal_err!("invalid plan, no udf"),
+            }
+        } else {
+            internal_err!("invalid plan, no expr")
+        }
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let func = Expr::ScalarFunction(ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(Arc::new(node.clone())),
+            args: vec![],
+        });
+
+        let proto = proto::ScalarUDFProto {
+            expr: Some(serialize_expr(&func, self)?),
+        };
+
+        proto.encode(buf).map_err(|e| {
+            DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+        })?;
+        Ok(())
     }
 }
 
@@ -1665,6 +1751,69 @@ fn roundtrip_scalar_udf() {
     ctx.register_udf(udf);
 
     roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_scalar_udf_extension_codec() {
+    #[derive(Debug)]
+    struct AddOne {
+        signature: Signature,
+    }
+
+    impl AddOne {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Int32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    /// Implement the ScalarUDFImpl trait for AddOne
+    impl ScalarUDFImpl for AddOne {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "add_one"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+            if !matches!(args.get(0), Some(&DataType::Int32)) {
+                return plan_err!("add_one only accepts Int32 arguments");
+            }
+            Ok(DataType::Int32)
+        }
+        // The actual implementation would add one to the argument
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    let udf = ScalarUDF::from(AddOne::new());
+    let test_expr =
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf.clone()), vec![]));
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(udf);
+
+    let extension_codec = ScalarUDFExtensionCodec {};
+    let proto: protobuf::LogicalExprNode =
+        match serialize_expr(&test_expr, &extension_codec) {
+            Ok(p) => p,
+            Err(e) => panic!("Error serializing expression: {:?}", e),
+        };
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
+
+    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+
+    roundtrip_json_test(&proto);
 }
 
 #[test]
