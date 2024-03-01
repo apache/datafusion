@@ -19,6 +19,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
+use arrow::datatypes::IntervalUnit::MonthDayNano;
+use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
@@ -26,6 +28,7 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
+
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(ArrayToString,
     array_to_string,
@@ -106,6 +109,7 @@ impl Range {
                     Exact(vec![Int64]),
                     Exact(vec![Int64, Int64]),
                     Exact(vec![Int64, Int64, Int64]),
+                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -136,7 +140,17 @@ impl ScalarUDFImpl for Range {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+        match args[0].data_type() {
+            arrow::datatypes::DataType::Int64 => {
+                crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+            }
+            arrow::datatypes::DataType::Date32 => {
+                crate::kernels::gen_range_date(&args, 0).map(ColumnarValue::Array)
+            }
+            _ => {
+                exec_err!("unsupported type for range")
+            }
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -165,6 +179,7 @@ impl GenSeries {
                     Exact(vec![Int64]),
                     Exact(vec![Int64, Int64]),
                     Exact(vec![Int64, Int64, Int64]),
+                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -195,7 +210,17 @@ impl ScalarUDFImpl for GenSeries {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
+        match args[0].data_type() {
+            arrow::datatypes::DataType::Int64 => {
+                crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
+            }
+            arrow::datatypes::DataType::Date32 => {
+                crate::kernels::gen_range_date(&args, 1).map(ColumnarValue::Array)
+            }
+            _ => {
+                exec_err!("unsupported type for range")
+            }
+        }
     }
 
     fn aliases(&self) -> &[String] {

@@ -38,7 +38,10 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+arrow-array = { workspace = true }
+arrow-arith = { version = "50.0.0", default-features = false }
+arrow-cast = { version = "50.0.0", default-features = false }
+datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 log = { workspace = true }
