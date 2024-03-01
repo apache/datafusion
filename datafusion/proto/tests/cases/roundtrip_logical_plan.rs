@@ -27,9 +27,8 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
-use datafusion::execution::FunctionRegistry;
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::{ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl};
+use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use prost::Message;
 
@@ -68,8 +67,7 @@ use datafusion_proto::bytes::{
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
-
-use self::proto::ScalarUDFProto;
+use regex::Regex;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -640,9 +638,9 @@ pub mod proto {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ScalarUDFProto {
-        #[prost(message, tag = "1")]
-        pub expr: ::core::option::Option<datafusion_proto::protobuf::LogicalExprNode>,
+    pub struct MyRegexUdfNode {
+        #[prost(string, tag = "1")]
+        pub pattern: String,
     }
 }
 
@@ -770,6 +768,52 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
 }
 
 #[derive(Debug)]
+struct MyRegexUdf {
+    signature: Signature,
+    // compiled regex
+    _regex: Regex,
+    // regex as original string
+    pattern: String,
+}
+
+impl MyRegexUdf {
+    fn new(_regex: Regex, pattern: String) -> Self {
+        Self {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int32],
+                Volatility::Immutable,
+            ),
+            _regex,
+            pattern,
+        }
+    }
+}
+
+/// Implement the ScalarUDFImpl trait for AddOne
+impl ScalarUDFImpl for MyRegexUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "regex_udf"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        if !matches!(args.first(), Some(&DataType::Utf8)) {
+            return plan_err!("regex_udf only accepts Utf8 arguments");
+        }
+        Ok(DataType::Int32)
+    }
+    // The actual implementation would add one to the argument
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
 pub struct ScalarUDFExtensionCodec {}
 
 impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
@@ -803,43 +847,29 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
         internal_err!("unsupported plan type")
     }
 
-    fn try_decode_udf(
-        &self,
-        _name: &str,
-        buf: &[u8],
-        ctx: &dyn FunctionRegistry,
-    ) -> Result<Arc<ScalarUDF>> {
-        let msg = ScalarUDFProto::decode(buf).map_err(|_| {
-            DataFusionError::Internal("Error decoding test table".to_string())
-        })?;
-        if let Some(expr) = msg.expr.as_ref() {
-            let node = from_proto::parse_expr(expr, ctx, self)?;
-            match node {
-                Expr::ScalarFunction(ScalarFunction { func_def, args: _ }) => {
-                    match func_def {
-                        ScalarFunctionDefinition::UDF(fun) => Ok(fun),
-                        _ => internal_err!("invalid plan, no udf"),
-                    }
-                }
-                _ => internal_err!("invalid plan, no udf"),
+    fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        if let Ok(proto) = proto::MyRegexUdfNode::decode(buf) {
+            let regex = Regex::new(&proto.pattern).map_err(|_err| ..);
+            match regex {
+                Ok(regex) => Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
+                    regex,
+                    proto.pattern,
+                )))),
+                Err(e) => internal_err!("unsupported regex pattern {e:?}"),
             }
         } else {
-            internal_err!("invalid plan, no expr")
+            not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
         }
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let func = Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::UDF(Arc::new(node.clone())),
-            args: vec![],
-        });
-
-        let proto = proto::ScalarUDFProto {
-            expr: Some(serialize_expr(&func, self)?),
+        let binding = node.inner();
+        let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
+        let proto = proto::MyRegexUdfNode {
+            pattern: udf.pattern.clone(),
         };
-
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
         })?;
         Ok(())
     }
@@ -1755,47 +1785,9 @@ fn roundtrip_scalar_udf() {
 
 #[test]
 fn roundtrip_scalar_udf_extension_codec() {
-    #[derive(Debug)]
-    struct AddOne {
-        signature: Signature,
-    }
-
-    impl AddOne {
-        fn new() -> Self {
-            Self {
-                signature: Signature::uniform(
-                    1,
-                    vec![DataType::Int32],
-                    Volatility::Immutable,
-                ),
-            }
-        }
-    }
-
-    /// Implement the ScalarUDFImpl trait for AddOne
-    impl ScalarUDFImpl for AddOne {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn name(&self) -> &str {
-            "add_one"
-        }
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-            if !matches!(args.get(0), Some(&DataType::Int32)) {
-                return plan_err!("add_one only accepts Int32 arguments");
-            }
-            Ok(DataType::Int32)
-        }
-        // The actual implementation would add one to the argument
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            unimplemented!()
-        }
-    }
-
-    let udf = ScalarUDF::from(AddOne::new());
+    let pattern = ".*";
+    let regex = Regex::new(pattern).unwrap();
+    let udf = ScalarUDF::from(MyRegexUdf::new(regex, pattern.to_string()));
     let test_expr =
         Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf.clone()), vec![]));
 

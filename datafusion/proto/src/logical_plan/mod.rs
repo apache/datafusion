@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
-use datafusion::execution::FunctionRegistry;
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use datafusion_expr::ScalarUDF;
 use std::collections::HashMap;
@@ -138,12 +137,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &mut Vec<u8>,
     ) -> Result<()>;
 
-    fn try_decode_udf(
-        &self,
-        name: &str,
-        _buf: &[u8],
-        _ctx: &dyn FunctionRegistry,
-    ) -> Result<Arc<ScalarUDF>> {
+    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
     }
 
