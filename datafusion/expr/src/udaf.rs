@@ -23,7 +23,7 @@ use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
