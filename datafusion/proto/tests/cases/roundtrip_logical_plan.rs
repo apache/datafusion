@@ -28,7 +28,6 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use prost::Message;
 
@@ -64,8 +63,8 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::from_proto;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
 
 #[cfg(feature = "json")]
@@ -80,9 +79,13 @@ fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 
 // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
 // equality.
-fn roundtrip_expr_test<T, E>(initial_struct: Expr, ctx: SessionContext) {
+fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
     let extension_codec = DefaultLogicalExtensionCodec {};
-    let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)?;
+    let proto: protobuf::LogicalExprNode =
+        match serialize_expr(&initial_struct, &extension_codec) {
+            Ok(p) => p,
+            Err(e) => panic!("Error serializing expression: {:?}", e),
+        };
     let round_trip: Expr =
         from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
@@ -168,14 +171,6 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         msg.encode(buf).map_err(|_| {
             DataFusionError::Internal("Error encoding test table".to_string())
         })
-    }
-
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        internal_err!("unsupported plan type")
-    }
-
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        internal_err!("unsupported plan type")
     }
 }
 
@@ -733,7 +728,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
             let proto = proto::TopKPlanProto {
                 k: exec.k as u64,
-                expr: Some(serialize_expr(&exec.expr, null)?),
+                expr: Some(serialize_expr(&exec.expr, self)?),
             };
 
             proto.encode(buf).map_err(|e| {
@@ -760,14 +755,6 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        internal_err!("unsupported plan type")
-    }
-
-    fn try_decode_udf(&self, _name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        internal_err!("unsupported plan type")
-    }
-
-    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
         internal_err!("unsupported plan type")
     }
 }

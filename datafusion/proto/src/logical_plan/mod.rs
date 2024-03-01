@@ -17,7 +17,7 @@
 
 use arrow::csv::WriterBuilder;
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::ScalarUDF;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -137,9 +137,13 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &mut Vec<u8>,
     ) -> Result<()>;
 
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>>;
+    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        not_impl_err!("LogicalExtensionCodec is not provided for scalar function {name}")
+    }
 
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -173,14 +177,6 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        not_impl_err!("LogicalExtensionCodec is not provided")
-    }
-
-    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        not_impl_err!("LogicalExtensionCodec is not provided")
-    }
-
-    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
 }

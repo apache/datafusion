@@ -814,7 +814,7 @@ pub fn serialize_expr(
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
                     let mut buf = Vec::new();
-                    codec.try_encode_udf(fun.as_ref(), &mut buf);
+                    let _ = codec.try_encode_udf(fun.as_ref(), &mut buf);
 
                     let fun_definition = if buf.is_empty() { None } else { Some(buf) };
 

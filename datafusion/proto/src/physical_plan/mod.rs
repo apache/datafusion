@@ -60,7 +60,6 @@ use datafusion::physical_plan::{
     WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::ScalarUDF;
 use prost::bytes::BufMut;
 use prost::Message;
 
