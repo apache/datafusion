@@ -534,18 +534,9 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
 
 #[cfg(test)]
 pub mod for_test {
-    use arrow::datatypes::DataType;
-    use datafusion_expr::{call_fn, lit, Cast, Expr};
+    use datafusion_expr::{call_fn, Expr};
 
     pub fn now_expr() -> Expr {
         call_fn("now", vec![]).unwrap()
-    }
-
-    pub fn cast_to_int64_expr(expr: Expr) -> Expr {
-        Expr::Cast(Cast::new(expr.into(), DataType::Int64))
-    }
-
-    pub fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
-        call_fn("to_timestamp", vec![lit(arg.into())]).unwrap()
     }
 }

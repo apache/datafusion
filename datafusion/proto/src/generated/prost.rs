@@ -2692,10 +2692,10 @@ pub enum ScalarFunction {
     Strpos = 52,
     Substr = 53,
     ToHex = 54,
-    ToTimestamp = 55,
-    ToTimestampMillis = 56,
-    ToTimestampMicros = 57,
-    ToTimestampSeconds = 58,
+    /// 55 was ToTimestamp
+    /// 56 was ToTimestampMillis
+    /// 57 was ToTimestampMicros
+    /// 58 was ToTimestampSeconds
     Now = 59,
     Translate = 60,
     Trim = 61,
@@ -2753,7 +2753,7 @@ pub enum ScalarFunction {
     ArrayEmpty = 115,
     ArrayPopBack = 116,
     StringToArray = 117,
-    ToTimestampNanos = 118,
+    /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
@@ -2771,8 +2771,8 @@ pub enum ScalarFunction {
     MakeDate = 133,
     ArrayReverse = 134,
     RegexpLike = 135,
+    /// / 137 was ToDate
     ToChar = 136,
-    ToDate = 137,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2832,10 +2832,6 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::ToTimestamp => "ToTimestamp",
-            ScalarFunction::ToTimestampMillis => "ToTimestampMillis",
-            ScalarFunction::ToTimestampMicros => "ToTimestampMicros",
-            ScalarFunction::ToTimestampSeconds => "ToTimestampSeconds",
             ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
@@ -2891,7 +2887,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
-            ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
@@ -2909,7 +2904,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayReverse => "ArrayReverse",
             ScalarFunction::RegexpLike => "RegexpLike",
             ScalarFunction::ToChar => "ToChar",
-            ScalarFunction::ToDate => "ToDate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2966,10 +2960,6 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "ToTimestamp" => Some(Self::ToTimestamp),
-            "ToTimestampMillis" => Some(Self::ToTimestampMillis),
-            "ToTimestampMicros" => Some(Self::ToTimestampMicros),
-            "ToTimestampSeconds" => Some(Self::ToTimestampSeconds),
             "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
@@ -3025,7 +3015,6 @@ impl ScalarFunction {
             "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
-            "ToTimestampNanos" => Some(Self::ToTimestampNanos),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
@@ -3043,7 +3032,6 @@ impl ScalarFunction {
             "ArrayReverse" => Some(Self::ArrayReverse),
             "RegexpLike" => Some(Self::RegexpLike),
             "ToChar" => Some(Self::ToChar),
-            "ToDate" => Some(Self::ToDate),
             _ => None,
         }
     }

@@ -90,6 +90,13 @@ pub mod macros;
 pub mod core;
 make_stub_package!(core, "core_expressions");
 
+/// Date and time expressions.
+/// Contains functions such as to_timestamp
+/// Enabled via feature flag `datetime_expressions`
+#[cfg(feature = "datetime_expressions")]
+pub mod datetime;
+make_stub_package!(datetime, "datetime_expressions");
+
 /// Encoding expressions.
 /// Contains Hex and binary `encode` and `decode` functions.
 /// Enabled via feature flag `encoding_expressions`
@@ -113,6 +120,8 @@ make_stub_package!(regex, "regex_expressions");
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
+    #[cfg(feature = "datetime_expressions")]
+    pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
     #[cfg(feature = "math_expressions")]
@@ -125,6 +134,7 @@ pub mod expr_fn {
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let mut all_functions = core::functions()
         .into_iter()
+        .chain(datetime::functions())
         .chain(encoding::functions())
         .chain(math::functions())
         .chain(regex::functions());

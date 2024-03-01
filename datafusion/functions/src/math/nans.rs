@@ -18,14 +18,12 @@
 //! Math function: `isnan()`.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
 use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{
-    utils::generate_signature_error_msg, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -58,18 +56,7 @@ impl ScalarUDFImpl for IsNanFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return Err(plan_datafusion_err!(
-                "{}",
-                generate_signature_error_msg(
-                    self.name(),
-                    self.signature().clone(),
-                    arg_types,
-                )
-            ));
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
 

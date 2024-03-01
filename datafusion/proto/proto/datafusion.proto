@@ -603,10 +603,10 @@ enum ScalarFunction {
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
   Now = 59;
   Translate = 60;
   Trim = 61;
@@ -664,7 +664,7 @@ enum ScalarFunction {
   ArrayEmpty = 115;
   ArrayPopBack = 116;
   StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
@@ -683,7 +683,7 @@ enum ScalarFunction {
   ArrayReverse = 134;
   RegexpLike = 135;
   ToChar = 136;
-  ToDate = 137;
+  /// 137 was ToDate
 }
 
 message ScalarFunctionNode {
