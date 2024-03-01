@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
-use crate::expressions::format_state_name;
+use crate::expressions::{format_state_name, is_null};
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
@@ -44,6 +44,7 @@ pub struct FirstValue {
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
+    is_ignore_null: bool,
 }
 
 impl FirstValue {
@@ -56,6 +57,25 @@ impl FirstValue {
         order_by_data_types: Vec<DataType>,
     ) -> Self {
         let requirement_satisfied = ordering_req.is_empty();
+        Self::with_ignore_null(
+            expr,
+            name,
+            input_data_type,
+            ordering_req,
+            order_by_data_types,
+            false,
+        )
+    }
+
+    pub fn with_ignore_null(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        input_data_type: DataType,
+        ordering_req: LexOrdering,
+        order_by_data_types: Vec<DataType>,
+        is_ignore_null: bool,
+    ) -> Self {
+        let requirement_satisfied = ordering_req.is_empty();
         Self {
             name: name.into(),
             input_data_type,
@@ -63,6 +83,7 @@ impl FirstValue {
             expr,
             ordering_req,
             requirement_satisfied,
+            is_ignore_null,
         }
     }
 
@@ -134,6 +155,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
+            self.is_ignore_null.clone(),
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -179,6 +201,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
+            self.is_ignore_null.clone(),
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -213,6 +236,7 @@ struct FirstValueAccumulator {
     ordering_req: LexOrdering,
     // Stores whether incoming data already satisfies the ordering requirement.
     requirement_satisfied: bool,
+    is_ignore_null: bool,
 }
 
 impl FirstValueAccumulator {
@@ -221,6 +245,7 @@ impl FirstValueAccumulator {
         data_type: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
+        is_ignore_null: bool,
     ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
@@ -233,6 +258,7 @@ impl FirstValueAccumulator {
             orderings,
             ordering_req,
             requirement_satisfied,
+            is_ignore_null,
         })
     }
 
@@ -249,7 +275,19 @@ impl FirstValueAccumulator {
         };
         if self.requirement_satisfied {
             // Get first entry according to the pre-existing ordering (0th index):
-            return Ok((!value.is_empty()).then_some(0));
+            if self.is_ignore_null {
+                // If ignoring nulls, find the first non-null value.
+                for i in 0..value.len() {
+                    if !value.is_null(i) {
+                        return Ok((!value.is_empty()).then_some(i));
+                    }
+                }
+                return Ok(None);
+
+            } else {
+                // If not ignoring nulls, return the first value if it exists.
+                return Ok((!value.is_empty()).then_some(0));
+            }
         }
         let sort_columns = ordering_values
             .iter()
@@ -259,8 +297,22 @@ impl FirstValueAccumulator {
                 options: Some(req.options),
             })
             .collect::<Vec<_>>();
-        let indices = lexsort_to_indices(&sort_columns, Some(1))?;
-        Ok((!indices.is_empty()).then_some(indices.value(0) as _))
+
+        if self.is_ignore_null {
+            let indices = lexsort_to_indices(&sort_columns, Some(value.len()))?;
+            // If ignoring nulls, find the first non-null value.
+            for index_option in indices.iter() {
+                if let Some(index) = index_option {
+                    if !value.is_null(index as usize) {
+                        return Ok((!value.is_empty()).then_some(index.clone() as usize));
+                    }
+                }
+            }
+            return Ok(None);
+        } else {
+            let indices = lexsort_to_indices(&sort_columns, Some(1))?;
+            Ok((!indices.is_empty()).then_some(indices.value(0) as _))
+        }
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
@@ -700,15 +752,17 @@ mod tests {
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
 
     use arrow::compute::concat;
-    use arrow_array::{ArrayRef, Int64Array};
-    use arrow_schema::DataType;
+    use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
+    use crate::expressions::{col, FirstValue};
+    use crate::{AggregateExpr, PhysicalSortExpr};
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
         let mut last_accumulator =
             LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
         // first value in the tuple is start of the range (inclusive),
@@ -748,13 +802,13 @@ mod tests {
 
         // FirstValueAccumulator
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
 
         first_accumulator.update_batch(&[arrs[0].clone()])?;
         let state1 = first_accumulator.state()?;
 
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
         first_accumulator.update_batch(&[arrs[1].clone()])?;
         let state2 = first_accumulator.state()?;
 
@@ -770,7 +824,7 @@ mod tests {
         }
 
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
         first_accumulator.merge_batch(&states)?;
 
         let merged_state = first_accumulator.state()?;
@@ -807,5 +861,119 @@ mod tests {
         assert_eq!(merged_state.len(), state1.len());
 
         Ok(())
+    }
+
+    #[test]
+    fn first_ignore_null() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(2),
+            None,
+            None,
+            Some(3),
+            Some(9),
+        ]));
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let a_expr = col("a", &schema)?;
+
+        let agg1 = Arc::new(FirstValue::with_ignore_null(
+            a_expr.clone(),
+            "first1",
+            DataType::Int32,
+            vec![],
+            vec![],
+            true,
+        ));
+        let first1 = aggregate(&batch, agg1)?;
+        assert_eq!(first1, ScalarValue::Int32(Some(2)));
+
+        let agg2 = Arc::new(FirstValue::new(
+            a_expr.clone(),
+            "first1",
+            DataType::Int32,
+            vec![],
+            vec![],
+        ));
+        let first2 = aggregate(&batch, agg2)?;
+        assert_eq!(first2, ScalarValue::Int32(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn first_ignore_null_with_sort() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(12),
+            None,
+            None,
+            None,
+            Some(10),
+            Some(9),
+        ]));
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let a_expr = col("a", &schema)?;
+
+        let option_desc = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let sort_expr_a = vec![PhysicalSortExpr {
+            expr: a_expr.clone(),
+            options: option_desc,
+        }];
+
+        let agg1 = Arc::new(FirstValue::with_ignore_null(
+            a_expr.clone(),
+            "first1",
+            DataType::Int32,
+            sort_expr_a.clone(),
+            vec![DataType::Int32],
+            true,
+        ));
+        let first1 = aggregate(&batch, agg1)?;
+        assert_eq!(first1, ScalarValue::Int32(Some(9)));
+
+        let agg2 = Arc::new(FirstValue::with_ignore_null(
+            a_expr.clone(),
+            "first2",
+            DataType::Int32,
+            sort_expr_a.clone(),
+            vec![DataType::Int32],
+            false,
+        ));
+        let first2 = aggregate(&batch, agg2)?;
+        assert_eq!(first2, ScalarValue::Int32(None));
+
+        Ok(())
+    }
+
+    pub fn aggregate(
+        batch: &RecordBatch,
+        agg: Arc<dyn AggregateExpr>,
+    ) -> Result<ScalarValue> {
+        let mut accum = agg.create_accumulator()?;
+        let mut expr = agg.expressions();
+        if let Some(ordering_req) = agg.order_bys() {
+            expr.extend(ordering_req.iter().map(|item| item.expr.clone()));
+        }
+
+        let mut values = expr
+            .iter()
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        accum.update_batch(&values)?;
+        accum.evaluate()
     }
 }
