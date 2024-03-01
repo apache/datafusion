@@ -508,6 +508,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::FromUnixtime => {
             Arc::new(datetime_expressions::from_unixtime_invoke)
         }
+        BuiltinScalarFunction::ToDate => Arc::new(datetime_expressions::to_date_invoke),
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::initcap::<i32>)(args)

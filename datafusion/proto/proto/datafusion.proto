@@ -1,4 +1,5 @@
 /*
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -682,6 +683,7 @@ enum ScalarFunction {
   ArrayReverse = 134;
   RegexpLike = 135;
   ToChar = 136;
+  ToDate = 137;
 }
 
 message ScalarFunctionNode {

@@ -17,8 +17,8 @@
 
 //! Defines the ANALYZE operator
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, time::Instant};
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use super::{
@@ -29,6 +29,7 @@ use crate::display::DisplayableExecutionPlan;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::instant::Instant;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;

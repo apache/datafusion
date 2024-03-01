@@ -45,7 +45,7 @@ use arrow::{
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
         IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -3314,6 +3314,12 @@ impl ScalarType<i64> for TimestampMicrosecondType {
 impl ScalarType<i64> for TimestampNanosecondType {
     fn scalar(r: Option<i64>) -> ScalarValue {
         ScalarValue::TimestampNanosecond(r, None)
+    }
+}
+
+impl ScalarType<i32> for Date32Type {
+    fn scalar(r: Option<i32>) -> ScalarValue {
+        ScalarValue::Date32(r)
     }
 }
 
