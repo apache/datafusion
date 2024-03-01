@@ -268,16 +268,18 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stride = stride.evaluate(batch)?.into_array(batch.num_rows())?;
                 match (array.data_type(), start.data_type(), stop.data_type(), stride.data_type()) {
-                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => {
+                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) |
+                    (DataType::LargeList(_), DataType::Int64, DataType::Int64, DataType::Int64)=> {
                         Ok(ColumnarValue::Array((array_slice(&[
                             array, start, stop, stride
                         ]))?))
                     },
-                    (DataType::List(_), start, stop, stride) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes. \
+                    (DataType::List(_), start, stop, stride) |
+                    (DataType::LargeList(_), start, stop, stride)=> exec_err!(
+                        "get indexed field is only possible on List/LargeList with int64 indexes. \
                                  Tried with {start:?}, {stop:?} and {stride:?} indices"),
                     (dt, start, stop, stride) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes or struct \
+                        "get indexed field is only possible on List/LargeList with int64 indexes or struct \
                                  with utf8 indexes. Tried {dt:?} with {start:?}, {stop:?} and {stride:?} indices"),
                 }
             }
