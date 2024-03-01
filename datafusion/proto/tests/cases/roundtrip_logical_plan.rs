@@ -868,7 +868,7 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
             pattern: udf.pattern.clone(),
         };
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
+            DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
         })?;
         Ok(())
     }
