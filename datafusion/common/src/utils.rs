@@ -35,8 +35,11 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::future::Future;
 use std::ops::Range;
 use std::sync::Arc;
+
+use tokio::task::{JoinError, JoinSet};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -677,6 +680,46 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
         .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+}
+
+/// Helper that  provides a simple API to spawn a single task and join it.
+/// Provides guarantees of aborting on `Drop` to keep it cancel-safe.
+///
+/// Technically, it's just a wrapper of `JoinSet` (with size=1).
+#[derive(Debug)]
+pub struct SpawnedTask<R> {
+    inner: JoinSet<R>,
+}
+
+impl<R: 'static> SpawnedTask<R> {
+    pub fn spawn<T>(task: T) -> Self
+    where
+        T: Future<Output = R>,
+        T: Send + 'static,
+        R: Send,
+    {
+        let mut inner = JoinSet::new();
+        inner.spawn(task);
+        Self { inner }
+    }
+
+    pub fn spawn_blocking<T>(task: T) -> Self
+    where
+        T: FnOnce() -> R,
+        T: Send + 'static,
+        R: Send,
+    {
+        let mut inner = JoinSet::new();
+        inner.spawn_blocking(task);
+        Self { inner }
+    }
+
+    pub async fn join(mut self) -> Result<R, JoinError> {
+        self.inner
+            .join_next()
+            .await
+            .expect("`SpawnedTask` instance always contains exactly 1 task")
+    }
 }
 
 #[cfg(test)]
