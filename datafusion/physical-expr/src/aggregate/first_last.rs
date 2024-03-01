@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, get_sort_options, ordering_fields};
-use crate::expressions::{format_state_name, is_null};
+use crate::expressions::format_state_name;
 use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
@@ -56,7 +56,6 @@ impl FirstValue {
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
     ) -> Self {
-        let requirement_satisfied = ordering_req.is_empty();
         Self::with_ignore_null(
             expr,
             name,
@@ -155,7 +154,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.is_ignore_null.clone(),
+            self.is_ignore_null,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -201,7 +200,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.is_ignore_null.clone(),
+            self.is_ignore_null,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -300,14 +299,12 @@ impl FirstValueAccumulator {
         if self.is_ignore_null {
             let indices = lexsort_to_indices(&sort_columns, Some(value.len()))?;
             // If ignoring nulls, find the first non-null value.
-            for index_option in indices.iter() {
-                if let Some(index) = index_option {
-                    if !value.is_null(index as usize) {
-                        return Ok((!value.is_empty()).then_some(index.clone() as usize));
-                    }
+            for index in indices.iter().flatten() {
+                if !value.is_null(index as usize) {
+                    return Ok((!value.is_empty()).then_some(index as usize));
                 }
             }
-            return Ok(None);
+            Ok(None)
         } else {
             let indices = lexsort_to_indices(&sort_columns, Some(1))?;
             Ok((!indices.is_empty()).then_some(indices.value(0) as _))
