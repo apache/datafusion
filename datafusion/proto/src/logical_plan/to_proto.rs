@@ -1456,7 +1456,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
             BuiltinScalarFunction::ToChar => Self::ToChar,
-            BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArraySort => Self::ArraySort,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
@@ -1499,7 +1498,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
-            BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
             BuiltinScalarFunction::Ascii => Self::Ascii,
@@ -1528,9 +1526,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Strpos => Self::Strpos,
             BuiltinScalarFunction::Substr => Self::Substr,
             BuiltinScalarFunction::ToHex => Self::ToHex,
-            BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
-            BuiltinScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
-            BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             BuiltinScalarFunction::Now => Self::Now,
             BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
             BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
@@ -1549,7 +1544,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
             BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
             BuiltinScalarFunction::FindInSet => Self::FindInSet,
-            BuiltinScalarFunction::ToDate => Self::ToDate,
         };
 
         Ok(scalar_function)
