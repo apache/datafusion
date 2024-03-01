@@ -1924,7 +1924,7 @@ pub fn parse_expr(
                 ScalarFunction::ToDate => {
                     let args: Vec<_> = args
                         .iter()
-                        .map(|expr| parse_expr(expr, registry))
+                        .map(|expr| parse_expr(expr, registry, codec))
                         .collect::<std::result::Result<_, _>>()?;
                     Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
                         BuiltinScalarFunction::ToDate,
