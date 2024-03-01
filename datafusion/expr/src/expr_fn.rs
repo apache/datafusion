@@ -1019,7 +1019,6 @@ pub fn create_udaf(
 
 /// Creates a new UDAF with a specific signature, state type and return type.
 /// The signature and state type must match the `Accumulator's implementation`.
-#[allow(clippy::too_many_arguments)]
 pub fn create_udaf_with_ordering(
     name: &str,
     input_type: Vec<DataType>,
@@ -1155,7 +1154,6 @@ impl Debug for SimpleOrderedAggregateUDF {
 impl SimpleOrderedAggregateUDF {
     /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
     /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
         input_type: Vec<DataType>,

@@ -118,11 +118,9 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulator = self.fun.accumulator(
-            &self.data_type,
-            self.sort_exprs.as_slice(),
-            &self.schema,
-        )?;
+        let accumulator =
+            self.fun
+                .accumulator(&self.data_type, &self.sort_exprs, &self.schema)?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to

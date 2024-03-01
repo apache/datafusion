@@ -160,8 +160,6 @@ impl AggregateUDF {
         sort_exprs: &[Expr],
         schema: &Schema,
     ) -> Result<Box<dyn Accumulator>> {
-        // let sort_exprs = self.inner.sort_exprs();
-        // let schema = self.inner.schema();
         self.inner.accumulator(return_type, sort_exprs, schema)
     }
 
@@ -179,10 +177,6 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator()
-    }
-
-    pub fn sort_exprs() -> Vec<Expr> {
-        vec![]
     }
 }
 
@@ -238,7 +232,7 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _arg: &DataType, _sort_exprs: Vec<Expr>, _schema: Option<&Schema>) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn accumulator(&self, _arg: &DataType, _sort_exprs: &[Expr], _schema: &Schema) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
 ///        Ok(vec![DataType::Float64, DataType::UInt32])
 ///    }
@@ -266,8 +260,15 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// Return a new [`Accumulator`] that aggregates values for a specific
-    /// group during query execution. sort_exprs is a list of ordering expressions,
-    /// and schema is used while ordering.
+    /// group during query execution.
+    ///
+    /// `arg`: the type of the argument to this accumulator
+    ///
+    /// `sort_exprs`: contains a list of `Expr::SortExpr`s if the
+    /// aggregate is called with an explicit `ORDER BY`. For example,
+    /// `ARRAY_AGG(x ORDER BY y ASC)`. In this case, `sort_exprs` would contain `[y ASC]`
+    ///
+    /// `schema` is the input schema to the udaf
     fn accumulator(
         &self,
         arg: &DataType,
