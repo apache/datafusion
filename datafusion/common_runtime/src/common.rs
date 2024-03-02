@@ -67,7 +67,7 @@ impl<R: 'static> SpawnedTask<R> {
                 std::panic::resume_unwind(e.into_panic());
             } else {
                 // Cancellation may be caused by two reasons:
-                // 1. Abort is called, but since we consumed `self`, it's not our case.
+                // 1. Abort is called, but since we consumed `self`, it's not our case (`JoinHandle` not accessible outside).
                 // 2. The runtime is shutting down.
                 // So we consider this branch as unreachable.
                 unreachable!("SpawnedTask was cancelled unexpectedly");
