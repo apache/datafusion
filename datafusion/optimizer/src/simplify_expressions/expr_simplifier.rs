@@ -155,7 +155,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
     ///     Ok(DataType::Int32)
     ///   }
-    ///   fn schema(&self) -> Option<Arc<DFSchema>> { None }
     /// }
     ///
     /// // Create the simplifier
