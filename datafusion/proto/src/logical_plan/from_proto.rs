@@ -47,15 +47,15 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array, array_append, array_concat, array_dims, array_distinct, array_element,
-    array_empty, array_except, array_has, array_has_all, array_has_any, array_intersect,
-    array_length, array_ndims, array_pop_back, array_pop_front, array_position,
-    array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
-    array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
-    array_slice, array_sort, array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh,
-    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
-    concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
-    date_part, date_trunc, degrees, digest, ends_with, exp,
+    acosh, array, array_append, array_concat, array_distinct, array_element, array_empty,
+    array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
+    array_ndims, array_pop_back, array_pop_front, array_position, array_positions,
+    array_prepend, array_remove, array_remove_all, array_remove_n, array_repeat,
+    array_replace, array_replace_all, array_replace_n, array_resize, array_slice,
+    array_sort, array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh, bit_length,
+    btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos,
+    cosh, cot, current_date, current_time, date_bin, date_part, date_trunc, degrees,
+    digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, instr, iszero,
     lcm, left, levenshtein, ln, log, log10, log2,
@@ -486,7 +486,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
-            ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::Flatten => Self::Flatten,
@@ -509,7 +508,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -1526,16 +1524,10 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry, codec)?,
                     parse_expr(&args[3], registry, codec)?,
                 )),
-                ScalarFunction::Cardinality => {
-                    Ok(cardinality(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayLength => Ok(array_length(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::ArrayDims => {
-                    Ok(array_dims(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayDistinct => {
                     Ok(array_distinct(parse_expr(&args[0], registry, codec)?))
                 }

@@ -629,12 +629,6 @@ scalar_expr!(
     "flattens an array of arrays into a single array."
 );
 scalar_expr!(
-    ArrayDims,
-    array_dims,
-    array,
-    "returns an array of the array's dimensions."
-);
-scalar_expr!(
     ArrayElement,
     array_element,
     array element,
@@ -737,13 +731,6 @@ scalar_expr!(
     "returns a slice of the array."
 );
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
-
-scalar_expr!(
-    Cardinality,
-    cardinality,
-    array,
-    "returns the total number of elements in the array."
-);
 
 scalar_expr!(
     ArrayResize,
@@ -1389,7 +1376,6 @@ mod test {
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
@@ -1402,7 +1388,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
