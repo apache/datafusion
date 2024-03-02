@@ -467,9 +467,6 @@ pub fn gen_range_date(
         if include_upper == 0 {
             stop = Date32Type::subtract_month_day_nano(stop, step);
         }
-        if neg && stop > start {
-            return exec_err!("start is less than stop but step is negative");
-        }
         let mut new_date = start;
         loop {
             if neg && new_date < stop || !neg && new_date > stop {
