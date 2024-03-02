@@ -42,7 +42,13 @@ pub trait SimplifyInfo {
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
 }
 
-/// See `ExprSimplifier` for an example of how to use this.
+/// Provides simplification information based on DFSchema and
+/// [`ExecutionProps`]. This is the default implementation used by DataFusion
+///
+/// # Example
+/// See the `simplify_demo` in the [`expr_api` example]
+///
+/// [`expr_api` example]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
 #[derive(Debug, Clone)]
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
