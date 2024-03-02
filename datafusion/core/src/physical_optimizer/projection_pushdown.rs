@@ -545,7 +545,8 @@ fn try_embed_to_hash_join(
         return Ok(None);
     }
 
-    let new_hash_join = Arc::new(hash_join.with_projection(&projection_index)?);
+    let new_hash_join =
+        Arc::new(hash_join.with_projection(Some(projection_index.to_vec()))?);
 
     // build projection expressions for update_expr
     let embed_project_exprs = projection_index

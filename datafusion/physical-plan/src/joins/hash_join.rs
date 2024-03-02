@@ -66,7 +66,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::expressions::UnKnownColumn;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -334,18 +335,22 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
+        let schema = Arc::new(schema);
+
+        //  check if the projection is valid
+        datafusion_common::utils::can_project(&schema, projection.as_ref())?;
+
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::new(schema.clone()),
+            schema.clone(),
             *join_type,
             &on,
             partition_mode,
-        );
+            projection.as_ref(),
+        )?;
 
-        let schema = Arc::new(schema);
-
-        let mut exec = HashJoinExec {
+        Ok(HashJoinExec {
             left,
             right,
             on,
@@ -356,6 +361,7 @@ impl HashJoinExec {
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
+            projection,
             column_indices,
             null_equals_null,
             cache,
@@ -414,6 +420,33 @@ impl HashJoinExec {
         JoinSide::Right
     }
 
+    /// Return whether the join contains a projection
+    pub fn contain_projection(&self) -> bool {
+        self.projection.is_some()
+    }
+
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        //  check if the projection is valid
+        datafusion_common::utils::can_project(&self.schema, projection.as_ref())?;
+        let projection = match projection {
+            Some(projection) => match &self.projection {
+                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
+                None => Some(projection),
+            },
+            None => None,
+        };
+        Self::try_new(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            self.filter.clone(),
+            &self.join_type,
+            projection,
+            self.mode,
+            self.null_equals_null,
+        )
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -422,13 +455,14 @@ impl HashJoinExec {
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
-    ) -> PlanProperties {
+        projection: Option<&Vec<usize>>,
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema,
+            schema.clone(),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -436,7 +470,7 @@ impl HashJoinExec {
 
         // Get output partitioning:
         let left_columns_len = left.schema().fields.len();
-        let output_partitioning = match mode {
+        let mut output_partitioning = match mode {
             PartitionMode::CollectLeft => match join_type {
                 JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
                     right.output_partitioning(),
@@ -482,7 +516,32 @@ impl HashJoinExec {
             execution_mode_from_children([left, right])
         };
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        if let Some(projection) = projection {
+            let projection_exprs = project_index_to_exprs(projection, &schema);
+            // construct a map from the input expressions to the output expression of the Projection
+            let projection_mapping =
+                ProjectionMapping::try_new(&projection_exprs, &schema)?;
+            let out_schema = project_schema(&schema, Some(projection))?;
+            if let Partitioning::Hash(exprs, part) = output_partitioning {
+                let normalized_exprs = exprs
+                    .iter()
+                    .map(|expr| {
+                        eq_properties
+                            .project_expr(expr, &projection_mapping)
+                            .unwrap_or_else(|| {
+                                Arc::new(UnKnownColumn::new(&expr.to_string()))
+                            })
+                    })
+                    .collect();
+                output_partitioning = Partitioning::Hash(normalized_exprs, part);
+            }
+            eq_properties = eq_properties.project(&projection_mapping, out_schema);
+        }
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            mode,
+        ))
     }
 }
 
@@ -528,7 +587,6 @@ impl DisplayAs for HashJoinExec {
     }
 }
 
-// TODO I don't find a utils file to locate this function
 pub fn project_index_to_exprs(
     projection_index: &[usize],
     schema: &SchemaRef,

@@ -217,7 +217,6 @@ fn roundtrip_hash_join() -> Result<()> {
                 on.clone(),
                 None,
                 join_type,
-                // TODO: add a projectionexec for projection in the join
                 None,
                 *partition_mode,
                 false,
