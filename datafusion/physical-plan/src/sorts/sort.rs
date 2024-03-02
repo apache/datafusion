@@ -27,7 +27,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter, SpawnedTask};
+use crate::common::{spawn_buffered, IPCWriter};
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -46,6 +46,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,

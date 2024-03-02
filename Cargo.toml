@@ -19,6 +19,7 @@
 exclude = ["datafusion-cli"]
 members = [
     "datafusion/common",
+    "datafusion/common_runtime",
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
@@ -72,6 +73,7 @@ ctor = "0.2.0"
 dashmap = "5.4.0"
 datafusion = { path = "datafusion/core", version = "36.0.0", default-features = false }
 datafusion-common = { path = "datafusion/common", version = "36.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common_runtime", version = "36.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "36.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "36.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "36.0.0" }
