@@ -100,7 +100,7 @@ html_context = {
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
-html_logo = "_static/images/DataFusion-Logo-Background-White.png"
+html_logo = "_static/images/2x_bgwhite_original.png"
 
 html_css_files = [
     "theme_overrides.css"
