@@ -67,7 +67,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// instance of [`SimplifyContext`]. See
     /// [`simplify`](Self::simplify) for an example.
     ///
-    /// [`SimplifyContext`]: crate::simplify_expressions::context::SimplifyContext
+    /// [`SimplifyContext`]: datafusion_expr::simplify::SimplifyContext
     pub fn new(info: S) -> Self {
         Self {
             info,

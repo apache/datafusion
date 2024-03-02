@@ -32,6 +32,7 @@ use std::sync::Arc;
 /// done so during predicate pruning and expression simplification
 ///
 /// [`LogicalPlan`]: datafusion_expr::LogicalPlan
+#[allow(rustdoc::broken_intra_doc_links)]
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
