@@ -842,8 +842,12 @@ impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
         internal_err!("unsupported plan type")
     }
 
-    fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        if let Ok(proto) = proto::MyRegexUdfNode::decode(buf) {
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        if name == "regex_udf" {
+            let proto = proto::MyRegexUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to decode regex_udf: {}", err))
+            })?;
+
             Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
                 proto.pattern,
             ))))
