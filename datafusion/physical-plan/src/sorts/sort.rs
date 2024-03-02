@@ -591,7 +591,8 @@ pub(crate) fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     let indices = if is_multi_column_with_lists(&sort_columns) {
-        // Ref: https://github.com/apache/arrow-rs/pull/2929
+        // lex_sort_to_indices doesn't support List with more than one colum
+        // https://github.com/apache/arrow-rs/issues/5454
         lexsort_to_indices_multi_columns(sort_columns, fetch)?
     } else {
         lexsort_to_indices(&sort_columns, fetch)?
