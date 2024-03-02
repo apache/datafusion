@@ -895,6 +895,8 @@ pub struct ScalarUdfExprNode {
     pub fun_name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
