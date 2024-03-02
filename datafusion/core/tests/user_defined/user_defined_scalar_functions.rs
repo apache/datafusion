@@ -24,7 +24,6 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::DFSchema;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
@@ -553,9 +552,19 @@ impl ScalarUDFImpl for CastToI64UDF {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         let e = args[0].to_owned();
-        let schema = info.schema().unwrap_or_else(|| DFSchema::empty().into());
-        let casted_expr = e.cast_to(&DataType::Int64, schema.as_ref())?;
-        Ok(ExprSimplifyResult::Simplified(casted_expr))
+        // TODO cast_to requires an ExprSchema but simplify gets a SimplifyInfo
+        // so we have to replicate some of the casting logic here.
+        let source_type = info.get_data_type(&e)?;
+        if source_type == DataType::Int64 {
+            Ok(ExprSimplifyResult::Original)
+        } else {
+            Ok(ExprSimplifyResult::Simplified(Expr::Cast(
+                datafusion_expr::Cast {
+                    expr: Box::new(e),
+                    data_type: DataType::Int64,
+                },
+            )))
+        }
     }
     // Casting should be done in `simplify`, so we just return the first argument
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

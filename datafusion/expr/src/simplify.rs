@@ -22,8 +22,7 @@ use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 
-#[allow(rustdoc::private_intra_doc_links)]
-/// The information necessary to apply algebraic simplification to an
+/// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.
 ///
 /// This trait exists so that other systems can plug schema
@@ -41,12 +40,10 @@ pub trait SimplifyInfo {
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
-
-    /// Return the schema for function simplifier
-    fn schema(&self) -> Option<DFSchemaRef>;
 }
 
 /// See `ExprSimplifier` for an example of how to use this.
+#[derive(Debug, Clone)]
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
     props: &'a ExecutionProps,
@@ -69,10 +66,6 @@ impl<'a> SimplifyContext<'a> {
 }
 
 impl<'a> SimplifyInfo for SimplifyContext<'a> {
-    fn schema(&self) -> Option<DFSchemaRef> {
-        self.schema.clone()
-    }
-
     /// returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         for schema in &self.schema {

@@ -67,10 +67,6 @@ impl SimplifyInfo for MyInfo {
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         expr.get_type(self.schema.as_ref())
     }
-
-    fn schema(&self) -> Option<DFSchemaRef> {
-        Some(self.schema.clone())
-    }
 }
 
 impl From<DFSchemaRef> for MyInfo {
