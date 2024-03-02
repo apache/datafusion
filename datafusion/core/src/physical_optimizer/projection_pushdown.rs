@@ -535,20 +535,17 @@ fn try_embed_to_hash_join(
     projection: &ProjectionExec,
     hash_join: &HashJoinExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // Collect all column indices from the given projection expressions.
     let projection_index = collect_column_indices(projection.expr());
 
     if projection_index.is_empty() {
         return Ok(None);
     };
 
-    if projection_index.len() >= hash_join.schema().fields().len() {
-        return Ok(None);
-    }
-
     let new_hash_join =
         Arc::new(hash_join.with_projection(Some(projection_index.to_vec()))?);
 
-    // build projection expressions for update_expr
+    // Build projection expressions for update_expr. Zip the projection_index with the new_hash_join output schema fields.
     let embed_project_exprs = projection_index
         .iter()
         .zip(new_hash_join.schema().fields())
@@ -569,6 +566,7 @@ fn try_embed_to_hash_join(
         };
         new_projection_exprs.push((expr, alias.clone()));
     }
+    // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
     let new_projection = Arc::new(ProjectionExec::try_new(
         new_projection_exprs,
         new_hash_join.clone(),
@@ -582,7 +580,8 @@ fn try_embed_to_hash_join(
 
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
-    // Since there are some expressions like `a + 1`, so we need to traverse the expr tree.
+    // ColumnVisitor will traverse the expr tree and collect all column indices.
+    // Since there are some expressions like `a + 1` in projection exprs, so we need to traverse the expr tree.
     struct ColumnVisitor {
         // TODO: should we use structure that preserves insertion order here, like indexmap?
         pub column_indices: std::collections::BTreeSet<usize>,
@@ -605,6 +604,7 @@ fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usiz
     let mut visitor = ColumnVisitor {
         column_indices: Default::default(),
     };
+    // Collect all column indices from the given projection expressions.
     exprs.iter().for_each(|(expr, _)| {
         let _ = expr.visit(&mut visitor);
     });
@@ -908,6 +908,8 @@ fn try_swapping_with_sym_hash_join(
 
 /// Compare the inputs and outputs of the projection. All expressions must be
 /// columns without alias, and projection does not change the order of fields.
+/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
+/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
     let exprs = projection.expr();
     exprs.iter().enumerate().all(|(idx, (expr, alias))| {
@@ -1291,6 +1293,7 @@ fn new_join_children(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::Arc;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -2339,6 +2342,22 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_column_indices() -> Result<()> {
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 7)),
+            Operator::Minus,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Operator::Plus,
+                Arc::new(Column::new("a", 1)),
+            )),
+        ));
+        let column_indices = collect_column_indices(&[(expr, "b-(1+a)".to_string())]);
+        assert_eq!(column_indices, vec![1, 7]);
+        Ok(())
+    }
+
+    #[test]
     fn test_hash_join_after_projection() -> Result<()> {
         // sql like
         // SELECT t1.c as c_from_left, t1.b as b_from_left, t1.a as a_from_left, t2.c as c_from_right FROM t1 JOIN t2 ON t1.b = t2.c WHERE t1.b - (1 + t2.a) <= t2.a + t1.c
@@ -2400,7 +2419,7 @@ mod tests {
                 (Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
                 (Arc::new(Column::new("c", 7)), "c_from_right".to_string()),
             ],
-            join,
+            join.clone(),
         )?);
         let initial = get_plan_string(&projection);
         let expected_initial = [
@@ -2413,6 +2432,23 @@ mod tests {
 
         // HashJoinExec only returns result after projection. Because there are some alias columns in the projection, the ProjectionExec is not removed.
         let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![
+                (Arc::new(Column::new("a", 0)), "a".to_string()),
+                (Arc::new(Column::new("b", 1)), "b".to_string()),
+                (Arc::new(Column::new("c", 2)), "c".to_string()),
+                (Arc::new(Column::new("c", 7)), "c".to_string()),
+            ],
+            join.clone(),
+        )?);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+        // Comparing to the previous result, this projection don't have alias columns either change the order of output fields. So the ProjectionExec is removed.
+        let expected = ["HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
         Ok(())

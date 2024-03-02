@@ -425,6 +425,7 @@ impl HashJoinExec {
         self.projection.is_some()
     }
 
+    /// Return new instance of [HashJoinExec] with the given projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  check if the projection is valid
         datafusion_common::utils::can_project(&self.schema, projection.as_ref())?;
@@ -516,6 +517,7 @@ impl HashJoinExec {
             execution_mode_from_children([left, right])
         };
 
+        // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             let projection_exprs = project_index_to_exprs(projection, &schema);
             // construct a map from the input expressions to the output expression of the Projection
