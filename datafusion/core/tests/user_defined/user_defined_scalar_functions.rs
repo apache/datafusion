@@ -700,7 +700,7 @@ impl FunctionFactory for MockFunctionFactory {
 async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let function_factory = Arc::new(MockFunctionFactory::default());
     let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
+    let runtime_environment = RuntimeEnv::new(runtime_config)?;
 
     // TODO: remove dialect once new version of sql parser arrives
     let session_config =
@@ -719,13 +719,13 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     "#;
 
     // try to create function when sql options have allow ddl disabled
-    assert!(ctx.sql_with_options(sql, options.clone()).await.is_err());
+    assert!(ctx.sql_with_options(sql, options).await.is_err());
 
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
     // try to drop function when sql options have allow ddl disabled
     assert!(ctx
-        .sql_with_options("drop function better_add", options.clone())
+        .sql_with_options("drop function better_add", options)
         .await
         .is_err());
 
