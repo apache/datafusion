@@ -1381,10 +1381,10 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+
     /// [FunctionFactory] to support pluggable user defined function handler.
-    /// It is invoked on `CREATE FUNCTION` and `DROP FUNCTION` statements.
     ///
-    /// Datafusion generic SQL dialect does not support `CRETE FUNCTION` statement
+    /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
 }

@@ -701,9 +701,10 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let function_factory = Arc::new(MockFunctionFactory::default());
     let runtime_config = RuntimeConfig::new();
     let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
+
+    // TODO: remove dialect once new version of sql parser arrives
     let session_config =
         SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-
     let state =
         SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
             .with_function_factory(function_factory.clone());
