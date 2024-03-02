@@ -2728,7 +2728,7 @@ pub enum ScalarFunction {
     /// 88 was ArrayDims
     ArrayRepeat = 89,
     ArrayLength = 90,
-    ArrayNdims = 91,
+    /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
     ArrayPrepend = 94,
@@ -2863,7 +2863,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
-            ScalarFunction::ArrayNdims => "ArrayNdims",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
@@ -2989,7 +2988,6 @@ impl ScalarFunction {
             "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
-            "ArrayNdims" => Some(Self::ArrayNdims),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),

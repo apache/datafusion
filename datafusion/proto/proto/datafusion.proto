@@ -639,7 +639,7 @@ enum ScalarFunction {
   // 88 was ArrayDims
   ArrayRepeat = 89;
   ArrayLength = 90;
-  ArrayNdims = 91;
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
   ArrayPrepend = 94;

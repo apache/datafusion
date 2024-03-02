@@ -1467,7 +1467,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayElement => Self::ArrayElement,
             BuiltinScalarFunction::Flatten => Self::Flatten,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
-            BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
             BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,

@@ -49,13 +49,13 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     acosh, array, array_append, array_concat, array_distinct, array_element, array_empty,
     array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
-    array_ndims, array_pop_back, array_pop_front, array_position, array_positions,
-    array_prepend, array_remove, array_remove_all, array_remove_n, array_repeat,
-    array_replace, array_replace_all, array_replace_n, array_resize, array_slice,
-    array_sort, array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh, bit_length,
-    btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos,
-    cosh, cot, current_date, current_time, date_bin, date_part, date_trunc, degrees,
-    digest, ends_with, exp,
+    array_pop_back, array_pop_front, array_position, array_positions, array_prepend,
+    array_remove, array_remove_all, array_remove_n, array_repeat, array_replace,
+    array_replace_all, array_replace_n, array_resize, array_slice, array_sort,
+    array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt,
+    ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, instr, iszero,
     lcm, left, levenshtein, ln, log, log10, log2,
@@ -490,7 +490,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
-            ScalarFunction::ArrayNdims => Self::ArrayNdims,
             ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
@@ -1537,9 +1536,6 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::ArrayEmpty => {
                     Ok(array_empty(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::ArrayNdims => {
-                    Ok(array_ndims(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,

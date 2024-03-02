@@ -313,3 +313,57 @@ impl ScalarUDFImpl for Cardinality {
         &self.aliases
     }
 }
+
+make_udf_function!(
+    ArrayNdims,
+    array_ndims,
+    array,
+    "returns the number of dimensions of the array.",
+    array_ndims_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayNdims {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl ArrayNdims {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("array_ndims"), String::from("list_ndims")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayNdims {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_ndims"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
+            _ => {
+                return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_ndims(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}

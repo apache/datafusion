@@ -647,12 +647,6 @@ scalar_expr!(
     "returns the length of the array dimension."
 );
 scalar_expr!(
-    ArrayNdims,
-    array_ndims,
-    array,
-    "returns the number of dimensions of the array."
-);
-scalar_expr!(
     ArrayDistinct,
     array_distinct,
     array,
@@ -1377,7 +1371,6 @@ mod test {
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
-        test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);

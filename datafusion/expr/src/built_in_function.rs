@@ -138,8 +138,6 @@ pub enum BuiltinScalarFunction {
     ArrayEmpty,
     /// array_length
     ArrayLength,
-    /// array_ndims
-    ArrayNdims,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -385,7 +383,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
@@ -565,7 +562,6 @@ impl BuiltinScalarFunction {
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -889,7 +885,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayNdims => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -1485,7 +1480,6 @@ impl BuiltinScalarFunction {
                 &["array_has", "list_has", "array_contains", "list_contains"]
             }
             BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
-            BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]
             }

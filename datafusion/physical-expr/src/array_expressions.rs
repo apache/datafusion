@@ -2018,41 +2018,6 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_ndims SQL function
-pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_ndims needs one argument");
-    }
-
-    fn general_list_ndims<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-    ) -> Result<ArrayRef> {
-        let mut data = Vec::new();
-        let ndims = datafusion_common::utils::list_ndims(array.data_type());
-
-        for arr in array.iter() {
-            if arr.is_some() {
-                data.push(Some(ndims))
-            } else {
-                data.push(None)
-            }
-        }
-
-        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    }
-    match args[0].data_type() {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            general_list_ndims::<i32>(array)
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            general_list_ndims::<i64>(array)
-        }
-        array_type => exec_err!("array_ndims does not support type {array_type:?}"),
-    }
-}
-
 /// Represents the type of comparison for array_has.
 #[derive(Debug, PartialEq)]
 enum ComparisonType {
