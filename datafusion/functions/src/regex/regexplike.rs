@@ -16,7 +16,7 @@
 // under the License.
 
 //! Encoding expressions
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait, StringArray};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use datafusion_common::exec_err;
