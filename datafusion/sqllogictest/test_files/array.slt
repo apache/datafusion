@@ -5572,36 +5572,12 @@ select range(5),
 ## should throw error
 query error
 select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'range(Date32, Null, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	range(Int64)
-	range(Int64, Int64)
-	range(Int64, Int64, Int64)
-	range(Date32, Date32, Interval(MonthDayNano))
-
 
 query error
 select range(DATE '1992-09-01', DATE '1993-03-01', NULL);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'range(Date32, Date32, Null)'. You might need to add explicit type casts.
-	Candidate functions:
-	range(Int64)
-	range(Int64, Int64)
-	range(Int64, Int64, Int64)
-	range(Date32, Date32, Interval(MonthDayNano))
-
 
 query error
 select range(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'range(Null, Date32, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	range(Int64)
-	range(Int64, Int64)
-	range(Int64, Int64, Int64)
-	range(Date32, Date32, Interval(MonthDayNano))
-
 
 query ?
 select range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
@@ -5629,35 +5605,12 @@ select generate_series(5),
 ## should throw error
 query error
 select generate_series(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'generate_series(Date32, Null, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	generate_series(Int64)
-	generate_series(Int64, Int64)
-	generate_series(Int64, Int64, Int64)
-	generate_series(Date32, Date32, Interval(MonthDayNano))
-
 
 query error
 select generate_series(DATE '1992-09-01', DATE '1993-03-01', NULL);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'generate_series(Date32, Date32, Null)'. You might need to add explicit type casts.
-	Candidate functions:
-	generate_series(Int64)
-	generate_series(Int64, Int64)
-	generate_series(Int64, Int64, Int64)
-	generate_series(Date32, Date32, Interval(MonthDayNano))
-
 
 query error
 select generate_series(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
-----
-DataFusion error: Error during planning: No function matches the given name and argument types 'generate_series(Null, Date32, Interval(MonthDayNano))'. You might need to add explicit type casts.
-	Candidate functions:
-	generate_series(Int64)
-	generate_series(Int64, Int64)
-	generate_series(Int64, Int64, Int64)
-	generate_series(Date32, Date32, Interval(MonthDayNano))
 
 
 query ?
