@@ -41,12 +41,13 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::compute::{concat_batches, lexsort_to_indices, take};
+use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, UInt32Array};
+use arrow_schema::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
@@ -584,17 +585,17 @@ pub(crate) fn sort_batch(
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
-    // Ref: https://github.com/apache/arrow-rs/pull/2929
-    if expressions.len() > 1 {
-        return sort_batch_with_multi_columns(batch, expressions, fetch);
-    }
-
     let sort_columns = expressions
         .iter()
         .map(|expr| expr.evaluate_to_sort_column(batch))
         .collect::<Result<Vec<_>>>()?;
 
-    let indices = lexsort_to_indices(&sort_columns, fetch)?;
+    let indices = if is_multi_column_with_lists(&sort_columns) {
+        // Ref: https://github.com/apache/arrow-rs/pull/2929
+        lexsort_to_indices_multi_columns(sort_columns, fetch)?
+    } else {
+        lexsort_to_indices(&sort_columns, fetch)?
+    };
 
     let columns = batch
         .columns()
@@ -605,21 +606,31 @@ pub(crate) fn sort_batch(
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
-pub(crate) fn sort_batch_with_multi_columns(
-    batch: &RecordBatch,
-    expressions: &[PhysicalSortExpr],
-    fetch: Option<usize>,
-) -> Result<RecordBatch> {
-    let mut fields = Vec::with_capacity(expressions.len());
-    let mut columns = Vec::with_capacity(expressions.len());
-    for expr in expressions {
-        let sort_column = expr.evaluate_to_sort_column(batch)?;
-        fields.push(SortField::new_with_options(
-            sort_column.values.data_type().clone(),
-            sort_column.options.unwrap_or_default(),
-        ));
-        columns.push(sort_column.values);
-    }
+#[inline]
+fn is_multi_column_with_lists(sort_columns: &[SortColumn]) -> bool {
+    sort_columns.iter().any(|c| {
+        matches!(
+            c.values.data_type(),
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        )
+    })
+}
+
+pub(crate) fn lexsort_to_indices_multi_columns(
+    sort_columns: Vec<SortColumn>,
+    limit: Option<usize>,
+) -> Result<UInt32Array> {
+    let (fields, columns) = sort_columns.into_iter().fold(
+        (vec![], vec![]),
+        |(mut fields, mut columns), sort_column| {
+            fields.push(SortField::new_with_options(
+                sort_column.values.data_type().clone(),
+                sort_column.options.unwrap_or_default(),
+            ));
+            columns.push(sort_column.values);
+            (fields, columns)
+        },
+    );
 
     // TODO reuse converter and rows, refer to TopK.
     let converter = RowConverter::new(fields)?;
@@ -628,19 +639,13 @@ pub(crate) fn sort_batch_with_multi_columns(
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
 
     let mut len = rows.num_rows();
-    if let Some(limit) = fetch {
+    if let Some(limit) = limit {
         len = limit.min(len);
     }
     let indices =
         UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
 
-    let columns = batch
-        .columns()
-        .iter()
-        .map(|c| take(c.as_ref(), &indices, None))
-        .collect::<Result<_, _>>()?;
-
-    Ok(RecordBatch::try_new(batch.schema(), columns)?)
+    Ok(indices)
 }
 
 async fn spill_sorted_batches(
