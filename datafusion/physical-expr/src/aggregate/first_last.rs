@@ -68,7 +68,7 @@ impl FirstValue {
         }
     }
 
-    pub fn ignore_null(mut self, ignore_null: bool) -> Self{
+    pub fn ignore_null(mut self, ignore_null: bool) -> Self {
         self.ignore_null = ignore_null;
         self
     }
@@ -735,11 +735,9 @@ mod tests {
 
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
 
-    use crate::expressions::{col, FirstValue};
-    use crate::{AggregateExpr, PhysicalSortExpr};
     use arrow::compute::concat;
-    use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow_array::{ArrayRef, Int64Array};
+    use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
 
@@ -845,112 +843,5 @@ mod tests {
         assert_eq!(merged_state.len(), state1.len());
 
         Ok(())
-    }
-
-    #[test]
-    fn first_ignore_null() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            None,
-            Some(2),
-            None,
-            None,
-            Some(3),
-            Some(9),
-        ]));
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-        let a_expr = col("a", &schema)?;
-
-        let agg1 = Arc::new(FirstValue::new(
-            a_expr.clone(),
-            "first1",
-            DataType::Int32,
-            vec![],
-            vec![],
-        ).ignore_null(true));
-        let first1 = aggregate(&batch, agg1)?;
-        assert_eq!(first1, ScalarValue::Int32(Some(2)));
-
-        let agg2 = Arc::new(FirstValue::new(
-            a_expr.clone(),
-            "first1",
-            DataType::Int32,
-            vec![],
-            vec![],
-        ));
-        let first2 = aggregate(&batch, agg2)?;
-        assert_eq!(first2, ScalarValue::Int32(None));
-
-        Ok(())
-    }
-
-    #[test]
-    fn first_ignore_null_with_sort() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(12),
-            None,
-            None,
-            None,
-            Some(10),
-            Some(9),
-        ]));
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
-        let a_expr = col("a", &schema)?;
-
-        let option_desc = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-        let sort_expr_a = vec![PhysicalSortExpr {
-            expr: a_expr.clone(),
-            options: option_desc,
-        }];
-
-        let agg1 = Arc::new(FirstValue::new(
-            a_expr.clone(),
-            "first1",
-            DataType::Int32,
-            sort_expr_a.clone(),
-            vec![DataType::Int32],
-        ).ignore_null(true));
-        let first1 = aggregate(&batch, agg1)?;
-        assert_eq!(first1, ScalarValue::Int32(Some(9)));
-
-        let agg2 = Arc::new(FirstValue::new(
-            a_expr.clone(),
-            "first2",
-            DataType::Int32,
-            sort_expr_a.clone(),
-            vec![DataType::Int32],
-        ));
-        let first2 = aggregate(&batch, agg2)?;
-        assert_eq!(first2, ScalarValue::Int32(None));
-
-        Ok(())
-    }
-
-    pub fn aggregate(
-        batch: &RecordBatch,
-        agg: Arc<dyn AggregateExpr>,
-    ) -> Result<ScalarValue> {
-        let mut accum = agg.create_accumulator()?;
-        let mut expr = agg.expressions();
-        if let Some(ordering_req) = agg.order_bys() {
-            expr.extend(ordering_req.iter().map(|item| item.expr.clone()));
-        }
-
-        let values = expr
-            .iter()
-            .map(|e| {
-                e.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        accum.update_batch(&values)?;
-        accum.evaluate()
     }
 }

@@ -216,7 +216,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 agg_func.distinct,
                                 agg_func.filter.clone(),
                                 agg_func.order_by.clone(),
-                                agg_func.null_treatment.clone(),
+                                agg_func.null_treatment,
                             )), true)
                         },
                         _ => (expr, false),

@@ -194,7 +194,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(Box::new);
 
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, args, distinct, filter, order_by, null_treatment,
+                    fun,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
                 )));
             };
 

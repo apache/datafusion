@@ -246,7 +246,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             filter,
             order_by,
-            null_treatment,
+            ..
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)

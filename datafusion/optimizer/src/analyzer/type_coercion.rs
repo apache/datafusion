@@ -367,7 +367,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         &self.schema,
                         &fun.signature(),
                     )?;
-                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(fun, new_expr, distinct, filter, order_by, null_treatment));
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                        fun,
+                        new_expr,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    ));
                     Ok(expr)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
