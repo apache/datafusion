@@ -354,18 +354,18 @@ pub struct CreateFunctionBody {
     /// IMMUTABLE | STABLE | VOLATILE
     pub behavior: Option<Volatility>,
     /// AS 'definition'
-    pub as_: Option<FunctionDefinition>,
+    pub as_: Option<DefinitionStatement>,
     /// RETURN expression
     pub return_: Option<Expr>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum FunctionDefinition {
+pub enum DefinitionStatement {
     SingleQuotedDef(String),
     DoubleDollarDef(String),
 }
 
-impl From<sqlparser::ast::FunctionDefinition> for FunctionDefinition {
+impl From<sqlparser::ast::FunctionDefinition> for DefinitionStatement {
     fn from(value: sqlparser::ast::FunctionDefinition) -> Self {
         match value {
             sqlparser::ast::FunctionDefinition::SingleQuotedDef(s) => {
