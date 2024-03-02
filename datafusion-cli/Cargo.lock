@@ -1255,7 +1255,6 @@ name = "datafusion-functions-array"
 version = "36.0.0"
 dependencies = [
  "arrow",
- "arrow-array",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
