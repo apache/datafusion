@@ -480,6 +480,11 @@ pub use parquet;
 /// re-export of [`datafusion_common`] crate
 pub mod common {
     pub use datafusion_common::*;
+
+    /// re-export of [`datafusion_common_runtime`] crate
+    pub mod runtime {
+        pub use datafusion_common_runtime::*;
+    }
 }
 
 // Backwards compatibility

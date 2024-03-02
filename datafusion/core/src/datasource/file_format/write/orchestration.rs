@@ -30,10 +30,10 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
-use datafusion_physical_plan::common::SpawnedTask;
 use futures::try_join;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
