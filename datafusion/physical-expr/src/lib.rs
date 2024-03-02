@@ -45,6 +45,11 @@ pub mod unicode_expressions;
 pub mod utils;
 pub mod window;
 
+// backwards compatibility
+pub mod execution_props {
+    pub use datafusion_expr::execution_props::ExecutionProps;
+}
+
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};

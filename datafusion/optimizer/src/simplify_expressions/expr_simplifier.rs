@@ -32,20 +32,19 @@ use datafusion_common::{
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
     ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
-use datafusion_physical_expr::create_physical_expr;
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
 
-use super::function_simplifier::FunctionSimplifier;
 use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
 use super::utils::*;
 
@@ -178,7 +177,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
-        let mut function_simplifier = FunctionSimplifier::new(&self.info);
 
         let expr = if self.canonicalize {
             expr.rewrite(&mut Canonicalizer::new())?
@@ -190,8 +188,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut function_simplifier)?
-            .rewrite(&mut const_evaluator)?
+        expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut inlist_simplifier)?
             .rewrite(&mut shorten_in_list_simplifier)?
@@ -1276,6 +1273,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(udf),
+                args,
+            }) => match udf.simplify(&args, info)? {
+                ExprSimplifyResult::Original => Expr::ScalarFunction(ScalarFunction {
+                    func_def: ScalarFunctionDefinition::UDF(udf),
+                    args,
+                }),
+                ExprSimplifyResult::Simplified(expr) => expr,
+            },
+
             // log
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
@@ -1382,10 +1390,10 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{assert_contains, DFField, ToDFSchema};
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{interval_arithmetic::Interval, *};
+    use datafusion_physical_expr::execution_props::ExecutionProps;
 
+    use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
 
     use super::*;

@@ -110,9 +110,9 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 }
 
 /// Was the expression simplified?
-pub enum Simplified {
+pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
-    Rewritten(Expr),
+    Simplified(Expr),
     /// the function call could not be simplified, and the arguments
     /// are return unmodified
     Original,

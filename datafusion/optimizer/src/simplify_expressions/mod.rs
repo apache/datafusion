@@ -16,12 +16,14 @@
 // under the License.
 
 pub mod expr_simplifier;
-mod function_simplifier;
 mod guarantees;
 mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod utils;
+
+// backwards compatibility
+pub use datafusion_expr::simplify::{SimplifyContext, SimplifyInfo};
 
 pub use expr_simplifier::*;
 pub use simplify_exprs::*;

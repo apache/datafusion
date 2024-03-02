@@ -17,7 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::simplify::{Simplified, SimplifyInfo};
+use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
@@ -165,7 +165,11 @@ impl ScalarUDF {
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
-    pub fn simplify(&self, args: &[Expr], info: &dyn SimplifyInfo) -> Result<Simplified> {
+    pub fn simplify(
+        &self,
+        args: &[Expr],
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
     }
 
@@ -349,17 +353,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Optionally apply per-UDF simplification / rewrite rules
     ///
-    /// This can be used to apply function specific simplification rules 
+    /// This can be used to apply function specific simplification rules
     /// during  optimization (e.g. `arrow_cast` --> `Expr::Cast`).
     ///
-    /// Note that since DataFusion handles simplifying arguments 
+    /// Note that since DataFusion handles simplifying arguments
     /// as well as "constant folding" (replacing a function call with constant
     /// arguments such as `my_add(1,2) --> 3` ) there is no need to implement such
     /// optimizations for UDFs.
     // 'args': The arguments of the function
     // 'schema': The schema of the function
-    fn simplify(&self, _args: &[Expr], _info: &dyn SimplifyInfo) -> Result<Simplified> {
-        Ok(Simplified::Original)
+    fn simplify(
+        &self,
+        _args: &[Expr],
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        Ok(ExprSimplifyResult::Original)
     }
 }
 
