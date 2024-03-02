@@ -827,20 +827,23 @@ impl SessionContext {
     }
 
     async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
-        let _function = {
-            let state = self.state.read().clone();
-            let function_factory = &state.function_factory;
+        // we don't know function type at this point
+        // decision has been made to drop all functions
+        let mut dropped = false;
+        dropped |= self.state.write().deregister_udf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
 
-            match function_factory {
-                Some(f) => f.remove(state.config(), stmt).await?,
-                None => Err(DataFusionError::Configuration(
-                    "Function factory has not been configured".into(),
-                ))?,
-            }
-        };
+        // DROP FUNCTION IF EXISTS drops the specified function only if that
+        // function exists and in this way, it avoids error. While the DROP FUNCTION
+        // statement also performs the same function, it throws an
+        // error if the function does not exist.
 
-        // TODO: Once we have unregister UDF we need to implement it here
-        self.return_empty_dataframe()
+        if !stmt.if_exists && !dropped {
+            Err(DataFusionError::Execution("Function does not exist".into()))
+        } else {
+            self.return_empty_dataframe()
+        }
     }
 
     /// Registers a variable provider within this context.
@@ -1310,18 +1313,9 @@ impl QueryPlanner for DefaultQueryPlanner {
             .await
     }
 }
-/// Crates and registers a function from [CreateFunction] statement
-///
-/// It is intended to handle `CREATE FUNCTION` statements
-/// and interact with [SessionState] to registers new udfs.
-///
-/// Datafusion `SQL` dialect does not support `CREATE FUNCTION`
-/// in generic dialect, so dialect should be changed to `PostgreSQL`
-///
-/// ```rust, no_run
-/// # use datafusion::execution::config::SessionConfig;
-/// SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-/// ```
+/// A pluggable interface to handle `CREATE FUNCTION` statements
+/// and interact with [SessionState] to registers new udf, udaf or udwf.
+
 #[async_trait]
 pub trait FunctionFactory: Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
@@ -1329,14 +1323,6 @@ pub trait FunctionFactory: Sync + Send {
         &self,
         state: &SessionConfig,
         statement: CreateFunction,
-    ) -> Result<RegisterFunction>;
-
-    /// Drops user defined function from [SessionState]
-    // Naming it `drop` would make more sense but its already occupied in rust
-    async fn remove(
-        &self,
-        state: &SessionConfig,
-        statement: DropFunction,
     ) -> Result<RegisterFunction>;
 }
 

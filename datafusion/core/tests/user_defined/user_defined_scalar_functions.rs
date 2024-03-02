@@ -31,8 +31,8 @@ use datafusion_common::{
 };
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, DropFunction,
-    ExprSchemable, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
+    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
@@ -693,28 +693,10 @@ impl FunctionFactory for MockFunctionFactory {
 
         Ok(RegisterFunction::Scalar(Arc::new(mock_udf)))
     }
-
-    async fn remove(
-        &self,
-        _config: &SessionConfig,
-        _statement: DropFunction,
-    ) -> datafusion::error::Result<RegisterFunction> {
-        // TODO: I don't like that remove returns RegisterFunction
-        //       we have to keep two states in FunctionFactory iml and
-        //       SessionState
-        //
-        //      It would be better to return (function_name, function type) tuple
-        //
-        // at the moment state does not support unregister user defined functions
-
-        Err(datafusion_common::DataFusionError::NotImplemented(
-            "remove function has not been implemented".into(),
-        ))
-    }
 }
 
 #[tokio::test]
-async fn create_scalar_function_from_sql_statement() {
+async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let function_factory = Arc::new(MockFunctionFactory::default());
     let runtime_config = RuntimeConfig::new();
     let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
@@ -732,14 +714,9 @@ async fn create_scalar_function_from_sql_statement() {
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let _ = ctx.sql(sql).await.unwrap();
+    let _ = ctx.sql(sql).await?;
 
-    ctx.sql("select better_add(2.0, 2.0)")
-        .await
-        .unwrap()
-        .show()
-        .await
-        .unwrap();
+    ctx.sql("select better_add(2.0, 2.0)").await?.show().await?;
 
     // check if we sql expr has been converted to datafusion expr
     let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
@@ -747,8 +724,16 @@ async fn create_scalar_function_from_sql_statement() {
     // is there some better way to test this
     assert_eq!("$1 + $2", captured_expression.to_string());
 
-    // no support at the moment
-    // ctx.sql("drop function better_add").await.unwrap();
+    // statement drops  function
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+    // no function, it panics
+    assert!(ctx.sql("drop function better_add").await.is_err());
+    // no function, it dies not care
+    assert!(ctx.sql("drop function if exists better_add").await.is_ok());
+    // query should fail as there is no function
+    assert!(ctx.sql("select better_add(2.0, 2.0)").await.is_err());
+
+    Ok(())
 }
 
 fn create_udf_context() -> SessionContext {
