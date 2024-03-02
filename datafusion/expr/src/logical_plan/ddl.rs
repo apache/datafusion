@@ -340,8 +340,7 @@ pub struct CreateFunction {
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct OperateFunctionArg {
-    // it is not really supported so no need to have it here
-    // currently
+    // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
     pub name: Option<Ident>,
     pub data_type: DataType,
