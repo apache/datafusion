@@ -655,9 +655,10 @@ impl FunctionFactory for MockFunctionFactory {
         _config: &SessionConfig,
         statement: CreateFunction,
     ) -> datafusion::error::Result<RegisterFunction> {
-        // this function is a mock for testing
-        // `CreateFunction` should be used to derive this function
-
+        // In this example, we always create a function that adds its arguments
+        // with the name specified in `CREATE FUNCTION`. In a real implementation
+        // the body of the created UDF would also likely be a function of the contents
+        // of the `CreateFunction`
         let mock_add = Arc::new(|args: &[datafusion_expr::ColumnarValue]| {
             let args = datafusion_expr::ColumnarValue::values_to_arrays(args)?;
             let base =
