@@ -252,14 +252,14 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             GetFieldAccessExpr::ListIndex{key} => {
             let key = key.evaluate(batch)?.into_array(batch.num_rows())?;
             match (array.data_type(), key.data_type()) {
-                (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
+                (DataType::List(_), DataType::Int64) | (DataType::LargeList(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
                     array, key
                 ])?)),
-                (DataType::List(_), key) => exec_err!(
-                                "get indexed field is only possible on lists with int64 indexes. \
+                (DataType::List(_), key) | (DataType::LargeList(_), key) => exec_err!(
+                                "get indexed field is only possible on List/LargeList with int64 indexes. \
                                     Tried with {key:?} index"),
                             (dt, key) => exec_err!(
-                                        "get indexed field is only possible on lists with int64 indexes or struct \
+                                        "get indexed field is only possible on List/LargeList with int64 indexes or struct \
                                                  with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },

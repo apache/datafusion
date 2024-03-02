@@ -78,10 +78,11 @@ impl GetFieldAccessSchema {
             Self::ListIndex{ key_dt } => {
                 match (data_type, key_dt) {
                     (DataType::List(lt), DataType::Int64) => Ok(Field::new("list", lt.data_type().clone(), true)),
-                    (DataType::List(_), _) => plan_err!(
-                        "Only ints are valid as an indexed field in a list"
+                    (DataType::LargeList(lt), DataType::Int64) => Ok(Field::new("large_list", lt.data_type().clone(), true)),
+                    (DataType::List(_), _) | (DataType::LargeList(_), _) => plan_err!(
+                        "Only ints are valid as an indexed field in a List/LargeList"
                     ),
-                    (other, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
+                    (other, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `LargeList` or `Struct` types, got {other}"),
                 }
             }
             Self::ListRange { start_dt, stop_dt, stride_dt } => {
@@ -89,7 +90,7 @@ impl GetFieldAccessSchema {
                     (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
                     (DataType::LargeList(_), DataType::Int64, DataType::Int64, DataType::Int64) => Ok(Field::new("large_list", data_type.clone(), true)),
                     (DataType::List(_), _, _, _) | (DataType::LargeList(_), _, _, _)=> plan_err!(
-                        "Only ints are valid as an indexed field in a list"
+                        "Only ints are valid as an indexed field in a List/LargeList"
                     ),
                     (other, _, _, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `LargeList` or `Struct` types, got {other}"),
                 }
