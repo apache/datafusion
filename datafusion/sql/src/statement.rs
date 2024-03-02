@@ -31,10 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
-    TableReference, ToDFSchema,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, OwnedTableReference, Result, ScalarValue, SchemaError,
+    SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -670,13 +670,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 // at the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
-                    [] => Err(DataFusionError::Execution(
-                        "Function should have name".into(),
-                    ))?,
+                    [] => exec_err!("Function should have name")?,
                     [n] => n.value.clone(),
-                    [..] => Err(DataFusionError::NotImplemented(
-                        "Qualified functions are not supported".into(),
-                    ))?,
+                    [..] => not_impl_err!("Qualified functions are not supported")?,
                 };
                 //
                 // convert resulting expression to data fusion expression
@@ -729,13 +725,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(desc) = func_desc.first() {
                     // at the moment functions can't be qualified `schema.name`
                     let name = match &desc.name.0[..] {
-                        [] => Err(DataFusionError::Execution(
-                            "Function should have name".into(),
-                        ))?,
+                        [] => exec_err!("Function should have name")?,
                         [n] => n.value.clone(),
-                        [..] => Err(DataFusionError::NotImplemented(
-                            "Qualified functions are not supported".into(),
-                        ))?,
+                        [..] => not_impl_err!("Qualified functions are not supported")?,
                     };
                     let statement = DdlStatement::DropFunction(DropFunction {
                         if_exists,
@@ -744,9 +736,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     });
                     Ok(LogicalPlan::Ddl(statement))
                 } else {
-                    Err(DataFusionError::Execution(
-                        "Function name not provided".into(),
-                    ))
+                    exec_err!("Function name not provided")
                 }
             }
             _ => {

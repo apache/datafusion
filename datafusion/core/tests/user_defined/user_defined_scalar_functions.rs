@@ -744,6 +744,23 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     // query should fail as there is no function
     assert!(ctx.sql("select better_add(2.0, 2.0)").await.is_err());
 
+    // tests expression parsing
+    // if expression is not correct
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
+
+    // tests bad function definition
+    let bad_definition_sql = r#"
+    CREATE FUNCTION bad_definition_fun(DOUBLE, DOUBLE)
+        RET BAD_TYPE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_definition_sql).await.is_err());
+
     Ok(())
 }
 

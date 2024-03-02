@@ -16,7 +16,6 @@
 // under the License.
 
 use datafusion::prelude::*;
-
 use tempfile::TempDir;
 
 #[tokio::test]

@@ -840,7 +840,7 @@ impl SessionContext {
         // error if the function does not exist.
 
         if !stmt.if_exists && !dropped {
-            Err(DataFusionError::Execution("Function does not exist".into()))
+            exec_err!("Function does not exist")
         } else {
             self.return_empty_dataframe()
         }
