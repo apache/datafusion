@@ -283,7 +283,8 @@ pub struct HashJoinExec {
     pub filter: Option<JoinFilter>,
     /// How the join is performed (`OUTER`, `INNER`, etc)
     pub join_type: JoinType,
-    /// The schema after join
+    /// The schema after join. Please be careful when using this schema,
+    /// if there is a projection, the schema isn't the same as the output schema.
     schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
@@ -779,14 +780,24 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        // TODO to update with column statistics
-        estimate_join_statistics(
+        let mut stats = estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),
             self.on.clone(),
             &self.join_type,
             &self.schema,
-        )
+        )?;
+        // Project statistics if there is a projection
+        if let Some(projection) = &self.projection {
+            stats.column_statistics = stats
+                .column_statistics
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| projection.contains(i))
+                .map(|(_, s)| s)
+                .collect();
+        }
+        Ok(stats)
     }
 }
 
