@@ -358,6 +358,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 distinct,
                 filter,
                 order_by,
+                null_treatment,
             }) => match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let new_expr = coerce_agg_exprs_for_signature(
@@ -366,9 +367,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         &self.schema,
                         &fun.signature(),
                     )?;
-                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                        fun, new_expr, distinct, filter, order_by,
-                    ));
+                    let expr = Expr::AggregateFunction(expr::AggregateFunction::new(fun, new_expr, distinct, filter, order_by, null_treatment));
                     Ok(expr)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
@@ -963,6 +962,7 @@ mod test {
             false,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(CAST(Int64(12) AS Float64))\n  EmptyRelation";
@@ -974,6 +974,7 @@ mod test {
             fun,
             vec![col("a")],
             false,
+            None,
             None,
             None,
         ));
@@ -991,6 +992,7 @@ mod test {
             fun,
             vec![lit("1")],
             false,
+            None,
             None,
             None,
         ));
@@ -1013,6 +1015,7 @@ mod test {
             fun,
             vec![lit(0.95), lit(42.0), lit(100.0)],
             false,
+            None,
             None,
             None,
         ));

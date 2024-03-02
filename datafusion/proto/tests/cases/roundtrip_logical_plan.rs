@@ -1659,6 +1659,7 @@ fn roundtrip_count() {
         false,
         None,
         None,
+        None,
     ));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1672,6 +1673,7 @@ fn roundtrip_count_distinct() {
         true,
         None,
         None,
+        None,
     ));
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1683,6 +1685,7 @@ fn roundtrip_approx_percentile_cont() {
         AggregateFunction::ApproxPercentileCont,
         vec![col("bananas"), lit(0.42_f32)],
         false,
+        None,
         None,
         None,
     ));

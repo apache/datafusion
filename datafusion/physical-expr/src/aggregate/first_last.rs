@@ -44,7 +44,7 @@ pub struct FirstValue {
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
-    is_ignore_null: bool,
+    ignore_null: bool,
 }
 
 impl FirstValue {
@@ -56,24 +56,6 @@ impl FirstValue {
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
     ) -> Self {
-        Self::with_ignore_null(
-            expr,
-            name,
-            input_data_type,
-            ordering_req,
-            order_by_data_types,
-            false,
-        )
-    }
-
-    pub fn with_ignore_null(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        input_data_type: DataType,
-        ordering_req: LexOrdering,
-        order_by_data_types: Vec<DataType>,
-        is_ignore_null: bool,
-    ) -> Self {
         let requirement_satisfied = ordering_req.is_empty();
         Self {
             name: name.into(),
@@ -82,8 +64,13 @@ impl FirstValue {
             expr,
             ordering_req,
             requirement_satisfied,
-            is_ignore_null,
+            ignore_null: false,
         }
+    }
+
+    pub fn ignore_null(mut self, ignore_null: bool) -> Self{
+        self.ignore_null = ignore_null;
+        self
     }
 
     /// Returns the name of the aggregate expression.
@@ -154,7 +141,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.is_ignore_null,
+            self.ignore_null,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -200,7 +187,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.is_ignore_null,
+            self.ignore_null,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -235,7 +222,8 @@ struct FirstValueAccumulator {
     ordering_req: LexOrdering,
     // Stores whether incoming data already satisfies the ordering requirement.
     requirement_satisfied: bool,
-    is_ignore_null: bool,
+    // Ignore null values.
+    ignore_null: bool,
 }
 
 impl FirstValueAccumulator {
@@ -244,7 +232,7 @@ impl FirstValueAccumulator {
         data_type: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
-        is_ignore_null: bool,
+        ignore_null: bool,
     ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
@@ -257,7 +245,7 @@ impl FirstValueAccumulator {
             orderings,
             ordering_req,
             requirement_satisfied,
-            is_ignore_null,
+            ignore_null,
         })
     }
 
@@ -274,11 +262,11 @@ impl FirstValueAccumulator {
         };
         if self.requirement_satisfied {
             // Get first entry according to the pre-existing ordering (0th index):
-            if self.is_ignore_null {
+            if self.ignore_null {
                 // If ignoring nulls, find the first non-null value.
                 for i in 0..value.len() {
                     if !value.is_null(i) {
-                        return Ok((!value.is_empty()).then_some(i));
+                        return Ok(Some(i));
                     }
                 }
                 return Ok(None);
@@ -296,12 +284,12 @@ impl FirstValueAccumulator {
             })
             .collect::<Vec<_>>();
 
-        if self.is_ignore_null {
-            let indices = lexsort_to_indices(&sort_columns, Some(value.len()))?;
+        if self.ignore_null {
+            let indices = lexsort_to_indices(&sort_columns, None)?;
             // If ignoring nulls, find the first non-null value.
             for index in indices.iter().flatten() {
                 if !value.is_null(index as usize) {
-                    return Ok((!value.is_empty()).then_some(index as usize));
+                    return Ok(Some(index as usize));
                 }
             }
             Ok(None)
@@ -874,14 +862,13 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let a_expr = col("a", &schema)?;
 
-        let agg1 = Arc::new(FirstValue::with_ignore_null(
+        let agg1 = Arc::new(FirstValue::new(
             a_expr.clone(),
             "first1",
             DataType::Int32,
             vec![],
             vec![],
-            true,
-        ));
+        ).ignore_null(true));
         let first1 = aggregate(&batch, agg1)?;
         assert_eq!(first1, ScalarValue::Int32(Some(2)));
 
@@ -922,24 +909,22 @@ mod tests {
             options: option_desc,
         }];
 
-        let agg1 = Arc::new(FirstValue::with_ignore_null(
+        let agg1 = Arc::new(FirstValue::new(
             a_expr.clone(),
             "first1",
             DataType::Int32,
             sort_expr_a.clone(),
             vec![DataType::Int32],
-            true,
-        ));
+        ).ignore_null(true));
         let first1 = aggregate(&batch, agg1)?;
         assert_eq!(first1, ScalarValue::Int32(Some(9)));
 
-        let agg2 = Arc::new(FirstValue::with_ignore_null(
+        let agg2 = Arc::new(FirstValue::new(
             a_expr.clone(),
             "first2",
             DataType::Int32,
             sort_expr_a.clone(),
             vec![DataType::Int32],
-            false,
         ));
         let first2 = aggregate(&batch, agg2)?;
         assert_eq!(first2, ScalarValue::Int32(None));

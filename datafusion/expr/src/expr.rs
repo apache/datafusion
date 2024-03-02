@@ -544,6 +544,7 @@ pub struct AggregateFunction {
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
     pub order_by: Option<Vec<Expr>>,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
@@ -553,6 +554,7 @@ impl AggregateFunction {
         distinct: bool,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             func_def: AggregateFunctionDefinition::BuiltIn(fun),
@@ -560,6 +562,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
+            null_treatment,
         }
     }
 
@@ -577,6 +580,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
+            null_treatment: None,
         }
     }
 }
@@ -1471,9 +1475,13 @@ impl fmt::Display for Expr {
                 ref args,
                 filter,
                 order_by,
+                null_treatment,
                 ..
             }) => {
                 fmt_function(f, func_def.name(), *distinct, args, true)?;
+                if let Some(nt) = null_treatment {
+                    write!(f, "{}", nt)?;
+                }
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1804,6 +1812,7 @@ fn create_name(e: &Expr) -> Result<String> {
             args,
             filter,
             order_by,
+            null_treatment,
         }) => {
             let name = match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)
@@ -1823,6 +1832,9 @@ fn create_name(e: &Expr) -> Result<String> {
             if let Some(order_by) = order_by {
                 info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
             };
+            if let Some(nt) = null_treatment {
+                info += &format!("{}", nt);
+            }
             match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)
                 | AggregateFunctionDefinition::Name(..) => {

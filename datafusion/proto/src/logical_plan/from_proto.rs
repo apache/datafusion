@@ -1191,6 +1191,7 @@ pub fn parse_expr(
                 parse_optional_expr(expr.filter.as_deref(), registry, codec)?
                     .map(Box::new),
                 parse_vec_expr(&expr.order_by, registry, codec)?,
+                None,
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(

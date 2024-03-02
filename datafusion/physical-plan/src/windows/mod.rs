@@ -74,6 +74,7 @@ pub fn create_window_expr(
                 &[],
                 input_schema,
                 name,
+                ignore_nulls,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,

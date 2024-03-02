@@ -213,6 +213,7 @@ mod tests {
             &[],
             &schema,
             "agg",
+            false,
         )
         .unwrap();
 

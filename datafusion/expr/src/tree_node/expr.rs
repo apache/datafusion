@@ -298,6 +298,7 @@ impl TreeNode for Expr {
                 distinct,
                 filter,
                 order_by,
+                null_treatment,
             }) => match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     Expr::AggregateFunction(AggregateFunction::new(
@@ -306,6 +307,7 @@ impl TreeNode for Expr {
                         distinct,
                         transform_option_box(filter, &mut transform)?,
                         transform_option_vec(order_by, &mut transform)?,
+                        null_treatment,
                     ))
                 }
                 AggregateFunctionDefinition::UDF(fun) => {

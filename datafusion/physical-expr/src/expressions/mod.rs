@@ -194,7 +194,7 @@ pub(crate) mod tests {
 
         let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
         let agg =
-            create_aggregate_expr(&function, distinct, &[input], &[], &schema, "agg")
+            create_aggregate_expr(&function, distinct, &[input], &[], &schema, "agg", false)
                 .unwrap();
 
         let result = aggregate(&batch, agg).unwrap();
