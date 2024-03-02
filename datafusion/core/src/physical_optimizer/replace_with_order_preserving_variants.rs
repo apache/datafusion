@@ -31,7 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::unbounded_output;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -120,7 +120,7 @@ fn plan_with_order_preserving_variants(
         // When a `RepartitionExec` doesn't preserve ordering, replace it with
         // a sort-preserving variant if appropriate:
         let child = sort_input.children[0].plan.clone();
-        let partitioning = sort_input.plan.output_partitioning();
+        let partitioning = sort_input.plan.output_partitioning().clone();
         sort_input.plan = Arc::new(
             RepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
         ) as _;
@@ -176,7 +176,7 @@ fn plan_with_order_breaking_variants(
         // When a `RepartitionExec` preserves ordering, replace it with a
         // non-sort-preserving variant:
         let child = sort_input.children[0].plan.clone();
-        let partitioning = plan.output_partitioning();
+        let partitioning = plan.output_partitioning().clone();
         sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
     } else if is_sort_preserving_merge(plan) {
         // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`:
@@ -241,8 +241,8 @@ pub(crate) fn replace_with_order_preserving_variants(
 
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
-    let use_order_preserving_variant =
-        config.optimizer.prefer_existing_sort || unbounded_output(&requirements.plan);
+    let use_order_preserving_variant = config.optimizer.prefer_existing_sort
+        || !requirements.plan.execution_mode().pipeline_friendly();
 
     // Create an alternate plan with order-preserving variants:
     let mut alternate_plan = plan_with_order_preserving_variants(

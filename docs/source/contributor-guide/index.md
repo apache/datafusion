@@ -157,6 +157,8 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
+Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/arrow-datafusion/issues/5347).
+
 Testing setup:
 
 - `rustup update stable` DataFusion uses the latest stable release of rust
@@ -202,7 +204,7 @@ There are several tests of the public interface of the DataFusion library in the
 You can run these tests individually using `cargo` as normal command such as
 
 ```shell
-cargo test -p datafusion --test dataframe
+cargo test -p datafusion --test parquet_exec
 ```
 
 ## Benchmarks
@@ -337,4 +339,29 @@ After you've confirmed your prettier version, you can format all the `.md` files
 
 ```bash
 prettier -w {datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
+```
+
+## How to format `.toml` files
+
+We use `taplo` to format `.toml` files.
+
+For Rust developers, you can install it via:
+
+```sh
+cargo install taplo-cli --locked
+```
+
+> Refer to the [Installation section][doc] on other ways to install it.
+>
+> [doc]: https://taplo.tamasfe.dev/cli/installation/binary.html
+
+```bash
+$ taplo --version
+taplo 0.9.0
+```
+
+After you've confirmed your `taplo` version, you can format all the `.toml` files:
+
+```bash
+taplo fmt
 ```

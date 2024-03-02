@@ -25,7 +25,7 @@ use crate::expr::{
 use crate::{Expr, GetFieldAccess};
 
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F: FnMut(&Self) -> Result<VisitRecursion>>(
@@ -283,12 +283,14 @@ impl TreeNode for Expr {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => Expr::WindowFunction(WindowFunction::new(
                 fun,
                 transform_vec(args, &mut transform)?,
                 transform_vec(partition_by, &mut transform)?,
                 transform_vec(order_by, &mut transform)?,
                 window_frame,
+                null_treatment,
             )),
             Expr::AggregateFunction(AggregateFunction {
                 args,

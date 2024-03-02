@@ -15,18 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
-use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+//! "regx" DataFusion functions
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await?;
-    let plan = ctx.table("t1").await?.into_optimized_plan()?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
-    Ok(())
-}
+mod regexpmatch;
+// create UDFs
+make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
+
+export_functions!((
+    regexp_match,
+    input_arg1
+    input_arg2,
+    "returns a list of regular expression matches in a string. "
+));

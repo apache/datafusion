@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
+use crate::builder::change_redundant_column;
 use crate::dml::CopyOptions;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
@@ -614,12 +615,13 @@ impl LogicalPlan {
                 input: _,
                 output_url,
                 file_format,
+                partition_by,
                 copy_options,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
-
+                partition_by: partition_by.clone(),
                 copy_options: copy_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
@@ -1550,6 +1552,7 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
+                        partition_by: _,
                         copy_options,
                     }) => {
                         let op_str = match copy_options {
@@ -1797,7 +1800,7 @@ pub struct Values {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Projection {
@@ -1891,7 +1894,9 @@ impl SubqueryAlias {
         alias: impl Into<OwnedTableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let schema: Schema = plan.schema().as_ref().clone().into();
+        let fields = change_redundant_column(plan.schema().fields().clone());
+        let meta_data = plan.schema().as_ref().metadata().clone();
+        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2181,6 +2186,7 @@ impl TableScan {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
+
         Ok(Self {
             table_name,
             source: table_source,

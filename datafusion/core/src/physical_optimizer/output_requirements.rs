@@ -28,14 +28,12 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, Statistics};
-use datafusion_physical_expr::{
-    Distribution, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -92,6 +90,7 @@ pub(crate) struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<LexRequirement>,
     dist_requirement: Distribution,
+    cache: PlanProperties,
 }
 
 impl OutputRequirementExec {
@@ -100,15 +99,26 @@ impl OutputRequirementExec {
         requirements: Option<LexRequirement>,
         dist_requirement: Distribution,
     ) -> Self {
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             order_requirement: requirements,
             dist_requirement,
+            cache,
         }
     }
 
     pub(crate) fn input(&self) -> Arc<dyn ExecutionPlan> {
         self.input.clone()
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            input.output_partitioning().clone(),    // Output Partitioning
+            input.execution_mode(),                 // Execution Mode
+        )
     }
 }
 
@@ -127,12 +137,8 @@ impl ExecutionPlan for OutputRequirementExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
-        self.input.output_partitioning()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -141,10 +147,6 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![self.dist_requirement.clone()]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -157,11 +159,6 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![self.order_requirement.clone()]
-    }
-
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        // Has a single child
-        Ok(children[0])
     }
 
     fn with_new_children(
@@ -245,7 +242,7 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let req_ordering = sort_exec.output_ordering().unwrap_or(&[]);
+        let req_ordering = sort_exec.properties().output_ordering().unwrap_or(&[]);
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((

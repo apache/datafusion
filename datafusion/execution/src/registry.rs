@@ -17,7 +17,7 @@
 
 //! FunctionRegistry trait
 
-use datafusion_common::{not_impl_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -47,7 +47,6 @@ pub trait FunctionRegistry {
     fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         not_impl_err!("Registering ScalarUDF")
     }
-
     /// Registers a new [`AggregateUDF`], returning any previously registered
     /// implementation.
     ///
@@ -59,7 +58,6 @@ pub trait FunctionRegistry {
     ) -> Result<Option<Arc<AggregateUDF>>> {
         not_impl_err!("Registering AggregateUDF")
     }
-
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///
@@ -67,6 +65,33 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn register_udwf(&mut self, _udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         not_impl_err!("Registering WindowUDF")
+    }
+
+    /// Deregisters a [`ScalarUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udf(&mut self, _name: &str) -> Result<Option<Arc<ScalarUDF>>> {
+        not_impl_err!("Deregistering ScalarUDF")
+    }
+
+    /// Deregisters a [`AggregateUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udaf(&mut self, _name: &str) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Deregistering AggregateUDF")
+    }
+
+    /// Deregisters a [`WindowUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    fn deregister_udwf(&mut self, _name: &str) -> Result<Option<Arc<WindowUDF>>> {
+        not_impl_err!("Deregistering WindowUDF")
     }
 }
 
@@ -133,5 +158,14 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         Ok(self.udfs.insert(udf.name().to_string(), udf))
+    }
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.udafs.insert(udaf.name().into(), udaf))
+    }
+    fn register_udwf(&mut self, udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.udwfs.insert(udaf.name().into(), udaf))
     }
 }

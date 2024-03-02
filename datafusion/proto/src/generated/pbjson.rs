@@ -3795,6 +3795,9 @@ impl serde::Serialize for CopyToNode {
         if !self.file_type.is_empty() {
             len += 1;
         }
+        if !self.partition_by.is_empty() {
+            len += 1;
+        }
         if self.copy_options.is_some() {
             len += 1;
         }
@@ -3807,6 +3810,9 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
+        }
+        if !self.partition_by.is_empty() {
+            struct_ser.serialize_field("partitionBy", &self.partition_by)?;
         }
         if let Some(v) = self.copy_options.as_ref() {
             match v {
@@ -3833,6 +3839,8 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             "outputUrl",
             "file_type",
             "fileType",
+            "partition_by",
+            "partitionBy",
             "sql_options",
             "sqlOptions",
             "writer_options",
@@ -3844,6 +3852,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             Input,
             OutputUrl,
             FileType,
+            PartitionBy,
             SqlOptions,
             WriterOptions,
         }
@@ -3870,6 +3879,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             "input" => Ok(GeneratedField::Input),
                             "outputUrl" | "output_url" => Ok(GeneratedField::OutputUrl),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
+                            "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
                             "sqlOptions" | "sql_options" => Ok(GeneratedField::SqlOptions),
                             "writerOptions" | "writer_options" => Ok(GeneratedField::WriterOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -3894,6 +3904,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                 let mut input__ = None;
                 let mut output_url__ = None;
                 let mut file_type__ = None;
+                let mut partition_by__ = None;
                 let mut copy_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3915,6 +3926,12 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             }
                             file_type__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PartitionBy => {
+                            if partition_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionBy"));
+                            }
+                            partition_by__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::SqlOptions => {
                             if copy_options__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sqlOptions"));
@@ -3935,6 +3952,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                     input: input__,
                     output_url: output_url__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
+                    partition_by: partition_by__.unwrap_or_default(),
                     copy_options: copy_options__,
                 })
             }
@@ -22323,9 +22341,7 @@ impl serde::Serialize for ScalarFunction {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Abs => "Abs",
-            Self::Acos => "Acos",
-            Self::Asin => "Asin",
+            Self::Unknown => "unknown",
             Self::Atan => "Atan",
             Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
@@ -22344,7 +22360,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Tan => "Tan",
             Self::Trunc => "Trunc",
             Self::Array => "Array",
-            Self::RegexpMatch => "RegexpMatch",
             Self::BitLength => "BitLength",
             Self::Btrim => "Btrim",
             Self::CharacterLength => "CharacterLength",
@@ -22440,7 +22455,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
-            Self::Range => "Range",
             Self::ArrayExcept => "ArrayExcept",
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
@@ -22455,6 +22469,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReverse => "ArrayReverse",
             Self::RegexpLike => "RegexpLike",
             Self::ToChar => "ToChar",
+            Self::ToDate => "ToDate",
         };
         serializer.serialize_str(variant)
     }
@@ -22466,9 +22481,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "Abs",
-            "Acos",
-            "Asin",
+            "unknown",
             "Atan",
             "Ascii",
             "Ceil",
@@ -22487,7 +22500,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Tan",
             "Trunc",
             "Array",
-            "RegexpMatch",
             "BitLength",
             "Btrim",
             "CharacterLength",
@@ -22583,7 +22595,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
-            "Range",
             "ArrayExcept",
             "ArrayPopFront",
             "Levenshtein",
@@ -22598,6 +22609,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReverse",
             "RegexpLike",
             "ToChar",
+            "ToDate",
         ];
 
         struct GeneratedVisitor;
@@ -22638,9 +22650,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                 E: serde::de::Error,
             {
                 match value {
-                    "Abs" => Ok(ScalarFunction::Abs),
-                    "Acos" => Ok(ScalarFunction::Acos),
-                    "Asin" => Ok(ScalarFunction::Asin),
+                    "unknown" => Ok(ScalarFunction::Unknown),
                     "Atan" => Ok(ScalarFunction::Atan),
                     "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
@@ -22659,7 +22669,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Tan" => Ok(ScalarFunction::Tan),
                     "Trunc" => Ok(ScalarFunction::Trunc),
                     "Array" => Ok(ScalarFunction::Array),
-                    "RegexpMatch" => Ok(ScalarFunction::RegexpMatch),
                     "BitLength" => Ok(ScalarFunction::BitLength),
                     "Btrim" => Ok(ScalarFunction::Btrim),
                     "CharacterLength" => Ok(ScalarFunction::CharacterLength),
@@ -22755,7 +22764,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
-                    "Range" => Ok(ScalarFunction::Range),
                     "ArrayExcept" => Ok(ScalarFunction::ArrayExcept),
                     "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
@@ -22770,6 +22778,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     "ToChar" => Ok(ScalarFunction::ToChar),
+                    "ToDate" => Ok(ScalarFunction::ToDate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

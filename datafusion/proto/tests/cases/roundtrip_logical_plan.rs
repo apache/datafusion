@@ -324,6 +324,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
     });
 
@@ -354,6 +355,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_format: FileType::PARQUET,
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         copy_options: CopyOptions::WriterOptions(Box::new(
             FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
         )),
@@ -367,6 +369,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(FileType::PARQUET, copy_to.file_format);
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Parquet(p) => {
@@ -402,6 +405,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         file_format: FileType::ARROW,
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
             ArrowWriterOptions::new(),
         ))),
@@ -415,6 +419,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
             assert_eq!(FileType::ARROW, copy_to.file_format);
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::Arrow(_) => {}
@@ -447,6 +452,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         file_format: FileType::CSV,
+        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
             CsvWriterOptions::new(
                 writer_properties,
@@ -463,6 +469,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!(FileType::CSV, copy_to.file_format);
+            assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
             match &copy_to.copy_options {
                 CopyOptions::WriterOptions(y) => match y.as_ref() {
                     FileTypeWriterOptions::CSV(p) => {
@@ -1714,6 +1721,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 2. with default window_frame
@@ -1725,6 +1733,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         WindowFrame::new(Some(false)),
+        None,
     ));
 
     // 3. with window_frame with row numbers
@@ -1742,6 +1751,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         range_number_frame,
+        None,
     ));
 
     // 4. test with AggregateFunction
@@ -1757,6 +1767,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
 
     // 5. test with AggregateUDF
@@ -1808,6 +1819,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame.clone(),
+        None,
     ));
     ctx.register_udaf(dummy_agg);
 
@@ -1883,6 +1895,7 @@ fn roundtrip_window() {
         vec![col("col1")],
         vec![col("col2")],
         row_number_frame,
+        None,
     ));
 
     ctx.register_udwf(dummy_window_udf);

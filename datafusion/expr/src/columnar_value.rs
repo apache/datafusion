@@ -20,7 +20,7 @@
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
 /// Represents the result of evaluating an expression: either a single

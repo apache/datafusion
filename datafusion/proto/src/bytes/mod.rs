@@ -23,7 +23,7 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_expr::{
     create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
     WindowUDF,
@@ -139,6 +139,30 @@ impl Serializeable for Expr {
                     Volatility::Immutable,
                     Arc::new(|| unimplemented!()),
                 )))
+            }
+            fn register_udaf(
+                &mut self,
+                _udaf: Arc<AggregateUDF>,
+            ) -> Result<Option<Arc<AggregateUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_udaf called in Placeholder Registry!"
+                )
+            }
+            fn register_udf(
+                &mut self,
+                _udf: Arc<datafusion_expr::ScalarUDF>,
+            ) -> Result<Option<Arc<datafusion_expr::ScalarUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_udf called in Placeholder Registry!"
+                )
+            }
+            fn register_udwf(
+                &mut self,
+                _udaf: Arc<WindowUDF>,
+            ) -> Result<Option<Arc<WindowUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_udwf called in Placeholder Registry!"
+                )
             }
         }
         Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;

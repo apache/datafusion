@@ -14,20 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//! Verifies [Macro Hygene]
+//!
+//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+mod plan_err {
+    // NO other imports!
+    use datafusion_common::plan_err;
 
-use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_proto::bytes::Serializeable;
+    #[test]
+    fn test_macro() {
+        // need type annotation for Ok variant
+        let _res: Result<(), _> = plan_err!("foo");
+    }
+}
 
-fn main() -> Result<()> {
-    // Create a new `Expr` a < 32
-    let expr = col("a").lt(lit(5i32));
+mod plan_datafusion_err {
+    // NO other imports!
+    use datafusion_common::plan_datafusion_err;
 
-    // Convert it to an opaque form
-    let bytes = expr.to_bytes()?;
-
-    // Decode bytes from somewhere (over network, etc.)
-    let decoded_expr = Expr::from_bytes(&bytes)?;
-    assert_eq!(expr, decoded_expr);
-    Ok(())
+    #[test]
+    fn test_macro() {
+        plan_datafusion_err!("foo");
+    }
 }

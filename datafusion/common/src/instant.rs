@@ -15,22 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
-use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
+//! WASM-compatible `Instant` wrapper.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
-        .await?;
-    let dataframe = ctx.table("t1").await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let bytes = physical_plan_to_bytes(physical_plan.clone())?;
-    let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(
-        format!("{physical_plan:?}"),
-        format!("{physical_round_trip:?}")
-    );
-    Ok(())
-}
+#[cfg(target_family = "wasm")]
+/// DataFusion wrapper around [`std::time::Instant`]. Uses [`instant::Instant`]
+/// under `wasm` feature gate. It provides the same API as [`std::time::Instant`].
+pub type Instant = instant::Instant;
+
+#[allow(clippy::disallowed_types)]
+#[cfg(not(target_family = "wasm"))]
+/// DataFusion wrapper around [`std::time::Instant`]. This is only a type alias.
+pub type Instant = std::time::Instant;

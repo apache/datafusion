@@ -36,7 +36,7 @@ First, [install wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 
 Then use wasm-pack to compile the crate from within this directory
 
-```
+```shell
 wasm-pack build
 ```
 
@@ -46,14 +46,34 @@ The `datafusion-wasm-app` directory contains a simple app (created with [`create
 
 From within the `datafusion/wasmtest/datafusion-wasm-app` directory:
 
-```
+```shell
 npm install
 npm run start
 ```
 
 Then open http://localhost:8080/ in a web browser and check the console to see the results of using various DataFusion crates.
 
-**Note:** In GitHub Actions we test the compilation with `wasm-build`, but we don't currently invoke `datafusion-wasm-app`. In the future we may want to test the behavior of the WASM build using [`wasm-pack test`](https://rustwasm.github.io/wasm-pack/book/tutorials/npm-browser-packages/testing-your-project.html).
+## Test
+
+This crate uses `wasm-pack test` to run tests. Try it out with one of the following commands depending on your browser of choice:
+
+```shell
+wasm-pack test --firefox
+wasm-pack test --chrome
+wasm-pack test --safari
+```
+
+To run the tests in headless mode, add the `--headless` flag:
+
+```shell
+wasm-pack test --headless --firefox
+wasm-pack test --headless --chrome
+wasm-pack test --headless --safari
+```
+
+**Note:** In GitHub Actions we test the compilation with `wasm-build`, but we don't currently invoke `wasm-pack test`. This is because the headless mode is not yet working. Document of adding a GitHub Action job: https://rustwasm.github.io/docs/wasm-bindgen/wasm-bindgen-test/continuous-integration.html#github-actions.
+
+To tweak timeout setting, use `WASM_BINDGEN_TEST_TIMEOUT` environment variable. E.g., `WASM_BINDGEN_TEST_TIMEOUT=300 wasm-pack test --firefox --headless`.
 
 ## Compatibility
 

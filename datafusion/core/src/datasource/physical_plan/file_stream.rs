@@ -25,12 +25,10 @@ use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Instant;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    FileMeta, FileScanConfig, PartitionColumnProjector,
-};
+use crate::datasource::physical_plan::file_scan_config::PartitionColumnProjector;
+use crate::datasource::physical_plan::{FileMeta, FileScanConfig};
 use crate::error::Result;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
@@ -40,6 +38,7 @@ use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
 
 use futures::future::BoxFuture;
@@ -531,7 +530,7 @@ mod tests {
     };
 
     use arrow_schema::Schema;
-    use datafusion_common::{internal_err, DataFusionError, Statistics};
+    use datafusion_common::{internal_err, Statistics};
 
     use bytes::Bytes;
     use futures::StreamExt;
