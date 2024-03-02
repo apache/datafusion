@@ -16,7 +16,7 @@
 // under the License.
 
 //! Encoding expressions
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait, StringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use datafusion_common::exec_err;
@@ -183,10 +183,14 @@ pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         ),
     }
 }
+#[cfg(test)]
 mod tests {
-    use crate::regex::regexplike::regexp_like;
-    use arrow::array::{BooleanBuilder, StringArray};
     use std::sync::Arc;
+
+    use arrow::array::BooleanBuilder;
+    use arrow_array::StringArray;
+
+    use crate::regex::regexplike::regexp_like;
 
     #[test]
     fn test_case_sensitive_regexp_like() {

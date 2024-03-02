@@ -139,6 +139,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         ),
     }
 }
+#[cfg(test)]
 mod tests {
     use crate::regex::regexpmatch::regexp_match;
     use arrow::array::{GenericStringBuilder, ListBuilder};
