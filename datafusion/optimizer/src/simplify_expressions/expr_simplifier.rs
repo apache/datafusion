@@ -50,6 +50,40 @@ use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
 use super::utils::*;
 
 /// This structure handles API for expression simplification
+///
+/// Provides simplification information based on DFSchema and
+/// [`ExecutionProps`]. This is the default implementation used by DataFusion
+///
+/// For example:
+/// ```
+/// use arrow::datatypes::{Schema, Field, DataType};
+/// use datafusion_expr::{col, lit};
+/// use datafusion_common::{DataFusionError, ToDFSchema};
+/// use datafusion_expr::execution_props::ExecutionProps;
+/// use datafusion_expr::simplify::SimplifyContext;
+/// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+///
+/// // Create the schema
+/// let schema = Schema::new(vec![
+///     Field::new("i", DataType::Int64, false),
+///   ])
+///   .to_dfschema_ref().unwrap();
+///
+/// // Create the simplifier
+/// let props = ExecutionProps::new();
+/// let context = SimplifyContext::new(&props)
+///    .with_schema(schema);
+/// let simplifier = ExprSimplifier::new(context);
+///
+/// // Use the simplifier
+///
+/// // b < 2 or (1 > 3)
+/// let expr = col("b").lt(lit(2)).or(lit(1).gt(lit(3)));
+///
+/// // b < 2
+/// let simplified = simplifier.simplify(expr).unwrap();
+/// assert_eq!(simplified, col("b").lt(lit(2)));
+/// ```
 pub struct ExprSimplifier<S> {
     info: S,
     /// Guarantees about the values of columns. This is provided by the user
@@ -97,6 +131,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_common::Result;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::simplify::SimplifyInfo;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     /// use datafusion_common::DFSchema;
     /// use std::sync::Arc;
