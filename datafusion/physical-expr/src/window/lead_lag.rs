@@ -278,10 +278,10 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                     .extend(array.nulls().unwrap().valid_indices().collect::<Vec<_>>());
             }
             if range.start == 0 && array.is_valid(0) {
-                self.curr_valid_idx = self.shift_offset - 1;
+                self.curr_valid_idx = -self.shift_offset - 1;
             }
             let idx0 = self.non_null_offsets.get(self.curr_valid_idx as usize);
-            if idx0.is_some() && range.start == *idx0.unwrap() && range.start > 0 {
+            if idx0.is_some() && range.start == *idx0.unwrap() {
                 self.curr_valid_idx += 1;
             }
             idx = self
