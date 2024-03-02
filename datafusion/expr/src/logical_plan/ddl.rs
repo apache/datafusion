@@ -322,6 +322,9 @@ pub struct DropCatalogSchema {
     pub schema: DFSchemaRef,
 }
 
+/// Arguments passed to `CREATE FUNCTION`
+///
+/// Note this meant to be the same as from sqlparser's [`sqlparser::ast::Statement::CreateFunction`]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateFunction {
     // TODO: There is open question should we expose sqlparser types or redefine them here?
