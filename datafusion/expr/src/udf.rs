@@ -347,7 +347,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(None)
     }
 
-    // Do the function rewrite.
+    /// Optionally apply per-UDF simplification / rewrite rules
+    ///
+    /// This can be used to apply function specific simplification rules 
+    /// during  optimization (e.g. `arrow_cast` --> `Expr::Cast`).
+    ///
+    /// Note that since DataFusion handles simplifying arguments 
+    /// as well as "constant folding" (replacing a function call with constant
+    /// arguments such as `my_add(1,2) --> 3` ) there is no need to implement such
+    /// optimizations for UDFs.
     // 'args': The arguments of the function
     // 'schema': The schema of the function
     fn simplify(&self, _args: &[Expr], _info: &dyn SimplifyInfo) -> Result<Simplified> {
