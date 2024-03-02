@@ -46,7 +46,7 @@ pub trait SimplifyInfo {
     fn schema(&self) -> Option<DFSchemaRef>;
 }
 
-/// See [ExprSimplifier] for an example of how to use this.
+/// See `ExprSimplifier` for an example of how to use this.
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
     props: &'a ExecutionProps,
