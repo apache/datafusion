@@ -938,8 +938,8 @@ fn func_order_in_one_dimension(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::lit;
     use crate::expressions::try_cast;
-    use crate::expressions::{col, lit};
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
@@ -948,7 +948,7 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::{as_boolean_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{exec_err, internal_err, plan_err};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
