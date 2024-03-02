@@ -1231,13 +1231,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
-            }) => simpl_log(args, <&S>::clone(&info))?,
+            }) => simpl_log(args, info)?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
-            }) => simpl_power(args, <&S>::clone(&info))?,
+            }) => simpl_power(args, info)?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
