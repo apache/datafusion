@@ -19,8 +19,8 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{Expr, ExprSchemable};
-use datafusion_physical_expr::execution_props::ExecutionProps;
+
+use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 
 #[allow(rustdoc::private_intra_doc_links)]
 /// The information necessary to apply algebraic simplification to an
@@ -54,8 +54,9 @@ pub trait SimplifyInfo {
 /// use arrow::datatypes::{Schema, Field, DataType};
 /// use datafusion_expr::{col, lit};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
-/// use datafusion_physical_expr::execution_props::ExecutionProps;
-/// use datafusion_optimizer::simplify_expressions::{SimplifyContext, ExprSimplifier};
+/// use datafusion_expr::execution_props::ExecutionProps;
+/// use datafusion_expr::simplify::SimplifyContext;
+/// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 ///
 /// // Create the schema
 /// let schema = Schema::new(vec![

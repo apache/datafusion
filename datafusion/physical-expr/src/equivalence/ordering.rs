@@ -228,7 +228,6 @@ mod tests {
     use crate::equivalence::{
         EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
     };
-    use crate::execution_props::ExecutionProps;
     use crate::expressions::Column;
     use crate::expressions::{col, BinaryExpr};
     use crate::functions::create_physical_expr;
@@ -236,6 +235,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::Result;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
     use itertools::Itertools;
     use std::sync::Arc;

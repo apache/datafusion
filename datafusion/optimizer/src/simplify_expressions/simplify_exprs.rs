@@ -19,10 +19,13 @@
 
 use std::sync::Arc;
 
+use super::ExprSimplifier;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 use crate::{OptimizerConfig, OptimizerRule};
 

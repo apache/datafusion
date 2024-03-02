@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod context;
 pub mod expr_simplifier;
 mod function_simplifier;
 mod guarantees;
@@ -24,6 +23,5 @@ mod regex;
 pub mod simplify_exprs;
 mod utils;
 
-pub use context::*;
 pub use expr_simplifier::*;
 pub use simplify_exprs::*;

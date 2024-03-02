@@ -25,7 +25,6 @@ use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
 
 use arrow::{
     array::{new_null_array, AsArray},
@@ -40,12 +39,14 @@ use datafusion_common::{
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
     ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
-use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use datafusion_physical_expr::create_physical_expr;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
@@ -101,8 +102,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use arrow::datatypes::DataType;
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::Result;
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     /// use datafusion_common::DFSchema;
     /// use std::sync::Arc;
     ///
@@ -202,9 +204,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{
-    ///     ExprSimplifier, SimplifyContext};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
     ///   Field::new("x", DataType::Int64, false),
@@ -261,9 +263,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{
-    ///     ExprSimplifier, SimplifyContext};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
     ///   Field::new("a", DataType::Int64, false),
@@ -1350,10 +1352,20 @@ mod tests {
         sync::Arc,
     };
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFField, ToDFSchema};
+    use super::*;
+    use crate::simplify_expressions::utils::for_test::{
+        cast_to_int64_expr, now_expr, to_timestamp_expr,
+    };
+    use crate::test::test_table_scan_with_name;
+
+    use arrow::{
+        array::{ArrayRef, Int32Array},
+        datatypes::{DataType, Field, Schema},
+    };
+    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{interval_arithmetic::Interval, *};
-    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;

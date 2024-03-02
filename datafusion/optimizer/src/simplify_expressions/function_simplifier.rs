@@ -19,10 +19,9 @@
 
 use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::Simplified;
 use datafusion_expr::{expr::ScalarFunction, Expr, ScalarFunctionDefinition};
-
-use super::SimplifyInfo;
 
 pub(super) struct FunctionSimplifier<'a, S> {
     info: &'a S,

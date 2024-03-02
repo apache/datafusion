@@ -17,11 +17,11 @@
 
 //! Utility functions for expression simplification
 
-use crate::simplify_expressions::SimplifyInfo;
-use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr::{Between, BinaryExpr, InList},
+    expr::{Between, BinaryExpr, InList, ScalarFunction},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator, ScalarFunctionDefinition,
 };

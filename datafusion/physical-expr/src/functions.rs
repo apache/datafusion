@@ -30,7 +30,6 @@
 //! an argument i32 is passed to a function that supports f64, the
 //! argument is automatically is coerced to f64.
 
-use crate::execution_props::ExecutionProps;
 use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions, math_expressions,
@@ -42,7 +41,8 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,

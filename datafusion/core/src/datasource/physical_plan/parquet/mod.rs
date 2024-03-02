@@ -804,11 +804,12 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
     use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
-    use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_expr::execution_props::ExecutionProps;
 
     use chrono::{TimeZone, Utc};
+    use datafusion_common::{FileType, GetExt, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{col, lit, when, Expr};
+    use datafusion_physical_expr::create_physical_expr;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;

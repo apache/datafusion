@@ -115,13 +115,13 @@ mod tests {
         output_schema,
     };
     use crate::equivalence::EquivalenceProperties;
-    use crate::execution_props::ExecutionProps;
     use crate::expressions::{col, BinaryExpr, Literal};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
     use itertools::Itertools;
     use std::sync::Arc;

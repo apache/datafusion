@@ -30,6 +30,7 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+// TODO(In this PR): Move to simplify.rs
 /// Was the expression simplified?
 pub enum Simplified {
     /// The function call was simplified to an entirely new Expr
