@@ -107,6 +107,6 @@ pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),
     /// the function call could not be simplified, and the arguments
-    /// are return unmodified
-    Original,
+    /// are return unmodified.
+    Original(Vec<Expr>),
 }

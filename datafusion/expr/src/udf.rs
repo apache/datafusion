@@ -167,7 +167,7 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::simplify`] for more details.
     pub fn simplify(
         &self,
-        args: &[Expr],
+        args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
@@ -353,8 +353,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///
-    /// This can be used to apply function specific simplification rules
-    /// during optimization (e.g. `arrow_cast` --> `Expr::Cast`).
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
     ///
     /// Note that DataFusion handles simplifying arguments and  "constant
     /// folding" (replacing a function call with constant arguments such as
@@ -364,12 +365,17 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// # Arguments
     /// * 'args': The arguments of the function
     /// * 'schema': The schema of the function
+    ///
+    /// # Returns
+    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
+    /// if the function cannot be simplified, the arguments *MUST* be returned
+    /// unmodified
     fn simplify(
         &self,
-        _args: &[Expr],
+        args: Vec<Expr>,
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        Ok(ExprSimplifyResult::Original)
+        Ok(ExprSimplifyResult::Original(args))
     }
 }
 

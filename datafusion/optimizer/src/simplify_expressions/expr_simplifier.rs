@@ -1276,11 +1276,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::UDF(udf),
                 args,
-            }) => match udf.simplify(&args, info)? {
-                ExprSimplifyResult::Original => Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::UDF(udf),
-                    args,
-                }),
+            }) => match udf.simplify(args, info)? {
+                ExprSimplifyResult::Original(args) => {
+                    Expr::ScalarFunction(ScalarFunction {
+                        func_def: ScalarFunctionDefinition::UDF(udf),
+                        args,
+                    })
+                }
                 ExprSimplifyResult::Simplified(expr) => expr,
             },
 
