@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
+//! Regx expressions
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
