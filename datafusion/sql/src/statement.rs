@@ -668,18 +668,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     None => None,
                 };
-
-                // Not sure if this is correct way to generate name
-                // postgresql function definition may have schema part as well
-                // datafusion at the moment does lookup based on given string
-                // `schema_name.function_name` will work even if there is no `schema_name`
-                let name: String = name
-                    .0
-                    .into_iter()
-                    .map(|i| i.value)
-                    .collect::<Vec<String>>()
-                    .join(".");
-
+                // at the moment functions can't be qualified `schema.name`
+                let name = match &name.0[..] {
+                    [] => Err(DataFusionError::Execution(
+                        "Function should have name".into(),
+                    ))?,
+                    [n] => n.value.clone(),
+                    [..] => Err(DataFusionError::NotImplemented(
+                        "Qualified functions are not supported".into(),
+                    ))?,
+                };
                 //
                 // convert resulting expression to data fusion expression
                 //
@@ -726,22 +724,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 func_desc,
                 ..
             } => {
-                // Not sure if this is correct way to generate name
-                // postgresql function definition may have schema part as well
-                // datafusion at the moment does lookup based on given string
-                // `schema_name.function_name` will work even if there is no `schema_name`
-
                 // according to postgresql documentation it can be only one function
                 // specified in drop statement
-
                 if let Some(desc) = func_desc.first() {
-                    let name: String = desc
-                        .name
-                        .0
-                        .iter()
-                        .map(|i| i.value.to_owned())
-                        .collect::<Vec<String>>()
-                        .join(".");
+                    // at the moment functions can't be qualified `schema.name`
+                    let name = match &desc.name.0[..] {
+                        [] => Err(DataFusionError::Execution(
+                            "Function should have name".into(),
+                        ))?,
+                        [n] => n.value.clone(),
+                        [..] => Err(DataFusionError::NotImplemented(
+                            "Qualified functions are not supported".into(),
+                        ))?,
+                    };
                     let statement = DdlStatement::DropFunction(DropFunction {
                         if_exists,
                         name,
