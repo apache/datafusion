@@ -19,13 +19,6 @@
 
 use std::ops::Not;
 
-use super::function_simplifier::FunctionSimplifier;
-use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
-use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
@@ -51,8 +44,8 @@ use datafusion_physical_expr::create_physical_expr;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
 
+use super::function_simplifier::FunctionSimplifier;
 use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
 use super::utils::*;
 
@@ -1352,22 +1345,12 @@ mod tests {
         sync::Arc,
     };
 
-    use super::*;
-    use crate::simplify_expressions::utils::for_test::{
-        cast_to_int64_expr, now_expr, to_timestamp_expr,
-    };
-    use crate::test::test_table_scan_with_name;
-
-    use arrow::{
-        array::{ArrayRef, Int32Array},
-        datatypes::{DataType, Field, Schema},
-    };
-    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{assert_contains, DFField, ToDFSchema};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{interval_arithmetic::Interval, *};
 
-    use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
 
     use super::*;

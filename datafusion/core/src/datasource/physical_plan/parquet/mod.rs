@@ -800,16 +800,16 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
+
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
     use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
-
-    use chrono::{TimeZone, Utc};
-    use datafusion_common::{FileType, GetExt, ScalarValue};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::create_physical_expr;
+
+    use chrono::{TimeZone, Utc};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;

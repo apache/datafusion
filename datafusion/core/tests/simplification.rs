@@ -20,24 +20,19 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Int32Array};
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::common::DFSchema;
+use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     expr, table_scan, BuiltinScalarFunction, Cast, ColumnarValue, Expr, ExprSchemable,
     LogicalPlan, LogicalPlanBuilder, ScalarUDF, Volatility,
 };
-use datafusion_optimizer::simplify_expressions::{
-    ExprSimplifier, SimplifyExpressions, SimplifyInfo,
-};
+use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
-use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
-use datafusion_common::{DFSchemaRef, ToDFSchema};
-use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::{Expr, ExprSchemable};
-use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.

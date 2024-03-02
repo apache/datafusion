@@ -41,7 +41,7 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
