@@ -140,3 +140,12 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
         self.props
     }
 }
+
+/// Was the expression simplified?
+pub enum Simplified {
+    /// The function call was simplified to an entirely new Expr
+    Rewritten(Expr),
+    /// the function call could not be simplified, and the arguments
+    /// are return unmodified
+    Original,
+}

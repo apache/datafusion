@@ -24,14 +24,16 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::DFSchemaRef;
+use datafusion_common::DFSchema;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
 };
+use datafusion_expr::simplify::Simplified;
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
-    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Simplified, Volatility,
+    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 
 use rand::{thread_rng, Rng};
@@ -545,8 +547,9 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
     // Wrap with Expr::Cast() to Int64
-    fn simplify(&self, args: &[Expr], schema: DFSchemaRef) -> Result<Simplified> {
+    fn simplify(&self, args: &[Expr], info: &dyn SimplifyInfo) -> Result<Simplified> {
         let e = args[0].to_owned();
+        let schema = info.schema().unwrap_or_else(|| DFSchema::empty().into());
         let casted_expr = e.cast_to(&DataType::Int64, schema.as_ref())?;
         Ok(Simplified::Rewritten(casted_expr))
     }

@@ -17,28 +17,19 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::simplify::{Simplified, SimplifyInfo};
 use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, ExprSchema, Result};
+use datafusion_common::{ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
-
-// TODO(In this PR): Move to simplify.rs
-/// Was the expression simplified?
-pub enum Simplified {
-    /// The function call was simplified to an entirely new Expr
-    Rewritten(Expr),
-    /// the function call could not be simplified, and the arguments
-    /// are return unmodified
-    Original,
-}
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -174,8 +165,8 @@ impl ScalarUDF {
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
-    pub fn simplify(&self, args: &[Expr], schema: DFSchemaRef) -> Result<Simplified> {
-        self.inner.simplify(args, schema)
+    pub fn simplify(&self, args: &[Expr], info: &dyn SimplifyInfo) -> Result<Simplified> {
+        self.inner.simplify(args, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -359,7 +350,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     // Do the function rewrite.
     // 'args': The arguments of the function
     // 'schema': The schema of the function
-    fn simplify(&self, _args: &[Expr], _schema: DFSchemaRef) -> Result<Simplified> {
+    fn simplify(&self, _args: &[Expr], _info: &dyn SimplifyInfo) -> Result<Simplified> {
         Ok(Simplified::Original)
     }
 }

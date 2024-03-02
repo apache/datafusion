@@ -18,9 +18,9 @@
 //! This module implements a rule that do function simplification.
 
 use datafusion_common::tree_node::TreeNodeRewriter;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
+use datafusion_expr::simplify::Simplified;
 use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::Simplified;
 use datafusion_expr::{expr::ScalarFunction, Expr, ScalarFunctionDefinition};
 
 pub(super) struct FunctionSimplifier<'a, S> {
@@ -42,12 +42,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for FunctionSimplifier<'a, S> {
             args,
         }) = &expr
         {
-            let schema = self
-                .info
-                .schema()
-                .unwrap_or_else(|| DFSchema::empty().into());
-
-            let simplified_expr = udf.simplify(args, schema)?;
+            let simplified_expr = udf.simplify(args, self.info)?;
             match simplified_expr {
                 Simplified::Original => Ok(expr),
                 Simplified::Rewritten(expr) => Ok(expr),
