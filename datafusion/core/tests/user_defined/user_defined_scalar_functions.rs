@@ -709,20 +709,29 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
             .with_function_factory(function_factory.clone());
 
     let ctx = SessionContext::new_with_state(state);
+    let options = SQLOptions::new().with_allow_ddl(false);
 
     let sql = r#"
     CREATE FUNCTION better_add(DOUBLE, DOUBLE)
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let _ = ctx.sql(sql).await?;
+
+    // try to create function when sql options have allow ddl disabled
+    assert!(ctx.sql_with_options(sql, options.clone()).await.is_err());
+
+    // Create the `better_add` function dynamically via CREATE FUNCTION statement
+    assert!(ctx.sql(sql).await.is_ok());
+    // try to drop function when sql options have allow ddl disabled
+    assert!(ctx
+        .sql_with_options("drop function better_add", options.clone())
+        .await
+        .is_err());
 
     ctx.sql("select better_add(2.0, 2.0)").await?.show().await?;
 
     // check if we sql expr has been converted to datafusion expr
     let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
-
-    // is there some better way to test this
     assert_eq!("$1 + $2", captured_expression.to_string());
 
     // statement drops  function

@@ -335,9 +335,7 @@ pub struct CreateFunction {
     pub name: String,
     pub args: Option<Vec<OperateFunctionArg>>,
     pub return_type: Option<DataType>,
-    // TODO: move this to new struct here
     pub params: CreateFunctionBody,
-    //pub body: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
