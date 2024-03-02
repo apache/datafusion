@@ -62,10 +62,15 @@ impl<R: 'static> SpawnedTask<R> {
     /// Joins the task and unwinds the panic if it happens.
     pub async fn join_unwind(self) -> R {
         self.join().await.unwrap_or_else(|e| {
+            // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
             } else {
-                unreachable!();
+                // Cancellation may be caused by two reasons:
+                // 1. Abort is called, but since we consumed `self`, it's not our case.
+                // 2. The runtime is shutting down.
+                // So we consider this branch as unreachable.
+                unreachable!("SpawnedTask was cancelled unexpectedly");
             }
         })
     }
