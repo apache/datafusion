@@ -4258,7 +4258,7 @@ LIMIT 5;
 statement ok
 set datafusion.execution.batch_size = 1;
 
-query II
+query I
 SELECT LAG(c1, 2) IGNORE NULLS OVER()
 FROM null_cases
 ORDER BY c2
