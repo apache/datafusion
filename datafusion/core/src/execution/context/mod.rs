@@ -1650,8 +1650,7 @@ impl SessionState {
         self
     }
 
-    /// Registers `CREATE FUNCTION` statement handler implementing
-    /// [`FunctionFactory`] trait.
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn with_function_factory(
         mut self,
         function_factory: Arc<dyn FunctionFactory>,
