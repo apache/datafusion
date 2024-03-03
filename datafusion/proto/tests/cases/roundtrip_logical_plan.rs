@@ -583,6 +583,11 @@ async fn roundtrip_expr_api() -> Result<()> {
         encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
         decode(lit("1234"), lit("hex")),
         array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+        array_dims(array(vec![lit(1), lit(2), lit(3)])),
+        array_ndims(array(vec![lit(1), lit(2), lit(3)])),
+        cardinality(array(vec![lit(1), lit(2), lit(3)])),
+        range(lit(1), lit(10), lit(2)),
+        gen_series(lit(1), lit(10), lit(2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

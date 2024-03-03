@@ -130,8 +130,6 @@ pub enum BuiltinScalarFunction {
     ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
-    /// array_dims
-    ArrayDims,
     /// array_distinct
     ArrayDistinct,
     /// array_element
@@ -140,8 +138,6 @@ pub enum BuiltinScalarFunction {
     ArrayEmpty,
     /// array_length
     ArrayLength,
-    /// array_ndims
-    ArrayNdims,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -172,8 +168,6 @@ pub enum BuiltinScalarFunction {
     ArrayUnion,
     /// array_except
     ArrayExcept,
-    /// cardinality
-    Cardinality,
     /// array_resize
     ArrayResize,
     /// construct an array from columns
@@ -210,8 +204,6 @@ pub enum BuiltinScalarFunction {
     EndsWith,
     /// initcap
     InitCap,
-    /// InStr
-    InStr,
     /// left
     Left,
     /// lpad
@@ -385,12 +377,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
@@ -409,7 +399,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
-            BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
@@ -423,7 +412,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateBin => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
-            BuiltinScalarFunction::InStr => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
@@ -561,9 +549,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ArrayHasAny
             | BuiltinScalarFunction::ArrayHas
             | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => {
-                Ok(List(Arc::new(Field::new("item", UInt64, true))))
-            }
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
@@ -574,7 +559,6 @@ impl BuiltinScalarFunction {
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -622,7 +606,6 @@ impl BuiltinScalarFunction {
                     (dt, _) => Ok(dt),
                 }
             }
-            BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
                 _ => {
@@ -678,9 +661,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
-            }
-            BuiltinScalarFunction::InStr => {
-                utf8_to_int_type(&input_expr_types[0], "instr/position")
             }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
             BuiltinScalarFunction::Lower => {
@@ -742,7 +722,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::StartsWith => Ok(Boolean),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
-                utf8_to_int_type(&input_expr_types[0], "strpos")
+                utf8_to_int_type(&input_expr_types[0], "strpos/instr/position")
             }
             BuiltinScalarFunction::Substr => {
                 utf8_to_str_type(&input_expr_types[0], "substr")
@@ -884,7 +864,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayDims => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayElement => {
                 Signature::array_and_index(self.volatility())
@@ -900,7 +879,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayNdims => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -931,7 +909,6 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::Cardinality => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayResize => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1160,7 +1137,6 @@ impl BuiltinScalarFunction {
             ),
 
             BuiltinScalarFunction::EndsWith
-            | BuiltinScalarFunction::InStr
             | BuiltinScalarFunction::Strpos
             | BuiltinScalarFunction::StartsWith => Signature::one_of(
                 vec![
@@ -1416,7 +1392,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Chr => &["chr"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::InStr => &["instr", "position"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],
@@ -1433,7 +1408,7 @@ impl BuiltinScalarFunction {
                 &["string_to_array", "string_to_list"]
             }
             BuiltinScalarFunction::StartsWith => &["starts_with"],
-            BuiltinScalarFunction::Strpos => &["strpos"],
+            BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],
             BuiltinScalarFunction::ToHex => &["to_hex"],
             BuiltinScalarFunction::Translate => &["translate"],
@@ -1481,7 +1456,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
-            BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
             BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
@@ -1498,7 +1472,6 @@ impl BuiltinScalarFunction {
                 &["array_has", "list_has", "array_contains", "list_contains"]
             }
             BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
-            BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]
             }
@@ -1534,7 +1507,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
-            BuiltinScalarFunction::Cardinality => &["cardinality"],
             BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
             BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
             BuiltinScalarFunction::ArrayIntersect => {

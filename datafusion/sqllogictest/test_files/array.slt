@@ -883,6 +883,11 @@ select arrow_cast([1, 2, 3], 'LargeList(Int64)')[0:0],
 ----
 [] [1, 2] [h, e, l, l, o]
 
+query I
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
+----
+1
+
 # TODO: support multiple negative index
 # multiple index with columns #3 (negative index)
 # query II
