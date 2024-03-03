@@ -767,7 +767,6 @@ scalar_expr!(
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -1313,7 +1312,6 @@ mod test {
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);

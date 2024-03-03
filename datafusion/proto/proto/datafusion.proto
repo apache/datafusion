@@ -678,7 +678,7 @@ enum ScalarFunction {
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
-  InStr = 132;
+  /// 132 was InStr
   MakeDate = 133;
   ArrayReverse = 134;
   RegexpLike = 135;
