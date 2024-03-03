@@ -289,14 +289,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                         break;
                     }
                 }
-            } else {
-                if range.end < len as usize && array.is_valid(range.end) {
-                    if array.is_valid(range.end) {
-                        self.non_null_offsets.push_back(1);
-                    } else {
-                        let last_idx = self.non_null_offsets.len() - 1;
-                        self.non_null_offsets[last_idx] += 1;
-                    }
+            } else if range.end < len as usize && array.is_valid(range.end) {
+                if array.is_valid(range.end) {
+                    self.non_null_offsets.push_back(1);
+                } else {
+                    let last_idx = self.non_null_offsets.len() - 1;
+                    self.non_null_offsets[last_idx] += 1;
                 }
             }
 
