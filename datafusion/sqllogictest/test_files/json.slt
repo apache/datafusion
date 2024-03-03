@@ -117,7 +117,7 @@ SELECT part FROM json_partitioned_test ORDER BY part
 2
 2
 
-# select without any table-relates columns in projection
+# select without any table-related columns in projection
 query T
 SELECT 'x' FROM json_partitioned_test
 ----
