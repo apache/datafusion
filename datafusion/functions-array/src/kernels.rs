@@ -25,8 +25,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::Field;
+use arrow::datatypes::UInt64Type;
 use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
-use arrow::datatypes::{DataType, UInt64Type};
 use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_large_list_array,
     as_list_array, as_string_array,
@@ -258,10 +258,6 @@ pub(super) fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(string_arr))
 }
-
-use arrow::array::ListArray;
-use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::Field;
 
 /// Generates an array of integers from start to stop with a given step.
 ///
