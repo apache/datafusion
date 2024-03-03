@@ -30,7 +30,7 @@ use crate::protobuf::{
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::{create_udf, ScalarUDF};
 
 use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
 use datafusion::datasource::{
@@ -537,6 +537,7 @@ fn serialize_expr(
             })
         } else {
             let mut buf = Vec::new();
+            let udf = create_udf(expr.name(), expr., return_type, volatility, fun);
             // let _ = codec.try_encode_udf(, &mut buf);
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(

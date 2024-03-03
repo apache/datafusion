@@ -49,7 +49,7 @@ use datafusion_expr::{
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionDefinition,
+    fun: ScalarFunctionImplementation,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -79,7 +79,7 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionDefinition,
+        fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
@@ -97,8 +97,7 @@ impl ScalarFunctionExpr {
 
     /// Get the scalar function implementation
     pub fn fun(&self) -> &ScalarFunctionImplementation {
-        //
-        todo!()
+        &self.fun
     }
 
     /// The name for this expression
