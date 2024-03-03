@@ -339,9 +339,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayHas => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_has)(args)
         }),
-        BuiltinScalarFunction::ArrayDims => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_dims)(args)
-        }),
         BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_distinct)(args)
         }),
@@ -357,9 +354,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Flatten => {
             Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
         }
-        BuiltinScalarFunction::ArrayNdims => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_ndims)(args)
-        }),
         BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_pop_front)(args)
         }),
@@ -404,9 +398,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
-        BuiltinScalarFunction::Cardinality => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::cardinality)(args)
         }),
         BuiltinScalarFunction::ArrayResize => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_resize)(args)
