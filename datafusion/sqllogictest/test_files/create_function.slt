@@ -37,7 +37,6 @@ CREATE FUNCTION foo.bar (DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
 statement error DataFusion error: This feature is not implemented: Qualified functions are not supported
 DROP FUNCTION foo.bar;
 
-
 # Show it is possible to drop existing (UDF) functions
 query I
 select abs(-1);
@@ -49,12 +48,8 @@ statement ok
 DROP FUNCTION abs;
 
 # now the the query errors
-query error
+query error Invalid function 'abs'.
 select abs(-1);
-----
-DataFusion error: Error during planning: Invalid function 'abs'.
-Did you mean 'cos'?
-
 
 # Can't drop the function again
 statement error DataFusion error: Execution error: Function does not exist
