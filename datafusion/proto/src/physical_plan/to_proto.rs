@@ -30,6 +30,7 @@ use crate::protobuf::{
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion_expr::ScalarUDF;
 
 use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
 use datafusion::datasource::{
@@ -70,14 +71,17 @@ use datafusion_common::{
     DataFusionError, FileTypeWriterOptions, JoinSide, Result,
 };
 
+use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
+
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
 
     fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
+        let codec = DefaultPhysicalExtensionCodec {};
         let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
             .iter()
-            .map(|e| e.clone().try_into())
+            .map(|e| serialize_expr(e.clone(), &codec))
             .collect::<Result<Vec<_>>>()?;
 
         let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
@@ -237,16 +241,16 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
         } else {
             return not_impl_err!("WindowExpr not supported: {window_expr:?}");
         };
-
+        let codec = DefaultPhysicalExtensionCodec {};
         let args = args
             .into_iter()
-            .map(|e| e.try_into())
+            .map(|e| serialize_expr(e, &codec))
             .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
         let partition_by = window_expr
             .partition_by()
             .iter()
-            .map(|p| p.clone().try_into())
+            .map(|p| serialize_expr(p.clone(), &codec))
             .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
         let order_by = window_expr
@@ -374,184 +378,192 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     Ok(AggrFn { inner, distinct })
 }
 
-impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
-    type Error = DataFusionError;
+fn serialize_expr(
+    value: Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNode, DataFusionError> {
+    let expr = value.as_any();
 
-    fn try_from(value: Arc<dyn PhysicalExpr>) -> Result<Self, Self::Error> {
-        let expr = value.as_any();
+    if let Some(expr) = expr.downcast_ref::<Column>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                protobuf::PhysicalColumn {
+                    name: expr.name().to_string(),
+                    index: expr.index() as u32,
+                },
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
+        let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
+            l: Some(Box::new(serialize_expr(expr.left().clone(), codec)?)),
+            r: Some(Box::new(serialize_expr(expr.right().clone(), codec)?)),
+            op: format!("{:?}", expr.op()),
+        });
 
-        if let Some(expr) = expr.downcast_ref::<Column>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                    protobuf::PhysicalColumn {
-                        name: expr.name().to_string(),
-                        index: expr.index() as u32,
-                    },
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
-            let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-                l: Some(Box::new(expr.left().to_owned().try_into()?)),
-                r: Some(Box::new(expr.right().to_owned().try_into()?)),
-                op: format!("{:?}", expr.op()),
-            });
-
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
-                    binary_expr,
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::Case(
-                        Box::new(
-                            protobuf::PhysicalCaseNode {
-                                expr: expr
-                                    .expr()
-                                    .map(|exp| exp.clone().try_into().map(Box::new))
-                                    .transpose()?,
-                                when_then_expr: expr
-                                    .when_then_expr()
-                                    .iter()
-                                    .map(|(when_expr, then_expr)| {
-                                        try_parse_when_then_expr(when_expr, then_expr)
-                                    })
-                                    .collect::<Result<
-                                        Vec<protobuf::PhysicalWhenThen>,
-                                        Self::Error,
-                                    >>()?,
-                                else_expr: expr
-                                    .else_expr()
-                                    .map(|a| a.clone().try_into().map(Box::new))
-                                    .transpose()?,
-                            },
-                        ),
-                    ),
-                ),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(
-                    Box::new(protobuf::PhysicalNot {
-                        expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                    }),
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
-                    Box::new(protobuf::PhysicalIsNull {
-                        expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                    }),
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
-                    Box::new(protobuf::PhysicalIsNotNull {
-                        expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                    }),
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::InList(
-                        Box::new(
-                            protobuf::PhysicalInListNode {
-                                expr: Some(Box::new(expr.expr().to_owned().try_into()?)),
-                                list: expr
-                                    .list()
-                                    .iter()
-                                    .map(|a| a.clone().try_into())
-                                    .collect::<Result<
-                                    Vec<protobuf::PhysicalExprNode>,
-                                    Self::Error,
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
+                binary_expr,
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(
+                protobuf::physical_expr_node::ExprType::Case(
+                    Box::new(
+                        protobuf::PhysicalCaseNode {
+                            expr: expr
+                                .expr()
+                                .map(|exp| {
+                                    serialize_expr(exp.clone(), codec).map(Box::new)
+                                })
+                                .transpose()?,
+                            when_then_expr: expr
+                                .when_then_expr()
+                                .iter()
+                                .map(|(when_expr, then_expr)| {
+                                    try_parse_when_then_expr(when_expr, then_expr, codec)
+                                })
+                                .collect::<Result<
+                                    Vec<protobuf::PhysicalWhenThen>,
+                                    DataFusionError,
                                 >>()?,
-                                negated: expr.negated(),
-                            },
-                        ),
+                            else_expr: expr
+                                .else_expr()
+                                .map(|a| serialize_expr(a.clone(), codec).map(Box::new))
+                                .transpose()?,
+                        },
                     ),
                 ),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(
-                    Box::new(protobuf::PhysicalNegativeNode {
-                        expr: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                    }),
-                )),
-            })
-        } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                    lit.value().try_into()?,
-                )),
-            })
-        } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
-                    protobuf::PhysicalCastNode {
-                        expr: Some(Box::new(cast.expr().clone().try_into()?)),
-                        arrow_type: Some(cast.cast_type().try_into()?),
-                    },
-                ))),
-            })
-        } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(
-                    Box::new(protobuf::PhysicalTryCastNode {
-                        expr: Some(Box::new(cast.expr().clone().try_into()?)),
-                        arrow_type: Some(cast.cast_type().try_into()?),
-                    }),
-                )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-            let args: Vec<protobuf::PhysicalExprNode> = expr
-                .args()
-                .iter()
-                .map(|e| e.to_owned().try_into())
-                .collect::<Result<Vec<_>, _>>()?;
-            if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
-                let fun: protobuf::ScalarFunction = (&fun).try_into()?;
-
-                Ok(protobuf::PhysicalExprNode {
-                    expr_type: Some(
-                        protobuf::physical_expr_node::ExprType::ScalarFunction(
-                            protobuf::PhysicalScalarFunctionNode {
-                                name: expr.name().to_string(),
-                                fun: fun.into(),
-                                args,
-                                return_type: Some(expr.return_type().try_into()?),
-                            },
-                        ),
-                    ),
-                })
-            } else {
-                Ok(protobuf::PhysicalExprNode {
-                    expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
-                        protobuf::PhysicalScalarUdfNode {
-                            name: expr.name().to_string(),
-                            args,
-                            return_type: Some(expr.return_type().try_into()?),
+            ),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
+                protobuf::PhysicalNot {
+                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                },
+            ))),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
+                Box::new(protobuf::PhysicalIsNull {
+                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                }),
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
+                Box::new(protobuf::PhysicalIsNotNull {
+                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                }),
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(
+                protobuf::physical_expr_node::ExprType::InList(
+                    Box::new(
+                        protobuf::PhysicalInListNode {
+                            expr: Some(Box::new(serialize_expr(
+                                expr.expr().to_owned(),
+                                codec,
+                            )?)),
+                            list: expr
+                                .list()
+                                .iter()
+                                .map(|a| serialize_expr(a.clone(), codec))
+                                .collect::<Result<
+                                    Vec<protobuf::PhysicalExprNode>,
+                                    DataFusionError,
+                                >>()?,
+                            negated: expr.negated(),
                         },
-                    )),
-                })
-            }
-        } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
+                    ),
+                ),
+            ),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
+                protobuf::PhysicalNegativeNode {
+                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                },
+            ))),
+        })
+    } else if let Some(lit) = expr.downcast_ref::<Literal>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
+                lit.value().try_into()?,
+            )),
+        })
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
+                protobuf::PhysicalCastNode {
+                    expr: Some(Box::new(serialize_expr(cast.expr().to_owned(), codec)?)),
+                    arrow_type: Some(cast.cast_type().try_into()?),
+                },
+            ))),
+        })
+    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
+                protobuf::PhysicalTryCastNode {
+                    expr: Some(Box::new(serialize_expr(cast.expr().to_owned(), codec)?)),
+                    arrow_type: Some(cast.cast_type().try_into()?),
+                },
+            ))),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        let args: Vec<protobuf::PhysicalExprNode> = expr
+            .args()
+            .iter()
+            .map(|e| serialize_expr(e.to_owned(), codec))
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
+            let fun: protobuf::ScalarFunction = (&fun).try_into()?;
+
             Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(
-                    Box::new(protobuf::PhysicalLikeExprNode {
-                        negated: expr.negated(),
-                        case_insensitive: expr.case_insensitive(),
-                        expr: Some(Box::new(expr.expr().to_owned().try_into()?)),
-                        pattern: Some(Box::new(expr.pattern().to_owned().try_into()?)),
-                    }),
+                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarFunction(
+                    protobuf::PhysicalScalarFunctionNode {
+                        name: expr.name().to_string(),
+                        fun: fun.into(),
+                        args,
+                        return_type: Some(expr.return_type().try_into()?),
+                    },
                 )),
             })
-        } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
-            let field = match expr.field() {
+        } else {
+            let mut buf = Vec::new();
+            // let _ = codec.try_encode_udf(, &mut buf);
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
+                    protobuf::PhysicalScalarUdfNode {
+                        name: expr.name().to_string(),
+                        args,
+                        return_type: Some(expr.return_type().try_into()?),
+                    },
+                )),
+            })
+        }
+    } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
+                protobuf::PhysicalLikeExprNode {
+                    negated: expr.negated(),
+                    case_insensitive: expr.case_insensitive(),
+                    expr: Some(Box::new(serialize_expr(expr.expr().to_owned(), codec)?)),
+                    pattern: Some(Box::new(serialize_expr(
+                        expr.pattern().to_owned(),
+                        codec,
+                    )?)),
+                },
+            ))),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
+        let field = match expr.field() {
                 GetFieldAccessExpr::NamedStructField{name} => Some(
                     protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(protobuf::NamedStructFieldExpr {
                         name: Some(ScalarValue::try_from(name)?)
@@ -559,43 +571,41 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 ),
                 GetFieldAccessExpr::ListIndex{key} => Some(
                     protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(Box::new(protobuf::ListIndexExpr {
-                        key: Some(Box::new(key.to_owned().try_into()?))
+                        key: Some(Box::new(serialize_expr(key.to_owned(), codec)?))
                     }))
                 ),
                 GetFieldAccessExpr::ListRange { start, stop, stride } => {
                     Some(
                         protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
-                            start: Some(Box::new(start.to_owned().try_into()?)),
-                            stop: Some(Box::new(stop.to_owned().try_into()?)),
-                            stride: Some(Box::new(stride.to_owned().try_into()?)),
+                            start: Some(Box::new(serialize_expr(start.to_owned(), codec)?)),
+                            stop: Some(Box::new(serialize_expr(stop.to_owned(), codec)?)),
+                            stride: Some(Box::new(serialize_expr(stride.to_owned(), codec)?)),
                         }))
                     )
                 }
             };
 
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
-                        Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
-                            arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            field,
-                        }),
-                    ),
-                ),
-            })
-        } else {
-            internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
-        }
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
+                Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
+                    arg: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                    field,
+                }),
+            )),
+        })
+    } else {
+        internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
     }
 }
 
 fn try_parse_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(when_expr.clone().try_into()?),
-        then_expr: Some(then_expr.clone().try_into()?),
+        when_expr: Some(serialize_expr(when_expr.clone(), codec)?),
+        then_expr: Some(serialize_expr(then_expr.clone(), codec)?),
     })
 }
 
@@ -716,6 +726,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
     fn try_from(
         conf: &FileScanConfig,
     ) -> Result<protobuf::FileScanExecConf, Self::Error> {
+        let codec = DefaultPhysicalExtensionCodec {};
         let file_groups = conf
             .file_groups
             .iter()
@@ -727,7 +738,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             let expr_node_vec = order
                 .iter()
                 .map(|sort_expr| {
-                    let expr = sort_expr.expr.clone().try_into()?;
+                    let expr = serialize_expr(sort_expr.expr, &codec)?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
                         asc: !sort_expr.options.descending,
@@ -790,10 +801,11 @@ impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
     type Error = DataFusionError;
 
     fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self, Self::Error> {
+        let codec = DefaultPhysicalExtensionCodec {};
         match expr {
             None => Ok(protobuf::MaybeFilter { expr: None }),
             Some(expr) => Ok(protobuf::MaybeFilter {
-                expr: Some(expr.try_into()?),
+                expr: Some(serialize_expr(expr, &codec)?),
             }),
         }
     }
@@ -819,8 +831,9 @@ impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
     type Error = DataFusionError;
 
     fn try_from(sort_expr: PhysicalSortExpr) -> std::result::Result<Self, Self::Error> {
+        let codec = DefaultPhysicalExtensionCodec {};
         Ok(PhysicalSortExprNode {
-            expr: Some(Box::new(sort_expr.expr.try_into()?)),
+            expr: Some(Box::new(serialize_expr(sort_expr.expr, &codec)?)),
             asc: !sort_expr.options.descending,
             nulls_first: sort_expr.options.nulls_first,
         })

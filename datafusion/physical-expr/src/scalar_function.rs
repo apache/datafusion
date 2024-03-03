@@ -44,12 +44,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionImplementation,
+    ScalarFunctionDefinition, ScalarFunctionImplementation,
 };
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionImplementation,
+    fun: ScalarFunctionDefinition,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -79,7 +79,7 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionImplementation,
+        fun: ScalarFunctionDefinition,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
@@ -97,7 +97,8 @@ impl ScalarFunctionExpr {
 
     /// Get the scalar function implementation
     pub fn fun(&self) -> &ScalarFunctionImplementation {
-        &self.fun
+        //
+        todo!()
     }
 
     /// The name for this expression
