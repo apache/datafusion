@@ -159,9 +159,9 @@ impl FileScanConfig {
 
     /// Projects only file schema, ignoring partition columns
     pub(crate) fn projected_file_schema(&self) -> SchemaRef {
-        let fields = self.projection.as_ref().map(|proj| {
-            proj.iter()
-                .filter(|col_idx| **col_idx < self.file_schema.fields().len())
+        let fields = self.file_column_projection_indices().map(|indices| {
+            indices
+                .iter()
                 .map(|col_idx| self.file_schema.field(*col_idx))
                 .cloned()
                 .collect::<Vec<_>>()

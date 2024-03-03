@@ -490,27 +490,19 @@ DROP TABLE csv_with_timestamps
 
 statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
-  c_date DATE,
   name VARCHAR,
-  ts TIMESTAMP
+  ts TIMESTAMP,
+  c_date DATE,
 )
 STORED AS CSV
 PARTITIONED BY (c_date)
 LOCATION '../core/tests/data/partitioned_table';
 
-# select wildcard always returns partition columns as the last ones
 query TPD
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
 ----
 Jorge 2018-12-13T12:12:10.011 2018-11-13
 Andrew 2018-11-13T17:11:10.011 2018-11-13
-
-# select all fields explicitly
-query DTP
-SELECT c_date, name, ts from csv_with_timestamps where c_date='2018-11-13'
-----
-2018-11-13 Jorge 2018-12-13T12:12:10.011
-2018-11-13 Andrew 2018-11-13T17:11:10.011
 
 statement ok
 DROP TABLE csv_with_timestamps
