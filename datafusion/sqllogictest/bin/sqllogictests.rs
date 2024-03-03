@@ -28,6 +28,7 @@ use log::info;
 use sqllogictest::strict_column_validator;
 
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -88,8 +89,7 @@ async fn run_tests() -> Result<()> {
     // modifying shared state like `/tmp/`)
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
-            #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
-            tokio::task::spawn(async move {
+            SpawnedTask::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
                 if options.complete {
                     run_complete_file(test_file).await?;
@@ -100,6 +100,7 @@ async fn run_tests() -> Result<()> {
                 }
                 Ok(()) as Result<()>
             })
+            .join()
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(num_cpus::get())
