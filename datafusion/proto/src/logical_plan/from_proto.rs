@@ -57,8 +57,8 @@ use datafusion_expr::{
     current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
     ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, instr, iszero,
-    lcm, left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, iszero, lcm,
+    left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, regexp_like, regexp_replace, repeat, replace, reverse, right, round, rpad,
@@ -527,7 +527,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::InStr => Self::InStr,
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
@@ -1651,10 +1650,6 @@ pub fn parse_expr(
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::InStr => Ok(instr(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Gcd => Ok(gcd(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

@@ -750,7 +750,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::InStr;
+        let fun = BuiltinScalarFunction::Strpos;
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
