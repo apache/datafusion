@@ -23,15 +23,12 @@ mod parquet;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
-use crate::execution::{
-    context::{SessionState, TaskContext},
-    FunctionRegistry,
-};
+use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
     col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
@@ -40,17 +37,18 @@ use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
 };
+use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions, ParamValues,
-    SchemaError, UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, FileType, FileTypeWriterOptions,
+    ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
 use datafusion_expr::{
@@ -58,7 +56,6 @@ use datafusion_expr::{
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
-use crate::prelude::SessionContext;
 use async_trait::async_trait;
 
 /// Contains options that control how data is
@@ -73,6 +70,9 @@ pub struct DataFrameWriteOptions {
     /// Allows compression of CSV and JSON.
     /// Not supported for parquet.
     compression: CompressionTypeVariant,
+    /// Sets which columns should be used for hive-style partitioned writes by name.
+    /// Can be set to empty vec![] for non-partitioned writes.
+    partition_by: Vec<String>,
 }
 
 impl DataFrameWriteOptions {
@@ -82,6 +82,7 @@ impl DataFrameWriteOptions {
             overwrite: false,
             single_file_output: false,
             compression: CompressionTypeVariant::UNCOMPRESSED,
+            partition_by: vec![],
         }
     }
     /// Set the overwrite option to true or false
@@ -99,6 +100,12 @@ impl DataFrameWriteOptions {
     /// Sets the compression type applied to the output file(s)
     pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Sets the partition_by columns for output partitioning
+    pub fn with_partition_by(mut self, partition_by: Vec<String>) -> Self {
+        self.partition_by = partition_by;
         self
     }
 }
@@ -1034,6 +1041,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        if matches!(self.plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
@@ -1137,6 +1147,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1149,6 +1160,7 @@ impl DataFrame {
     ///     DataFrameWriteOptions::new(),
     ///     None, // can also specify CSV writing options here
     /// ).await?;
+    /// # fs::remove_file("output.csv")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1176,6 +1188,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
@@ -1188,6 +1201,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use std::fs;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// use datafusion::dataframe::DataFrameWriteOptions;
@@ -1199,6 +1213,7 @@ impl DataFrame {
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
     /// ).await?;
+    /// # fs::remove_file("output.json")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1219,6 +1234,7 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
+            options.partition_by,
             copy_options,
         )?
         .build()?;
@@ -1494,13 +1510,14 @@ mod tests {
     use arrow::array::{self, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
         WindowFunctionDefinition,
     };
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -1669,6 +1686,7 @@ mod tests {
             vec![col("aggregate_test_100.c2")],
             vec![],
             WindowFrame::new(None),
+            None,
         ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -2155,11 +2173,11 @@ mod tests {
     async fn sendable() {
         let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
-        let task = tokio::task::spawn(async move {
+        let task = SpawnedTask::spawn(async move {
             df.select_columns(&["c1"])
                 .expect("should be usable in a task")
         });
-        task.await.expect("task completed successfully");
+        task.join().await.expect("task completed successfully");
     }
 
     #[tokio::test]
@@ -2886,7 +2904,7 @@ mod tests {
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
             physical_plan.output_partitioning(),
-            Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
+            Partitioning::UnknownPartitioning(partition_count) if *partition_count == default_partition_count * 2));
         Ok(())
     }
 
@@ -2935,7 +2953,7 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(left_exprs, default_partition_count)
+                        &Partitioning::Hash(left_exprs, default_partition_count)
                     );
                 }
                 JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
@@ -2945,17 +2963,28 @@ mod tests {
                     ];
                     assert_eq!(
                         out_partitioning,
-                        Partitioning::Hash(right_exprs, default_partition_count)
+                        &Partitioning::Hash(right_exprs, default_partition_count)
                     );
                 }
                 JoinType::Full => {
                     assert!(matches!(
                         out_partitioning,
-                    Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                    &Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn nested_explain_should_fail() -> Result<()> {
+        let ctx = SessionContext::new();
+        // must be error
+        let mut result = ctx.sql("explain select 1").await?.explain(false, false);
+        assert!(result.is_err());
+        // must be error
+        result = ctx.sql("explain explain select 1").await;
+        assert!(result.is_err());
         Ok(())
     }
 }

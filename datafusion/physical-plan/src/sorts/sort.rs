@@ -36,27 +36,28 @@ use crate::sorts::streaming_merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::LexOrdering;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
-use tokio::task;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -604,8 +605,8 @@ async fn spill_sorted_batches(
     schema: SchemaRef,
 ) -> Result<()> {
     let path: PathBuf = path.into();
-    let handle = task::spawn_blocking(move || write_sorted(batches, path, schema));
-    match handle.await {
+    let task = SpawnedTask::spawn_blocking(move || write_sorted(batches, path, schema));
+    match task.join().await {
         Ok(r) => r,
         Err(e) => exec_err!("Error occurred while spilling {e}"),
     }
@@ -676,6 +677,8 @@ pub struct SortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl SortExec {
@@ -692,12 +695,15 @@ impl SortExec {
     /// Create a new sort execution plan that produces a single,
     /// sorted output partition.
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        let preserve_partitioning = false;
+        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
             expr,
             input,
             metrics_set: ExecutionPlanMetricsSet::new(),
-            preserve_partitioning: false,
+            preserve_partitioning,
             fetch: None,
+            cache,
         }
     }
 
@@ -732,6 +738,12 @@ impl SortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
+        self.cache = self
+            .cache
+            .with_partitioning(Self::output_partitioning_helper(
+                &self.input,
+                self.preserve_partitioning,
+            ));
         self
     }
 
@@ -761,6 +773,46 @@ impl SortExec {
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
     }
+
+    fn output_partitioning_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+    ) -> Partitioning {
+        // Get output partitioning:
+        if preserve_partitioning {
+            input.output_partitioning().clone()
+        } else {
+            Partitioning::UnknownPartitioning(1)
+        }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        sort_exprs: LexOrdering,
+        preserve_partitioning: bool,
+    ) -> PlanProperties {
+        // Calculate equivalence properties; i.e. reset the ordering equivalence
+        // class with the new ordering:
+        let eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .with_reorder(sort_exprs);
+
+        // Get output partitioning:
+        let output_partitioning =
+            Self::output_partitioning_helper(input, preserve_partitioning);
+
+        // Determine execution mode:
+        let mode = match input.execution_mode() {
+            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
+                ExecutionMode::PipelineBreaking
+            }
+            ExecutionMode::Bounded => ExecutionMode::Bounded,
+        };
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
+    }
 }
 
 impl DisplayAs for SortExec {
@@ -788,28 +840,8 @@ impl ExecutionPlan for SortExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        if self.preserve_partitioning {
-            self.input.output_partitioning()
-        } else {
-            Partitioning::UnknownPartitioning(1)
-        }
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            plan_err!("Sort Error: Can not sort unbounded inputs.")
-        } else {
-            Ok(false)
-        }
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -828,17 +860,6 @@ impl ExecutionPlan for SortExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        Some(&self.expr)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Reset the ordering equivalence class with the new ordering:
-        self.input
-            .equivalence_properties()
-            .with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

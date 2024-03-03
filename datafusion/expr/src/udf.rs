@@ -17,12 +17,13 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{ExprSchema, Result};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
@@ -36,9 +37,10 @@ use std::sync::Arc;
 /// functions you supply such name, type signature, return type, and actual
 /// implementation.
 ///
-/// 1. For simple (less performant) use cases, use [`create_udf`] and [`simple_udf.rs`].
+/// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
-/// 2. For advanced use cases, use  [`ScalarUDFImpl`] and [`advanced_udf.rs`].
+/// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
+/// access (examples in  [`advanced_udf.rs`]).
 ///
 /// # API Note
 ///
@@ -110,7 +112,7 @@ impl ScalarUDF {
     ///
     /// If you implement [`ScalarUDFImpl`] directly you should return aliases directly.
     pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
-        Self::new_from_impl(AliasedScalarUDFImpl::new(self, aliases))
+        Self::new_from_impl(AliasedScalarUDFImpl::new(self.inner.clone(), aliases))
     }
 
     /// Returns a [`Expr`] logical expression to call this UDF with specified
@@ -146,10 +148,17 @@ impl ScalarUDF {
     }
 
     /// The datatype this function returns given the input argument input types.
+    /// This function is used when the input arguments are [`Expr`]s.
     ///
-    /// See [`ScalarUDFImpl::return_type`] for more details.
-    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(args)
+    ///
+    /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
+    pub fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        schema: &dyn ExprSchema,
+    ) -> Result<DataType> {
+        // If the implementation provides a return_type_from_exprs, use it
+        self.inner.return_type_from_exprs(args, schema)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -246,8 +255,53 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn signature(&self) -> &Signature;
 
     /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments
+    /// the arguments.
+    ///
+    /// # Notes
+    ///
+    /// If you provide an implementation for [`Self::return_type_from_exprs`],
+    /// DataFusion will not call `return_type` (this function). In this case it
+    /// is recommended to return [`DataFusionError::Internal`].
+    ///
+    /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What [`DataType`] will be returned by this function, given the
+    /// arguments?
+    ///
+    /// Note most UDFs should implement [`Self::return_type`] and not this
+    /// function. The output type for most functions only depends on the types
+    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// This method can be overridden for functions that return different
+    /// *types* based on the *values* of their arguments.
+    ///
+    /// For example, the following two function calls get the same argument
+    /// types (something and a `Utf8` string) but return different types based
+    /// on the value of the second argument:
+    ///
+    /// * `arrow_cast(x, 'Int16')` --> `Int16`
+    /// * `arrow_cast(x, 'Float32')` --> `Float32`
+    ///
+    /// # Notes:
+    ///
+    /// This function must consistently return the same type for the same
+    /// logical input even if the input is simplified (e.g. it must return the same
+    /// value for `('foo' | 'bar')` as it does for ('foobar').
+    fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        schema: &dyn ExprSchema,
+    ) -> Result<DataType> {
+        let arg_types = args
+            .iter()
+            .map(|arg| arg.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        self.return_type(&arg_types)
+    }
 
     /// Invoke the function on `args`, returning the appropriate result
     ///
@@ -290,13 +344,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
 #[derive(Debug)]
 struct AliasedScalarUDFImpl {
-    inner: ScalarUDF,
+    inner: Arc<dyn ScalarUDFImpl>,
     aliases: Vec<String>,
 }
 
 impl AliasedScalarUDFImpl {
     pub fn new(
-        inner: ScalarUDF,
+        inner: Arc<dyn ScalarUDFImpl>,
         new_aliases: impl IntoIterator<Item = &'static str>,
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();

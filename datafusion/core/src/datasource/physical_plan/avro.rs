@@ -22,11 +22,10 @@ use std::sync::Arc;
 
 use super::FileScanConfig;
 use crate::error::Result;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -43,6 +42,7 @@ pub struct AvroExec {
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
 }
 
 impl AvroExec {
@@ -50,18 +50,40 @@ impl AvroExec {
     pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
+        let cache = Self::compute_properties(
+            projected_schema.clone(),
+            &projected_output_ordering,
+            &base_config,
+        );
         Self {
             base_config,
             projected_schema,
             projected_statistics,
             projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
     }
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let n_partitions = file_scan_config.file_groups.len();
+
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
+            ExecutionMode::Bounded,                          // Execution Mode
+        )
     }
 }
 
@@ -81,25 +103,8 @@ impl ExecutionPlan for AvroExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -163,6 +168,7 @@ mod private {
     use crate::datasource::avro_to_arrow::Reader as AvroReader;
     use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
+
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
@@ -213,21 +219,21 @@ mod private {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
+    use super::*;
+    use crate::arrow::datatypes::{DataType, Field, SchemaBuilder};
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::datatypes::{DataType, Field, SchemaBuilder};
+
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
-
-    use super::*;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {
@@ -273,7 +279,13 @@ mod tests {
             table_partition_cols: vec![],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
         let mut results = avro_exec
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
@@ -344,7 +356,13 @@ mod tests {
             table_partition_cols: vec![],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
 
         let mut results = avro_exec
             .execute(0, state.task_ctx())
@@ -414,7 +432,13 @@ mod tests {
             table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
         });
-        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            avro_exec
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
 
         let mut results = avro_exec
             .execute(0, state.task_ctx())

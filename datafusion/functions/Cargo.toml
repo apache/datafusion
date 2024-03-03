@@ -31,13 +31,15 @@ rust-version = { workspace = true }
 [features]
 # enable core functions
 core_expressions = []
+# enable datetime functions
+datetime_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
-default = ["core_expressions", "encoding_expressions", "math_expressions"]
+default = ["core_expressions", "datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions"]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
-
+regex_expressions = []
 
 [lib]
 name = "datafusion_functions"
@@ -47,9 +49,22 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-array = { workspace = true }
 base64 = { version = "0.21", optional = true }
+chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
-log = "0.4.20"
+itertools = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+rand = { workspace = true }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[[bench]]
+harness = false
+name = "to_timestamp"

@@ -17,7 +17,27 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/functions", "datafusion/functions-array",  "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion/wasmtest", "datafusion-examples", "docs", "test-utils", "benchmarks",
+members = [
+    "datafusion/common",
+    "datafusion/common_runtime",
+    "datafusion/core",
+    "datafusion/expr",
+    "datafusion/execution",
+    "datafusion/functions",
+    "datafusion/functions-array",
+    "datafusion/optimizer",
+    "datafusion/physical-expr",
+    "datafusion/physical-plan",
+    "datafusion/proto",
+    "datafusion/proto/gen",
+    "datafusion/sql",
+    "datafusion/sqllogictest",
+    "datafusion/substrait",
+    "datafusion/wasmtest",
+    "datafusion-examples",
+    "docs",
+    "test-utils",
+    "benchmarks",
 ]
 resolver = "2"
 
@@ -29,9 +49,14 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.72"
-version = "35.0.0"
+version = "36.0.0"
 
 [workspace.dependencies]
+# We turn off default-features for some dependencies here so the workspaces which inherit them can
+# selectively turn them on if needed, since we can override default-features = true (from false)
+# for the inherited dependency but cannot do the reverse (override from true to false).
+#
+# See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
 arrow = { version = "50.0.0", features = ["prettyprint"] }
 arrow-array = { version = "50.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "50.0.0", default-features = false }
@@ -46,23 +71,24 @@ bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
 dashmap = "5.4.0"
-datafusion = { path = "datafusion/core", version = "35.0.0" }
-datafusion-common = { path = "datafusion/common", version = "35.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "35.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "35.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "35.0.0" }
-datafusion-functions-array = { path = "datafusion/functions-array", version = "35.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "35.0.0" }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "35.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "35.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "35.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "35.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "35.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "35.0.0" }
+datafusion = { path = "datafusion/core", version = "36.0.0", default-features = false }
+datafusion-common = { path = "datafusion/common", version = "36.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common_runtime", version = "36.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "36.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "36.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "36.0.0" }
+datafusion-functions-array = { path = "datafusion/functions-array", version = "36.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "36.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "36.0.0", default-features = false }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "36.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "36.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "36.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "36.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "36.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = "2.2.1"
+half = { version = "2.2.1", default-features = false }
 indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"

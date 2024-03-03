@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
-keywords = [ "datafusion", "query", "optimizer" ]
+keywords = ["datafusion", "query", "optimizer"]
 readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -42,9 +42,9 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { path = "../physical-expr", version = "35.0.0", default-features = false }
+datafusion-physical-expr = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -52,5 +52,5 @@ regex-syntax = "0.8.0"
 
 [dev-dependencies]
 ctor = { workspace = true }
-datafusion-sql = { path = "../sql", version = "35.0.0" }
-env_logger = "0.11.0"
+datafusion-sql = { workspace = true }
+env_logger = { workspace = true }

@@ -25,17 +25,17 @@ use datafusion::datasource::provider::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError};
+use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 
@@ -57,8 +57,25 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 
 #[derive(Debug)]
 struct CustomPlan {
-    schema: SchemaRef,
     batches: Vec<RecordBatch>,
+    cache: PlanProperties,
+}
+
+impl CustomPlan {
+    fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
+        let cache = Self::compute_properties(schema);
+        Self { batches, cache }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
+    }
 }
 
 impl DisplayAs for CustomPlan {
@@ -80,16 +97,8 @@ impl ExecutionPlan for CustomPlan {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -183,25 +192,25 @@ impl TableProvider for CustomProvider {
                     }
                 };
 
-                Ok(Arc::new(CustomPlan {
-                    schema: match projection.is_empty() {
+                Ok(Arc::new(CustomPlan::new(
+                    match projection.is_empty() {
                         true => Arc::new(Schema::empty()),
                         false => self.zero_batch.schema(),
                     },
-                    batches: match int_value {
+                    match int_value {
                         0 => vec![self.zero_batch.clone()],
                         1 => vec![self.one_batch.clone()],
                         _ => vec![],
                     },
-                }))
+                )))
             }
-            _ => Ok(Arc::new(CustomPlan {
-                schema: match projection.is_empty() {
+            _ => Ok(Arc::new(CustomPlan::new(
+                match projection.is_empty() {
                     true => Arc::new(Schema::empty()),
                     false => self.zero_batch.schema(),
                 },
-                batches: vec![],
-            })),
+                vec![],
+            ))),
         }
     }
 

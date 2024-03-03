@@ -22,18 +22,17 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::{
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+use super::{
+    DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
+use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
-use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
@@ -51,16 +50,19 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
 }
 
 impl GlobalLimitExec {
     /// Create a new GlobalLimitExec
     pub fn new(input: Arc<dyn ExecutionPlan>, skip: usize, fetch: Option<usize>) -> Self {
+        let cache = Self::compute_properties(&input);
         GlobalLimitExec {
             input,
             skip,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
     }
 
@@ -77,6 +79,15 @@ impl GlobalLimitExec {
     /// Maximum number of rows to fetch
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            ExecutionMode::Bounded,                 // Execution Mode
+        )
     }
 }
 
@@ -105,8 +116,8 @@ impl ExecutionPlan for GlobalLimitExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -116,10 +127,6 @@ impl ExecutionPlan for GlobalLimitExec {
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
     }
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
@@ -127,14 +134,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -146,10 +145,6 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
     }
 
     fn execute(
@@ -272,15 +267,18 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
 }
 
 impl LocalLimitExec {
     /// Create a new LocalLimitExec partition
     pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         }
     }
 
@@ -292,6 +290,15 @@ impl LocalLimitExec {
     /// Maximum number of rows to fetch
     pub fn fetch(&self) -> usize {
         self.fetch
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        PlanProperties::new(
+            input.equivalence_properties().clone(), // Equivalence Properties
+            input.output_partitioning().clone(),    // Output Partitioning
+            ExecutionMode::Bounded,                 // Execution Mode
+        )
     }
 }
 
@@ -315,37 +322,20 @@ impl ExecutionPlan for LocalLimitExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
 
-    // Local limit will not change the input plan's ordering
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
     }
 
     fn with_new_children(
@@ -420,7 +410,8 @@ impl ExecutionPlan for LocalLimitExec {
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Precision::Inexact(
-                    self.fetch * self.output_partitioning().partition_count(),
+                    self.fetch
+                        * self.properties().output_partitioning().partition_count(),
                 ),
 
                 column_statistics: col_stats,
@@ -507,26 +498,15 @@ impl LimitStream {
             //
             self.fetch -= batch.num_rows();
             Some(batch)
-        } else {
+        } else if batch.num_rows() >= self.fetch {
             let batch_rows = self.fetch;
             self.fetch = 0;
             self.input = None; // clear input so it can be dropped early
 
-            let limited_columns: Vec<ArrayRef> = batch
-                .columns()
-                .iter()
-                .map(|col| col.slice(0, col.len().min(batch_rows)))
-                .collect();
-            let options =
-                RecordBatchOptions::new().with_row_count(Option::from(batch_rows));
-            Some(
-                RecordBatch::try_new_with_options(
-                    batch.schema(),
-                    limited_columns,
-                    &options,
-                )
-                .unwrap(),
-            )
+            // It is guaranteed that batch_rows is <= batch.num_rows
+            Some(batch.slice(0, batch_rows))
+        } else {
+            unreachable!()
         }
     }
 }
@@ -575,6 +555,7 @@ mod tests {
     use crate::{common, test};
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use arrow_array::RecordBatchOptions;
     use arrow_schema::Schema;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;

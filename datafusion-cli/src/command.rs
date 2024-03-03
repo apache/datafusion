@@ -28,11 +28,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::exec_err;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
+use datafusion_common::instant::Instant;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Command
 #[derive(Debug)]

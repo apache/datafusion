@@ -88,6 +88,9 @@ jobs:
       - name: Check function packages (array_expressions)
         run: cargo check --no-default-features --features=array_expressions -p datafusion
 
+      - name: Check function packages (datetime_expressions)
+        run: cargo check --no-default-features --features=datetime_expressions -p datafusion
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
@@ -322,7 +325,7 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder
+        uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -480,16 +483,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install cargo-tomlfmt
-        run: which cargo-tomlfmt || cargo install cargo-tomlfmt
-
+      - name: Install taplo
+        run: cargo +stable install taplo-cli --version ^0.9 --locked
+      # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
-        run: |
-          # if you encounter an error, try running 'cargo tomlfmt -p path/to/Cargo.toml' to fix the formatting automatically.
-          # If the error still persists, you need to manually edit the Cargo.toml file, which introduces formatting violation.
-          #
-          # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
-          ci/scripts/rust_toml_fmt.sh
+        run: taplo format --check
 
   config-docs-check:
     name: check configs.md is up-to-date

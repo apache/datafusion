@@ -20,15 +20,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
-use super::{DisplayAs, SendableRecordBatchStream};
+use super::{DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use log::trace;
 
@@ -43,6 +43,7 @@ pub struct ExplainExec {
     stringified_plans: Vec<StringifiedPlan>,
     /// control which plans to print
     verbose: bool,
+    cache: PlanProperties,
 }
 
 impl ExplainExec {
@@ -52,10 +53,12 @@ impl ExplainExec {
         stringified_plans: Vec<StringifiedPlan>,
         verbose: bool,
     ) -> Self {
+        let cache = Self::compute_properties(schema.clone());
         ExplainExec {
             schema,
             stringified_plans,
             verbose,
+            cache,
         }
     }
 
@@ -67,6 +70,16 @@ impl ExplainExec {
     /// access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -90,22 +103,13 @@ impl ExecutionPlan for ExplainExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

@@ -139,6 +139,61 @@ AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
 --------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
+# test array_agg_order with list data type
+statement ok
+CREATE TABLE array_agg_order_list_table AS VALUES
+  ('w', 2, [1,2,3], 10),
+  ('w', 1, [9,5,2], 20),
+  ('w', 1, [3,2,5], 30),
+  ('b', 2, [4,5,6], 20),
+  ('b', 1, [7,8,9], 30)
+;
+
+query T? rowsort
+select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [[7, 8, 9], [4, 5, 6]]
+w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
+
+query T?? rowsort
+select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [7, 8, 9] [4, 5, 6]
+w [3, 2, 5] [1, 2, 3]
+
+query T? rowsort
+select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [4, 5, 6]
+w [9, 5, 2]
+
+statement ok
+drop table array_agg_order_list_table;
+
+# test array_agg_distinct with list data type
+statement ok
+CREATE TABLE array_agg_distinct_list_table AS VALUES
+  ('w', [0,1]),
+  ('w', [0,1]),
+  ('w', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [0,1])
+;
+
+# Apply array_sort to have determinisitic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
+query ??
+select array_sort(c1), array_sort(c2) from (
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+);
+----
+[b, w] [[0, 1], [1, 0]]
+
+statement ok
+drop table array_agg_distinct_list_table;
+
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
@@ -3122,7 +3177,68 @@ select count(distinct column1), count(distinct column2), count(distinct column3)
 1 1 3 3
 
 statement ok
+drop table distinct_count_long_string_table;
+
+
+# test with binary strings as well
+statement ok
+create table distinct_count_binary_table as
+SELECT column1,
+  arrow_cast(column2, 'Binary') as column2,
+  arrow_cast(column3, 'Binary') as column3,
+  arrow_cast(column4, 'Binary') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_binary_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_binary_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+statement ok
+drop table distinct_count_binary_table;
+
+
+# test with large binary strings as well
+statement ok
+create table distinct_count_large_binary_table as
+SELECT column1,
+  arrow_cast(column2, 'LargeBinary') as column2,
+  arrow_cast(column3, 'LargeBinary') as column3,
+  arrow_cast(column4, 'LargeBinary') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_large_binary_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_large_binary_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+statement ok
+drop table distinct_count_large_binary_table;
+
+
+
+## Cleanup from distinct count tests
+statement ok
 drop table distinct_count_string_table;
+
 
 
 # rule `aggregate_statistics` should not optimize MIN/MAX to wrong values on empty relation
@@ -3179,3 +3295,31 @@ NULL
 statement ok
 DROP TABLE t;
 
+
+# Test for the case when the column name is ambiguous
+statement ok
+CREATE TABLE t(a BIGINT) AS VALUES(1), (2), (3);
+
+# The column name referenced by GROUP-BY is ambiguous, prefer the column in base plan
+query I
+SELECT 0 as "t.a" FROM t GROUP BY t.a;
+----
+0
+0
+0
+
+# The column name referenced by HAVING is ambiguous, prefer the column in the base plan
+query I
+SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
+----
+
+# Test issue: https://github.com/apache/arrow-datafusion/issues/9161
+query I rowsort
+SELECT CAST(a AS INT) FROM t GROUP BY t.a;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE t;

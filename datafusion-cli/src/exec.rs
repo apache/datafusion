@@ -17,11 +17,11 @@
 
 //! Execution functions
 
+use datafusion_common::instant::Instant;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::time::Instant;
 
 use crate::print_format::PrintFormat;
 use crate::{
@@ -33,15 +33,14 @@ use crate::{
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::is_plan_streaming;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
-use datafusion::physical_plan::{collect, execute_stream};
-use datafusion::prelude::SessionContext;
-use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
-
 use datafusion::logical_expr::dml::CopyTo;
-use datafusion::sql::parser::Statement;
+use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
+use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
+use datafusion::prelude::SessionContext;
+use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
+
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -228,11 +227,10 @@ async fn exec_and_print(
                 | LogicalPlan::DescribeTable(_)
                 | LogicalPlan::Analyze(_)
         );
-
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if is_plan_streaming(&physical_plan)? {
+        if physical_plan.execution_mode().is_unbounded() {
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
@@ -306,10 +304,9 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use datafusion::common::plan_err;
-    use datafusion_common::{
-        file_options::StatementOptions, FileType, FileTypeWriterOptions,
-    };
+
+    use datafusion::common::{plan_err, FileType, FileTypeWriterOptions};
+    use datafusion_common::file_options::StatementOptions;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();

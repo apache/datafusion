@@ -31,7 +31,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -42,12 +42,6 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// abs
-    Abs,
-    /// acos
-    Acos,
-    /// asin
-    Asin,
     /// atan
     Atan,
     /// atan2
@@ -136,8 +130,6 @@ pub enum BuiltinScalarFunction {
     ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
-    /// array_dims
-    ArrayDims,
     /// array_distinct
     ArrayDistinct,
     /// array_element
@@ -146,8 +138,6 @@ pub enum BuiltinScalarFunction {
     ArrayEmpty,
     /// array_length
     ArrayLength,
-    /// array_ndims
-    ArrayNdims,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -178,16 +168,12 @@ pub enum BuiltinScalarFunction {
     ArrayUnion,
     /// array_except
     ArrayExcept,
-    /// cardinality
-    Cardinality,
     /// array_resize
     ArrayResize,
     /// construct an array from columns
     MakeArray,
     /// Flatten
     Flatten,
-    /// Range
-    Range,
 
     // struct functions
     /// struct
@@ -237,7 +223,6 @@ pub enum BuiltinScalarFunction {
     /// regexp_like
     RegexpLike,
     /// regexp_match
-    RegexpMatch,
     /// regexp_replace
     RegexpReplace,
     /// repeat
@@ -272,16 +257,6 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// to_hex
     ToHex,
-    /// to_timestamp
-    ToTimestamp,
-    /// to_timestamp_millis
-    ToTimestampMillis,
-    /// to_timestamp_micros
-    ToTimestampMicros,
-    /// to_timestamp_nanos
-    ToTimestampNanos,
-    /// to_timestamp_seconds
-    ToTimestampSeconds,
     /// from_unixtime
     FromUnixtime,
     ///now
@@ -364,9 +339,6 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Abs => Volatility::Immutable,
-            BuiltinScalarFunction::Acos => Volatility::Immutable,
-            BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
             BuiltinScalarFunction::Atan2 => Volatility::Immutable,
             BuiltinScalarFunction::Acosh => Volatility::Immutable,
@@ -407,12 +379,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
@@ -431,8 +401,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
-            BuiltinScalarFunction::Range => Volatility::Immutable,
-            BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
@@ -455,7 +423,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpLike => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -475,11 +442,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::ToHex => Volatility::Immutable,
             BuiltinScalarFunction::ToChar => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampNanos => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
             BuiltinScalarFunction::MakeDate => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
@@ -543,10 +505,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
-                        DataType::List(field) if matches!(field.data_type(), DataType::List(_)) => get_base_type(field.data_type()),
+                        DataType::List(field) | DataType::FixedSizeList(field, _) if matches!(field.data_type(), DataType::List(_)|DataType::FixedSizeList(_,_ )) => get_base_type(field.data_type()),
                         DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
                         DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
-                        _ => internal_err!("Not reachable, data_type should be List or LargeList"),
+                        DataType::FixedSizeList(field,_ ) => Ok(DataType::List(field.clone())),
+                        _ => exec_err!("Not reachable, data_type should be List, LargeList or FixedSizeList"),
                     }
                 }
 
@@ -578,7 +541,7 @@ impl BuiltinScalarFunction {
                         _ => {
                             return plan_err!(
                                 "The {self} function can only accept list as the args."
-                            )
+                            );
                         }
                     }
                 }
@@ -589,9 +552,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ArrayHasAny
             | BuiltinScalarFunction::ArrayHas
             | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => {
-                Ok(List(Arc::new(Field::new("item", UInt64, true))))
-            }
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
@@ -602,7 +562,6 @@ impl BuiltinScalarFunction {
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -642,9 +601,6 @@ impl BuiltinScalarFunction {
                     (dt, _) => Ok(dt),
                 }
             }
-            BuiltinScalarFunction::Range => {
-                Ok(List(Arc::new(Field::new("item", Int64, true))))
-            }
             BuiltinScalarFunction::ArrayExcept => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, _) | (_, DataType::Null) => {
@@ -653,7 +609,6 @@ impl BuiltinScalarFunction {
                     (dt, _) => Ok(dt),
                 }
             }
-            BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
                 _ => {
@@ -791,11 +746,6 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
-            BuiltinScalarFunction::ToTimestamp
-            | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
-            BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
-            BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
-            BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
                 Ok(Timestamp(Nanosecond, Some("+00:00".into())))
@@ -816,16 +766,6 @@ impl BuiltinScalarFunction {
                 other => {
                     return plan_err!(
                         "The regexp_like function can only accept strings. Got {other}"
-                    );
-                }
-            }),
-            BuiltinScalarFunction::RegexpMatch => Ok(match &input_expr_types[0] {
-                LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
-                Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
-                Null => Null,
-                other => {
-                    return plan_err!(
-                        "The regexp_match function can only accept strings. Got {other}"
                     );
                 }
             }),
@@ -867,8 +807,6 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
-            BuiltinScalarFunction::Abs => Ok(input_expr_types[0].clone()),
-
             BuiltinScalarFunction::OverLay => {
                 utf8_to_str_type(&input_expr_types[0], "overlay")
             }
@@ -877,9 +815,7 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "levenshtein")
             }
 
-            BuiltinScalarFunction::Acos
-            | BuiltinScalarFunction::Asin
-            | BuiltinScalarFunction::Atan
+            BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
             | BuiltinScalarFunction::Atanh
@@ -929,18 +865,17 @@ impl BuiltinScalarFunction {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicEqual, Any(0)], self.volatility())
             }
-            BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayPopFront => Signature::array(self.volatility()),
+            BuiltinScalarFunction::ArrayPopBack => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayEmpty => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayElement => {
                 Signature::array_and_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::Flatten => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
                 Signature::any(2, self.volatility())
             }
@@ -950,10 +885,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayDistinct => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
-                Signature::variadic_any(self.volatility())
+                Signature::array_and_element_and_optional_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayPositions => {
                 Signature::array_and_element(self.volatility())
@@ -981,19 +915,10 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayResize => {
                 Signature::variadic_any(self.volatility())
             }
 
-            BuiltinScalarFunction::Range => Signature::one_of(
-                vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Struct => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
@@ -1086,13 +1011,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::ToTimestamp
-            | BuiltinScalarFunction::ToTimestampSeconds
-            | BuiltinScalarFunction::ToTimestampMillis
-            | BuiltinScalarFunction::ToTimestampMicros
-            | BuiltinScalarFunction::ToTimestampNanos => {
-                Signature::variadic_any(self.volatility())
-            }
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
@@ -1271,15 +1189,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::RegexpReplace => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Utf8]),
@@ -1337,7 +1246,6 @@ impl BuiltinScalarFunction {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
             BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::Abs => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::OverLay => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Int64, Int64]),
@@ -1351,9 +1259,7 @@ impl BuiltinScalarFunction {
                 vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Acos
-            | BuiltinScalarFunction::Asin
-            | BuiltinScalarFunction::Atan
+            BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
             | BuiltinScalarFunction::Atanh
@@ -1443,10 +1349,7 @@ impl BuiltinScalarFunction {
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Abs => &["abs"],
-            BuiltinScalarFunction::Acos => &["acos"],
             BuiltinScalarFunction::Acosh => &["acosh"],
-            BuiltinScalarFunction::Asin => &["asin"],
             BuiltinScalarFunction::Asinh => &["asinh"],
             BuiltinScalarFunction::Atan => &["atan"],
             BuiltinScalarFunction::Atanh => &["atanh"],
@@ -1526,7 +1429,6 @@ impl BuiltinScalarFunction {
 
             // regex functions
             BuiltinScalarFunction::RegexpLike => &["regexp_like"],
-            BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
             BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
             // time/date functions
@@ -1538,11 +1440,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
             BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
-            BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
-            BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
-            BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
-            BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
-            BuiltinScalarFunction::ToTimestampNanos => &["to_timestamp_nanos"],
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
             // hashing functions
@@ -1567,7 +1464,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
-            BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
             BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
@@ -1584,7 +1480,6 @@ impl BuiltinScalarFunction {
                 &["array_has", "list_has", "array_contains", "list_contains"]
             }
             BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
-            BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]
             }
@@ -1620,14 +1515,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
-            BuiltinScalarFunction::Cardinality => &["cardinality"],
             BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
             BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
             BuiltinScalarFunction::ArrayIntersect => {
                 &["array_intersect", "list_intersect"]
             }
             BuiltinScalarFunction::OverLay => &["overlay"],
-            BuiltinScalarFunction::Range => &["range", "generate_series"],
 
             // struct functions
             BuiltinScalarFunction::Struct => &["struct"],

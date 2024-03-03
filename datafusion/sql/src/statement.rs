@@ -718,6 +718,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut statement_options = StatementOptions::new(options);
         let file_format = statement_options.try_infer_file_type(&statement.target)?;
+        let partition_by = statement_options.take_partition_by();
 
         let copy_options = CopyOptions::SQLOptions(statement_options);
 
@@ -725,6 +726,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             input: Arc::new(input),
             output_url: statement.target,
             file_format,
+            partition_by,
             copy_options,
         }))
     }

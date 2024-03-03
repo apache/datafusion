@@ -28,7 +28,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
+    Repartition, ScalarUDF, Subquery, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -78,6 +78,7 @@ enum ScalarFunctionType {
     Builtin(BuiltinScalarFunction),
     Op(Operator),
     Expr(BuiltinExprBuilder),
+    Udf(Arc<ScalarUDF>),
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -113,7 +114,15 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
     }
 }
 
-fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
+fn scalar_function_type_from_str(
+    ctx: &SessionContext,
+    name: &str,
+) -> Result<ScalarFunctionType> {
+    let s = ctx.state();
+    if let Some(func) = s.scalar_functions().get(name) {
+        return Ok(ScalarFunctionType::Udf(func.to_owned()));
+    }
+
     if let Ok(op) = name_to_op(name) {
         return Ok(ScalarFunctionType::Op(op));
     }
@@ -859,21 +868,51 @@ pub async fn from_substrait_rex(
                     f.function_reference
                 ))
             })?;
-            let fn_type = scalar_function_type_from_str(fn_name)?;
+
+            // Convert function arguments from Substrait to DataFusion
+            async fn decode_arguments(
+                ctx: &SessionContext,
+                input_schema: &DFSchema,
+                extensions: &HashMap<u32, &String>,
+                function_args: &[FunctionArgument],
+            ) -> Result<Vec<Expr>> {
+                let mut args = Vec::with_capacity(function_args.len());
+                for arg in function_args {
+                    let arg_expr = match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            from_substrait_rex(ctx, e, input_schema, extensions).await
+                        }
+                        _ => not_impl_err!(
+                            "Aggregated function argument non-Value type not supported"
+                        ),
+                    }?;
+                    args.push(arg_expr.as_ref().clone());
+                }
+                Ok(args)
+            }
+
+            let fn_type = scalar_function_type_from_str(ctx, fn_name)?;
             match fn_type {
+                ScalarFunctionType::Udf(fun) => {
+                    let args = decode_arguments(
+                        ctx,
+                        input_schema,
+                        extensions,
+                        f.arguments.as_slice(),
+                    )
+                    .await?;
+                    Ok(Arc::new(Expr::ScalarFunction(
+                        expr::ScalarFunction::new_udf(fun, args),
+                    )))
+                }
                 ScalarFunctionType::Builtin(fun) => {
-                    let mut args = Vec::with_capacity(f.arguments.len());
-                    for arg in &f.arguments {
-                        let arg_expr = match &arg.arg_type {
-                            Some(ArgType::Value(e)) => {
-                                from_substrait_rex(ctx, e, input_schema, extensions).await
-                            }
-                            _ => not_impl_err!(
-                                "Aggregated function argument non-Value type not supported"
-                            ),
-                        };
-                        args.push(arg_expr?.as_ref().clone());
-                    }
+                    let args = decode_arguments(
+                        ctx,
+                        input_schema,
+                        extensions,
+                        f.arguments.as_slice(),
+                    )
+                    .await?;
                     Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
                         fun, args,
                     ))))
@@ -978,6 +1017,7 @@ pub async fn from_substrait_rex(
                     from_substrait_bound(&window.lower_bound, true)?,
                     from_substrait_bound(&window.upper_bound, false)?,
                 ),
+                null_treatment: None,
             })))
         }
         Some(RexType::Subquery(subquery)) => match &subquery.as_ref().subquery_type {

@@ -22,12 +22,16 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::{assert_batches_eq, cast::as_int32_array, Result, ScalarValue};
+use datafusion_common::{
+    assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
+    plan_err, ExprSchema, Result, ScalarValue,
+};
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, LogicalPlanBuilder, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
+    LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use rand::{thread_rng, Rng};
+use std::any::Any;
 use std::iter;
 use std::sync::Arc;
 
@@ -494,6 +498,143 @@ async fn test_user_defined_functions_zero_argument() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn deregister_udf() -> Result<()> {
+    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
+    let ctx = SessionContext::new();
+
+    ctx.register_udf(random_normal_udf.clone());
+
+    assert!(ctx.udfs().contains("random_udf"));
+
+    ctx.deregister_udf("random_udf");
+
+    assert!(!ctx.udfs().contains("random_udf"));
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TakeUDF {
+    signature: Signature,
+}
+
+impl TakeUDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(3, Volatility::Immutable),
+        }
+    }
+}
+
+/// Implement a ScalarUDFImpl whose return type is a function of the input values
+impl ScalarUDFImpl for TakeUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "take"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because the return_type_from_exprs is implemented")
+    }
+
+    /// This function returns the type of the first or second argument based on
+    /// the third argument:
+    ///
+    /// 1. If the third argument is '0', return the type of the first argument
+    /// 2. If the third argument is '1', return the type of the second argument
+    fn return_type_from_exprs(
+        &self,
+        arg_exprs: &[Expr],
+        schema: &dyn ExprSchema,
+    ) -> Result<DataType> {
+        if arg_exprs.len() != 3 {
+            return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
+        }
+
+        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
+            arg_exprs.get(2)
+        {
+            if *idx == 0 || *idx == 1 {
+                *idx as usize
+            } else {
+                return plan_err!("The third argument must be 0 or 1, got: {idx}");
+            }
+        } else {
+            return plan_err!(
+                "The third argument must be a literal of type int64, but got {:?}",
+                arg_exprs.get(2)
+            );
+        };
+
+        arg_exprs.get(take_idx).unwrap().get_type(schema)
+    }
+
+    // The actual implementation
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let take_idx = match &args[2] {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+            _ => unreachable!(),
+        };
+        match &args[take_idx] {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
+            ColumnarValue::Scalar(_) => unimplemented!(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn verify_udf_return_type() -> Result<()> {
+    // Create a new ScalarUDF from the implementation
+    let take = ScalarUDF::from(TakeUDF::new());
+
+    // SELECT
+    //   take(smallint_col, double_col, 0) as take0,
+    //   take(smallint_col, double_col, 1) as take1
+    // FROM alltypes_plain;
+    let exprs = vec![
+        take.call(vec![col("smallint_col"), col("double_col"), lit(0_i64)])
+            .alias("take0"),
+        take.call(vec![col("smallint_col"), col("double_col"), lit(1_i64)])
+            .alias("take1"),
+    ];
+
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await?;
+
+    let df = ctx.table("alltypes_plain").await?.select(exprs)?;
+
+    let schema = df.schema();
+
+    // The output schema should be
+    // * type of column smallint_col (int32)
+    // * type of column double_col (float64)
+    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
+    assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+
+    let expected = [
+        "+-------+-------+",
+        "| take0 | take1 |",
+        "+-------+-------+",
+        "| 0     | 0.0   |",
+        "| 0     | 0.0   |",
+        "| 0     | 0.0   |",
+        "| 0     | 0.0   |",
+        "| 1     | 10.1  |",
+        "| 1     | 10.1  |",
+        "| 1     | 10.1  |",
+        "| 1     | 10.1  |",
+        "+-------+-------+",
+    ];
+    assert_batches_sorted_eq!(&expected, &df.collect().await?);
+
+    Ok(())
+}
+
 fn create_udf_context() -> SessionContext {
     let ctx = SessionContext::new();
     // register a custom UDF
@@ -526,6 +667,17 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
         "aggregate_test_100",
         &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn register_alltypes_parquet(ctx: &SessionContext) -> Result<()> {
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
     )
     .await?;
     Ok(())

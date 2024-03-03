@@ -36,6 +36,8 @@ pub struct CopyTo {
     pub output_url: String,
     /// The file format to output (explicitly defined or inferred from file extension)
     pub file_format: FileType,
+    /// Determines which, if any, columns should be used for hive-style partitioned writes
+    pub partition_by: Vec<String>,
     /// Arbitrary options as tuples
     pub copy_options: CopyOptions,
 }

@@ -25,7 +25,7 @@ pub use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, Result};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -321,7 +321,7 @@ mod tests {
             }
         }
 
-        let schema = Arc::new(MemorySchemaProvider::new()) as _;
+        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
         let catalog = Arc::new(TestProvider {});
 
         match catalog.register_schema("foo", schema) {
@@ -353,7 +353,7 @@ mod tests {
         let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
 
         let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
-        cat.register_schema("foo", schema.clone()).unwrap();
+        cat.register_schema("foo", schema).unwrap();
 
         assert!(cat.deregister_schema("foo", false).unwrap().is_some());
     }

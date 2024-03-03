@@ -28,6 +28,7 @@ use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
@@ -36,7 +37,6 @@ use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
 use std::sync::Arc;
-use std::time::Instant;
 
 use self::rewrite_expr::OperatorToFunction;
 

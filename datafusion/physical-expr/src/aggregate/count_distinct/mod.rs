@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod bytes;
 mod native;
-mod strings;
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -26,6 +26,7 @@ use std::sync::Arc;
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float16Type, Float32Type,
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType,
@@ -37,11 +38,12 @@ use arrow_array::types::{
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
+use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
 use crate::aggregate::count_distinct::native::{
     FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
 };
-use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
+use crate::binary_map::OutputType;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 
@@ -144,8 +146,16 @@ impl AggregateExpr for DistinctCount {
             Float32 => Box::new(FloatDistinctCountAccumulator::<Float32Type>::new()),
             Float64 => Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
 
-            Utf8 => Box::new(StringDistinctCountAccumulator::<i32>::new()),
-            LargeUtf8 => Box::new(StringDistinctCountAccumulator::<i64>::new()),
+            Utf8 => Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8)),
+            LargeUtf8 => {
+                Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
+            }
+            Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
+                OutputType::Binary,
+            )),
+            LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
+                OutputType::Binary,
+            )),
 
             _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
@@ -175,7 +185,7 @@ impl PartialEq<dyn Any> for DistinctCount {
 /// General purpose distinct accumulator that works for any DataType by using
 /// [`ScalarValue`]. Some types have specialized accumulators that are (much)
 /// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
-/// [`StringDistinctCountAccumulator`]
+/// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
 struct DistinctCountAccumulator {
     values: HashSet<ScalarValue, RandomState>,
@@ -241,11 +251,10 @@ impl Accumulator for DistinctCountAccumulator {
             return Ok(());
         }
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars);
-        }
-        Ok(())
+        let array = &states[0];
+        let list_array = array.as_list::<i32>();
+        let inner_array = list_array.value(0);
+        self.update_batch(&[inner_array])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {

@@ -23,23 +23,24 @@ use std::{any::Any, sync::Arc, task::Poll};
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
+use crate::coalesce_batches::concat_batches;
+use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::DisplayAs;
+use crate::ExecutionPlanProperties;
 use crate::{
-    coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    execution_mode_from_children, ColumnStatistics, DisplayAs, DisplayFormatType,
+    Distribution, ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, JoinType, Result, ScalarValue};
+use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -61,6 +62,7 @@ pub struct CrossJoinExec {
     left_fut: OnceAsync<JoinLeftData>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
 }
 
 impl CrossJoinExec {
@@ -76,13 +78,14 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns));
-
+        let cache = Self::compute_properties(&left, &right, schema.clone());
         CrossJoinExec {
             left,
             right,
             schema,
             left_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
+            cache,
         }
     }
 
@@ -94,6 +97,43 @@ impl CrossJoinExec {
     /// right side which gets combined with left side
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        // Calculate equivalence properties
+        // TODO: Check equivalence properties of cross join, it may preserve
+        //       ordering in some cases.
+        let eq_properties = join_equivalence_properties(
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &JoinType::Full,
+            schema,
+            &[false, false],
+            None,
+            &[],
+        );
+
+        // Get output partitioning:
+        // TODO: Optimize the cross join implementation to generate M * N
+        //       partitions.
+        let output_partitioning = adjust_right_output_partitioning(
+            right.output_partitioning(),
+            left.schema().fields.len(),
+        );
+
+        // Determine the execution mode:
+        let mut mode = execution_mode_from_children([left, right]);
+        if mode.is_unbounded() {
+            // If any of the inputs is unbounded, cross join breaks the pipeline.
+            mode = ExecutionMode::PipelineBreaking;
+        }
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -158,8 +198,8 @@ impl ExecutionPlan for CrossJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -168,19 +208,6 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] || children[1] {
-            plan_err!(
-                "Cross Join Error: Cross join is not supported for the unbounded inputs."
-            )
-        } else {
-            Ok(false)
-        }
     }
 
     fn with_new_children(
@@ -198,32 +225,6 @@ impl ExecutionPlan for CrossJoinExec {
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
         ]
-    }
-
-    // TODO optimize CrossJoin implementation to generate M * N partitions
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        adjust_right_output_partitioning(
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    // TODO check the output ordering of CrossJoin
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &JoinType::Full,
-            self.schema(),
-            &[false, false],
-            None,
-            &[],
-        )
     }
 
     fn execute(

@@ -392,6 +392,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
@@ -414,6 +415,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     partition_by,
                     order_by,
                     window_frame,
+                    null_treatment,
                 ));
                 Ok(expr)
             }
@@ -681,17 +683,17 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
     let case_type = case
         .expr
         .as_ref()
-        .map(|expr| expr.get_type(&schema))
+        .map(|expr| expr.get_type(schema))
         .transpose()?;
     let then_types = case
         .when_then_expr
         .iter()
-        .map(|(_when, then)| then.get_type(&schema))
+        .map(|(_when, then)| then.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let else_type = case
         .else_expr
         .as_ref()
-        .map(|expr| expr.get_type(&schema))
+        .map(|expr| expr.get_type(schema))
         .transpose()?;
 
     // find common coercible types
@@ -701,7 +703,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
             let when_types = case
                 .when_then_expr
                 .iter()
-                .map(|(when, _then)| when.get_type(&schema))
+                .map(|(when, _then)| when.get_type(schema))
                 .collect::<Result<Vec<_>>>()?;
             let coerced_type =
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
@@ -727,7 +729,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
     let case_expr = case
         .expr
         .zip(case_when_coerce_type.as_ref())
-        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, &schema))
+        .map(|(case_expr, coercible_type)| case_expr.cast_to(coercible_type, schema))
         .transpose()?
         .map(Box::new);
     let when_then = case
@@ -735,7 +737,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
         .into_iter()
         .map(|(when, then)| {
             let when_type = case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
-            let when = when.cast_to(when_type, &schema).map_err(|e| {
+            let when = when.cast_to(when_type, schema).map_err(|e| {
                 DataFusionError::Context(
                     format!(
                         "WHEN expressions in CASE couldn't be \
@@ -744,13 +746,13 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
                     Box::new(e),
                 )
             })?;
-            let then = then.cast_to(&then_else_coerce_type, &schema)?;
+            let then = then.cast_to(&then_else_coerce_type, schema)?;
             Ok((Box::new(when), Box::new(then)))
         })
         .collect::<Result<Vec<_>>>()?;
     let else_expr = case
         .else_expr
-        .map(|expr| expr.cast_to(&then_else_coerce_type, &schema))
+        .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
         .transpose()?
         .map(Box::new);
 
@@ -871,14 +873,12 @@ mod test {
     fn scalar_udf_invalid_input() -> Result<()> {
         let empty = empty();
         let udf = ScalarUDF::from(TestScalarUDF {}).call(vec![lit("Apple")]);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
-            .err()
-            .unwrap();
-        assert_eq!(
-    "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float32]) failed.",
-    err.strip_backtrace()
-    );
+        let plan_err = Projection::try_new(vec![udf], empty)
+            .expect_err("Expected an error due to incorrect function input");
+
+        let expected_error = "Error during planning: No function matches the given name and argument types 'TestScalarUDF(Utf8)'. You might need to add explicit type casts.";
+
+        assert!(plan_err.to_string().starts_with(expected_error));
         Ok(())
     }
 
@@ -887,14 +887,14 @@ mod test {
         // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Acos;
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Floor;
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
         )?);
-        let expected = "Projection: acos(CAST(Int64(10) AS Float64))\n  EmptyRelation";
+        let expected = "Projection: floor(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 

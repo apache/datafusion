@@ -27,7 +27,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, unbounded_output, ExecutionPlan, InputOrderMode, PhysicalExpr,
+    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -48,13 +48,13 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-pub use window_agg_exec::WindowAggExec;
-
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
+#[allow(clippy::too_many_arguments)]
 pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
@@ -63,6 +63,7 @@ pub fn create_window_expr(
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateFunction(fun) => {
@@ -83,7 +84,7 @@ pub fn create_window_expr(
         }
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
             Arc::new(BuiltInWindowExpr::new(
-                create_built_in_window_expr(fun, args, input_schema, name)?,
+                create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
                 partition_by,
                 order_by,
                 window_frame,
@@ -159,6 +160,7 @@ fn create_built_in_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
@@ -208,6 +210,7 @@ fn create_built_in_window_expr(
                 arg,
                 shift_offset,
                 default_value,
+                ignore_nulls,
             ))
         }
         BuiltInWindowFunction::Lead => {
@@ -222,6 +225,7 @@ fn create_built_in_window_expr(
                 arg,
                 shift_offset,
                 default_value,
+                ignore_nulls,
             ))
         }
         BuiltInWindowFunction::NthValue => {
@@ -329,11 +333,11 @@ pub(crate) fn calc_requirements<
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
-/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// This function calculates the indices such that when partition by expressions reordered with the indices
 /// resulting expressions define a preset for existing ordering.
-// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
-// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
-// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
+/// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used,
+/// this vector will be [1, 0]. It means that when we iterate b, a columns with the order [1, 0]
+/// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
@@ -372,8 +376,8 @@ pub(crate) fn window_equivalence_properties(
 ) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.equivalence_properties()`.
-    let mut window_eq_properties =
-        EquivalenceProperties::new(schema.clone()).extend(input.equivalence_properties());
+    let mut window_eq_properties = EquivalenceProperties::new(schema.clone())
+        .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
@@ -415,7 +419,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = unbounded_output(input);
+    let is_unbounded = input.execution_mode().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
@@ -477,7 +481,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
-    let input_eqs = input.equivalence_properties();
+    let input_eqs = input.equivalence_properties().clone();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
@@ -671,6 +675,7 @@ mod tests {
                 &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
             )?],
             blocking_exec,
             vec![],

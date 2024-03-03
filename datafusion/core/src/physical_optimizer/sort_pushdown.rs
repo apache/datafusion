@@ -28,10 +28,10 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
+use datafusion_common::{plan_err, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -184,7 +184,7 @@ fn pushdown_requirement_to_children(
     } else if is_sort_preserving_merge(plan) {
         let new_ordering =
             PhysicalSortRequirement::to_sort_exprs(parent_required.to_vec());
-        let mut spm_eqs = plan.equivalence_properties();
+        let mut spm_eqs = plan.equivalence_properties().clone();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
         // Do not push-down through SortPreservingMergeExec when
@@ -262,7 +262,7 @@ fn try_pushdown_requirements_to_join(
         &smj.maintains_input_order(),
         Some(probe_side),
     );
-    let mut smj_eqs = smj.equivalence_properties();
+    let mut smj_eqs = smj.properties().equivalence_properties().clone();
     // smj will have this ordering when its input changes.
     smj_eqs = smj_eqs.with_reorder(new_output_ordering.unwrap_or_default());
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);

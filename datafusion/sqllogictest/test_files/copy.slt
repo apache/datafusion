@@ -25,6 +25,119 @@ COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compressi
 ----
 2
 
+# Copy to directory as partitioned files
+query IT
+COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, compression 'zstd(10)', partition_by 'col2');
+----
+2
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
+
+query I?
+select * from validate_partitioned_parquet order by col1, col2;
+----
+1 Foo
+2 Bar
+
+# validate partition paths were actually generated
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_bar STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table1/col2=Bar';
+
+query I
+select * from validate_partitioned_parquet_bar order by col1;
+----
+2
+
+# Copy to directory as partitioned files
+query ITT
+COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
+(format parquet, compression 'zstd(10)', partition_by 'column2, column3');
+----
+3
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
+
+query I??
+select * from validate_partitioned_parquet2 order by column1,column2,column3;
+----
+1 a x
+2 b y
+3 c z
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_a_x STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table2/column2=a/column3=x';
+
+query I
+select * from validate_partitioned_parquet_a_x order by column1;
+----
+1
+
+# Copy to directory as partitioned files
+query TTT
+COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
+(format parquet, compression 'zstd(10)', partition_by 'column1, column3');
+----
+3
+
+# validate multiple partitioned parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table3/' PARTITIONED BY (column1, column3);
+
+query ?T?
+select column1, column2, column3 from validate_partitioned_parquet3 order by column1,column2,column3;
+----
+1 a x
+2 b y
+3 c z
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet_1_x STORED AS PARQUET 
+LOCATION 'test_files/scratch/copy/partitioned_table3/column1=1/column3=x';
+
+query T
+select * from validate_partitioned_parquet_1_x order by column2;
+----
+a
+
+statement ok
+create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
+
+query TTT
+insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
+----
+3
+
+query T
+select "'test'" from test
+----
+a
+b
+c
+
+# Note to place a single ' inside of a literal string escape by putting two ''
+query TTT
+copy test to 'test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV 
+LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
+
+# This triggers a panic (index out of bounds)
+# https://github.com/apache/arrow-datafusion/issues/9269
+#query
+#select * from validate_partitioned_escape_quote;
+
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, compression 'zstd(10)');
 ----

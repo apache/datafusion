@@ -68,33 +68,31 @@
 
 use std::sync::Arc;
 
-use arrow::array::DictionaryArray;
-use arrow::datatypes::Int32Type;
 use arrow::{
-    array::{Float64Array, Int64Array, StringArray},
+    array::{DictionaryArray, Float64Array, Int64Array, StringArray},
     compute::SortOptions,
-    datatypes::Schema,
+    datatypes::{Int32Type, Schema},
     record_batch::RecordBatch,
 };
 
-/// Benchmarks for SortPreservingMerge stream
-use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
-        memory::MemoryExec, sorts::sort_preserving_merge::SortPreservingMergeExec,
-        ExecutionPlan,
+        coalesce_partitions::CoalescePartitionsExec, memory::MemoryExec,
+        sorts::sort_preserving_merge::SortPreservingMergeExec, ExecutionPlan,
+        ExecutionPlanProperties,
     },
     prelude::SessionContext,
 };
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+
+/// Benchmarks for SortPreservingMerge stream
+use criterion::{criterion_group, criterion_main, Criterion};
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
-
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
 /// Total number of streams to divide each input into
 /// models 8 partition plan (should it be 16??)

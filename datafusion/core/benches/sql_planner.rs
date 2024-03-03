@@ -234,7 +234,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let sql = std::fs::read_to_string(format!("../../benchmarks/queries/{}.sql", q))
             .unwrap();
         c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
-            b.iter(|| logical_plan(&ctx, &sql))
+            b.iter(|| physical_plan(&ctx, &sql))
         });
     }
 
@@ -247,6 +247,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         .collect::<Vec<_>>();
 
     c.bench_function("physical_plan_tpch_all", |b| {
+        b.iter(|| {
+            for sql in &all_tpch_sql_queries {
+                physical_plan(&ctx, sql)
+            }
+        })
+    });
+
+    c.bench_function("logical_plan_tpch_all", |b| {
         b.iter(|| {
             for sql in &all_tpch_sql_queries {
                 logical_plan(&ctx, sql)
