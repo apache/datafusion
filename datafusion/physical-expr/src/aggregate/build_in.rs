@@ -368,7 +368,7 @@ pub fn create_aggregate_expr(
                 ordering_req.to_vec(),
                 ordering_types,
             )
-            .ignore_null(ignore_nulls),
+            .with_ignore_nulls(ignore_nulls),
         ),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),

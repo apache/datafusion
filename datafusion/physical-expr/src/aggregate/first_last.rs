@@ -44,7 +44,7 @@ pub struct FirstValue {
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
-    ignore_null: bool,
+    ignore_nulls: bool,
 }
 
 impl FirstValue {
@@ -64,12 +64,12 @@ impl FirstValue {
             expr,
             ordering_req,
             requirement_satisfied,
-            ignore_null: false,
+            ignore_nulls: false,
         }
     }
 
-    pub fn ignore_null(mut self, ignore_null: bool) -> Self {
-        self.ignore_null = ignore_null;
+    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+        self.ignore_nulls = ignore_nulls;
         self
     }
 
@@ -141,7 +141,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.ignore_null,
+            self.ignore_nulls,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -187,7 +187,7 @@ impl AggregateExpr for FirstValue {
             &self.input_data_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
-            self.ignore_null,
+            self.ignore_nulls,
         )
         .map(|acc| {
             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
@@ -223,7 +223,7 @@ struct FirstValueAccumulator {
     // Stores whether incoming data already satisfies the ordering requirement.
     requirement_satisfied: bool,
     // Ignore null values.
-    ignore_null: bool,
+    ignore_nulls: bool,
 }
 
 impl FirstValueAccumulator {
@@ -232,7 +232,7 @@ impl FirstValueAccumulator {
         data_type: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
-        ignore_null: bool,
+        ignore_nulls: bool,
     ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
@@ -245,7 +245,7 @@ impl FirstValueAccumulator {
             orderings,
             ordering_req,
             requirement_satisfied,
-            ignore_null,
+            ignore_nulls,
         })
     }
 
@@ -262,7 +262,7 @@ impl FirstValueAccumulator {
         };
         if self.requirement_satisfied {
             // Get first entry according to the pre-existing ordering (0th index):
-            if self.ignore_null {
+            if self.ignore_nulls {
                 // If ignoring nulls, find the first non-null value.
                 for i in 0..value.len() {
                     if !value.is_null(i) {
@@ -284,7 +284,7 @@ impl FirstValueAccumulator {
             })
             .collect::<Vec<_>>();
 
-        if self.ignore_null {
+        if self.ignore_nulls {
             let indices = lexsort_to_indices(&sort_columns, None)?;
             // If ignoring nulls, find the first non-null value.
             for index in indices.iter().flatten() {

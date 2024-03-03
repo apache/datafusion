@@ -651,6 +651,7 @@ pub struct WindowFunction {
     pub order_by: Vec<Expr>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
+    /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -1480,7 +1481,7 @@ impl fmt::Display for Expr {
             }) => {
                 fmt_function(f, func_def.name(), *distinct, args, true)?;
                 if let Some(nt) = null_treatment {
-                    write!(f, "{}", nt)?;
+                    write!(f, " {}", nt)?;
                 }
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
@@ -1833,7 +1834,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
             };
             if let Some(nt) = null_treatment {
-                info += &format!("{}", nt);
+                info += &format!(" {}", nt);
             }
             match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)

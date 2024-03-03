@@ -76,7 +76,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                     args,
                     filter,
                     order_by,
-                    ..
+                    null_treatment: _,
                 }) = expr
                 {
                     if filter.is_some() || order_by.is_some() {
