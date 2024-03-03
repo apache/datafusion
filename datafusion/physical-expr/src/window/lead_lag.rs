@@ -121,7 +121,6 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             default_value: self.default_value.clone(),
             ignore_nulls: self.ignore_nulls,
             non_null_offsets: VecDeque::new(),
-            curr_valid_idx: 0,
         }))
     }
 
@@ -144,8 +143,6 @@ pub(crate) struct WindowShiftEvaluator {
     ignore_nulls: bool,
     // VecDeque contains offset values that between non-null entries
     non_null_offsets: VecDeque<usize>,
-    // Current idx pointing to non null value
-    curr_valid_idx: i64,
 }
 
 impl WindowShiftEvaluator {
@@ -217,8 +214,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             let end = idx + 1;
             Ok(Range { start, end })
         } else {
-            let offset = (-self.shift_offset) as usize;
-            let end = min(idx + offset, n_rows);
+            let end = if self.non_null_offsets.len() == (-self.shift_offset) as usize {
+                let offset: usize = self.non_null_offsets.iter().sum();
+                min(idx + offset + 1, n_rows)
+            } else {
+                n_rows
+            };
             Ok(Range { start: idx, end })
         }
     }
@@ -273,22 +274,46 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 self.non_null_offsets[end_idx] += 1;
             }
         } else if self.ignore_nulls && !self.is_lag() {
+            let offset = (-self.shift_offset) as usize;
+
             if self.non_null_offsets.is_empty() {
-                self.non_null_offsets
-                    .extend(array.nulls().unwrap().valid_indices().collect::<Vec<_>>());
+                let mut offset_val = 1;
+                for idx in range.start + 1..range.end {
+                    if array.is_valid(idx) {
+                        self.non_null_offsets.push_back(offset_val);
+                        offset_val = 1;
+                    } else {
+                        offset_val += 1;
+                    }
+                    if self.non_null_offsets.len() == offset + 1 {
+                        break;
+                    }
+                }
+            } else {
+                if range.end < len as usize && array.is_valid(range.end) {
+                    if array.is_valid(range.end) {
+                        self.non_null_offsets.push_back(1);
+                    } else {
+                        let last_idx = self.non_null_offsets.len() - 1;
+                        self.non_null_offsets[last_idx] += 1;
+                    }
+                }
             }
-            if range.start == 0 && array.is_valid(0) {
-                self.curr_valid_idx = -self.shift_offset - 1;
+
+            // Find the nonNULL row index that shifted by offset comparing to current row index
+            idx = if self.non_null_offsets.len() >= offset {
+                let total_offset: usize = self.non_null_offsets.iter().take(offset).sum();
+                (range.start + total_offset) as i64
+            } else {
+                -1
+            };
+            if !self.non_null_offsets.is_empty() {
+                if self.non_null_offsets[0] > 1 {
+                    self.non_null_offsets[0] -= 1
+                } else {
+                    self.non_null_offsets.pop_front();
+                }
             }
-            let idx0 = self.non_null_offsets.get(self.curr_valid_idx as usize);
-            if idx0.is_some() && range.start == *idx0.unwrap() {
-                self.curr_valid_idx += 1;
-            }
-            idx = self
-                .non_null_offsets
-                .get((self.curr_valid_idx - self.shift_offset - 1) as usize)
-                .map(|v| *v as i64)
-                .unwrap_or(-1);
         }
 
         // Set the default value if
