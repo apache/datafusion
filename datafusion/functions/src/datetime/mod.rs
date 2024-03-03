@@ -22,10 +22,16 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 mod common;
+mod date_bin;
+mod date_part;
+mod date_trunc;
 mod to_date;
 mod to_timestamp;
 
 // create UDFs
+make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
+make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
+make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
@@ -53,7 +59,23 @@ make_udf_function!(
 // functions with varargs currently
 
 pub mod expr_fn {
-    use datafusion_expr::Expr;
+    use datafusion_expr::{Expr, ScalarUDF};
+    use std::sync::Arc;
+
+    #[doc = "coerces an arbitrary timestamp to the start of the nearest specified interval"]
+    pub fn date_bin(args: Vec<Expr>) -> Expr {
+        super::date_bin().call(args)
+    }
+
+    #[doc = "extracts a subfield from the date"]
+    pub fn date_part(args: Vec<Expr>) -> Expr {
+        super::date_part().call(args)
+    }
+
+    #[doc = "truncates the date to a specified level of precision"]
+    pub fn date_trunc(args: Vec<Expr>) -> Expr {
+        super::date_trunc().call(args)
+    }
 
     /// ```ignore
     /// # use std::sync::Arc;
@@ -129,11 +151,22 @@ pub mod expr_fn {
     pub fn to_timestamp_nanos(args: Vec<Expr>) -> Expr {
         super::to_timestamp_nanos().call(args)
     }
+
+    pub fn _date_bin_scalar_udf() -> Arc<ScalarUDF> {
+        super::date_bin()
+    }
+
+    pub fn _date_part_scalar_udf() -> Arc<ScalarUDF> {
+        super::date_part()
+    }
 }
 
 ///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        date_bin(),
+        date_part(),
+        date_trunc(),
         to_date(),
         to_timestamp(),
         to_timestamp_seconds(),

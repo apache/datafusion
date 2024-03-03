@@ -40,6 +40,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
+use datafusion_functions::expr_fn::_date_part_scalar_udf;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -169,8 +170,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::DatePart,
+                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    _date_part_scalar_udf(),
                     vec![
                         Expr::Literal(ScalarValue::from(format!("{field}"))),
                         self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -885,8 +886,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -899,6 +898,8 @@ mod tests {
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
     use crate::TableReference;
+
+    use super::*;
 
     struct TestContextProvider {
         options: ConfigOptions,

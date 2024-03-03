@@ -121,34 +121,44 @@ mod tests {
     use crate::PhysicalSortExpr;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{BuiltinScalarFunction, Operator};
+    use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    use datafusion_expr::{BuiltinScalarFunction, Expr, Operator};
+    use datafusion_functions::expr_fn::_date_bin_scalar_udf;
     use itertools::Itertools;
     use std::sync::Arc;
 
     #[test]
     fn project_orderings() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
+        let s = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
             Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]));
+        ]);
+        let df_schema = s.clone().to_dfschema()?;
+        let schema = Arc::new(s);
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let interval = Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(2))))
-            as Arc<dyn PhysicalExpr>;
-        let date_bin_func = &create_physical_expr(
-            &BuiltinScalarFunction::DateBin,
-            &[interval, col_ts.clone()],
-            &schema,
-            &ExecutionProps::default(),
+        let expr_col_ts = datafusion_common::Column::from_qualified_name("ts");
+        let interval_value = ScalarValue::IntervalDayTime(Some(2));
+        let expr_interval = Expr::Literal(interval_value.clone());
+        let interval = Arc::new(Literal::new(interval_value)) as Arc<dyn PhysicalExpr>;
+        let date_bin_udf = _date_bin_scalar_udf();
+        let date_bin_func = &crate::udf::create_physical_expr(
+            &date_bin_udf,
+            &[interval.clone(), col_ts.clone()],
+            date_bin_udf
+                .return_type_from_exprs(
+                    &[expr_interval, Expr::Column(expr_col_ts)],
+                    &df_schema,
+                )
+                .unwrap(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),
@@ -641,29 +651,38 @@ mod tests {
 
     #[test]
     fn project_orderings2() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
+        let s = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
             Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]));
+        ]);
+        let df_schema = s.clone().to_dfschema()?;
+        let schema = Arc::new(s.clone());
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_ts = &col("ts", &schema)?;
+        let expr_col_ts = datafusion_common::Column::from_qualified_name("ts");
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),
             Operator::Plus,
             col_b.clone(),
         )) as Arc<dyn PhysicalExpr>;
-        let interval = Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(2))))
-            as Arc<dyn PhysicalExpr>;
-        let date_bin_ts = &create_physical_expr(
-            &BuiltinScalarFunction::DateBin,
-            &[interval, col_ts.clone()],
-            &schema,
-            &ExecutionProps::default(),
+        let interval_value = ScalarValue::IntervalDayTime(Some(2));
+        let expr_interval = Expr::Literal(interval_value.clone());
+        let interval = Arc::new(Literal::new(interval_value)) as Arc<dyn PhysicalExpr>;
+        let date_bin_udf = _date_bin_scalar_udf();
+        let date_bin_ts = &crate::udf::create_physical_expr(
+            &date_bin_udf,
+            &[interval.clone(), col_ts.clone()],
+            date_bin_udf
+                .return_type_from_exprs(
+                    &[expr_interval, Expr::Column(expr_col_ts)],
+                    &df_schema,
+                )
+                .unwrap(),
         )?;
 
         let round_c = &create_physical_expr(
