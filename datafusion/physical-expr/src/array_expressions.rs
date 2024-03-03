@@ -193,28 +193,6 @@ fn compute_array_length(
     }
 }
 
-/// Returns the length of each array dimension
-fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let mut res = vec![Some(value.len() as u64)];
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res.push(Some(value.len() as u64));
-            }
-            _ => return Ok(Some(res)),
-        }
-    }
-}
-
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
     if !args.iter().all(|arg| {
@@ -1938,40 +1916,6 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_set_op(array1, array2, SetOp::Intersect)
 }
 
-/// Cardinality SQL function
-pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("cardinality expects one argument");
-    }
-
-    match &args[0].data_type() {
-        DataType::List(_) => {
-            let list_array = as_list_array(&args[0])?;
-            generic_list_cardinality::<i32>(list_array)
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&args[0])?;
-            generic_list_cardinality::<i64>(list_array)
-        }
-        other => {
-            exec_err!("cardinality does not support type '{:?}'", other)
-        }
-    }
-}
-
-fn generic_list_cardinality<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
-) -> Result<ArrayRef> {
-    let result = array
-        .iter()
-        .map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
-            None => Ok(None),
-        })
-        .collect::<Result<UInt64Array>>()?;
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 // Create new offsets that are euqiavlent to `flatten` the array.
 fn get_offsets_for_flatten<O: OffsetSizeTrait>(
     offsets: OffsetBuffer<O>,
@@ -2071,72 +2015,6 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
         array_type => exec_err!("array_length does not support type '{array_type:?}'"),
-    }
-}
-
-/// Array_dims SQL function
-pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_dims needs one argument");
-    }
-
-    let data = match args[0].data_type() {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        array_type => {
-            return exec_err!("array_dims does not support type '{array_type:?}'");
-        }
-    };
-
-    let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Array_ndims SQL function
-pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_ndims needs one argument");
-    }
-
-    fn general_list_ndims<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-    ) -> Result<ArrayRef> {
-        let mut data = Vec::new();
-        let ndims = datafusion_common::utils::list_ndims(array.data_type());
-
-        for arr in array.iter() {
-            if arr.is_some() {
-                data.push(Some(ndims))
-            } else {
-                data.push(None)
-            }
-        }
-
-        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    }
-    match args[0].data_type() {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            general_list_ndims::<i32>(array)
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            general_list_ndims::<i64>(array)
-        }
-        array_type => exec_err!("array_ndims does not support type {array_type:?}"),
     }
 }
 
