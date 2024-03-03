@@ -59,3 +59,7 @@ Did you mean 'cos'?
 # Can't drop the function again
 statement error DataFusion error: Execution error: Function does not exist
 DROP FUNCTION abs;
+
+# But DROP IF EXISTS does not error
+statement ok
+DROP FUNCTION IF EXISTS abs;
