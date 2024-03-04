@@ -99,7 +99,7 @@ impl ExecutionProps {
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
         self.var_providers
             .as_ref()
-            .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
+            .and_then(|var_providers| var_providers.get(&var_type).cloned())
     }
 }
 
