@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=0.14,<2.0"] 
+build-backend = "maturin" 
+
+[project]
+name = "datafusion-cli" 
+description = "Command Line Client for DataFusion query engine."
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "bin" 
