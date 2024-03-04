@@ -295,16 +295,7 @@ impl DataSink for ArrowFileSink {
             }
         }
 
-        match demux_task.join().await {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
-            }
-        }
+        demux_task.join_unwind().await?;
         Ok(row_count as u64)
     }
 }
