@@ -22,7 +22,7 @@ use crate::LogicalPlan;
 use datafusion_common::tree_node::{
     Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
-use datafusion_common::{handle_visit_recursion_down, handle_visit_recursion_up, Result};
+use datafusion_common::{handle_visit_recursion, Result};
 
 impl TreeNode for LogicalPlan {
     fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -31,7 +31,7 @@ impl TreeNode for LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
-        handle_visit_recursion_down!(f(self)?);
+        handle_visit_recursion!(f(self)?, DOWN);
         self.apply_subqueries(f)?;
         self.apply_children(&mut |n| n.apply(f))
     }
@@ -65,8 +65,9 @@ impl TreeNode for LogicalPlan {
         match visitor.f_down(self)? {
             TreeNodeRecursion::Continue => {
                 self.visit_subqueries(visitor)?;
-                handle_visit_recursion_up!(
-                    self.apply_children(&mut |n| n.visit(visitor))?
+                handle_visit_recursion!(
+                    self.apply_children(&mut |n| n.visit(visitor))?,
+                    UP
                 );
                 visitor.f_up(self)
             }
@@ -85,7 +86,7 @@ impl TreeNode for LogicalPlan {
         let mut tnr = TreeNodeRecursion::Continue;
         for child in self.inputs() {
             tnr = f(child)?;
-            handle_visit_recursion_down!(tnr)
+            handle_visit_recursion!(tnr, DOWN)
         }
         Ok(tnr)
     }
@@ -94,8 +95,8 @@ impl TreeNode for LogicalPlan {
     where
         F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let old_children = self.inputs();
-        let new_children = old_children
+        let new_children = self
+            .inputs()
             .iter()
             .map(|&c| c.clone())
             .map_until_stop_and_collect(f)?;

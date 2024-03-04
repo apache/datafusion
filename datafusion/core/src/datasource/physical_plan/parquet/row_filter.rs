@@ -15,28 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use super::ParquetFileMetrics;
+use crate::physical_plan::metrics;
+
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{arrow_err, DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
-use std::collections::BTreeSet;
-
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
-use std::sync::Arc;
-
-use crate::physical_plan::metrics;
-
-use super::ParquetFileMetrics;
 
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
@@ -190,8 +190,7 @@ impl<'a> FilterCandidateBuilder<'a> {
         mut self,
         metadata: &ParquetMetaData,
     ) -> Result<Option<FilterCandidate>> {
-        let expr = self.expr.clone();
-        let expr = expr.rewrite(&mut self)?.data;
+        let expr = self.expr.clone().rewrite(&mut self).data()?;
 
         if self.non_primitive_columns || self.projected_columns {
             Ok(None)

@@ -20,11 +20,11 @@
 use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
-use datafusion_expr::expr::Exists;
-use datafusion_expr::expr::InSubquery;
+use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{
     logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,
 };
@@ -51,7 +51,7 @@ impl AnalyzerRule for InlineTableScan {
 }
 
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    Ok(match plan {
+    match plan {
         // Match only on scans without filter / projection / fetch
         // Views and DataFrames won't have those added
         // during the early stage of planning
@@ -64,31 +64,29 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }) if filters.is_empty() && source.get_logical_plan().is_some() => {
             let sub_plan = source.get_logical_plan().unwrap();
             let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
-            let plan = LogicalPlanBuilder::from(sub_plan.clone())
+            LogicalPlanBuilder::from(sub_plan.clone())
                 .project(projection_exprs)?
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
                 .alias(table_name)?
-                .build()?;
-            Transformed::yes(plan)
+                .build()
+                .map(Transformed::yes)
         }
         LogicalPlan::Filter(filter) => {
-            let new_expr = filter.predicate.transform(&rewrite_subquery)?.data;
-            Transformed::yes(LogicalPlan::Filter(Filter::try_new(
-                new_expr,
-                filter.input,
-            )?))
+            let new_expr = filter.predicate.transform(&rewrite_subquery).data()?;
+            Filter::try_new(new_expr, filter.input)
+                .map(|e| Transformed::yes(LogicalPlan::Filter(e)))
         }
-        _ => Transformed::no(plan),
-    })
+        _ => Ok(Transformed::no(plan)),
+    }
 }
 
 fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
     match expr {
         Expr::Exists(Exists { subquery, negated }) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?.data;
+            let new_plan = plan.transform_up(&analyze_internal).data()?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
             Ok(Transformed::yes(Expr::Exists(Exists { subquery, negated })))
         }
@@ -98,7 +96,7 @@ fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
             negated,
         }) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?.data;
+            let new_plan = plan.transform_up(&analyze_internal).data()?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
             Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                 expr, subquery, negated,
@@ -106,7 +104,7 @@ fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
         }
         Expr::ScalarSubquery(subquery) => {
             let plan = subquery.subquery.as_ref().clone();
-            let new_plan = plan.transform_up(&analyze_internal)?.data;
+            let new_plan = plan.transform_up(&analyze_internal).data()?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
             Ok(Transformed::yes(Expr::ScalarSubquery(subquery)))
         }
@@ -135,12 +133,11 @@ fn generate_projection_expr(
 mod tests {
     use std::{sync::Arc, vec};
 
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
-
     use crate::analyzer::inline_table_scan::InlineTableScan;
     use crate::test::assert_analyzed_plan_eq;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
 
     pub struct RawTableSource {}
 

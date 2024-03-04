@@ -19,29 +19,27 @@
 
 use std::sync::Arc;
 
-use arrow::compute::{and, cast, prep_null_mask_filter};
-use arrow::{
-    array::{ArrayRef, StringBuilder},
-    datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
-};
-use arrow_array::cast::AsArray;
-use arrow_array::Array;
-use arrow_schema::Fields;
-use futures::stream::FuturesUnordered;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use log::{debug, trace};
-
-use crate::{error::Result, scalar::ScalarValue};
-
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
+use crate::{error::Result, scalar::ScalarValue};
+
+use arrow::{
+    array::{Array, ArrayRef, AsArray, StringBuilder},
+    compute::{and, cast, prep_null_mask_filter},
+    datatypes::{DataType, Field, Schema},
+    record_batch::RecordBatch,
+};
+use arrow_schema::Fields;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+
+use futures::stream::{BoxStream, FuturesUnordered};
+use futures::{StreamExt, TryStreamExt};
+use log::{debug, trace};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 

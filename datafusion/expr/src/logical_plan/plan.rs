@@ -664,8 +664,8 @@ impl LogicalPlan {
                             )),
                             _ => Ok(Transformed::no(expr)),
                         }
-                    })?
-                    .data;
+                    })
+                    .data()?;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)

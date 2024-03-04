@@ -63,8 +63,7 @@ impl<T> ExprContext<T> {
 
     pub fn update_expr_from_children(mut self) -> Result<Self> {
         let children_expr = self.children.iter().map(|c| c.expr.clone()).collect();
-        let t = with_new_children_if_necessary(self.expr, children_expr)?;
-        self.expr = t;
+        self.expr = with_new_children_if_necessary(self.expr, children_expr)?;
         Ok(self)
     }
 }

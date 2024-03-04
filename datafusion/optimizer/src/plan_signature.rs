@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
 };
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::LogicalPlan;
 
 /// Non-unique identifier of a [`LogicalPlan`].

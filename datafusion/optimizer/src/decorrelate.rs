@@ -15,19 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::{BTreeSet, HashMap};
+use std::ops::Deref;
+
 use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::utils::collect_subquery_cols;
+
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Result};
-use datafusion_common::{Column, DFSchemaRef, ScalarValue};
+use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
-use std::collections::{BTreeSet, HashMap};
-use std::ops::Deref;
 
 /// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's 'Filter'.
 /// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
@@ -396,8 +397,8 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                     _ => Transformed::no(expr),
                 };
                 Ok(new_expr)
-            })?
-            .data;
+            })
+            .data()?;
 
         let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
@@ -432,8 +433,9 @@ fn proj_exprs_evaluation_result_on_empty_batch(
                 } else {
                     Ok(Transformed::no(expr))
                 }
-            })?
-            .data;
+            })
+            .data()?;
+
         if result_expr.ne(expr) {
             let props = ExecutionProps::new();
             let info = SimplifyContext::new(&props).with_schema(schema.clone());
@@ -468,8 +470,9 @@ fn filter_exprs_evaluation_result_on_empty_batch(
             } else {
                 Ok(Transformed::no(expr))
             }
-        })?
-        .data;
+        })
+        .data()?;
+
     let pull_up_expr = if result_expr.ne(filter_expr) {
         let props = ExecutionProps::new();
         let info = SimplifyContext::new(&props).with_schema(schema);

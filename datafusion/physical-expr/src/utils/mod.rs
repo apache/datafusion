@@ -130,10 +130,10 @@ pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
 
 pub type ExprTreeNode<T> = ExprContext<Option<T>>;
 
-/// This struct is used to convert a [PhysicalExpr] tree into a DAEG (i.e. an expression
+/// This struct is used to convert a [`PhysicalExpr`] tree into a DAEG (i.e. an expression
 /// DAG) by collecting identical expressions in one node. Caller specifies the node type
 /// in the DAEG via the `constructor` argument, which constructs nodes in the DAEG from
-/// the [ExprTreeNode] ancillary object.
+/// the [`ExprTreeNode`] ancillary object.
 struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> {
     // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
@@ -196,8 +196,8 @@ where
     };
     // Use the builder to transform the expression tree node into a DAG.
     let root = init
-        .transform_up_mut(&mut |node| builder.mutate(node))?
-        .data;
+        .transform_up_mut(&mut |node| builder.mutate(node))
+        .data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }

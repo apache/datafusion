@@ -237,8 +237,8 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
-            .transform_up(&|p| apply_subrules(p, &subrules, config))?
-            .data;
+            .transform_up(&|p| apply_subrules(p, &subrules, config))
+            .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
         // - For a hash join with partition mode [`PartitionMode::Auto`], we will
@@ -813,8 +813,8 @@ mod tests_statistical {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
-            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))?
-            .data;
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .data()?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;

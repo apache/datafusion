@@ -19,8 +19,9 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, IntervalUnit};
+use crate::analyzer::AnalyzerRule;
 
+use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{
@@ -49,8 +50,6 @@ use datafusion_expr::{
     LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
-
-use crate::analyzer::AnalyzerRule;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -753,30 +752,25 @@ mod test {
     use std::any::Any;
     use std::sync::{Arc, OnceLock};
 
-    use arrow::array::{FixedSizeListArray, Int32Array};
-    use arrow::datatypes::{DataType, TimeUnit};
-
-    use arrow::datatypes::Field;
-    use datafusion_common::tree_node::TreeNode;
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::{
-        cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
-        AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, ScalarUDFImpl,
-        SimpleAggregateUDF, Subquery,
-    };
-    use datafusion_expr::{
-        lit,
-        logical_plan::{EmptyRelation, Projection},
-        Expr, LogicalPlan, ScalarUDF, Signature, Volatility,
-    };
-    use datafusion_physical_expr::expressions::AvgAccumulator;
-
     use crate::analyzer::type_coercion::{
         cast_expr, coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
     use crate::test::assert_analyzed_plan_eq;
+
+    use arrow::array::{FixedSizeListArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection};
+    use datafusion_expr::{
+        cast, col, concat, concat_ws, create_udaf, is_true, lit,
+        AccumulatorFactoryFunction, AggregateFunction, AggregateUDF, BinaryExpr,
+        BuiltinScalarFunction, Case, ColumnarValue, Expr, ExprSchemable, Filter,
+        LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+        Subquery, Volatility,
+    };
+    use datafusion_physical_expr::expressions::AvgAccumulator;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1278,7 +1272,7 @@ mod test {
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
-        let result = expr.rewrite(&mut rewriter)?.data;
+        let result = expr.rewrite(&mut rewriter).data()?;
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![DFField::new_unqualified(
@@ -1313,7 +1307,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?.data;
+        let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
         // eq
@@ -1324,7 +1318,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?.data;
+        let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
         // lt
@@ -1335,7 +1329,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?.data;
+        let result = expr.rewrite(&mut rewriter).data()?;
         assert_eq!(expected, result);
 
         Ok(())

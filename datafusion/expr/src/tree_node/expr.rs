@@ -27,7 +27,7 @@ use crate::{Expr, GetFieldAccess};
 use datafusion_common::tree_node::{
     Transformed, TransformedIterator, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{handle_visit_recursion_down, internal_err, Result};
+use datafusion_common::{handle_visit_recursion, internal_err, Result};
 
 impl TreeNode for Expr {
     fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -134,7 +134,7 @@ impl TreeNode for Expr {
         let mut tnr = TreeNodeRecursion::Continue;
         for child in children {
             tnr = f(child)?;
-            handle_visit_recursion_down!(tnr);
+            handle_visit_recursion!(tnr, DOWN);
         }
 
         Ok(tnr)

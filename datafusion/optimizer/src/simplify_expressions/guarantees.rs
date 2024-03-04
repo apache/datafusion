@@ -21,8 +21,8 @@
 
 use std::{borrow::Cow, collections::HashMap};
 
-use datafusion_common::tree_node::Transformed;
-use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 
@@ -204,8 +204,8 @@ mod tests {
     use super::*;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::TransformedResult;
-    use datafusion_common::{tree_node::TreeNode, ScalarValue};
+    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::{col, lit, Operator};
 
     #[test]

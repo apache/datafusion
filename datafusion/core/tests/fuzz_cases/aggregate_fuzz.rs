@@ -17,19 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::Array;
-use hashbrown::HashMap;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use tokio::task::JoinSet;
-
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
 use datafusion::physical_plan::aggregates::{
@@ -43,6 +36,11 @@ use datafusion_physical_expr::expressions::{col, Sum};
 use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
+
+use hashbrown::HashMap;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use tokio::task::JoinSet;
 
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
@@ -316,6 +314,7 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
 
     impl TreeNodeVisitor for Visitor {
         type Node = Arc<dyn ExecutionPlan>;
+
         fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
             if let Some(exec) = node.as_any().downcast_ref::<AggregateExec>() {
                 if self.expected_sort {

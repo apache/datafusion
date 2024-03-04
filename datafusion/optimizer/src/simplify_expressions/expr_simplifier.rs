@@ -19,16 +19,21 @@
 
 use std::ops::Not;
 
+use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
+use super::utils::*;
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-
-use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
-    tree_node::{TreeNode, TreeNodeRewriter},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -39,14 +44,6 @@ use datafusion_expr::{
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
-
-use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
-use super::utils::*;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -132,36 +129,34 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = simplifier.simplify(expr).unwrap();
     /// assert_eq!(expr, b_lt_2);
     /// ```
-    pub fn simplify(&self, expr: Expr) -> Result<Expr> {
+    pub fn simplify(&self, mut expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut inlist_simplifier = InListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
-        let expr = if self.canonicalize {
-            expr.rewrite(&mut Canonicalizer::new())?.data
-        } else {
-            expr
-        };
+        if self.canonicalize {
+            expr = expr.rewrite(&mut Canonicalizer::new()).data()?
+        }
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)?
-            .data
-            .rewrite(&mut simplifier)?
-            .data
-            .rewrite(&mut inlist_simplifier)?
-            .data
-            .rewrite(&mut shorten_in_list_simplifier)?
-            .data
-            .rewrite(&mut guarantee_rewriter)?
-            .data
+        expr.rewrite(&mut const_evaluator)
+            .data()?
+            .rewrite(&mut simplifier)
+            .data()?
+            .rewrite(&mut inlist_simplifier)
+            .data()?
+            .rewrite(&mut shorten_in_list_simplifier)
+            .data()?
+            .rewrite(&mut guarantee_rewriter)
+            .data()?
             // run both passes twice to try an minimize simplifications that we missed
-            .rewrite(&mut const_evaluator)?
-            .data
+            .rewrite(&mut const_evaluator)
+            .data()?
             .rewrite(&mut simplifier)
             .data()
     }
@@ -1372,15 +1367,14 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{assert_contains, DFField, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::execution_props::ExecutionProps;
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
-
-    use super::*;
 
     // ------------------------------
     // --- ExprSimplifier tests -----

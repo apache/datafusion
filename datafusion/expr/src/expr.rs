@@ -17,28 +17,27 @@
 
 //! Logical Expressions: [`Expr`]
 
-use crate::expr_fn::binary_expr;
-use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
-use crate::window_frame;
-
-use crate::Operator;
-use crate::{aggregate_function, ExprSchemable};
-use crate::{built_in_function, BuiltinScalarFunction};
-use crate::{built_in_window_function, udaf};
-use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
-use datafusion_common::{plan_err, Column, Result, ScalarValue};
-use sqlparser::ast::NullTreatment;
 use std::collections::HashSet;
-use std::fmt;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{self, Display, Formatter, Write};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::Signature;
+use crate::expr_fn::binary_expr;
+use crate::logical_plan::Subquery;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::window_frame;
+use crate::{
+    aggregate_function, built_in_function, built_in_window_function, udaf,
+    BuiltinScalarFunction, ExprSchemable, Operator, Signature,
+};
+
+use arrow::datatypes::DataType;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    internal_err, plan_err, Column, DFSchema, OwnedTableReference, Result, ScalarValue,
+};
+use sqlparser::ast::NullTreatment;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS

@@ -165,8 +165,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
             let parallel = plan_with_coalesce_partitions
-                .transform_up(&parallelize_sorts)?
-                .data;
+                .transform_up(&parallelize_sorts)
+                .data()?;
             parallel.plan
         } else {
             adjusted.plan
@@ -181,8 +181,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
                     true,
                     config,
                 )
-            })?
-            .data;
+            })
+            .data()?;
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
@@ -687,7 +687,8 @@ mod tests {
             {
                 let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
                 let adjusted = plan_requirements
-                    .transform_up(&ensure_sorting).data()
+                    .transform_up(&ensure_sorting)
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
@@ -695,7 +696,8 @@ mod tests {
                     let plan_with_coalesce_partitions =
                         PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
                     let parallel = plan_with_coalesce_partitions
-                        .transform_up(&parallelize_sorts).data()
+                        .transform_up(&parallelize_sorts)
+                        .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     parallel.plan
@@ -712,14 +714,16 @@ mod tests {
                             true,
                             state.config_options(),
                         )
-                    }).data()
+                    })
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
                 let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
                 assign_initial_requirements(&mut sort_pushdown);
                 sort_pushdown
-                    .transform_down(&pushdown_sorts).data()
+                    .transform_down(&pushdown_sorts)
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }

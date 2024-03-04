@@ -17,17 +17,18 @@
 
 //! Expression rewriter
 
-use crate::expr::{Alias, Unnest};
-use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
-};
-use datafusion_common::Result;
-use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+
+use crate::expr::{Alias, Unnest};
+use crate::logical_plan::Projection;
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
+};
+use datafusion_common::{Column, DFSchema, Result};
 
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
@@ -277,13 +278,15 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::ops::Add;
+
     use super::*;
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
+
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
-    use std::ops::Add;
 
     #[derive(Default)]
     struct RecordingRewriter {

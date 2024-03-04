@@ -15,21 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
-use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -56,8 +58,11 @@ impl ScalarSubqueryToJoin {
             sub_query_info: vec![],
             alias_gen,
         };
-        let new_expr = predicate.clone().rewrite(&mut extract)?.data;
-        Ok((extract.sub_query_info, new_expr))
+        predicate
+            .clone()
+            .rewrite(&mut extract)
+            .data()
+            .map(|new_expr| (extract.sub_query_info, new_expr))
     }
 }
 
@@ -100,8 +105,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                     } else {
                                         Ok(Transformed::no(expr))
                                     }
-                                })?
-                                .data;
+                                })
+                                .data()?;
                         }
                         cur_input = optimized_subquery;
                     } else {
@@ -157,8 +162,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                             } else {
                                                 Ok(Transformed::no(expr))
                                             }
-                                        })?
-                                        .data;
+                                        })
+                                        .data()?;
                                     expr_to_rewrite_expr_map.insert(expr, new_expr);
                                 }
                             }
@@ -283,7 +288,7 @@ fn build_join(
         collected_count_expr_map: Default::default(),
         pull_up_having_expr: None,
     };
-    let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?.data;
+    let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -372,15 +377,17 @@ fn build_join(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+
     use super::*;
     use crate::test::*;
+
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
+    use datafusion_expr::logical_plan::LogicalPlanBuilder;
     use datafusion_expr::{
-        col, lit, logical_plan::LogicalPlanBuilder, max, min, out_ref_col,
-        scalar_subquery, sum, Between,
+        col, lit, max, min, out_ref_col, scalar_subquery, sum, Between,
     };
-    use std::ops::Add;
 
     /// Test multiple correlated subqueries
     #[test]

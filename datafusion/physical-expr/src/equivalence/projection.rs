@@ -109,6 +109,8 @@ impl ProjectionMapping {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::equivalence::tests::{
         apply_projection, convert_to_orderings, convert_to_orderings_owned,
@@ -120,12 +122,13 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Literal};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{BuiltinScalarFunction, Operator};
+
     use itertools::Itertools;
-    use std::sync::Arc;
 
     #[test]
     fn project_orderings() -> Result<()> {

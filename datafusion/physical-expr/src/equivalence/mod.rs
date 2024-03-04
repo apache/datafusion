@@ -15,18 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::expressions::Column;
+use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+
 mod class;
 mod ordering;
 mod projection;
 mod properties;
-use crate::expressions::Column;
-use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+
 pub use class::{EquivalenceClass, EquivalenceGroup};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{join_equivalence_properties, EquivalenceProperties};
-use std::sync::Arc;
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
@@ -62,19 +66,22 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::expressions::{col, Column};
     use crate::PhysicalSortExpr;
+
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
     use arrow_schema::{SchemaRef, SortOptions};
     use datafusion_common::{plan_datafusion_err, Result};
+
     use itertools::izip;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
-    use std::sync::Arc;
 
     pub fn output_schema(
         mapping: &ProjectionMapping,

@@ -31,7 +31,7 @@ use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     arrow_datafusion_err, plan_datafusion_err, DataFusionError, JoinSide, Result,
     ScalarValue,
@@ -292,8 +292,8 @@ pub fn convert_sort_expr_with_filter_schema(
                         None => Transformed::no(p),
                     }
                 })
-            })?
-            .data;
+            })
+            .data()?;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
         // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(

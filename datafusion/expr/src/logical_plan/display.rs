@@ -16,12 +16,14 @@
 // under the License.
 //! This module provides logic for displaying LogicalPlans in various styles
 
+use std::fmt;
+
 use crate::LogicalPlan;
+
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::DataFusionError;
-use std::fmt;
 
 /// Formats plans with a single line per node. For example:
 ///

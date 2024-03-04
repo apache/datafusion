@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::analyzer::AnalyzerRule;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
@@ -29,7 +32,6 @@ use datafusion_expr::{
     aggregate_function, expr, lit, Aggregate, Expr, Filter, LogicalPlan,
     LogicalPlanBuilder, Projection, Sort, Subquery,
 };
-use std::sync::Arc;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///

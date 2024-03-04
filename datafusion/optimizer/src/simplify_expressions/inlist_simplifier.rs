@@ -17,6 +17,9 @@
 
 //! This module implements a rule that simplifies the values for `InList`s
 
+use super::utils::{is_null, lit_bool_null};
+use super::THRESHOLD_INLINE_INLIST;
+
 use std::borrow::Cow;
 use std::collections::HashSet;
 
@@ -24,9 +27,6 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
-
-use super::utils::{is_null, lit_bool_null};
-use super::THRESHOLD_INLINE_INLIST;
 
 pub(super) struct ShortenInListSimplifier {}
 

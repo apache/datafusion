@@ -29,7 +29,8 @@ use datafusion_common::tree_node::{
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_datafusion_err, internal_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{
@@ -680,12 +681,9 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         self.series_number += 1;
 
-        let (idx, sub_expr_desc) =
-            if let Some((idx, sub_expr_desc)) = self.pop_enter_mark() {
-                (idx, sub_expr_desc)
-            } else {
-                return Ok(TreeNodeRecursion::Continue);
-            };
+        let Some((idx, sub_expr_desc)) = self.pop_enter_mark() else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
         // skip exprs should not be recognize.
         if self.expr_mask.ignores(expr) {
             self.id_array[idx].0 = self.series_number;
@@ -787,7 +785,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     self.curr_index += 1;
                     // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
                     let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
-                        DataFusionError::Internal("expr_set invalid state".to_string())
+                        internal_datafusion_err!("expr_set invalid state")
                     })?;
                     if *series_number < self.max_series_number
                         || id.is_empty()

@@ -140,7 +140,7 @@ impl PhysicalOptimizerRule for TopKAggregation {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = if config.optimizer.enable_topk_aggregation {
+        if config.optimizer.enable_topk_aggregation {
             plan.transform_down(&|plan| {
                 Ok(
                     if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
@@ -149,12 +149,11 @@ impl PhysicalOptimizerRule for TopKAggregation {
                         Transformed::no(plan)
                     },
                 )
-            })?
-            .data
+            })
+            .data()
         } else {
-            plan
-        };
-        Ok(plan)
+            Ok(plan)
+        }
     }
 
     fn name(&self) -> &str {
