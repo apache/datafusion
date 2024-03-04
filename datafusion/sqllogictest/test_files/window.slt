@@ -4258,14 +4258,15 @@ LIMIT 5;
 statement ok
 set datafusion.execution.batch_size = 1;
 
-query I
-SELECT LAG(c1, 2) IGNORE NULLS OVER()
+query II
+SELECT LAG(c1, 2) IGNORE NULLS OVER(),
+       LEAD(c1, 2) IGNORE NULLS OVER()
 FROM null_cases
 ORDER BY c2
 LIMIT 5;
 ----
-78
-63
-3
-24
-14
+78 50
+63 38
+3 53
+24 31
+14 94
