@@ -6213,12 +6213,19 @@ select * from test_create_array_table;
 query T
 select arrow_typeof(a) from test_create_array_table;
 ----
-List(Field { name: "field", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query T
 select arrow_typeof(c) from test_create_array_table;
 ----
-List(Field { name: "field", data_type: List(Field { name: "field", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# Test casting to array types
+# issue: https://github.com/apache/arrow-datafusion/issues/9440
+query ??T
+select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
+----
+[1, 2, 3] [[1]] List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 
 ### Delete tables
