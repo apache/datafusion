@@ -40,7 +40,7 @@ use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -2189,9 +2189,9 @@ impl<'a> BadPlanVisitor<'a> {
 }
 
 impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
@@ -2205,7 +2205,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            _ => Ok(VisitRecursion::Continue),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
     }
 }

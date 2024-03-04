@@ -479,7 +479,7 @@ mod tests {
                 vec![
                     (col_a, options),
                     (col_c, options),
-                    (&floor_a, options),
+                    (floor_a, options),
                     (&a_plus_b, options),
                 ],
                 // expected: requirement is not satisfied.
@@ -505,8 +505,8 @@ mod tests {
                 vec![
                     (col_a, options),
                     (col_b, options),
-                    (&col_c, options),
-                    (&floor_a, options),
+                    (col_c, options),
+                    (floor_a, options),
                 ],
                 // expected: requirement is satisfied.
                 true,

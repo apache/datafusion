@@ -15,26 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use super::ParquetFileMetrics;
+use crate::physical_plan::metrics;
+
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{arrow_err, DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
-use std::collections::BTreeSet;
-
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
-use std::sync::Arc;
-
-use crate::physical_plan::metrics;
-
-use super::ParquetFileMetrics;
 
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
@@ -188,8 +190,7 @@ impl<'a> FilterCandidateBuilder<'a> {
         mut self,
         metadata: &ParquetMetaData,
     ) -> Result<Option<FilterCandidate>> {
-        let expr = self.expr.clone();
-        let expr = expr.rewrite(&mut self)?;
+        let expr = self.expr.clone().rewrite(&mut self).data()?;
 
         if self.non_primitive_columns || self.projected_columns {
             Ok(None)
@@ -209,29 +210,35 @@ impl<'a> FilterCandidateBuilder<'a> {
 }
 
 impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
-    type N = Arc<dyn PhysicalExpr>;
+    type Node = Arc<dyn PhysicalExpr>;
 
-    fn pre_visit(&mut self, node: &Arc<dyn PhysicalExpr>) -> Result<RewriteRecursion> {
+    fn f_down(
+        &mut self,
+        node: Arc<dyn PhysicalExpr>,
+    ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = node.as_any().downcast_ref::<Column>() {
             if let Ok(idx) = self.file_schema.index_of(column.name()) {
                 self.required_column_indices.insert(idx);
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
-                    return Ok(RewriteRecursion::Stop);
+                    return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
                 }
             } else if self.table_schema.index_of(column.name()).is_err() {
                 // If the column does not exist in the (un-projected) table schema then
                 // it must be a projected column.
                 self.projected_columns = true;
-                return Ok(RewriteRecursion::Stop);
+                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
             }
         }
 
-        Ok(RewriteRecursion::Continue)
+        Ok(Transformed::no(node))
     }
 
-    fn mutate(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+    fn f_up(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if self.file_schema.field_with_name(column.name()).is_err() {
                 // the column expr must be in the table schema
@@ -239,7 +246,7 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
                     Ok(field) => {
                         // return the null value corresponding to the data type
                         let null_value = ScalarValue::try_from(field.data_type())?;
-                        Ok(Arc::new(Literal::new(null_value)))
+                        Ok(Transformed::yes(Arc::new(Literal::new(null_value))))
                     }
                     Err(e) => {
                         // If the column is not in the table schema, should throw the error
@@ -249,7 +256,7 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
             }
         }
 
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 

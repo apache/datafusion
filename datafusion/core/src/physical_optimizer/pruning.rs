@@ -29,20 +29,22 @@ use crate::{
     logical_expr::Operator,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
-use arrow::record_batch::RecordBatchOptions;
+
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
+    record_batch::{RecordBatch, RecordBatchOptions},
 };
 use arrow_array::cast::AsArray;
+use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    internal_err, plan_err,
+    internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
+    ScalarValue,
 };
-use datafusion_common::{plan_datafusion_err, ScalarValue};
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+
 use log::trace;
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
@@ -1034,12 +1036,13 @@ fn rewrite_column_expr(
     e.transform(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
             if column == column_old {
-                return Ok(Transformed::Yes(Arc::new(column_new.clone())));
+                return Ok(Transformed::yes(Arc::new(column_new.clone())));
             }
         }
 
-        Ok(Transformed::No(expr))
+        Ok(Transformed::no(expr))
     })
+    .data()
 }
 
 fn reverse_operator(op: Operator) -> Result<Operator> {

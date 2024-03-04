@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
 };
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::LogicalPlan;
 
 /// Non-unique identifier of a [`LogicalPlan`].
@@ -75,7 +75,7 @@ fn get_node_number(plan: &LogicalPlan) -> NonZeroUsize {
     let mut node_number = 0;
     plan.apply(&mut |_plan| {
         node_number += 1;
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })
     // Closure always return Ok
     .unwrap();

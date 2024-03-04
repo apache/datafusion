@@ -465,6 +465,10 @@ SELECT TIME 'not a time' as time;
 query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type
 SELECT TIME '24:01:02' as time;
 
+# invalid timezone
+query error Arrow error: Parser error: Invalid timezone "ZZ": 'ZZ' is not a valid timezone
+SELECT TIMESTAMP '2023-12-05T21:58:10.45ZZ';
+
 statement ok
 set datafusion.optimizer.skip_failed_rules = true
 
