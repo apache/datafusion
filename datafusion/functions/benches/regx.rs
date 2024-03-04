@@ -17,13 +17,13 @@
 
 extern crate criterion;
 
-use std::iter;
 use std::sync::Arc;
 
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_physical_expr::regex_expressions::{regexp_match, regexp_replace};
+use datafusion_functions::regex::regexplike::regexp_like;
+use datafusion_functions::regex::regexpmatch::regexp_match;
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
@@ -74,6 +74,20 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    c.bench_function("regexp_like_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_like::<i32>(&[data.clone(), regex.clone(), flags.clone()])
+                    .expect("regexp_like should work on valid values"),
+            )
+        })
+    });
+
     c.bench_function("regexp_match_1000", |b| {
         let mut rng = rand::thread_rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
@@ -84,28 +98,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 regexp_match::<i32>(&[data.clone(), regex.clone(), flags.clone()])
                     .expect("regexp_match should work on valid values"),
-            )
-        })
-    });
-
-    c.bench_function("regexp_replace_1000", |b| {
-        let mut rng = rand::thread_rng();
-        let data = Arc::new(data(&mut rng)) as ArrayRef;
-        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
-        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
-        let replacement =
-            Arc::new(StringArray::from_iter_values(iter::repeat("XX").take(1000)))
-                as ArrayRef;
-
-        b.iter(|| {
-            black_box(
-                regexp_replace::<i32>(&[
-                    data.clone(),
-                    regex.clone(),
-                    replacement.clone(),
-                    flags.clone(),
-                ])
-                .expect("regexp_replace should work on valid values"),
             )
         })
     });

@@ -2770,7 +2770,8 @@ pub enum ScalarFunction {
     /// / 132 was InStr
     MakeDate = 133,
     ArrayReverse = 134,
-    RegexpLike = 135,
+    /// / 135 is RegexpLike
+    ///
     /// / 137 was ToDate
     ToChar = 136,
 }
@@ -2898,7 +2899,6 @@ impl ScalarFunction {
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
-            ScalarFunction::RegexpLike => "RegexpLike",
             ScalarFunction::ToChar => "ToChar",
         }
     }
@@ -3022,7 +3022,6 @@ impl ScalarFunction {
             "EndsWith" => Some(Self::EndsWith),
             "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
-            "RegexpLike" => Some(Self::RegexpLike),
             "ToChar" => Some(Self::ToChar),
             _ => None,
         }
