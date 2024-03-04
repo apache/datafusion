@@ -2044,3 +2044,78 @@ select position('' in '')
 
 query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)
+
+
+query I
+select strpos('abc', 'c');
+----
+3
+
+query I
+select strpos('abc', 'd');
+----
+0
+
+
+query I
+select strpos('abc', '');
+----
+1
+
+query I
+select strpos('helloworld', 'world');
+----
+6
+
+query I
+select strpos('helloworld', arrow_cast(null, 'Utf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'hello');
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+6
+
+query I
+select strpos(arrow_cast(null, 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast(null, 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos('josé', 'é');
+----
+4
+
+query I
+select strpos('joséésoj', 'so');
+----
+6
+
+
+query I
+select strpos('joséésoj', 'abc');
+----
+0
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'abc');
+----
+NULL
+
+query I
+select strpos('joséésoj', arrow_cast(null, 'Utf8'));
+----
+NULL
+
+
