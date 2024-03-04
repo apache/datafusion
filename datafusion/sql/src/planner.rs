@@ -362,7 +362,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let data_type = self.convert_data_type(inner_sql_type)?;
 
                 Ok(DataType::List(Arc::new(Field::new(
-                    "field", data_type, true,
+                    "item", data_type, true,
                 ))))
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
