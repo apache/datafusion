@@ -29,12 +29,11 @@ use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use futures::StreamExt;
-use tokio::task::spawn_blocking;
 
 use datafusion_common::{plan_err, Constraints, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_plan::common::AbortOnDropSingle;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
@@ -344,7 +343,7 @@ impl DataSink for StreamWrite {
         let config = self.0.clone();
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
         // Note: FIFO Files support poll so this could use AsyncFd
-        let write = AbortOnDropSingle::new(spawn_blocking(move || {
+        let write_task = SpawnedTask::spawn_blocking(move || {
             let mut count = 0_u64;
             let mut writer = config.writer()?;
             while let Some(batch) = receiver.blocking_recv() {
@@ -352,7 +351,7 @@ impl DataSink for StreamWrite {
                 writer.write(&batch)?;
             }
             Ok(count)
-        }));
+        });
 
         while let Some(b) = data.next().await.transpose()? {
             if sender.send(b).await.is_err() {
@@ -360,6 +359,6 @@ impl DataSink for StreamWrite {
             }
         }
         drop(sender);
-        write.await.unwrap()
+        write_task.join().await.unwrap()
     }
 }

@@ -31,8 +31,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -751,7 +750,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::InStr;
+        let fun = BuiltinScalarFunction::Strpos;
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;

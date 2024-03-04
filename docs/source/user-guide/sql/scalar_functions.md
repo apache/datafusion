@@ -569,6 +569,9 @@ trunc(numeric_expression[, decimal_places])
 
 - [coalesce](#coalesce)
 - [nullif](#nullif)
+- [nvl](#nvl)
+- [nvl2](#nvl2)
+- [ifnull](#ifnull)
 
 ### `coalesce`
 
@@ -602,6 +605,42 @@ nullif(expression1, expression2)
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression2**: Expression to compare to expression1.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl`
+
+Returns _expression2_ if _expression1_ is NULL; otherwise it returns _expression1_.
+
+```
+nvl(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: return if expression1 not is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nvl2`
+
+Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.
+
+```
+nvl2(expression1, expression2, expression3)
+```
+
+#### Arguments
+
+- **expression1**: conditional expression.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: return if expression1 is not NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression3**: return if expression1 is NULL.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `ifnull`
+
+_Alias of [nvl](#nvl)._
 
 ## String Functions
 
@@ -793,12 +832,7 @@ initcap(str)
 
 ### `instr`
 
-Returns the location where substr first appeared in str (counting from 1).
-If substr does not appear in str, return 0.
-
-```
-instr(str, substr)
-```
+_Alias of [strpos](#strpos)._
 
 #### Arguments
 
@@ -1068,6 +1102,10 @@ strpos(str, substr)
   Can be a constant, column, or function, and any combination of string operators.
 - **substr**: Substring expression to search for.
   Can be a constant, column, or function, and any combination of string operators.
+
+#### Aliases
+
+- instr
 
 ### `substr`
 
@@ -1401,7 +1439,8 @@ Additional examples can be found [here](https://github.com/apache/arrow-datafusi
 
 ### `position`
 
-Returns the position of substr in orig_str
+Returns the position of `substr` in `origstr` (counting from 1). If `substr` does
+not appear in `origstr`, return 0.
 
 ```
 position(substr in origstr)
@@ -1409,7 +1448,7 @@ position(substr in origstr)
 
 #### Arguments
 
-- **substr**: he pattern string.
+- **substr**: The pattern string.
 - **origstr**: The model string.
 
 ## Time and Date Functions
@@ -1935,6 +1974,7 @@ from_unixtime(expression)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [empty](#empty)
+- [flatten](#flatten)
 - [generate_series](#generate_series)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
@@ -2884,7 +2924,28 @@ empty(array)
 
 ### `generate_series`
 
-_Alias of [range](#range)._
+Similar to the range function, but it includes the upper bound.
+
+```
+generate_series(start, stop, step)
+```
+
+#### Arguments
+
+- **start**: start of the range
+- **end**: end of the range (included)
+- **step**: increase by step (can not be 0)
+
+#### Example
+
+```
+❯ select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
+```
 
 ### `list_append`
 
@@ -3008,7 +3069,7 @@ _Alias of [array_slice](#array_slice)._
 
 ### `list_to_string`
 
-_Alias of [list_to_string](#list_to_string)._
+_Alias of [array_to_string](#array_to_string)._
 
 ### `make_array`
 

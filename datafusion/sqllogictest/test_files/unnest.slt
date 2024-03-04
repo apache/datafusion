@@ -25,10 +25,12 @@ AS VALUES
     ([1,2,3], [7], 1),
     ([4,5], [8,9,10], 2),
     ([6], [11,12], 3),
-    ([12], [null, 42, null], null)
+    ([12], [null, 42, null], null),
+    -- null array to verify the `preserve_nulls` option
+    (null, null, 4)
 ;
 
-## Basic unnest expression
+## Basic unnest expression in select list
 query I
 select unnest([1,2,3]);
 ----
@@ -36,13 +38,34 @@ select unnest([1,2,3]);
 2
 3
 
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and structs and null
+## Basic unnest expression in from clause
+query I
+select * from unnest([1,2,3]);
+----
+1
+2
+3
+
+
+## Unnest null in select list
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null);
 
-## Unnest empty array
+## Unnest null in from clause
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+select * from unnest(null);
+
+
+## Unnest empty array in select list
 query ?
 select unnest([]);
 ----
+
+## Unnest empty array in from clause
+query ?
+select * from unnest([]);
+----
+
 
 ## Unnest column non-null
 query I
@@ -70,28 +93,166 @@ NULL
 42
 NULL
 
-## Unnest column with scalars
-# TODO: This should be an error, but unnest is able to process scalar values now.
-query I
-select unnest(column3) from unnest_table;
+## Unnest with additional column
+## Issue: https://github.com/apache/arrow-datafusion/issues/9349
+query II
+select unnest(column1), column3 from unnest_table;
 ----
-1
-2
-3
-NULL
+1 1
+2 1
+3 1
+4 2
+5 2
+6 3
+12 NULL
+
+query I?
+select unnest(column1), column1 from unnest_table;
+----
+1 [1, 2, 3]
+2 [1, 2, 3]
+3 [1, 2, 3]
+4 [4, 5]
+5 [4, 5]
+6 [6]
+12 [12]
+
+query ?II
+select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table;
+----
+[1, 2, 3] 7 10
+[5] 8 20
+[5] 9 20
+[5] 10 20
+[6] 11 30
+[6] 12 30
+[12] NULL NULL
+[12] 42 NULL
+[12] NULL NULL
+
+
+## Unnest column with scalars
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
+select unnest(column3) from unnest_table;
 
 ## Unnest multiple columns
 query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
 select unnest(column1), unnest(column2) from unnest_table;
 
-## Unnest scalar
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array and structs and null
+
+## Unnest scalar in select list
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(1);
 
+## Unnest scalar in from clause
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
+select * from unnest(1);
 
-## Unnest empty expression
-query error DataFusion error: Execution error: unnest\(\) requires at least one argument
+
+## Unnest empty expression in select list
+query error DataFusion error: Error during planning: unnest\(\) requires at least one argument
 select unnest();
+
+## Unnest empty expression in from clause
+query error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+select * from unnest();
+
+
+## Unnest multiple expressions in select list
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+select unnest([1,2], [2,3]);
+
+## Unnest multiple expressions in from clause
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support multiple arguments yet
+select * from unnest([1,2], [2,3]);
+
+
+## Unnest struct expression in select list
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+select unnest(struct(null));
+
+## Unnest struct expression in from clause
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support struct yet
+select * from unnest(struct(null));
+
+
+## Unnest array expression
+query I
+select unnest(range(1, 3));
+----
+1
+2
+
+query I
+select * from unnest(range(1, 3));
+----
+1
+2
+
+query I
+select unnest(arrow_cast(range(1, 3), 'LargeList(Int64)'));
+----
+1
+2
+
+query I
+select * from unnest(arrow_cast(range(1, 3), 'LargeList(Int64)'));
+----
+1
+2
+
+query I
+select unnest(arrow_cast(range(1, 3), 'FixedSizeList(2, Int64)'));
+----
+1
+2
+
+query I
+select * from unnest(arrow_cast(range(1, 3), 'FixedSizeList(2, Int64)'));
+----
+1
+2
+
+query I
+select unnest(array_remove(column1, 12)) from unnest_table;
+----
+1
+2
+3
+4
+5
+6
+
+
+## Unnest in from clause with alias
+query I
+select * from unnest([1,2]) as t;
+----
+1
+2
+
+query I
+select a from unnest([1,2]) as t(a);
+----
+1
+2
+
+
+## Unnest in from clause with offset is not supported
+query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
+select * from unnest([1,2]) with offset;
+
+query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
+select * from unnest([1,2]) with offset offset_alias;
+
+
+## More complex cases
+query I
+select * from unnest([1,2,(select sum(column3) from unnest_table)]);
+----
+1
+2
+10
 
 statement ok
 drop table unnest_table;

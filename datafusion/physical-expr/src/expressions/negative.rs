@@ -30,7 +30,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
@@ -179,6 +179,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::cast::as_primitive_array;
+    use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
     use paste::paste;

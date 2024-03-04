@@ -303,10 +303,7 @@ impl GraphvizVisitor<'_, '_> {
 impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
     type Error = fmt::Error;
 
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> datafusion_common::Result<bool, Self::Error> {
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         let id = self.graphviz_builder.next_id();
 
         struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
@@ -468,11 +465,11 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::DataFusionError;
-
-    use crate::{DisplayAs, ExecutionPlan};
-
     use super::DisplayableExecutionPlan;
+    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+
+    use datafusion_common::{DataFusionError, Result, Statistics};
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     #[derive(Debug, Clone, Copy)]
     enum TestStatsExecPlan {
@@ -496,18 +493,8 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> arrow_schema::SchemaRef {
-            Arc::new(arrow_schema::Schema::empty())
-        }
-
-        fn output_partitioning(&self) -> datafusion_physical_expr::Partitioning {
-            datafusion_physical_expr::Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(
-            &self,
-        ) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-            None
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -517,28 +504,25 @@ mod tests {
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
 
         fn execute(
             &self,
             _: usize,
-            _: Arc<datafusion_execution::TaskContext>,
-        ) -> datafusion_common::Result<datafusion_execution::SendableRecordBatchStream>
-        {
+            _: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
             todo!()
         }
 
-        fn statistics(&self) -> datafusion_common::Result<datafusion_common::Statistics> {
+        fn statistics(&self) -> Result<Statistics> {
             match self {
                 Self::Panic => panic!("expected panic"),
                 Self::Error => {
                     Err(DataFusionError::Internal("expected error".to_string()))
                 }
-                Self::Ok => Ok(datafusion_common::Statistics::new_unknown(
-                    self.schema().as_ref(),
-                )),
+                Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
             }
         }
     }

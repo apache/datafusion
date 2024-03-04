@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -307,6 +307,11 @@ async fn not_between_integers() -> Result<()> {
 #[tokio::test]
 async fn simple_scalar_function_abs() -> Result<()> {
     roundtrip("SELECT ABS(a) FROM data").await
+}
+
+#[tokio::test]
+async fn simple_scalar_function_isnan() -> Result<()> {
+    roundtrip("SELECT ISNAN(a) FROM data").await
 }
 
 #[tokio::test]

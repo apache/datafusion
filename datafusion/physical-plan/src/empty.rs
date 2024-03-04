@@ -20,14 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::expressions::PhysicalSortExpr;
-use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
+use super::{
+    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use log::trace;
 
@@ -38,25 +41,48 @@ pub struct EmptyExec {
     schema: SchemaRef,
     /// Number of partitions
     partitions: usize,
+    cache: PlanProperties,
 }
 
 impl EmptyExec {
     /// Create a new EmptyExec
     pub fn new(schema: SchemaRef) -> Self {
+        let cache = Self::compute_properties(schema.clone(), 1);
         EmptyExec {
             schema,
             partitions: 1,
+            cache,
         }
     }
 
     /// Create a new EmptyExec with specified partition number
     pub fn with_partitions(mut self, partitions: usize) -> Self {
         self.partitions = partitions;
+        // Changing partitions may invalidate output partitioning, so update it:
+        let output_partitioning = Self::output_partitioning_helper(self.partitions);
+        self.cache = self.cache.with_partitioning(output_partitioning);
         self
     }
 
     fn data(&self) -> Result<Vec<RecordBatch>> {
         Ok(vec![])
+    }
+
+    fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
+        Partitioning::UnknownPartitioning(n_partitions)
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let output_partitioning = Self::output_partitioning_helper(n_partitions);
+        PlanProperties::new(
+            eq_properties,
+            // Output Partitioning
+            output_partitioning,
+            // Execution Mode
+            ExecutionMode::Bounded,
+        )
     }
 }
 
@@ -80,21 +106,12 @@ impl ExecutionPlan for EmptyExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
     }
 
     fn with_new_children(

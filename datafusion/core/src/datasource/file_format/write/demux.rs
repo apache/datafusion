@@ -33,7 +33,7 @@ use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArr
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::as_string_array;
 use datafusion_common::{exec_datafusion_err, DataFusionError};
-
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use futures::StreamExt;
@@ -42,7 +42,6 @@ use object_store::path::Path;
 use rand::distributions::DistString;
 
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
 type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
@@ -76,15 +75,15 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
+    let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
     let single_file_output = !base_output_path.is_collection();
-    let task: JoinHandle<std::result::Result<(), DataFusionError>> = match partition_by {
+    let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
             // bound this channel without risking a deadlock.
-            tokio::spawn(async move {
+            SpawnedTask::spawn(async move {
                 hive_style_partitions_demuxer(
                     tx,
                     input,
@@ -96,7 +95,7 @@ pub(crate) fn start_demuxer_task(
                 .await
             })
         }
-        None => tokio::spawn(async move {
+        None => SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
                 input,

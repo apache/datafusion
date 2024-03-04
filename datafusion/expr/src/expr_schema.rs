@@ -28,8 +28,7 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, DataFusionError,
-    ExprSchema, Result,
+    internal_err, plan_datafusion_err, plan_err, Column, DFField, ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -123,7 +122,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 match func_def {
                     ScalarFunctionDefinition::BuiltIn(fun) => {
-                        // verify that input data types is consistent with function's `TypeSignature`
+                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                         data_types(&arg_data_types, &fun.signature()).map_err(|_| {
                             plan_datafusion_err!(
                                 "{}",
@@ -135,9 +134,25 @@ impl ExprSchemable for Expr {
                             )
                         })?;
 
+                        // perform additional function arguments validation (due to limited
+                        // expressiveness of `TypeSignature`), then infer return type
                         fun.return_type(&arg_data_types)
                     }
                     ScalarFunctionDefinition::UDF(fun) => {
+                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
+                        data_types(&arg_data_types, fun.signature()).map_err(|_| {
+                            plan_datafusion_err!(
+                                "{}",
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &arg_data_types,
+                                )
+                            )
+                        })?;
+
+                        // perform additional function arguments validation (due to limited
+                        // expressiveness of `TypeSignature`), then infer return type
                         Ok(fun.return_type_from_exprs(args, schema)?)
                     }
                     ScalarFunctionDefinition::Name(_) => {

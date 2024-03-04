@@ -21,6 +21,9 @@ mod sql;
 /// Run all tests that are found in the `dataframe` directory
 mod dataframe;
 
+/// Run all tests that are found in the `macro_hygiene` directory
+mod macro_hygiene;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {

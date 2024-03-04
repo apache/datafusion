@@ -29,18 +29,20 @@ use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalSortExpr, PhysicalSortRequirement,
+    EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use futures::stream::TryStreamExt;
 use tokio::task::JoinSet;
 
+mod ordering;
 mod topk;
 mod visitor;
 
@@ -58,7 +60,6 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
-mod ordering;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
@@ -80,7 +81,6 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
-use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
@@ -101,8 +101,8 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// `ExecutionPlan`'s output from its input. See [`Partitioning`] for more
 /// details on partitioning.
 ///
-/// Methods such as [`schema`] and [`output_partitioning`] communicate
-/// properties of this output to the DataFusion optimizer, and methods such as
+/// Methods such as [`Self::schema`] and [`Self::properties`] communicate
+/// properties of the output to the DataFusion optimizer, and methods such as
 /// [`required_input_distribution`] and [`required_input_ordering`] express
 /// requirements of the `ExecutionPlan` from its input.
 ///
@@ -111,8 +111,6 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// quite verbose) `Debug` output.
 ///
 /// [`execute`]: ExecutionPlan::execute
-/// [`schema`]: ExecutionPlan::schema
-/// [`output_partitioning`]: ExecutionPlan::output_partitioning
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
@@ -121,34 +119,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef;
-
-    /// Specifies how the output of this `ExecutionPlan` is split into
-    /// partitions.
-    fn output_partitioning(&self) -> Partitioning;
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        if _children.iter().any(|&x| x) {
-            plan_err!("Plan does not support infinite stream from its children")
-        } else {
-            Ok(false)
-        }
+    fn schema(&self) -> SchemaRef {
+        self.properties().schema().clone()
     }
 
-    /// If the output of this `ExecutionPlan` within each partition is sorted,
-    /// returns `Some(keys)` with the description of how it was sorted.
+    /// Return properties of the output of the `ExecutionPlan`, such as output
+    /// ordering(s), partitioning information etc.
     ///
-    /// For example, Sort, (obviously) produces sorted output as does
-    /// SortPreservingMergeStream. Less obviously `Projection`
-    /// produces sorted output if its input was sorted as it does not
-    /// reorder the input rows,
-    ///
-    /// It is safe to return `None` here if your `ExecutionPlan` does not
-    /// have any particular output order here
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    /// This information is available via methods on [`ExecutionPlanProperties`]
+    /// trait, which is implemented for all `ExecutionPlan`s.
+    fn properties(&self) -> &PlanProperties;
 
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -206,27 +186,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .into_iter()
             .map(|dist| !matches!(dist, Distribution::SinglePartition))
             .collect()
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan.
-    ///
-    /// Equivalence properties tell DataFusion what columns are known to be
-    /// equal, during various optimization passes. By default, this returns "no
-    /// known equivalences" which is always correct, but may cause DataFusion to
-    /// unnecessarily resort data.
-    ///
-    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
-    /// through it or how columns within each row relate to each other, it
-    /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
-    /// otherwise modify them, it preserves its input equivalence properties.
-    /// However, since `ProjectionExec` may calculate derived expressions, it
-    /// needs special handling.
-    ///
-    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
-    /// for related concepts.
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new(self.schema())
     }
 
     /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
@@ -298,14 +257,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// "abort" such tasks, they may continue to consume resources even after
     /// the plan is dropped, generating intermediate results that are never
     /// used.
+    /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
-    /// See [`AbortOnDropSingle`], [`AbortOnDropMany`] and
-    /// [`RecordBatchReceiverStreamBuilder`] for structures to help ensure all
-    /// background tasks are cancelled.
+    /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
+    /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
-    /// [`AbortOnDropSingle`]: crate::common::AbortOnDropSingle
-    /// [`AbortOnDropMany`]: crate::common::AbortOnDropMany
+    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     ///
     /// # Implementation Examples
@@ -446,6 +405,220 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// Extension trait provides an easy API to fetch various properties of
+/// [`ExecutionPlan`] objects based on [`ExecutionPlan::properties`].
+pub trait ExecutionPlanProperties {
+    /// Specifies how the output of this `ExecutionPlan` is split into
+    /// partitions.
+    fn output_partitioning(&self) -> &Partitioning;
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
+    fn execution_mode(&self) -> ExecutionMode;
+
+    /// If the output of this `ExecutionPlan` within each partition is sorted,
+    /// returns `Some(keys)` describing the ordering. A `None` return value
+    /// indicates no assumptions should be made on the output ordering.
+    ///
+    /// For example, `SortExec` (obviously) produces sorted output as does
+    /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
+    /// output if its input is sorted as it does not reorder the input rows.
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
+    /// Get the [`EquivalenceProperties`] within the plan.
+    ///
+    /// Equivalence properties tell DataFusion what columns are known to be
+    /// equal, during various optimization passes. By default, this returns "no
+    /// known equivalences" which is always correct, but may cause DataFusion to
+    /// unnecessarily resort data.
+    ///
+    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
+    /// through it or how columns within each row relate to each other, it
+    /// should return the equivalence properties of its input. For
+    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// otherwise modify them, it preserves its input equivalence properties.
+    /// However, since `ProjectionExec` may calculate derived expressions, it
+    /// needs special handling.
+    ///
+    /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
+    /// for related concepts.
+    fn equivalence_properties(&self) -> &EquivalenceProperties;
+}
+
+impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
+    fn output_partitioning(&self) -> &Partitioning {
+        self.properties().output_partitioning()
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        self.properties().execution_mode()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.properties().output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> &EquivalenceProperties {
+        self.properties().equivalence_properties()
+    }
+}
+
+impl ExecutionPlanProperties for &dyn ExecutionPlan {
+    fn output_partitioning(&self) -> &Partitioning {
+        self.properties().output_partitioning()
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        self.properties().execution_mode()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.properties().output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> &EquivalenceProperties {
+        self.properties().equivalence_properties()
+    }
+}
+
+/// Describes the execution mode of an operator's resulting stream with respect
+/// to its size and behavior. There are three possible execution modes: `Bounded`,
+/// `Unbounded` and `PipelineBreaking`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ExecutionMode {
+    /// Represents the mode where generated stream is bounded, e.g. finite.
+    Bounded,
+    /// Represents the mode where generated stream is unbounded, e.g. infinite.
+    /// Even though the operator generates an unbounded stream of results, it
+    /// works with bounded memory and execution can still continue successfully.
+    ///
+    /// The stream that results from calling `execute` on an `ExecutionPlan` that is `Unbounded`
+    /// will never be done (return `None`), except in case of error.
+    Unbounded,
+    /// Represents the mode where some of the operator's input stream(s) are
+    /// unbounded; however, the operator cannot generate streaming results from
+    /// these streaming inputs. In this case, the execution mode will be pipeline
+    /// breaking, e.g. the operator requires unbounded memory to generate results.
+    PipelineBreaking,
+}
+
+impl ExecutionMode {
+    /// Check whether the execution mode is unbounded or not.
+    pub fn is_unbounded(&self) -> bool {
+        matches!(self, ExecutionMode::Unbounded)
+    }
+
+    /// Check whether the execution is pipeline friendly. If so, operator can
+    /// execute safely.
+    pub fn pipeline_friendly(&self) -> bool {
+        matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
+    }
+}
+
+/// Conservatively "combines" execution modes of a given collection of operators.
+fn execution_mode_from_children<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> ExecutionMode {
+    let mut result = ExecutionMode::Bounded;
+    for mode in children.into_iter().map(|child| child.execution_mode()) {
+        match (mode, result) {
+            (ExecutionMode::PipelineBreaking, _)
+            | (_, ExecutionMode::PipelineBreaking) => {
+                // If any of the modes is `PipelineBreaking`, so is the result:
+                return ExecutionMode::PipelineBreaking;
+            }
+            (ExecutionMode::Unbounded, _) | (_, ExecutionMode::Unbounded) => {
+                // Unbounded mode eats up bounded mode:
+                result = ExecutionMode::Unbounded;
+            }
+            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
+                // When both modes are bounded, so is the result:
+                result = ExecutionMode::Bounded;
+            }
+        }
+    }
+    result
+}
+
+/// Stores certain, often expensive to compute, plan properties used in query
+/// optimization.
+///
+/// These properties are stored a single structure to permit this information to
+/// be computed once and then those cached results used multiple times without
+/// recomputation (aka a cache)
+#[derive(Debug, Clone)]
+pub struct PlanProperties {
+    /// See [ExecutionPlanProperties::equivalence_properties]
+    pub eq_properties: EquivalenceProperties,
+    /// See [ExecutionPlanProperties::output_partitioning]
+    pub partitioning: Partitioning,
+    /// See [ExecutionPlanProperties::execution_mode]
+    pub execution_mode: ExecutionMode,
+    /// See [ExecutionPlanProperties::output_ordering]
+    output_ordering: Option<LexOrdering>,
+}
+
+impl PlanProperties {
+    /// Construct a new `PlanPropertiesCache` from the
+    pub fn new(
+        eq_properties: EquivalenceProperties,
+        partitioning: Partitioning,
+        execution_mode: ExecutionMode,
+    ) -> Self {
+        // Output ordering can be derived from `eq_properties`.
+        let output_ordering = eq_properties.oeq_class().output_ordering();
+        Self {
+            eq_properties,
+            partitioning,
+            execution_mode,
+            output_ordering,
+        }
+    }
+
+    /// Overwrite output partitioning with its new value.
+    pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+        self.partitioning = partitioning;
+        self
+    }
+
+    /// Overwrite the execution Mode with its new value.
+    pub fn with_execution_mode(mut self, execution_mode: ExecutionMode) -> Self {
+        self.execution_mode = execution_mode;
+        self
+    }
+
+    /// Overwrite equivalence properties with its new value.
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        // Changing equivalence properties also changes output ordering, so
+        // make sure to overwrite it:
+        self.output_ordering = eq_properties.oeq_class().output_ordering();
+        self.eq_properties = eq_properties;
+        self
+    }
+
+    pub fn equivalence_properties(&self) -> &EquivalenceProperties {
+        &self.eq_properties
+    }
+
+    pub fn output_partitioning(&self) -> &Partitioning {
+        &self.partitioning
+    }
+
+    pub fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.output_ordering.as_deref()
+    }
+
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
+    }
+
+    /// Get schema of the node.
+    fn schema(&self) -> &SchemaRef {
+        self.eq_properties.schema()
+    }
+}
+
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
 /// Currently there are 3 kinds of execution plan which needs data exchange
@@ -453,9 +626,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
+    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         !matches!(
-            repart.output_partitioning(),
+            repartition.properties().output_partitioning(),
             Partitioning::RoundRobinBatch(_)
         )
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
@@ -530,7 +703,7 @@ pub fn execute_stream(
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(plan.clone());
             // CoalescePartitionsExec must produce a single partition
-            assert_eq!(1, plan.output_partitioning().partition_count());
+            assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
         }
     }
@@ -593,17 +766,6 @@ pub fn execute_stream_partitioned(
         streams.push(plan.execute(i, context.clone())?);
     }
     Ok(streams)
-}
-
-// Get output (un)boundedness information for the given `plan`.
-pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let children_unbounded_output = plan
-        .children()
-        .iter()
-        .map(unbounded_output)
-        .collect::<Vec<_>>();
-    plan.unbounded_output(&children_unbounded_output)
-        .unwrap_or(true)
 }
 
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].

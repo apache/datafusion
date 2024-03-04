@@ -30,13 +30,14 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
+use futures::try_join;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
-use tokio::task::{JoinHandle, JoinSet};
-use tokio::try_join;
+use tokio::task::JoinSet;
 
 type WriterType = AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>;
 type SerializerType = Arc<dyn BatchSerializer>;
@@ -51,14 +52,14 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
-        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
-    let serialize_task = tokio::spawn(async move {
+        mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
+    let serialize_task = SpawnedTask::spawn(async move {
         // Some serializers (like CSV) handle the first batch differently than
         // subsequent batches, so we track that here.
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = serializer.clone();
-            let handle = tokio::spawn(async move {
+            let task = SpawnedTask::spawn(async move {
                 let num_rows = batch.num_rows();
                 let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
@@ -66,7 +67,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
             if initial {
                 initial = false;
             }
-            tx.send(handle).await.map_err(|_| {
+            tx.send(task).await.map_err(|_| {
                 internal_datafusion_err!("Unknown error writing to object store")
             })?;
         }
@@ -74,8 +75,8 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     });
 
     let mut row_count = 0;
-    while let Some(handle) = rx.recv().await {
-        match handle.await {
+    while let Some(task) = rx.recv().await {
+        match task.join().await {
             Ok(Ok((cnt, bytes))) => {
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
@@ -106,7 +107,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         }
     }
 
-    match serialize_task.await {
+    match serialize_task.join().await {
         Ok(Ok(_)) => (),
         Ok(Err(e)) => return Err((writer, e)),
         Err(_) => {
@@ -115,7 +116,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                 internal_datafusion_err!("Unknown error writing to object store"),
             ))
         }
-    };
+    }
     Ok((writer, row_count as u64))
 }
 
@@ -241,9 +242,9 @@ pub(crate) async fn stateless_multipart_put(
         .execution
         .max_buffered_batches_per_output_file;
 
-    let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size / 2);
+    let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
-    let write_coordinater_task = tokio::spawn(async move {
+    let write_coordinator_task = SpawnedTask::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
@@ -260,10 +261,10 @@ pub(crate) async fn stateless_multipart_put(
             })?;
     }
 
-    // Signal to the write coordinater that no more files are coming
+    // Signal to the write coordinator that no more files are coming
     drop(tx_file_bundle);
 
-    match try_join!(write_coordinater_task, demux_task) {
+    match try_join!(write_coordinator_task.join(), demux_task.join()) {
         Ok((r1, r2)) => {
             r1?;
             r2?;

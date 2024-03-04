@@ -38,9 +38,7 @@ use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
 use datafusion_common::hash_utils::HashValue;
-use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use ahash::RandomState;

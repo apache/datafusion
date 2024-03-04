@@ -19,18 +19,12 @@
 
 use std::ops::Not;
 
-use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
-use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
-
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
+
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
@@ -44,6 +38,14 @@ use datafusion_expr::{
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
+use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
+use super::utils::*;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -523,9 +525,13 @@ impl<'a> ConstEvaluator<'a> {
                         DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
                         expr,
                     )
-                } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
+                } else if as_list_array(&a).is_ok() {
                     ConstSimplifyResult::Simplified(ScalarValue::List(
-                        a.as_list().to_owned().into(),
+                        a.as_list::<i32>().to_owned().into(),
+                    ))
+                } else if as_large_list_array(&a).is_ok() {
+                    ConstSimplifyResult::Simplified(ScalarValue::LargeList(
+                        a.as_list::<i64>().to_owned().into(),
                     ))
                 } else {
                     // Non-ListArray
@@ -1231,13 +1237,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
-            }) => simpl_log(args, <&S>::clone(&info))?,
+            }) => simpl_log(args, info)?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
-            }) => simpl_power(args, <&S>::clone(&info))?,
+            }) => simpl_power(args, info)?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
@@ -1331,22 +1337,15 @@ mod tests {
         sync::Arc,
     };
 
-    use super::*;
-    use crate::simplify_expressions::{
-        utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
-        SimplifyContext,
-    };
-    use crate::test::test_table_scan_with_name;
-
-    use arrow::{
-        array::{ArrayRef, Int32Array},
-        datatypes::{DataType, Field, Schema},
-    };
-    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{assert_contains, DFField, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::execution_props::ExecutionProps;
 
-    use chrono::{DateTime, TimeZone, Utc};
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
+
+    use super::*;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -1425,187 +1424,6 @@ mod tests {
             .unwrap();
         let expected = col("i").lt(lit(5));
         assert_eq!(expected, simplifier.simplify(expr).unwrap());
-    }
-
-    // ------------------------------
-    // --- ConstEvaluator tests -----
-    // ------------------------------
-    fn test_evaluate_with_start_time(
-        input_expr: Expr,
-        expected_expr: Expr,
-        date_time: &DateTime<Utc>,
-    ) {
-        let execution_props =
-            ExecutionProps::new().with_query_execution_start_time(*date_time);
-
-        let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
-        let evaluated_expr = input_expr
-            .clone()
-            .rewrite(&mut const_evaluator)
-            .expect("successfully evaluated");
-
-        assert_eq!(
-            evaluated_expr, expected_expr,
-            "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{evaluated_expr}"
-        );
-    }
-
-    fn test_evaluate(input_expr: Expr, expected_expr: Expr) {
-        test_evaluate_with_start_time(input_expr, expected_expr, &Utc::now())
-    }
-
-    // Make a UDF that adds its two values together, with the specified volatility
-    fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
-        let input_types = vec![DataType::Int32, DataType::Int32];
-        let return_type = Arc::new(DataType::Int32);
-
-        let fun = Arc::new(|args: &[ColumnarValue]| {
-            let args = ColumnarValue::values_to_arrays(args)?;
-
-            let arg0 = as_int32_array(&args[0])?;
-            let arg1 = as_int32_array(&args[1])?;
-
-            // 2. perform the computation
-            let array = arg0
-                .iter()
-                .zip(arg1.iter())
-                .map(|args| {
-                    if let (Some(arg0), Some(arg1)) = args {
-                        Some(arg0 + arg1)
-                    } else {
-                        // one or both args were Null
-                        None
-                    }
-                })
-                .collect::<Int32Array>();
-
-            Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
-        });
-
-        Arc::new(create_udf(
-            "udf_add",
-            input_types,
-            return_type,
-            volatility,
-            fun,
-        ))
-    }
-
-    #[test]
-    fn test_const_evaluator() {
-        // true --> true
-        test_evaluate(lit(true), lit(true));
-        // true or true --> true
-        test_evaluate(lit(true).or(lit(true)), lit(true));
-        // true or false --> true
-        test_evaluate(lit(true).or(lit(false)), lit(true));
-
-        // "foo" == "foo" --> true
-        test_evaluate(lit("foo").eq(lit("foo")), lit(true));
-        // "foo" != "foo" --> false
-        test_evaluate(lit("foo").not_eq(lit("foo")), lit(false));
-
-        // c = 1 --> c = 1
-        test_evaluate(col("c").eq(lit(1)), col("c").eq(lit(1)));
-        // c = 1 + 2 --> c + 3
-        test_evaluate(col("c").eq(lit(1) + lit(2)), col("c").eq(lit(3)));
-        // (foo != foo) OR (c = 1) --> false OR (c = 1)
-        test_evaluate(
-            (lit("foo").not_eq(lit("foo"))).or(col("c").eq(lit(1))),
-            lit(false).or(col("c").eq(lit(1))),
-        );
-    }
-
-    #[test]
-    fn test_const_evaluator_scalar_functions() {
-        // concat("foo", "bar") --> "foobar"
-        let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
-        test_evaluate(expr, lit("foobar"));
-
-        // ensure arguments are also constant folded
-        // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-        let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
-        let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
-        test_evaluate(expr, lit("foobarbaz"));
-
-        // Check non string arguments
-        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400i64)
-        let expr =
-            call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
-        test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
-
-        // check that non foldable arguments are folded
-        // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
-        test_evaluate(expr.clone(), expr);
-
-        // volatile / stable functions should not be evaluated
-        // rand() + (1 + 2) --> rand() + 3
-        let fun = BuiltinScalarFunction::Random;
-        assert_eq!(fun.volatility(), Volatility::Volatile);
-        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
-        let expr = rand.clone() + (lit(1) + lit(2));
-        let expected = rand + lit(3);
-        test_evaluate(expr, expected);
-
-        // parenthesization matters: can't rewrite
-        // (rand() + 1) + 2 --> (rand() + 1) + 2)
-        let fun = BuiltinScalarFunction::Random;
-        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
-        let expr = (rand + lit(1)) + lit(2);
-        test_evaluate(expr.clone(), expr);
-    }
-
-    #[test]
-    fn test_const_evaluator_now() {
-        let ts_nanos = 1599566400000000000i64;
-        let time = chrono::Utc.timestamp_nanos(ts_nanos);
-        let ts_string = "2020-09-08T12:05:00+00:00";
-        // now() --> ts
-        test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
-
-        // CAST(now() as int64) + 100_i64 --> ts + 100_i64
-        let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
-        test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
-
-        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
-        let expr = cast_to_int64_expr(now_expr())
-            .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
-        test_evaluate_with_start_time(expr, lit(true), &time);
-    }
-
-    #[test]
-    fn test_evaluator_udfs() {
-        let args = vec![lit(1) + lit(2), lit(30) + lit(40)];
-        let folded_args = vec![lit(3), lit(70)];
-
-        // immutable UDF should get folded
-        // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            make_udf_add(Volatility::Immutable),
-            args.clone(),
-        ));
-        test_evaluate(expr, lit(73));
-
-        // stable UDF should be entirely folded
-        // udf_add(1+2, 30+40) --> 73
-        let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            Arc::clone(&fun),
-            args.clone(),
-        ));
-        test_evaluate(expr, lit(73));
-
-        // volatile UDF should have args folded
-        // udf_add(1+2, 30+40) --> udf_add(3, 70)
-        let fun = make_udf_add(Volatility::Volatile);
-        let expr =
-            Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
-        let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            Arc::clone(&fun),
-            folded_args,
-        ));
-        test_evaluate(expr, expected_expr);
     }
 
     // ------------------------------

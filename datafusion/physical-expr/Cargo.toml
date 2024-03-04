@@ -58,14 +58,14 @@ base64 = { version = "0.21", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-half = { version = "2.1", default-features = false }
+half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 hex = { version = "0.4", optional = true }
 indexmap = { workspace = true }
-itertools = { version = "0.12", features = ["use_std"] }
+itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
 paste = "^1.0"
@@ -89,10 +89,6 @@ name = "in_list"
 [[bench]]
 harness = false
 name = "make_date"
-
-[[bench]]
-harness = false
-name = "to_timestamp"
 
 [[bench]]
 harness = false

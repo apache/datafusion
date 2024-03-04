@@ -20,6 +20,7 @@
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use std::{any::Any, sync::Arc};
 
 use arrow::{
@@ -78,7 +79,10 @@ struct InformationSchemaConfig {
 
 impl InformationSchemaConfig {
     /// Construct the `information_schema.tables` virtual table
-    async fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
+    async fn make_tables(
+        &self,
+        builder: &mut InformationSchemaTablesBuilder,
+    ) -> Result<(), DataFusionError> {
         // create a mem table with the names of tables
 
         for catalog_name in self.catalog_list.catalog_names() {
@@ -89,7 +93,7 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await {
+                            if let Some(table) = schema.table(&table_name).await? {
                                 builder.add_table(
                                     &catalog_name,
                                     &schema_name,
@@ -124,6 +128,8 @@ impl InformationSchemaConfig {
                 TableType::View,
             );
         }
+
+        Ok(())
     }
 
     async fn make_schemata(&self, builder: &mut InformationSchemataBuilder) {
@@ -141,7 +147,10 @@ impl InformationSchemaConfig {
         }
     }
 
-    async fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
+    async fn make_views(
+        &self,
+        builder: &mut InformationSchemaViewBuilder,
+    ) -> Result<(), DataFusionError> {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -150,7 +159,7 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await {
+                            if let Some(table) = schema.table(&table_name).await? {
                                 builder.add_view(
                                     &catalog_name,
                                     &schema_name,
@@ -163,10 +172,15 @@ impl InformationSchemaConfig {
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Construct the `information_schema.columns` virtual table
-    async fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
+    async fn make_columns(
+        &self,
+        builder: &mut InformationSchemaColumnsBuilder,
+    ) -> Result<(), DataFusionError> {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -175,7 +189,7 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await {
+                            if let Some(table) = schema.table(&table_name).await? {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
                                 {
@@ -193,6 +207,8 @@ impl InformationSchemaConfig {
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Construct the `information_schema.df_settings` virtual table
@@ -223,7 +239,10 @@ impl SchemaProvider for InformationSchemaProvider {
         ]
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         let config = self.config.clone();
         let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
             Arc::new(InformationSchemaTables::new(config))
@@ -236,12 +255,12 @@ impl SchemaProvider for InformationSchemaProvider {
         } else if name.eq_ignore_ascii_case("schemata") {
             Arc::new(InformationSchemata::new(config))
         } else {
-            return None;
+            return Ok(None);
         };
 
-        Some(Arc::new(
+        Ok(Some(Arc::new(
             StreamingTable::try_new(table.schema().clone(), vec![table]).unwrap(),
-        ))
+        )))
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -292,7 +311,7 @@ impl PartitionStream for InformationSchemaTables {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_tables(&mut builder).await;
+                config.make_tables(&mut builder).await?;
                 Ok(builder.finish())
             }),
         ))
@@ -383,7 +402,7 @@ impl PartitionStream for InformationSchemaViews {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_views(&mut builder).await;
+                config.make_views(&mut builder).await?;
                 Ok(builder.finish())
             }),
         ))
@@ -497,7 +516,7 @@ impl PartitionStream for InformationSchemaColumns {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_columns(&mut builder).await;
+                config.make_columns(&mut builder).await?;
                 Ok(builder.finish())
             }),
         ))

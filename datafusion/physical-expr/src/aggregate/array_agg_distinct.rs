@@ -188,7 +188,7 @@ mod tests {
     use arrow_array::Array;
     use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
-    use datafusion_common::{internal_err, DataFusionError};
+    use datafusion_common::internal_err;
 
     // arrow::compute::sort can't sort nested ListArray directly, so we compare the scalar values pair-wise.
     fn compare_list_contents(

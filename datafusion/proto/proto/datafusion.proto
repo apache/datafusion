@@ -1,4 +1,5 @@
 /*
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -327,6 +328,7 @@ message CopyToNode {
         FileTypeWriterOptions writer_options = 5;
     }
     string file_type = 6;
+    repeated string partition_by = 7;
 }
 
 message SQLOptions {
@@ -544,9 +546,11 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs = 0;
-  Acos = 1;
-  Asin = 2;
+  //  0 was Abs before
+  //  The first enum value must be zero for open enums
+  unknown = 0;
+  //  1 was Acos
+  //  2 was Asin
   Atan = 3;
   Ascii = 4;
   Ceil = 5;
@@ -565,7 +569,7 @@ enum ScalarFunction {
   Tan = 18;
   Trunc = 19;
   Array = 20;
-  RegexpMatch = 21;
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;
@@ -599,10 +603,10 @@ enum ScalarFunction {
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
   Now = 59;
   Translate = 60;
   Trim = 61;
@@ -632,17 +636,17 @@ enum ScalarFunction {
   Gcd = 85;
   ArrayAppend = 86;
   ArrayConcat = 87;
-  ArrayDims = 88;
+  // 88 was ArrayDims
   ArrayRepeat = 89;
   ArrayLength = 90;
-  ArrayNdims = 91;
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
   // 97 was ArrayToString
-  Cardinality = 98;
+  // 98 was Cardinality
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
@@ -660,11 +664,11 @@ enum ScalarFunction {
   ArrayEmpty = 115;
   ArrayPopBack = 116;
   StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Range = 122;
+  /// 122 is Range
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;
@@ -674,11 +678,12 @@ enum ScalarFunction {
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
-  InStr = 132;
+  /// 132 was InStr
   MakeDate = 133;
   ArrayReverse = 134;
   RegexpLike = 135;
   ToChar = 136;
+  /// 137 was ToDate
 }
 
 message ScalarFunctionNode {
@@ -746,6 +751,7 @@ message AggregateUDFExprNode {
 message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
 }
 
 enum BuiltInWindowFunction {

@@ -941,6 +941,25 @@ select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integ
 NaN 10 NaN
 NaN 100 NaN
 
+# sqrt scalar fraction
+query RR rowsort
+select sqrt(1.4), sqrt(2.0/3);
+----
+1.18321595662 0.816496580928
+
+# sqrt scalar cast
+query R rowsort
+select sqrt(cast(10e8 as double));
+----
+31622.776601683792
+
+
+# sqrt scalar negative
+query R rowsort
+select sqrt(-1);
+----
+NaN
+
 ## tan
 
 # tan scalar function
@@ -1858,7 +1877,7 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error DataFusion error: Failed to coerce arguments for NULLIF
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.
 SELECT nullif(1);
 
 
@@ -1873,6 +1892,16 @@ SELECT arrow_typeof(1, 1);
 # error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
 statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
 SELECT power(1, 2, 3);
+
+# The following functions need 1 argument
+statement error Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+SELECT abs();
+
+statement error Error during planning: No function matches the given name and argument types 'acos\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tacos\(Float64/Float32\)
+SELECT acos();
+
+statement error Error during planning: No function matches the given name and argument types 'isnan\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tisnan\(Float32\)\n\tisnan\(Float64\)
+SELECT isnan();
 
 # turn off enable_ident_normalization
 statement ok
@@ -2013,5 +2042,5 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The INSTR/POSITION function can only accept strings, but got Int64.
+query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)

@@ -28,13 +28,14 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::Schema;
+
+use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_expr::AggregateFunction;
+
 use crate::aggregate::regr::RegrType;
 use crate::expressions::{self, Literal};
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-
-use arrow::datatypes::Schema;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::AggregateFunction;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -379,9 +380,7 @@ pub fn create_aggregate_expr(
                 .downcast_ref::<Literal>()
                 .map(|literal| literal.value())
             else {
-                return internal_err!(
-                    "Second argument of NTH_VALUE needs to be a literal"
-                );
+                return exec_err!("Second argument of NTH_VALUE needs to be a literal");
             };
             let nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::NthValueAgg::new(
@@ -415,17 +414,19 @@ pub fn create_aggregate_expr(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use arrow::datatypes::{DataType, Field};
+
+    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
+    use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_expr::{type_coercion, Signature};
+
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Correlation, Count, Covariance,
         DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
 
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{plan_err, ScalarValue};
-    use datafusion_expr::type_coercion::aggregates::NUMERICS;
-    use datafusion_expr::{type_coercion, Signature};
+    use super::*;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

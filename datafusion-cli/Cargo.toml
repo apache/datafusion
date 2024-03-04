@@ -38,6 +38,7 @@ clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "36.0.0", features = [
     "avro",
     "crypto_expressions",
+    "datetime_expressions",
     "encoding_expressions",
     "parquet",
     "regex_expressions",
