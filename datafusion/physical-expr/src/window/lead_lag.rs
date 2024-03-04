@@ -310,7 +310,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
             // Find the nonNULL row index that shifted by offset comparing to current row index
             idx = if self.non_null_offsets.len() >= non_null_row_count {
-                let total_offset: usize = self.non_null_offsets.iter().take(non_null_row_count).sum();
+                let total_offset: usize =
+                    self.non_null_offsets.iter().take(non_null_row_count).sum();
                 (range.start + total_offset) as i64
             } else {
                 -1
