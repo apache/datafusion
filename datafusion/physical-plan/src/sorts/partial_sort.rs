@@ -73,7 +73,8 @@ use datafusion_common::Result;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
-use futures::{ready, Stream, StreamExt};
+use crate::stream::RecordBatchStreamAdapter;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 use log::trace;
 
 /// Partial Sort execution plan.
@@ -272,7 +273,7 @@ impl ExecutionPlan for PartialSortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let input = self.input.execute(partition, context.clone())?;
+        let mut input = self.input.execute(partition, context.clone())?;
 
         trace!(
             "End PartialSortExec's input.execute for partition: {}",
@@ -282,16 +283,31 @@ impl ExecutionPlan for PartialSortExec {
         // Make sure common prefix length is larger than 0
         // Otherwise, we should use SortExec.
         assert!(self.common_prefix_length > 0);
+        let execution_options = &context.session_config().options().execution;
 
-        Ok(Box::pin(PartialSortStream {
-            input,
-            expr: self.expr.clone(),
-            common_prefix_length: self.common_prefix_length,
-            in_mem_batches: vec![],
-            fetch: self.fetch,
-            is_closed: false,
-            baseline_metrics: BaselineMetrics::new(&self.metrics_set, partition),
-        }))
+        let mut sorter = crate::sorts::sort::ExternalSorter::new(
+            partition,
+            input.schema(),
+            self.expr.clone(),
+            context.session_config().batch_size(),
+            self.fetch,
+            execution_options.sort_spill_reservation_bytes,
+            execution_options.sort_in_place_threshold_bytes,
+            &self.metrics_set,
+            context.runtime_env(),
+        );
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            futures::stream::once(async move {
+                while let Some(batch) = input.next().await {
+                    let batch = batch?;
+                    sorter.insert_batch(batch).await?;
+                }
+                sorter.sort()
+            })
+            .try_flatten(),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

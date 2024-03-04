@@ -197,7 +197,7 @@ impl ExternalSorterMetrics {
 ///
 ///  in_mem_batches
 /// ```
-struct ExternalSorter {
+pub(crate) struct ExternalSorter {
     /// schema of the output (and the input)
     schema: SchemaRef,
     /// Potentially unsorted in memory buffer
@@ -277,7 +277,7 @@ impl ExternalSorter {
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
     /// Updates memory usage metrics, and possibly triggers spilling to disk
-    async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
+    pub(crate) async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
         }
@@ -322,7 +322,7 @@ impl ExternalSorter {
     ///
     /// 2. A combined streaming merge incorporating both in-memory
     /// batches and data from spill files on disk.
-    fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    pub(crate) fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             let mut streams = vec![];
             if !self.in_mem_batches.is_empty() {
