@@ -3214,7 +3214,7 @@ JOIN sales_global AS e
   ON s.currency = e.currency AND
   s.ts >= e.ts
 GROUP BY s.sn, s.zip_code, s.country, s.ts, s.currency
-ORDER BY s.sn
+ORDER BY s.sn, s.zip_code
 ----
 0 GRC 0 2022-01-01T06:00:00 EUR 30
 0 GRC 4 2022-01-03T10:00:00 EUR 80

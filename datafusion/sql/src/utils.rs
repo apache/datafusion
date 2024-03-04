@@ -17,34 +17,36 @@
 
 //! SQL Utility Functions
 
+use std::collections::HashMap;
+
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use sqlparser::ast::Ident;
-
-use datafusion_common::{exec_err, internal_err, plan_err};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    exec_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
-use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{Expr, LogicalPlan};
-use std::collections::HashMap;
+use datafusion_expr::{expr_vec_fmt, Expr, LogicalPlan};
+use sqlparser::ast::Ident;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
-    expr.clone().transform_up(&|nested_expr| {
-        match nested_expr {
-            Expr::Column(col) => {
-                let field = plan.schema().field_from_column(&col)?;
-                Ok(Transformed::Yes(Expr::Column(field.qualified_column())))
+    expr.clone()
+        .transform_up(&|nested_expr| {
+            match nested_expr {
+                Expr::Column(col) => {
+                    let field = plan.schema().field_from_column(&col)?;
+                    Ok(Transformed::yes(Expr::Column(field.qualified_column())))
+                }
+                _ => {
+                    // keep recursing
+                    Ok(Transformed::no(nested_expr))
+                }
             }
-            _ => {
-                // keep recursing
-                Ok(Transformed::No(nested_expr))
-            }
-        }
-    })
+        })
+        .data()
 }
 
 /// Rebuilds an `Expr` as a projection on top of a collection of `Expr`'s.
@@ -66,13 +68,15 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
-    expr.clone().transform_down(&|nested_expr| {
-        if base_exprs.contains(&nested_expr) {
-            Ok(Transformed::Yes(expr_as_column_expr(&nested_expr, plan)?))
-        } else {
-            Ok(Transformed::No(nested_expr))
-        }
-    })
+    expr.clone()
+        .transform_down(&|nested_expr| {
+            if base_exprs.contains(&nested_expr) {
+                Ok(Transformed::yes(expr_as_column_expr(&nested_expr, plan)?))
+            } else {
+                Ok(Transformed::no(nested_expr))
+            }
+        })
+        .data()
 }
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
@@ -170,16 +174,18 @@ pub(crate) fn resolve_aliases_to_exprs(
     expr: &Expr,
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    expr.clone().transform_up(&|nested_expr| match nested_expr {
-        Expr::Column(c) if c.relation.is_none() => {
-            if let Some(aliased_expr) = aliases.get(&c.name) {
-                Ok(Transformed::Yes(aliased_expr.clone()))
-            } else {
-                Ok(Transformed::No(Expr::Column(c)))
+    expr.clone()
+        .transform_up(&|nested_expr| match nested_expr {
+            Expr::Column(c) if c.relation.is_none() => {
+                if let Some(aliased_expr) = aliases.get(&c.name) {
+                    Ok(Transformed::yes(aliased_expr.clone()))
+                } else {
+                    Ok(Transformed::no(Expr::Column(c)))
+                }
             }
-        }
-        _ => Ok(Transformed::No(nested_expr)),
-    })
+            _ => Ok(Transformed::no(nested_expr)),
+        })
+        .data()
 }
 
 /// given a slice of window expressions sharing the same sort key, find their common partition
