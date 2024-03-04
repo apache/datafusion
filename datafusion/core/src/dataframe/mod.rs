@@ -1510,6 +1510,7 @@ mod tests {
     use arrow::array::{self, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_common::{Constraint, Constraints};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
@@ -2169,15 +2170,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::disallowed_methods)]
     async fn sendable() {
         let df = test_table().await.unwrap();
         // dataframes should be sendable between threads/tasks
-        let task = tokio::task::spawn(async move {
+        let task = SpawnedTask::spawn(async move {
             df.select_columns(&["c1"])
                 .expect("should be usable in a task")
         });
-        task.await.expect("task completed successfully");
+        task.join().await.expect("task completed successfully");
     }
 
     #[tokio::test]

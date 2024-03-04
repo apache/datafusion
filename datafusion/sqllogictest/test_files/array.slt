@@ -861,11 +861,32 @@ select make_array(1, 2, 3)[1:2], make_array(1.0, 2.0, 3.0)[2:3], make_array('h',
 ----
 [1, 2] [2.0, 3.0] [e, l, l]
 
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1:2],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[2:3],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[2:4]
+;
+----
+[1, 2] [2, 3] [e, l, l]
+
 # multiple index with columns #2 (zero index)
 query ???
 select make_array(1, 2, 3)[0:0], make_array(1.0, 2.0, 3.0)[0:2], make_array('h', 'e', 'l', 'l', 'o')[0:6];
 ----
 [] [1.0, 2.0] [h, e, l, l, o]
+
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[0:0],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[0:2],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[0:6]
+;
+----
+[] [1, 2] [h, e, l, l, o]
+
+query I
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
+----
+1
 
 # TODO: support multiple negative index
 # multiple index with columns #3 (negative index)

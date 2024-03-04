@@ -541,9 +541,13 @@ impl<'a> ConstEvaluator<'a> {
                         DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
                         expr,
                     )
-                } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
+                } else if as_list_array(&a).is_ok() {
                     ConstSimplifyResult::Simplified(ScalarValue::List(
-                        a.as_list().to_owned().into(),
+                        a.as_list::<i32>().to_owned().into(),
+                    ))
+                } else if as_large_list_array(&a).is_ok() {
+                    ConstSimplifyResult::Simplified(ScalarValue::LargeList(
+                        a.as_list::<i64>().to_owned().into(),
                     ))
                 } else {
                     // Non-ListArray
@@ -1269,13 +1273,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Log),
                 args,
-            }) => Transformed::yes(simpl_log(args, <&S>::clone(&info))?),
+            }) => Transformed::yes(simpl_log(args, info)?),
 
             // power
             Expr::ScalarFunction(ScalarFunction {
                 func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Power),
                 args,
-            }) => Transformed::yes(simpl_power(args, <&S>::clone(&info))?),
+            }) => Transformed::yes(simpl_power(args, info)?),
 
             // concat
             Expr::ScalarFunction(ScalarFunction {

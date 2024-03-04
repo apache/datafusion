@@ -832,12 +832,7 @@ initcap(str)
 
 ### `instr`
 
-Returns the location where substr first appeared in str (counting from 1).
-If substr does not appear in str, return 0.
-
-```
-instr(str, substr)
-```
+_Alias of [strpos](#strpos)._
 
 #### Arguments
 
@@ -1107,6 +1102,10 @@ strpos(str, substr)
   Can be a constant, column, or function, and any combination of string operators.
 - **substr**: Substring expression to search for.
   Can be a constant, column, or function, and any combination of string operators.
+
+#### Aliases
+
+- instr
 
 ### `substr`
 
@@ -1440,7 +1439,8 @@ Additional examples can be found [here](https://github.com/apache/arrow-datafusi
 
 ### `position`
 
-Returns the position of substr in orig_str
+Returns the position of `substr` in `origstr` (counting from 1). If `substr` does
+not appear in `origstr`, return 0.
 
 ```
 position(substr in origstr)
@@ -1448,7 +1448,7 @@ position(substr in origstr)
 
 #### Arguments
 
-- **substr**: he pattern string.
+- **substr**: The pattern string.
 - **origstr**: The model string.
 
 ## Time and Date Functions

@@ -283,26 +283,6 @@ async fn test_fn_initcap() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fn_instr() -> Result<()> {
-    let expr = instr(col("a"), lit("b"));
-
-    let expected = [
-        "+-------------------------+",
-        "| instr(test.a,Utf8(\"b\")) |",
-        "+-------------------------+",
-        "| 2                       |",
-        "| 2                       |",
-        "| 0                       |",
-        "| 5                       |",
-        "+-------------------------+",
-    ];
-
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_left() -> Result<()> {
     let expr = left(col("a"), lit(3));
