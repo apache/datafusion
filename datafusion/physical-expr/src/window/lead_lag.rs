@@ -121,6 +121,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             default_value: self.default_value.clone(),
             ignore_nulls: self.ignore_nulls,
             non_null_offsets: VecDeque::new(),
+            curr_valid_idx: 0,
         }))
     }
 
@@ -143,6 +144,8 @@ pub(crate) struct WindowShiftEvaluator {
     ignore_nulls: bool,
     // VecDeque contains offset values that between non-null entries
     non_null_offsets: VecDeque<usize>,
+    // Current idx pointing to non null value
+    curr_valid_idx: i64,
 }
 
 impl WindowShiftEvaluator {
@@ -270,10 +273,22 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 self.non_null_offsets[end_idx] += 1;
             }
         } else if self.ignore_nulls && !self.is_lag() {
-            // IGNORE NULLS and LEAD mode.
-            return Err(exec_datafusion_err!(
-                "IGNORE NULLS mode for LEAD is not supported for BoundedWindowAggExec"
-            ));
+            if self.non_null_offsets.is_empty() {
+                self.non_null_offsets
+                    .extend(array.nulls().unwrap().valid_indices().collect::<Vec<_>>());
+            }
+            if range.start == 0 && array.is_valid(0) {
+                self.curr_valid_idx = -self.shift_offset - 1;
+            }
+            let idx0 = self.non_null_offsets.get(self.curr_valid_idx as usize);
+            if idx0.is_some() && range.start == *idx0.unwrap() {
+                self.curr_valid_idx += 1;
+            }
+            idx = self
+                .non_null_offsets
+                .get((self.curr_valid_idx - self.shift_offset - 1) as usize)
+                .map(|v| *v as i64)
+                .unwrap_or(-1);
         }
 
         // Set the default value if
