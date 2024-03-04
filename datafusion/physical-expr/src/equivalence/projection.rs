@@ -283,7 +283,7 @@ mod tests {
                 // orderings
                 vec![
                     // [a + b ASC, c ASC]
-                    vec![(&a_plus_b, option_asc), (&col_c, option_asc)],
+                    vec![(&a_plus_b, option_asc), (col_c, option_asc)],
                 ],
                 // projection exprs
                 vec![
@@ -546,7 +546,7 @@ mod tests {
                     vec![
                         (col_a, option_asc),
                         (col_c, option_asc),
-                        (&col_b, option_asc),
+                        (col_b, option_asc),
                     ],
                 ],
                 // proj exprs
@@ -805,7 +805,7 @@ mod tests {
                     // [a+b ASC, round(c) ASC, c_new ASC]
                     vec![
                         (&a_new_plus_b_new, option_asc),
-                        (&col_round_c_res, option_asc),
+                        (col_round_c_res, option_asc),
                     ],
                     // [a+b ASC, c_new ASC]
                     vec![(&a_new_plus_b_new, option_asc), (col_c_new, option_asc)],

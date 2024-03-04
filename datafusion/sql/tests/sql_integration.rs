@@ -2881,11 +2881,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.udfs.get(name).map(Arc::clone)
+        self.udfs.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).map(Arc::clone)
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
