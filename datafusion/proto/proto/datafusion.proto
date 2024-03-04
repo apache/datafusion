@@ -587,7 +587,7 @@ enum ScalarFunction {
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
-  RegexpReplace = 39;
+  // 39 was RegexpReplace
   Repeat = 40;
   Replace = 41;
   Reverse = 42;

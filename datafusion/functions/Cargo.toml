@@ -58,7 +58,8 @@ datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
-
+regex = { version = "1.8"}
+datafusion-physical-expr = { workspace = true, default-features = true }
 [dev-dependencies]
 criterion = "0.5"
 rand = { workspace = true }

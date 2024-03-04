@@ -158,7 +158,7 @@ macro_rules! invoke_if_unicode_expressions_feature_flag {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Hint {
+pub enum Hint {
     /// Indicates the argument needs to be padded if it is scalar
     Pad,
     /// Indicates the argument can be converted to an array of length 1
@@ -552,31 +552,6 @@ pub fn create_physical_fun(
                 _ => unreachable!(),
             },
         }),
-        BuiltinScalarFunction::RegexpReplace => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
-                        specialize_regexp_replace,
-                        i32,
-                        "regexp_replace"
-                    );
-                    let func = specializer_func(args)?;
-                    func(args)
-                }
-                DataType::LargeUtf8 => {
-                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
-                        specialize_regexp_replace,
-                        i64,
-                        "regexp_replace"
-                    );
-                    let func = specializer_func(args)?;
-                    func(args)
-                }
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function regexp_replace"
-                ),
-            })
-        }
         BuiltinScalarFunction::Repeat => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::repeat::<i32>)(args)

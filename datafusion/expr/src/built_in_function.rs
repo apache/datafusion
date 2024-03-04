@@ -218,9 +218,6 @@ pub enum BuiltinScalarFunction {
     OctetLength,
     /// random
     Random,
-    /// regexp_match
-    /// regexp_replace
-    RegexpReplace,
     /// repeat
     Repeat,
     /// replace
@@ -417,7 +414,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
             BuiltinScalarFunction::Reverse => Volatility::Immutable,
@@ -674,9 +670,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
-            BuiltinScalarFunction::RegexpReplace => {
-                utf8_to_str_type(&input_expr_types[0], "regexp_replace")
-            }
             BuiltinScalarFunction::Repeat => {
                 utf8_to_str_type(&input_expr_types[0], "repeat")
             }
@@ -1161,14 +1154,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
-            BuiltinScalarFunction::RegexpReplace => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                ],
-                self.volatility(),
-            ),
-
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
@@ -1397,9 +1382,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-
-            // regex functions
-            BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
             // time/date functions
             BuiltinScalarFunction::Now => &["now"],

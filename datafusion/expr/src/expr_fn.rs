@@ -823,11 +823,6 @@ nary_scalar_expr!(
     "fill up a string to the length by appending the characters"
 );
 nary_scalar_expr!(
-    RegexpReplace,
-    regexp_replace,
-    "replace strings that match a regular expression"
-);
-nary_scalar_expr!(
     Btrim,
     btrim,
     "removes all characters, spaces by default, from both sides of a string"
