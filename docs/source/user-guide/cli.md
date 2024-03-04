@@ -55,7 +55,7 @@ DataFusion CLI can also be installed via PyPI. You can check how to install PyPI
 Install it as any other pre-built software like this:
 
 ```bash
-pip3 install datafusion
+pip3 install datafusion-cli
 # Defaulting to user installation because normal site-packages is not writeable
 # Collecting datafusion
 #   Downloading datafusion-33.0.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (9.6 kB)
