@@ -4251,10 +4251,9 @@ LIMIT 5;
 24 31
 14 94
 
-# result should be same with above, when lag algorithm work with pruned data.
+# result should be same with above, when lag/lead algorithm work with pruned data.
 # decreasing batch size, causes data to be produced in smaller chunks at the source.
 # Hence sliding window algorithm is used during calculations.
-# LEAD function to be added, there is some bug with incoming data array when LEAD is called
 statement ok
 set datafusion.execution.batch_size = 1;
 
