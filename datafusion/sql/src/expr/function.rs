@@ -258,10 +258,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FunctionArg::Named {
                 name: _,
                 arg: FunctionArgExpr::Expr(arg),
+                operator: _,
             } => self.sql_expr_to_logical_expr(arg, schema, planner_context),
             FunctionArg::Named {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
+                operator: _,
             } => Ok(Expr::Wildcard { qualifier: None }),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
