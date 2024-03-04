@@ -20,7 +20,8 @@
 use crate::expr::{Alias, Sort};
 use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
@@ -91,7 +92,7 @@ fn rewrite_in_terms_of_projection(
                     .to_field(input.schema())
                     .map(|f| f.qualified_column())?,
             );
-            return Ok(Transformed::Yes(col));
+            return Ok(Transformed::yes(col));
         }
 
         // if that doesn't work, try to match the expression as an
@@ -103,7 +104,7 @@ fn rewrite_in_terms_of_projection(
             e
         } else {
             // The expr is not based on Aggregate plan output. Skip it.
-            return Ok(Transformed::No(expr));
+            return Ok(Transformed::no(expr));
         };
 
         // expr is an actual expr like min(t.c2), but we are looking
@@ -118,7 +119,7 @@ fn rewrite_in_terms_of_projection(
         // look for the column named the same as this expr
         if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {
             let found = found.clone();
-            return Ok(Transformed::Yes(match normalized_expr {
+            return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
                     expr: Box::new(found),
                     data_type,
@@ -131,8 +132,9 @@ fn rewrite_in_terms_of_projection(
             }));
         }
 
-        Ok(Transformed::No(expr))
+        Ok(Transformed::no(expr))
     })
+    .data()
 }
 
 /// Does the underlying expr match e?
