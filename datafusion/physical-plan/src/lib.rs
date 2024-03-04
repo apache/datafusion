@@ -341,7 +341,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ## Lazily (async) create a Stream
     ///
-    /// If you need to to create the return `Stream` using an `async` function,
+    /// If you need to create the return `Stream` using an `async` function,
     /// you can do so by flattening the result:
     ///
     /// ```

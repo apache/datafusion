@@ -118,7 +118,7 @@ pub struct MockExec {
     /// the results to send back
     data: Vec<Result<RecordBatch>>,
     schema: SchemaRef,
-    /// if true (the default), sends data using a separate task to to ensure the
+    /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
     cache: PlanProperties,
