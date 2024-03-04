@@ -17,16 +17,18 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use std::collections::{BTreeSet, HashMap};
+
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFSchemaRef};
-use datafusion_common::{DFSchema, Result};
+
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::is_volatile;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
+
 use log::{debug, trace};
-use std::collections::{BTreeSet, HashMap};
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -101,9 +103,9 @@ pub(crate) fn is_volatile_expression(e: &Expr) -> Result<bool> {
     e.apply(&mut |expr| {
         Ok(if is_volatile(expr)? {
             is_volatile_expr = true;
-            VisitRecursion::Stop
+            TreeNodeRecursion::Stop
         } else {
-            VisitRecursion::Continue
+            TreeNodeRecursion::Continue
         })
     })?;
     Ok(is_volatile_expr)

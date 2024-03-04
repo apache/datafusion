@@ -45,7 +45,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -197,22 +197,25 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new_default(plan);
-            let adjusted =
-                plan_requirements.transform_down(&adjust_input_keys_ordering)?;
+            let adjusted = plan_requirements
+                .transform_down(&adjust_input_keys_ordering)
+                .data()?;
             adjusted.plan
         } else {
             // Run a bottom-up process
             plan.transform_up(&|plan| {
-                Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-            })?
+                Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
+            })
+            .data()?
         };
 
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
-        let distribution_context =
-            distribution_context.transform_up(&|distribution_context| {
+        let distribution_context = distribution_context
+            .transform_up(&|distribution_context| {
                 ensure_distribution(distribution_context, config)
-            })?;
+            })
+            .data()?;
         Ok(distribution_context.plan)
     }
 
@@ -306,7 +309,7 @@ fn adjust_input_keys_ordering(
                     vec![],
                     &join_constructor,
                 )
-                .map(Transformed::Yes);
+                .map(Transformed::yes);
             }
             PartitionMode::CollectLeft => {
                 // Push down requirements to the right side
@@ -370,18 +373,18 @@ fn adjust_input_keys_ordering(
             sort_options.clone(),
             &join_constructor,
         )
-        .map(Transformed::Yes);
+        .map(Transformed::yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
             if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
-                    .map(Transformed::Yes);
+                    .map(Transformed::yes);
             } else {
                 requirements.data.clear();
             }
         } else {
             // Keep everything unchanged
-            return Ok(Transformed::No(requirements));
+            return Ok(Transformed::no(requirements));
         }
     } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
@@ -409,7 +412,7 @@ fn adjust_input_keys_ordering(
             child.data = requirements.data.clone();
         }
     }
-    Ok(Transformed::Yes(requirements))
+    Ok(Transformed::yes(requirements))
 }
 
 fn reorder_partitioned_join_keys<F>(
@@ -1057,7 +1060,7 @@ fn ensure_distribution(
     let dist_context = update_children(dist_context)?;
 
     if dist_context.plan.children().is_empty() {
-        return Ok(Transformed::No(dist_context));
+        return Ok(Transformed::no(dist_context));
     }
 
     let target_partitions = config.execution.target_partitions;
@@ -1237,7 +1240,7 @@ fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
-    Ok(Transformed::Yes(DistributionContext::new(
+    Ok(Transformed::yes(DistributionContext::new(
         plan, data, children,
     )))
 }
@@ -1323,6 +1326,7 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
@@ -1716,7 +1720,7 @@ pub(crate) mod tests {
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
         config.optimizer.prefer_existing_sort = prefer_existing_sort;
-        ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
+        ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
     }
 
     /// Test whether plan matches with expected plan
@@ -1785,14 +1789,16 @@ pub(crate) mod tests {
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
                         .transform_down(&adjust_input_keys_ordering)
+                        .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
                 } else {
                     // Run reorder_join_keys_to_inputs rule
                     $PLAN.clone().transform_up(&|plan| {
-                        Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-                    })?
+                        Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
+                    })
+                    .data()?
                 };
 
                 // Then run ensure_distribution rule
@@ -1800,6 +1806,7 @@ pub(crate) mod tests {
                     .transform_up(&|distribution_context| {
                         ensure_distribution(distribution_context, &config)
                     })
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }

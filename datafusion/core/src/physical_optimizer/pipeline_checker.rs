@@ -28,7 +28,7 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::plan_err;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 
@@ -51,6 +51,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -82,7 +83,7 @@ pub fn check_finiteness_requirements(
             input
         )
     } else {
-        Ok(Transformed::No(input))
+        Ok(Transformed::no(input))
     }
 }
 
