@@ -459,7 +459,7 @@ mod tests {
                 vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
                 Some(vec![
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00".into())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+TZ".into())),
                     DataType::Timestamp(TimeUnit::Nanosecond, Some("+01".into())),
                 ]),
             ),
