@@ -79,7 +79,7 @@ mod tests {
     use std::sync::Arc;
 
     use object_store::local::LocalFileSystem;
-    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
