@@ -400,7 +400,7 @@ AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
 --CoalesceBatchesExec: target_batch_size=8192
 ----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 ------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
---------MemoryExec: partitions=4, partition_sizes=[1, 1, 2, 1]
+--------MemoryExec: partitions=4, partition_sizes=[1, 2, 1, 1]
 
 query I
 SELECT i FROM t1000 ORDER BY i DESC LIMIT 3;
