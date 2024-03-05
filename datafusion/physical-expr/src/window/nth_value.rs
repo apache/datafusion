@@ -149,7 +149,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
             expr: self.expr.clone(),
             data_type: self.data_type.clone(),
             kind: reversed_kind,
-            ignore_nulls: self.ignore_nulls.clone(),
+            ignore_nulls: self.ignore_nulls,
         }))
     }
 }
