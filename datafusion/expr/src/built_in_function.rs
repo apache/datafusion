@@ -247,10 +247,6 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// to_hex
     ToHex,
-    /// from_unixtime
-    FromUnixtime,
-    ///now
-    Now,
     ///current_date
     CurrentDate,
     /// current_time
@@ -432,7 +428,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
-            BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
@@ -440,7 +435,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Stable builtin functions
-            BuiltinScalarFunction::Now => Volatility::Stable,
             BuiltinScalarFunction::CurrentDate => Volatility::Stable,
             BuiltinScalarFunction::CurrentTime => Volatility::Stable,
 
@@ -707,10 +701,6 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
-            BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
-            BuiltinScalarFunction::Now => {
-                Ok(Timestamp(Nanosecond, Some("+00:00".into())))
-            }
             BuiltinScalarFunction::CurrentDate => Ok(Date32),
             BuiltinScalarFunction::CurrentTime => Ok(Time64(Nanosecond)),
             BuiltinScalarFunction::MakeDate => Ok(Date32),
@@ -962,9 +952,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::FromUnixtime => {
-                Signature::uniform(1, vec![Int64], self.volatility())
-            }
             BuiltinScalarFunction::Digest => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
@@ -1127,8 +1114,7 @@ impl BuiltinScalarFunction {
                 // will be as good as the number of digits in the number
                 Signature::uniform(1, vec![Float64, Float32], self.volatility())
             }
-            BuiltinScalarFunction::Now
-            | BuiltinScalarFunction::CurrentDate
+            BuiltinScalarFunction::CurrentDate
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
@@ -1264,12 +1250,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
             // time/date functions
-            BuiltinScalarFunction::Now => &["now"],
             BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
             BuiltinScalarFunction::CurrentTime => &["current_time"],
             BuiltinScalarFunction::MakeDate => &["make_date"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
-            BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
             // hashing functions
             BuiltinScalarFunction::Digest => &["digest"],

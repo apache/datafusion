@@ -614,7 +614,7 @@ enum ScalarFunction {
   Coalesce = 63;
   Power = 64;
   StructFun = 65;
-  FromUnixtime = 66;
+  // 66 was FromUnixtime
   Atan2 = 67;
   // 68 was DateBin
   ArrowTypeof = 69;
