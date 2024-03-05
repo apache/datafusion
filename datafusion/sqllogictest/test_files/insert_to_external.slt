@@ -99,9 +99,11 @@ select * from dictionary_encoded_arrow_test_readback;
 ----
 b
 
-# https://github.com/apache/arrow-datafusion/issues/7816
-query error DataFusion error: Arrow error: Schema error: project index 1 out of bounds, max field 1
+query TT
 select * from dictionary_encoded_arrow_partitioned order by (a);
+----
+a foo
+b bar
 
 
 # test_insert_into
@@ -195,9 +197,15 @@ INSERT INTO partitioned_insert_test_json values (1, 2), (3, 4), (5, 6), (1, 2), 
 ----
 6
 
-# Issue open for this error: https://github.com/apache/arrow-datafusion/issues/7816
-query error DataFusion error: Arrow error: Json error: Encountered unmasked nulls in non\-nullable StructArray child: Field \{ name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}
+query TT
 select * from partitioned_insert_test_json order by a,b
+----
+1 2
+1 2
+3 4
+3 4
+5 6
+5 6
 
 statement ok
 CREATE EXTERNAL TABLE

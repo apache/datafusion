@@ -2676,7 +2676,7 @@ pub enum ScalarFunction {
     ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
-    RegexpReplace = 39,
+    /// 39 was RegexpReplace
     Repeat = 40,
     Replace = 41,
     Reverse = 42,
@@ -2725,17 +2725,17 @@ pub enum ScalarFunction {
     Gcd = 85,
     ArrayAppend = 86,
     ArrayConcat = 87,
-    ArrayDims = 88,
+    /// 88 was ArrayDims
     ArrayRepeat = 89,
     ArrayLength = 90,
-    ArrayNdims = 91,
+    /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
     ArrayPrepend = 94,
     ArrayRemove = 95,
     ArrayReplace = 96,
     /// 97 was ArrayToString
-    Cardinality = 98,
+    /// 98 was Cardinality
     ArrayElement = 99,
     ArraySlice = 100,
     Cot = 103,
@@ -2767,10 +2767,11 @@ pub enum ScalarFunction {
     ArrayDistinct = 129,
     ArrayResize = 130,
     EndsWith = 131,
-    InStr = 132,
+    /// / 132 was InStr
     MakeDate = 133,
     ArrayReverse = 134,
-    RegexpLike = 135,
+    /// / 135 is RegexpLike
+    ///
     /// / 137 was ToDate
     ToChar = 136,
 }
@@ -2816,7 +2817,6 @@ impl ScalarFunction {
             ScalarFunction::Md5 => "MD5",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
-            ScalarFunction::RegexpReplace => "RegexpReplace",
             ScalarFunction::Repeat => "Repeat",
             ScalarFunction::Replace => "Replace",
             ScalarFunction::Reverse => "Reverse",
@@ -2861,16 +2861,13 @@ impl ScalarFunction {
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
-            ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
-            ScalarFunction::ArrayNdims => "ArrayNdims",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
@@ -2899,10 +2896,8 @@ impl ScalarFunction {
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::InStr => "InStr",
             ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
-            ScalarFunction::RegexpLike => "RegexpLike",
             ScalarFunction::ToChar => "ToChar",
         }
     }
@@ -2944,7 +2939,6 @@ impl ScalarFunction {
             "MD5" => Some(Self::Md5),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
-            "RegexpReplace" => Some(Self::RegexpReplace),
             "Repeat" => Some(Self::Repeat),
             "Replace" => Some(Self::Replace),
             "Reverse" => Some(Self::Reverse),
@@ -2989,16 +2983,13 @@ impl ScalarFunction {
             "Gcd" => Some(Self::Gcd),
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
-            "ArrayDims" => Some(Self::ArrayDims),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
-            "ArrayNdims" => Some(Self::ArrayNdims),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
-            "Cardinality" => Some(Self::Cardinality),
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
@@ -3027,10 +3018,8 @@ impl ScalarFunction {
             "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
-            "InStr" => Some(Self::InStr),
             "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
-            "RegexpLike" => Some(Self::RegexpLike),
             "ToChar" => Some(Self::ToChar),
             _ => None,
         }

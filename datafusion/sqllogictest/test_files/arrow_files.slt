@@ -42,3 +42,74 @@ SELECT * FROM arrow_simple
 2 bar NULL
 3 baz false
 4 NULL true
+
+# ARROW partitioned table
+statement ok
+CREATE EXTERNAL TABLE arrow_partitioned (
+    part Int,
+    f0 Bigint,
+    f1 String,
+    f2 Boolean
+)
+STORED AS ARROW
+LOCATION '../core/tests/data/partitioned_table_arrow/'
+PARTITIONED BY (part);
+
+# select wildcard
+query ITBI
+SELECT * FROM arrow_partitioned ORDER BY f0;
+----
+1 foo true 123
+2 bar false 123
+3 baz true 456
+4 NULL NULL 456
+
+# select all fields
+query IITB
+SELECT part, f0, f1, f2 FROM arrow_partitioned ORDER BY f0;
+----
+123 1 foo true
+123 2 bar false
+456 3 baz true
+456 4 NULL NULL
+
+# select without partition column
+query IB
+SELECT f0, f2 FROM arrow_partitioned ORDER BY f0
+----
+1 true
+2 false
+3 true
+4 NULL
+
+# select only partition column
+query I
+SELECT part FROM arrow_partitioned ORDER BY part
+----
+123
+123
+456
+456
+
+# select without any table-related columns in projection
+query I
+SELECT 1 FROM arrow_partitioned
+----
+1
+1
+1
+1
+
+# select with partition filter
+query I
+SELECT f0 FROM arrow_partitioned WHERE part = 123 ORDER BY f0
+----
+1
+2
+
+# select with partition filter should scan only one directory
+query TT
+EXPLAIN SELECT f0 FROM arrow_partitioned WHERE part = 456
+----
+logical_plan TableScan: arrow_partitioned projection=[f0], full_filters=[arrow_partitioned.part = Int32(456)]
+physical_plan ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow/part=456/data.arrow]]}, projection=[f0]

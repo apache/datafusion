@@ -21,7 +21,7 @@ use crate::expressions::Column;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
 /// Stores the mapping between source expressions and target expressions for a
@@ -68,10 +68,11 @@ impl ProjectionMapping {
                             let matching_input_field = input_schema.field(idx);
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
-                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                            Ok(Transformed::yes(Arc::new(matching_input_column)))
                         }
-                        None => Ok(Transformed::No(e)),
+                        None => Ok(Transformed::no(e)),
                     })
+                    .data()
                     .map(|source_expr| (source_expr, target_expr))
             })
             .collect::<Result<Vec<_>>>()
@@ -108,6 +109,8 @@ impl ProjectionMapping {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::equivalence::tests::{
         apply_projection, convert_to_orderings, convert_to_orderings_owned,
@@ -119,12 +122,13 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Literal};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{BuiltinScalarFunction, Operator};
+
     use itertools::Itertools;
-    use std::sync::Arc;
 
     #[test]
     fn project_orderings() -> Result<()> {
@@ -283,7 +287,7 @@ mod tests {
                 // orderings
                 vec![
                     // [a + b ASC, c ASC]
-                    vec![(&a_plus_b, option_asc), (&col_c, option_asc)],
+                    vec![(&a_plus_b, option_asc), (col_c, option_asc)],
                 ],
                 // projection exprs
                 vec![
@@ -546,7 +550,7 @@ mod tests {
                     vec![
                         (col_a, option_asc),
                         (col_c, option_asc),
-                        (&col_b, option_asc),
+                        (col_b, option_asc),
                     ],
                 ],
                 // proj exprs
@@ -805,7 +809,7 @@ mod tests {
                     // [a+b ASC, round(c) ASC, c_new ASC]
                     vec![
                         (&a_new_plus_b_new, option_asc),
-                        (&col_round_c_res, option_asc),
+                        (col_round_c_res, option_asc),
                     ],
                     // [a+b ASC, c_new ASC]
                     vec![(&a_new_plus_b_new, option_asc), (col_c_new, option_asc)],

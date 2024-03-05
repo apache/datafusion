@@ -323,7 +323,7 @@ fn prune_pages_in_one_row_group(
                 assert_eq!(row_vec.len(), values.len());
                 let mut sum_row = *row_vec.first().unwrap();
                 let mut selected = *values.first().unwrap();
-                trace!("Pruned to to {:?} using {:?}", values, pruning_stats);
+                trace!("Pruned to {:?} using {:?}", values, pruning_stats);
                 for (i, &f) in values.iter().enumerate().skip(1) {
                     if f == selected {
                         sum_row += *row_vec.get(i).unwrap();

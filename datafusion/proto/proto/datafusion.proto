@@ -587,7 +587,7 @@ enum ScalarFunction {
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
-  RegexpReplace = 39;
+  // 39 was RegexpReplace
   Repeat = 40;
   Replace = 41;
   Reverse = 42;
@@ -636,17 +636,17 @@ enum ScalarFunction {
   Gcd = 85;
   ArrayAppend = 86;
   ArrayConcat = 87;
-  ArrayDims = 88;
+  // 88 was ArrayDims
   ArrayRepeat = 89;
   ArrayLength = 90;
-  ArrayNdims = 91;
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
   // 97 was ArrayToString
-  Cardinality = 98;
+  // 98 was Cardinality
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
@@ -678,10 +678,10 @@ enum ScalarFunction {
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
-  InStr = 132;
+  /// 132 was InStr
   MakeDate = 133;
   ArrayReverse = 134;
-  RegexpLike = 135;
+  /// 135 is RegexpLike
   ToChar = 136;
   /// 137 was ToDate
 }
