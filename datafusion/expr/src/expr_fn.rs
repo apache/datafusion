@@ -1309,21 +1309,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement
-        );
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement,
-            flags
-        );
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);
