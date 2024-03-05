@@ -412,7 +412,10 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
 
-        // cannot coerce
+        // More coerce rules.
+        // Note that not all rules in `comparison_coercion` can be reused here.
+        // For example, all numeric types can be coerced into Utf8 for comparison,
+        // but not for function arguments.
         _ => comparison_binary_numeric_coercion(type_into, type_from),
     }
 }
