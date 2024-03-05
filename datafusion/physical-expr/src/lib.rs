@@ -32,8 +32,6 @@ pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
 mod scalar_function;
 mod sort_expr;
 pub mod sort_properties;

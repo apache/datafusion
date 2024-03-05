@@ -92,8 +92,4 @@ name = "make_date"
 
 [[bench]]
 harness = false
-name = "regexp"
-
-[[bench]]
-harness = false
 name = "to_char"
