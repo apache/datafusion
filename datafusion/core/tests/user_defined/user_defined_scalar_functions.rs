@@ -575,9 +575,8 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
 
-    // Casting should be done in `simplify`, so we just return the first argument
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        unimplemented!("Function should not be evaluated")
+        unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
 
