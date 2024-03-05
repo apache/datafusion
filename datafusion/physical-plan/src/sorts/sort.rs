@@ -55,6 +55,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
+use datafusion_common::utils::evaluate_partition_ranges;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
@@ -309,6 +310,66 @@ impl ExternalSorter {
         Ok(())
     }
 
+    fn get_slice_point(
+        &self,
+        common_prefix_len: usize,
+        batch: &RecordBatch,
+    ) -> Result<Option<usize>> {
+        let common_prefix_sort_keys = (0..common_prefix_len)
+            .map(|idx| self.expr[idx].evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_points =
+            evaluate_partition_ranges(batch.num_rows(), &common_prefix_sort_keys)?;
+        // If partition points are [0..100], [100..200], [200..300]
+        // we should return 200, which is the safest and furthest partition boundary
+        // Please note that we shouldn't return 300 (which is number of rows in the batch),
+        // because this boundary may change with new data.
+        if partition_points.len() >= 2 {
+            Ok(Some(partition_points[partition_points.len() - 2].end))
+        } else {
+            Ok(None)
+        }
+    }
+    pub(crate) async fn insert_batch_with_prefix(
+        &mut self,
+        input: RecordBatch,
+        prefix: usize,
+    ) -> Result<()> {
+        if input.num_rows() == 0 {
+            return Ok(());
+        }
+        self.reserve_memory_for_merge()?;
+
+        let size = input.get_array_memory_size();
+        if self.reservation.try_grow(size).is_err() {
+            let before = self.reservation.size();
+            self.in_mem_sort().await?;
+            // Sorting may have freed memory, especially if fetch is `Some`
+            //
+            // As such we check again, and if the memory usage has dropped by
+            // a factor of 2, and we can allocate the necessary capacity,
+            // we don't spill
+            //
+            // The factor of 2 aims to avoid a degenerate case where the
+            // memory required for `fetch` is just under the memory available,
+            // causing repeated re-sorting of data
+            if self.reservation.size() > before / 2
+                || self.reservation.try_grow(size).is_err()
+            {
+                self.spill().await?;
+                self.reservation.try_grow(size)?
+            }
+        }
+        if let Some(slice_point) = self.get_slice_point(prefix, &input)? {
+            self.in_mem_batches.push(input.slice(0, slice_point));
+            self.in_mem_batches
+                .push(input.slice(slice_point, input.num_rows() - slice_point));
+        } else {
+            self.in_mem_batches.push(input);
+        }
+        self.in_mem_batches_sorted = false;
+        Ok(())
+    }
     fn spilled_before(&self) -> bool {
         !self.spills.is_empty()
     }
