@@ -88,17 +88,13 @@ message ProjectionColumns {
 }
 
 message CsvFormat {
-  bool has_header = 1;
-  string delimiter = 2;
-  string quote = 3;
-  oneof optional_escape {
-    string escape = 4;
-  }
+  CsvOptions options = 5;
 }
 
 message ParquetFormat {
   // Used to be bool enable_pruning = 1;
   reserved 1;
+  TableParquetOptions options = 2;
 }
 
 message AvroFormat {}
@@ -322,22 +318,18 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    oneof CopyOptions {
-        SQLOptions sql_options = 4;
-        FileTypeWriterOptions writer_options = 5;
+    oneof format_options {
+      CsvOptions csv = 8;
+      JsonOptions json = 9;
+      TableParquetOptions parquet = 10;
+      AvroOptions avro = 11;
+      ArrowOptions arrow = 12;
     }
-    string file_type = 6;
     repeated string partition_by = 7;
 }
 
-message SQLOptions {
-  repeated SQLOption option = 1;
-}
-
-message SQLOption {
-    string key = 1;
-    string value = 2;
-}
+message AvroOptions {}
+message ArrowOptions {}
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
@@ -1214,22 +1206,11 @@ message PartitionColumn {
   ArrowType arrow_type = 2;
 }
 
-message FileTypeWriterOptions {
-  oneof FileType {
-    JsonWriterOptions json_options = 1;
-    ParquetWriterOptions parquet_options = 2;
-    CsvWriterOptions csv_options = 3;
-    ArrowWriterOptions arrow_options = 4;
-  }
-}
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
 }
 
-message ParquetWriterOptions {
-    WriterProperties writer_properties = 1;
-}
 
 message CsvWriterOptions {
   // Compression type
@@ -1250,16 +1231,26 @@ message CsvWriterOptions {
   string null_value = 8;
 }
 
-message ArrowWriterOptions {}
+// Options controlling CSV format
+message CsvOptions {
+  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes delimiter = 2; // Delimiter character as a byte
+  bytes quote = 3; // Quote character as a byte
+  bytes escape = 4; // Optional escape character as a byte
+  CompressionTypeVariant compression = 5; // Compression type
+  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  string date_format = 7; // Optional date format
+  string datetime_format = 8; // Optional datetime format
+  string timestamp_format = 9; // Optional timestamp format
+  string timestamp_tz_format = 10; // Optional timestamp with timezone format
+  string time_format = 11; // Optional time format
+  string null_value = 12; // Optional representation of null value
+}
 
-message WriterProperties {
-  uint64 data_page_size_limit = 1;
-  uint64 dictionary_page_size_limit = 2;
-  uint64 data_page_row_count_limit = 3;
-  uint64 write_batch_size = 4;
-  uint64 max_row_group_size = 5;
-  string writer_version = 6;
-  string created_by = 7;
+// Options controlling CSV format
+message JsonOptions {
+  CompressionTypeVariant compression = 1; // Compression type
+  uint64 schema_infer_max_rec = 2; // Max records for schema inference
 }
 
 message FileSinkConfig {
@@ -1271,7 +1262,6 @@ message FileSinkConfig {
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
-  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
@@ -1296,6 +1286,50 @@ message CsvSinkExecNode {
   CsvSink sink = 2;
   Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message TableParquetOptions {
+  ParquetOptions global = 1;
+  repeated ColumnSpecificOptions column_specific_options = 2;
+}
+
+message ColumnSpecificOptions {
+  string column_name = 1;
+  ColumnOptions options = 2;
+}
+
+message ColumnOptions {
+  oneof bloom_filter_enabled_opt {
+    bool bloom_filter_enabled = 1;
+  }
+
+  oneof encoding_opt {
+    string encoding = 2;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 3;
+  }
+
+  oneof compression_opt {
+    string compression = 4;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 5;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 6;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 7;
+  }
+
+  oneof max_statistics_size_opt {
+    uint32 max_statistics_size = 8;
+  }
 }
 
 message ParquetOptions {
@@ -1362,7 +1396,7 @@ message ParquetOptions {
 
 message ParquetSink {
   FileSinkConfig config = 1;
-  ParquetOptions parquet_options = 2;
+  TableParquetOptions parquet_options = 2;
 }
 
 message ParquetSinkExecNode {

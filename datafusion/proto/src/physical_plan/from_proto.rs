@@ -17,6 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
@@ -42,15 +43,11 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
-use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    not_impl_err, DataFusionError, FileTypeWriterOptions, JoinSide, Result, ScalarValue,
-};
+use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
 
 use crate::common::proto_error;
 use crate::convert_required;
@@ -58,9 +55,13 @@ use crate::logical_plan;
 use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
 
-use crate::logical_plan::{csv_writer_options_from_proto, writer_properties_from_proto};
+use crate::logical_plan::csv_writer_options_from_proto;
+use crate::protobuf::copy_to_node;
 use chrono::{TimeZone, Utc};
-use datafusion_common::config::{JsonOptions, ParquetOptions};
+use datafusion_common::config::{
+    ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
+    TableParquetOptions,
+};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -822,7 +823,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             overwrite: conf.overwrite,
-            file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })
     }
 }
@@ -851,38 +851,6 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
-impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(value: &protobuf::FileTypeWriterOptions) -> Result<Self, Self::Error> {
-        let file_type = value
-            .file_type
-            .as_ref()
-            .ok_or_else(|| proto_error("Missing required file_type field in protobuf"))?;
-
-        match file_type {
-            protobuf::file_type_writer_options::FileType::ArrowOptions(_) => {
-                Ok(Self::Arrow(ArrowWriterOptions::new()))
-            }
-
-            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => {
-                let compression: CompressionTypeVariant = opts.compression().into();
-                Ok(Self::JSON(JsonWriterOptions::new(compression)))
-            }
-            protobuf::file_type_writer_options::FileType::CsvOptions(opts) => {
-                let write_options = csv_writer_options_from_proto(opts)?;
-                let compression: CompressionTypeVariant = opts.compression().into();
-                Ok(Self::CSV(CsvWriterOptions::new(write_options, compression)))
-            }
-            protobuf::file_type_writer_options::FileType::ParquetOptions(opt) => {
-                let props = opt.writer_properties.clone().unwrap_or_default();
-                let writer_properties = writer_properties_from_proto(&props)?;
-                Ok(Self::Parquet(ParquetWriterOptions::new(writer_properties)))
-            }
-        }
-    }
-}
-
 impl TryFrom<&protobuf::CsvWriterOptions> for CsvWriterOptions {
     type Error = DataFusionError;
 
@@ -902,6 +870,33 @@ impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
     }
 }
 
+impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
+    type Error = DataFusionError;
+
+    fn try_from(proto_opts: &protobuf::CsvOptions) -> Result<Self, Self::Error> {
+        Ok(CsvOptions {
+            has_header: proto_opts.has_header,
+            delimiter: proto_opts.delimiter[0],
+            quote: proto_opts.quote[0],
+            escape: proto_opts.escape.get(0).copied(),
+            compression: proto_opts.compression().into(),
+            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
+            date_format: (!proto_opts.date_format.is_empty())
+                .then(|| proto_opts.date_format.clone()),
+            datetime_format: (!proto_opts.datetime_format.is_empty())
+                .then(|| proto_opts.datetime_format.clone()),
+            timestamp_format: (!proto_opts.timestamp_format.is_empty())
+                .then(|| proto_opts.timestamp_format.clone()),
+            timestamp_tz_format: (!proto_opts.timestamp_tz_format.is_empty())
+                .then(|| proto_opts.timestamp_tz_format.clone()),
+            time_format: (!proto_opts.time_format.is_empty())
+                .then(|| proto_opts.time_format.clone()),
+            null_value: (!proto_opts.null_value.is_empty())
+                .then(|| proto_opts.null_value.clone()),
+        })
+    }
+}
+
 impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     type Error = DataFusionError;
 
@@ -911,7 +906,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             pruning: value.pruning,
             skip_metadata: value.skip_metadata,
             metadata_size_hint: value
-                .metadata_size_hint_opt
+                .metadata_size_hint_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
                 })
@@ -920,8 +915,8 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             reorder_filters: value.reorder_filters,
             data_pagesize_limit: value.data_pagesize_limit as usize,
             write_batch_size: value.write_batch_size as usize,
-            writer_version: value.writer_version,
-            compression: value.compression_opt.map(|opt| match opt {
+            writer_version: value.writer_version.clone(),
+            compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
             dictionary_enabled: match value.dictionary_enabled_opt {
@@ -931,12 +926,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             // Continuing from where we left off in the TryFrom implementation
             dictionary_page_size_limit: value.dictionary_page_size_limit as usize,
             statistics_enabled: value
-                .statistics_enabled_opt
+                .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
                 })
                 .unwrap_or(None),
-            max_statistics_size: value
+            max_statistics_size: value.clone()
                 .max_statistics_size_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
@@ -944,7 +939,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
             created_by: value.created_by.clone(),
-            column_index_truncate_length: value
+            column_index_truncate_length: value.clone()
                 .column_index_truncate_length_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(v as usize),
@@ -952,19 +947,19 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .unwrap_or(None),
             data_page_row_count_limit: value.data_page_row_count_limit as usize,
             encoding: value
-                .encoding_opt
+                .encoding_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_enabled: value.bloom_filter_enabled,
-            bloom_filter_fpp: value
+            bloom_filter_fpp: value.clone()
                 .bloom_filter_fpp_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
                 })
                 .unwrap_or(None),
-            bloom_filter_ndv: value
+            bloom_filter_ndv: value.clone()
                 .bloom_filter_ndv_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
@@ -973,6 +968,113 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
+
+        })
+    }
+}
+
+impl TryFrom<&protobuf::ColumnOptions> for ColumnOptions {
+    type Error = DataFusionError;
+    fn try_from(value: &protobuf::ColumnOptions) -> Result<Self, Self::Error> {
+        Ok(ColumnOptions {
+            compression: value.compression_opt.clone().map(|opt| match opt {
+                protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
+            }).unwrap_or(None),
+            dictionary_enabled: match value.dictionary_enabled_opt {
+                Some(protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)) => Some(v),
+                None => None,
+            },
+            statistics_enabled: value
+                .statistics_enabled_opt.clone()
+                .map(|opt| match opt {
+                    protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                })
+                .unwrap_or(None),
+            max_statistics_size: value
+                .max_statistics_size_opt.clone()
+                .map(|opt| match opt {
+                    protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
+                })
+                .unwrap_or(None),
+            encoding: value
+                .encoding_opt.clone()
+                .map(|opt| match opt {
+                    protobuf::column_options::EncodingOpt::Encoding(v) => Some(v),
+                })
+                .unwrap_or(None),
+            bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
+                protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
+            })
+                .unwrap_or(None),
+            bloom_filter_fpp: value
+                .bloom_filter_fpp_opt.clone()
+                .map(|opt| match opt {
+                    protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                })
+                .unwrap_or(None),
+            bloom_filter_ndv: value
+                .bloom_filter_ndv_opt.clone()
+                .map(|opt| match opt {
+                    protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
+                })
+                .unwrap_or(None),
+        })
+    }
+}
+
+impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
+    type Error = DataFusionError;
+    fn try_from(value: &protobuf::TableParquetOptions) -> Result<Self, Self::Error> {
+        let mut column_specific_options: HashMap<String, ColumnOptions> = HashMap::new();
+        for protobuf::ColumnSpecificOptions {
+            column_name,
+            options: maybe_options,
+        } in &value.column_specific_options
+        {
+            if let Some(options) = maybe_options {
+                column_specific_options.insert(column_name.clone(), options.try_into()?);
+            }
+        }
+        Ok(TableParquetOptions {
+            global: value
+                .global
+                .as_ref()
+                .map(|v| v.try_into())
+                .unwrap()
+                .unwrap(),
+            column_specific_options,
+        })
+    }
+}
+
+impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
+    type Error = DataFusionError;
+
+    fn try_from(proto_opts: &protobuf::JsonOptions) -> Result<Self, Self::Error> {
+        let compression: protobuf::CompressionTypeVariant =
+            proto_opts.compression().into();
+        Ok(JsonOptions {
+            compression: compression.into(),
+            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
+        })
+    }
+}
+
+impl TryFrom<&copy_to_node::FormatOptions> for FormatOptions {
+    type Error = DataFusionError;
+    fn try_from(value: &copy_to_node::FormatOptions) -> Result<Self, Self::Error> {
+        Ok(match value {
+            copy_to_node::FormatOptions::Csv(options) => {
+                FormatOptions::CSV(options.try_into()?)
+            }
+            copy_to_node::FormatOptions::Json(options) => {
+                FormatOptions::JSON(options.try_into()?)
+            }
+            copy_to_node::FormatOptions::Parquet(options) => {
+                FormatOptions::PARQUET(options.try_into()?)
+            }
+            copy_to_node::FormatOptions::Avro(_) => FormatOptions::AVRO,
+            copy_to_node::FormatOptions::Arrow(_) => FormatOptions::ARROW,
         })
     }
 }
