@@ -52,8 +52,8 @@ use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
 };
 
 use super::plan::RecursiveQuery;

@@ -179,7 +179,7 @@ async fn exec_scan(
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
-    let exec = test_file.create_scan(Some(filter)).await?;
+    let exec = test_file.create_scan(ctx, Some(filter)).await?;
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;

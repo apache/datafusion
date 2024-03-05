@@ -539,7 +539,6 @@ mod tests {
     use crate::test_util::arrow_test_data;
 
     use arrow::compute::concat_batches;
-    use arrow::util::pretty::print_batches;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::stats::Precision;
     use datafusion_common::{internal_err, FileType, GetExt};

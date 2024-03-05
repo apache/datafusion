@@ -32,7 +32,6 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
-use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
@@ -67,12 +66,12 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{FileTypeWriterOptions, Result};
+use datafusion_common::Result;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
     SimpleAggregateUDF, WindowFrame, WindowFrameBound,
@@ -560,6 +559,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         scan_config,
         Some(predicate),
         None,
+        Default::default(),
     )))
 }
 
@@ -586,7 +586,12 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
     };
 
-    roundtrip_test(Arc::new(ParquetExec::new(scan_config, None, None)))
+    roundtrip_test(Arc::new(ParquetExec::new(
+        scan_config,
+        None,
+        None,
+        Default::default(),
+    )))
 }
 
 #[test]
@@ -823,11 +828,11 @@ fn roundtrip_json_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
-            CompressionTypeVariant::UNCOMPRESSED,
-        )),
     };
-    let data_sink = Arc::new(JsonSink::new(file_sink_config));
+    let data_sink = Arc::new(JsonSink::new(
+        file_sink_config,
+        JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
@@ -858,12 +863,11 @@ fn roundtrip_csv_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
-            WriterBuilder::default(),
-            CompressionTypeVariant::ZSTD,
-        )),
     };
-    let data_sink = Arc::new(CsvSink::new(file_sink_config));
+    let data_sink = Arc::new(CsvSink::new(
+        file_sink_config,
+        CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
@@ -891,12 +895,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         .unwrap();
     assert_eq!(
         CompressionTypeVariant::ZSTD,
-        csv_sink
-            .config()
-            .file_type_writer_options
-            .try_into_csv()
-            .unwrap()
-            .compression
+        csv_sink.writer_options().compression
     );
 
     Ok(())
@@ -916,11 +915,11 @@ fn roundtrip_parquet_sink() -> Result<()> {
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         overwrite: true,
-        file_type_writer_options: FileTypeWriterOptions::Parquet(
-            ParquetWriterOptions::new(WriterProperties::default()),
-        ),
     };
-    let data_sink = Arc::new(ParquetSink::new(file_sink_config));
+    let data_sink = Arc::new(ParquetSink::new(
+        file_sink_config,
+        TableParquetOptions::default(),
+    ));
     let sort_order = vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {

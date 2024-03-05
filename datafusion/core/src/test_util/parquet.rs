@@ -34,7 +34,7 @@ use crate::physical_expr::execution_props::ExecutionProps;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::{Expr, SessionConfig};
+use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use datafusion_common::Statistics;
 
@@ -42,6 +42,8 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use datafusion_common::config::TableOptions;
+use datafusion_optimizer::OptimizerConfig;
 
 ///  a ParquetFile that has been created for testing.
 pub struct TestParquetFile {
@@ -140,6 +142,7 @@ impl TestParquetFile {
     /// Otherwise if `maybe_filter` is None, return just a `ParquetExec`
     pub async fn create_scan(
         &self,
+        ctx: &SessionContext,
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let scan_config = FileScanConfig {
@@ -163,6 +166,7 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
+        let parquet_options = TableOptions::default_from_session_config(ctx.state().options()).parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
@@ -172,12 +176,19 @@ impl TestParquetFile {
                 scan_config,
                 Some(physical_filter_expr.clone()),
                 None,
+                parquet_options,
             ));
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(Arc::new(ParquetExec::new(scan_config, None, None)))
+
+            Ok(Arc::new(ParquetExec::new(
+                scan_config,
+                None,
+                None,
+                parquet_options,
+            )))
         }
     }
 

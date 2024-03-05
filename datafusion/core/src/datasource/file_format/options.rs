@@ -35,6 +35,7 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+use datafusion_common::config::TableOptions;
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
@@ -494,7 +495,10 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let mut file_format = ParquetFormat::new();
+        let mut file_format = ParquetFormat::new().with_options(
+            TableOptions::default_from_session_config(config.options()).parquet,
+        );
+
         if let Some(parquet_pruning) = self.parquet_pruning {
             file_format = file_format.with_enable_pruning(parquet_pruning)
         }

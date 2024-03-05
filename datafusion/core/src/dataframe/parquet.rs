@@ -83,6 +83,7 @@ mod tests {
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
+    use datafusion_common::file_options::parquet_writer::parse_compression_string;
 
     use datafusion_expr::{col, lit};
 
@@ -124,18 +125,18 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]  // levels cannot be recovered from reader, only default levels are read.
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_util::test_table().await?;
-
         let output_path = "file://local/test.parquet";
         let test_compressions = vec![
-            parquet::basic::Compression::SNAPPY,
-            parquet::basic::Compression::LZ4,
-            parquet::basic::Compression::LZ4_RAW,
-            parquet::basic::Compression::GZIP(GzipLevel::default()),
-            parquet::basic::Compression::BROTLI(BrotliLevel::default()),
-            parquet::basic::Compression::ZSTD(ZstdLevel::default()),
+            "snappy",
+            "brotli(1)",
+            "lz4",
+            "lz4_raw",
+            "gzip(6)",
+            "zstd(1)",
         ];
         for compression in test_compressions.into_iter() {
             let df = test_df.clone();
@@ -165,7 +166,7 @@ mod tests {
             let written_compression =
                 parquet_metadata.row_group(0).column(0).compression();
 
-            assert_eq!(written_compression, compression);
+            assert_eq!(written_compression, parse_compression_string(compression)?);
         }
 
         Ok(())

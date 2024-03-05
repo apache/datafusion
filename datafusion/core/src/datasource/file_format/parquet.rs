@@ -39,7 +39,7 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
-use datafusion_common::config::{ParquetOptions, TableParquetOptions};
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
@@ -157,8 +157,8 @@ impl ParquetFormat {
         self
     }
 
-    pub fn options(&self) -> &ParquetOptions {
-        &self.options.global
+    pub fn options(&self) -> &TableParquetOptions {
+        &self.options
     }
 }
 
@@ -264,10 +264,13 @@ impl FileFormat for ParquetFormat {
         // will not prune data based on the statistics.
         let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
 
+        println!("self.options {:?}", self.options);
+
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
             self.metadata_size_hint(),
+            self.options.clone(),
         )))
     }
 
@@ -283,6 +286,7 @@ impl FileFormat for ParquetFormat {
         }
 
         let sink_schema = conf.output_schema().clone();
+        println!("self.options.clone() {:?}", self.options);
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(FileSinkExec::new(
@@ -622,6 +626,7 @@ impl ParquetSink {
             PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
+
         Ok(writer)
     }
     pub fn parquet_options(&self) -> &TableParquetOptions {
@@ -645,6 +650,8 @@ impl DataSink for ParquetSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
+
+        println!("parquet_props {:?}", parquet_props);
 
         let object_store = context
             .runtime_env()
@@ -709,6 +716,7 @@ impl DataSink for ParquetSink {
                 let schema = self.get_writer_schema();
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
+                println!("props.writer_options() {:?}", props.writer_options());
                 file_write_tasks.spawn(async move {
                     output_single_parquet_file_parallelized(
                         writer,
@@ -1014,6 +1022,7 @@ async fn output_single_parquet_file_parallelized(
         mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
     let arc_props = Arc::new(parquet_props.clone());
+    println!("arc_props {:?}", arc_props);
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         data,
         serialize_tx,

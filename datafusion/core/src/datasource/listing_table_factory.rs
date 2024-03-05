@@ -228,7 +228,7 @@ mod tests {
 
         let mut options = HashMap::new();
         options.insert(
-            "format.csv.schema_infer_max_rec".to_owned(),
+            "csv.schema_infer_max_rec".to_owned(),
             "1000".to_owned(),
         );
         let cmd = CreateExternalTable {

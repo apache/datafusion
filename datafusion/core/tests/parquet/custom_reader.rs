@@ -88,6 +88,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         },
         None,
         None,
+        Default::default(),
     )
     .with_parquet_file_reader_factory(Arc::new(InMemoryParquetFileReaderFactory(
         Arc::clone(&in_memory_object_store),

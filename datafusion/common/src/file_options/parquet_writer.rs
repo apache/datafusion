@@ -233,7 +233,7 @@ fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
-pub(crate) fn parse_compression_string(
+pub fn parse_compression_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Compression> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
@@ -250,6 +250,7 @@ pub(crate) fn parse_compression_string(
         }
         "gzip" => {
             let level = require_level(codec, level)?;
+            println!("level {}", level);
             Ok(parquet::basic::Compression::GZIP(GzipLevel::try_new(
                 level,
             )?))

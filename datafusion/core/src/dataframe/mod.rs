@@ -46,8 +46,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DataFusionError, FileType, ParamValues, SchemaError,
-    UnnestOptions,
+    plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,

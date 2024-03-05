@@ -113,8 +113,7 @@ macro_rules! config_namespace {
     ) => {
 
         $(#[doc = $struct_d])*
-        #[derive(Debug, Clone)]
-        #[non_exhaustive]
+        #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
@@ -1266,7 +1265,7 @@ impl TableOptions {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {
     /// Global parquet options that propagates all columns
     pub global: ParquetOptions,
@@ -1304,8 +1303,7 @@ macro_rules! config_namespace_with_hashmap {
     ) => {
 
         $(#[doc = $struct_d])*
-        #[derive(Debug, Clone)]
-        #[non_exhaustive]
+        #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
@@ -1440,6 +1438,16 @@ config_namespace! {
 impl CsvOptions {
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    pub fn with_compression(
+        mut self,
+        compression_type_variant: CompressionTypeVariant,
+    ) -> Self {
+        self.compression = compression_type_variant;
+        self
+    }
+
+    /// Set a limit in terms of records to scan to infer the schema
+    /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
         self.schema_infer_max_rec = max_rec;
         self
@@ -1512,7 +1520,7 @@ config_namespace! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FormatOptions {
     CSV(CsvOptions),
     JSON(JsonOptions),
