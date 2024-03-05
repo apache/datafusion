@@ -36,4 +36,4 @@ export_functions!((
     regexp_like,
     input_arg1 input_arg2,
     "Returns true if a has at least one match in a string,false otherwise."
-),(regexp_replace, input_arg1 input_arg2, "Replaces substrings in a string that match"));
+),(regexp_replace, arg1 arg2 arg3 arg4, "Replaces substrings in a string that match"));
