@@ -68,3 +68,74 @@ DROP TABLE json_test
 
 statement ok
 DROP TABLE single_nan
+
+# JSON partitioned table
+statement ok
+CREATE EXTERNAL TABLE json_partitioned_test (
+    part Int,
+    id Int,
+    value String,
+)
+STORED AS JSON
+LOCATION '../core/tests/data/partitioned_table_json'
+PARTITIONED BY (part);
+
+# select wildcard always returns partition columns as the last ones
+query ITI
+SELECT * FROM json_partitioned_test ORDER BY id
+----
+1 foo 1
+2 bar 1
+3 baz 2
+4 qux 2
+
+
+# select all fields
+query IIT
+SELECT part, id, value FROM json_partitioned_test ORDER BY id
+----
+1 1 foo
+1 2 bar
+2 3 baz
+2 4 qux
+
+# select without partition column
+query I
+SELECT id FROM json_partitioned_test ORDER BY id
+----
+1
+2
+3
+4
+
+# select only partition column
+query I
+SELECT part FROM json_partitioned_test ORDER BY part
+----
+1
+1
+2
+2
+
+# select without any table-related columns in projection
+query T
+SELECT 'x' FROM json_partitioned_test
+----
+x
+x
+x
+x
+
+# select with partition filter
+query I
+SELECT id FROM json_partitioned_test WHERE part = 1 ORDER BY id
+----
+1
+2
+
+# select with partition filter should scan only one directory
+query TT
+EXPLAIN SELECT id FROM json_partitioned_test WHERE part = 2
+----
+logical_plan TableScan: json_partitioned_test projection=[id], full_filters=[json_partitioned_test.part = Int32(2)]
+physical_plan JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_json/part=2/data.json]]}, projection=[id]

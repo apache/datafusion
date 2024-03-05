@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
+//! Regx expressions
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
@@ -137,5 +137,74 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use crate::regex::regexpmatch::regexp_match;
+    use arrow::array::{GenericStringBuilder, ListBuilder};
+    use arrow_array::StringArray;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_case_sensitive_regexp_match() {
+        let values = StringArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.append(false);
+        let expected = expected_builder.finish();
+
+        let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_case_insensitive_regexp_match() {
+        let values = StringArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from(vec!["i"; 5]);
+
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        let expected = expected_builder.finish();
+
+        let re =
+            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+                .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_unsupported_global_flag_regexp_match() {
+        let values = StringArray::from(vec!["abc"]);
+        let patterns = StringArray::from(vec!["^(a)"]);
+        let flags = StringArray::from(vec!["g"]);
+
+        let re_err =
+            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+                .expect_err("unsupported flag should have failed");
+
+        assert_eq!(re_err.strip_backtrace(), "Error during planning: regexp_match() does not support the \"global\" option");
     }
 }

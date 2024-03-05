@@ -68,3 +68,7 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 [[bench]]
 harness = false
 name = "to_timestamp"
+
+[[bench]]
+harness = false
+name = "regx"

@@ -177,7 +177,7 @@ impl ExecutionPlan for ArrowExec {
 
         let opener = ArrowOpener {
             object_store,
-            projection: self.base_config.projection.clone(),
+            projection: self.base_config.file_column_projection_indices(),
         };
         let stream =
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;

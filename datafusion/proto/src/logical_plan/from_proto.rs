@@ -60,12 +60,12 @@ use datafusion_expr::{
     left, levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, regexp_like, regexp_replace, repeat, replace, reverse, right, round, rpad,
-    rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
-    starts_with, string_to_array, strpos, struct_fun, substr, substr_index, substring,
-    tan, tanh, to_hex, translate, trim, trunc, upper, uuid, AggregateFunction, Between,
-    BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetFieldAccess, GetIndexedField, GroupingSet,
+    random, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224,
+    sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
+    string_to_array, strpos, struct_fun, substr, substr_index, substring, tan, tanh,
+    to_hex, translate, trim, trunc, upper, uuid, AggregateFunction, Between, BinaryExpr,
+    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
+    GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -526,7 +526,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::RegexpLike => Self::RegexpLike,
             ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
@@ -1682,12 +1681,6 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Rpad => Ok(rpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::RegexpLike => Ok(regexp_like(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry, codec))

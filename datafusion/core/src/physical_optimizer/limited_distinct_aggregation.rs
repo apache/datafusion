@@ -26,7 +26,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
 use itertools::Itertools;
@@ -109,7 +109,7 @@ impl LimitedDistinctAggregation {
         let mut rewrite_applicable = true;
         let mut closure = |plan: Arc<dyn ExecutionPlan>| {
             if !rewrite_applicable {
-                return Ok(Transformed::No(plan));
+                return Ok(Transformed::no(plan));
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
                 if found_match_aggr {
@@ -120,7 +120,7 @@ impl LimitedDistinctAggregation {
                             // a partial and final aggregation with different groupings disqualifies
                             // rewriting the child aggregation
                             rewrite_applicable = false;
-                            return Ok(Transformed::No(plan));
+                            return Ok(Transformed::no(plan));
                         }
                     }
                 }
@@ -131,14 +131,14 @@ impl LimitedDistinctAggregation {
                     Some(new_aggr) => {
                         match_aggr = plan;
                         found_match_aggr = true;
-                        return Ok(Transformed::Yes(new_aggr));
+                        return Ok(Transformed::yes(new_aggr));
                     }
                 }
             }
             rewrite_applicable = false;
-            Ok(Transformed::No(plan))
+            Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).ok()?;
+        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
         if is_global_limit {
             return Some(Arc::new(GlobalLimitExec::new(
                 child,
@@ -162,22 +162,22 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = if config.optimizer.enable_distinct_aggregation_soft_limit {
+        if config.optimizer.enable_distinct_aggregation_soft_limit {
             plan.transform_down(&|plan| {
                 Ok(
                     if let Some(plan) =
                         LimitedDistinctAggregation::transform_limit(plan.clone())
                     {
-                        Transformed::Yes(plan)
+                        Transformed::yes(plan)
                     } else {
-                        Transformed::No(plan)
+                        Transformed::no(plan)
                     },
                 )
-            })?
+            })
+            .data()
         } else {
-            plan
-        };
-        Ok(plan)
+            Ok(plan)
+        }
     }
 
     fn name(&self) -> &str {
