@@ -3154,8 +3154,8 @@ Note that when the required range is a number, it accepts 1, 2, and 3 parameters
 
 #### Arguments
 
-- **start**: start of the range 
-- **end**: end of the range (not included) 
+- **start**: start of the range
+- **end**: end of the range (not included)
 - **step**: increase by step (can not be 0)
 
 #### Aliases
