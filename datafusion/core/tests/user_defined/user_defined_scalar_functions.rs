@@ -16,7 +16,9 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, RecordBatch, UInt8Array};
+use arrow_array::{
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
+};
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::*;
@@ -26,10 +28,13 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
 };
+use datafusion_expr::simplify::ExprSimplifyResult;
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
@@ -510,6 +515,101 @@ async fn deregister_udf() -> Result<()> {
     ctx.deregister_udf("random_udf");
 
     assert!(!ctx.udfs().contains("random_udf"));
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct CastToI64UDF {
+    signature: Signature,
+}
+
+impl CastToI64UDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for CastToI64UDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "cast_to_i64"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    // Demonstrate simplifying a UDF
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        // DataFusion should have ensured the function is called with just a
+        // single argument
+        assert_eq!(args.len(), 1);
+        let arg = args.pop().unwrap();
+
+        // Note that Expr::cast_to requires an ExprSchema but simplify gets a
+        // SimplifyInfo so we have to replicate some of the casting logic here.
+
+        let source_type = info.get_data_type(&arg)?;
+        let new_expr = if source_type == DataType::Int64 {
+            // the argument's data type is already the correct type
+            arg
+        } else {
+            // need to use an actual cast to get the correct type
+            Expr::Cast(datafusion_expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Int64,
+            })
+        };
+        // return the newly written argument to DataFusion
+        Ok(ExprSimplifyResult::Simplified(new_expr))
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!("Function should have been simplified prior to evaluation")
+    }
+}
+
+#[tokio::test]
+async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, false)]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]))],
+    )?;
+
+    ctx.register_batch("t", batch)?;
+
+    let cast_to_i64_udf = ScalarUDF::from(CastToI64UDF::new());
+    ctx.register_udf(cast_to_i64_udf);
+
+    let result = plan_and_collect(&ctx, "SELECT cast_to_i64(x) FROM t").await?;
+
+    assert_batches_eq!(
+        &[
+            "+------------------+",
+            "| cast_to_i64(t.x) |",
+            "+------------------+",
+            "| 1                |",
+            "| 2                |",
+            "| 3                |",
+            "+------------------+"
+        ],
+        &result
+    );
 
     Ok(())
 }

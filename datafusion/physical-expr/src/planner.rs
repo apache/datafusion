@@ -16,19 +16,18 @@
 // under the License.
 
 use crate::expressions::GetFieldAccessExpr;
-use crate::var_provider::is_system_variables;
 use crate::{
-    execution_props::ExecutionProps,
     expressions::{self, binary, like, Column, GetIndexedFieldExpr, Literal},
-    functions, udf,
-    var_provider::VarType,
-    PhysicalExpr,
+    functions, udf, PhysicalExpr,
 };
 use arrow::datatypes::Schema;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
+use datafusion_expr::var_provider::is_system_variables;
+use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
     Operator, ScalarFunctionDefinition, TryCast,
