@@ -251,12 +251,16 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 
 - Add the actual implementation of the function to a new module file within:
   - [here](../../../datafusion/functions-array/src) for array functions
+  - [here](../../../datafusion/functions/src/crypto) for crypto functions
   - [here](../../../datafusion/functions/src/datetime) for datetime functions
   - [here](../../../datafusion/functions/src/encoding) for encoding functions
   - [here](../../../datafusion/functions/src/math) for math functions
   - [here](../../../datafusion/functions/src/regex) for regex functions
   - [here](../../../datafusion/functions/src/string) for string functions
-  - create a new module [here](../../../datafusion/functions/src) for other functions. New function modules should likely have their own feature flag.
+  - [here](../../../datafusion/functions/src/unicode) for unicode functions
+  - create a new module [here](../../../datafusion/functions/src) for other functions.
+- New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
+  users to enable or disable the new module as desired.
 - The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
   - See the [advanced_udf.rs](../../../datafusion-examples/examples/advanced_udf.rs) example for an example implementation
   - Add tests for the new function
