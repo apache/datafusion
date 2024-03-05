@@ -350,6 +350,7 @@ impl TreeNode for Expr {
                 distinct,
                 filter,
                 order_by,
+                null_treatment,
             }) => transform_vec(args, &mut f)?
                 .update_data(|new_args| (new_args, filter, order_by))
                 .try_transform_node(|(new_args, filter, order_by)| {
@@ -368,6 +369,7 @@ impl TreeNode for Expr {
                             distinct,
                             new_filter,
                             new_order_by,
+                            null_treatment,
                         )))
                     }
                     AggregateFunctionDefinition::UDF(fun) => {
