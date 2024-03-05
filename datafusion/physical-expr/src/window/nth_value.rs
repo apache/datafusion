@@ -226,11 +226,11 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
             match self.state.kind {
-                 NthValueKind::First => ScalarValue::try_from_array_ignore_nulls_first(
+                NthValueKind::First => ScalarValue::try_from_array_ignore_nulls_first(
                     arr,
                     range.start,
                     self.ignore_nulls,
-                 ),
+                ),
                 NthValueKind::Last => ScalarValue::try_from_array_ignore_nulls_last(
                     arr,
                     range.end - 1,

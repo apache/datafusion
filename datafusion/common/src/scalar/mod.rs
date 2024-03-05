@@ -2225,11 +2225,11 @@ impl ScalarValue {
         }
     }
 
-     pub fn try_from_array_ignore_nulls_first(
+    pub fn try_from_array_ignore_nulls_first(
         array: &dyn Array,
         mut index: usize,
         ignore_nulls: bool,
-     ) -> Result<Self> {
+    ) -> Result<Self> {
         if ignore_nulls {
             while index < (array.len() - 1) && !array.is_valid(index) {
                 index += 1;
