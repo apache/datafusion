@@ -21,10 +21,10 @@ description = "Code generation for proto"
 version = "0.1.0"
 edition = { workspace = true }
 rust-version = "1.72"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-license = "Apache-2.0"
+authors = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
 publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

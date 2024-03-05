@@ -470,7 +470,7 @@ mod test {
         test_analyze(
             col("b").not_eq(lit(1)).and(col("b").eq(lit(2))),
             vec![
-                // can only be true of b is not 1 and b is is 2 (even though it is redundant)
+                // can only be true of b is not 1 and b is 2 (even though it is redundant)
                 not_in_guarantee("b", [1]),
                 in_guarantee("b", [2]),
             ],

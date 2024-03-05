@@ -23,7 +23,7 @@ use crate::expressions::{NthValueAgg, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::datatypes::Field;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{Accumulator, GroupsAccumulator};
 
 mod hyperloglog;

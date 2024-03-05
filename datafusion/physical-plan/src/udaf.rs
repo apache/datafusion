@@ -28,7 +28,7 @@ use arrow::{
 };
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 pub use datafusion_expr::AggregateUDF;
 use datafusion_physical_expr::PhysicalExpr;
 

@@ -88,6 +88,9 @@ jobs:
       - name: Check function packages (array_expressions)
         run: cargo check --no-default-features --features=array_expressions -p datafusion
 
+      - name: Check function packages (datetime_expressions)
+        run: cargo check --no-default-features --features=datetime_expressions -p datafusion
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory

@@ -29,6 +29,26 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[[example]]
+name = "flight_sql_server"
+path = "examples/flight/flight_sql_server.rs"
+
+[[example]]
+name = "flight_server"
+path = "examples/flight/flight_server.rs"
+
+[[example]]
+name = "flight_client"
+path = "examples/flight/flight_client.rs"
+
+[[example]]
+name = "dataframe_to_s3"
+path = "examples/external_dependency/dataframe-to-s3.rs"
+
+[[example]]
+name = "query_aws_s3"
+path = "examples/external_dependency/query-aws-s3.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
@@ -36,12 +56,12 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
-datafusion = { path = "../datafusion/core", features = ["avro"] }
-datafusion-common = { path = "../datafusion/common" }
-datafusion-expr = { path = "../datafusion/expr" }
-datafusion-optimizer = { path = "../datafusion/optimizer" }
-datafusion-physical-expr = { workspace = true }
-datafusion-sql = { path = "../datafusion/sql" }
+datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-common = { workspace = true, default-features = true }
+datafusion-expr = { workspace = true }
+datafusion-optimizer = { workspace = true, default-features = true }
+datafusion-physical-expr = { workspace = true, default-features = true }
+datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
@@ -54,6 +74,7 @@ serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tonic = "0.11"
+# 0.10 and 0.11 are incompatible. Need to upgrade tonic to 0.11 when upgrading to arrow 51
+tonic = "0.10"
 url = { workspace = true }
 uuid = "1.2"

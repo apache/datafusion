@@ -57,24 +57,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::compute::concat_batches;
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use futures::{ready, Stream, StreamExt};
-use log::trace;
-
-use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::Result;
-use datafusion_execution::{RecordBatchStream, TaskContext};
-use datafusion_physical_expr::EquivalenceProperties;
-
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
+
+use arrow::compute::concat_batches;
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::Result;
+use datafusion_execution::{RecordBatchStream, TaskContext};
+use datafusion_physical_expr::LexOrdering;
+
+use futures::{ready, Stream, StreamExt};
+use log::trace;
 
 /// Partial Sort execution plan.
 #[derive(Debug, Clone)]
@@ -93,6 +93,8 @@ pub struct PartialSortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl PartialSortExec {
@@ -103,13 +105,16 @@ impl PartialSortExec {
         common_prefix_length: usize,
     ) -> Self {
         assert!(common_prefix_length > 0);
+        let preserve_partitioning = false;
+        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
             input,
             expr,
             common_prefix_length,
             metrics_set: ExecutionPlanMetricsSet::new(),
-            preserve_partitioning: false,
+            preserve_partitioning,
             fetch: None,
+            cache,
         }
     }
 
@@ -127,6 +132,12 @@ impl PartialSortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
+        self.cache = self
+            .cache
+            .with_partitioning(Self::output_partitioning_helper(
+                &self.input,
+                self.preserve_partitioning,
+            ));
         self
     }
 
@@ -156,6 +167,41 @@ impl PartialSortExec {
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
     }
+
+    fn output_partitioning_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+    ) -> Partitioning {
+        // Get output partitioning:
+        if preserve_partitioning {
+            input.output_partitioning().clone()
+        } else {
+            Partitioning::UnknownPartitioning(1)
+        }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        sort_exprs: LexOrdering,
+        preserve_partitioning: bool,
+    ) -> PlanProperties {
+        // Calculate equivalence properties; i.e. reset the ordering equivalence
+        // class with the new ordering:
+        let eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .with_reorder(sort_exprs);
+
+        // Get output partitioning:
+        let output_partitioning =
+            Self::output_partitioning_helper(input, preserve_partitioning);
+
+        // Determine execution mode:
+        let mode = input.execution_mode();
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
+    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -184,28 +230,8 @@ impl ExecutionPlan for PartialSortExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        if self.preserve_partitioning {
-            self.input.output_partitioning()
-        } else {
-            Partitioning::UnknownPartitioning(1)
-        }
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        Some(&self.expr)
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -218,13 +244,6 @@ impl ExecutionPlan for PartialSortExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Reset the ordering equivalence class with the new ordering:
-        self.input
-            .equivalence_properties()
-            .with_reorder(self.expr.to_vec())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -24,7 +24,7 @@ use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
-    plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
+    plan_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
@@ -494,6 +494,22 @@ async fn test_user_defined_functions_zero_argument() -> Result<()> {
         assert!(random_udf.value(i) != previous);
         previous = random_udf.value(i);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn deregister_udf() -> Result<()> {
+    let random_normal_udf = ScalarUDF::from(RandomUDF::new());
+    let ctx = SessionContext::new();
+
+    ctx.register_udf(random_normal_udf.clone());
+
+    assert!(ctx.udfs().contains("random_udf"));
+
+    ctx.deregister_udf("random_udf");
+
+    assert!(!ctx.udfs().contains("random_udf"));
 
     Ok(())
 }

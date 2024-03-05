@@ -19,21 +19,19 @@
 
 use std::sync::Arc;
 
+use super::AnalyzerRule;
+
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRewriter;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::utils::list_ndims;
-use datafusion_common::DFSchema;
-use datafusion_common::DFSchemaRef;
-use datafusion_common::Result;
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::BuiltinScalarFunction;
-use datafusion_expr::Operator;
-use datafusion_expr::ScalarFunctionDefinition;
-use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
-
-use super::AnalyzerRule;
+use datafusion_expr::{
+    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
+    ScalarFunctionDefinition,
+};
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -94,41 +92,34 @@ pub(crate) struct OperatorToFunctionRewriter {
 }
 
 impl TreeNodeRewriter for OperatorToFunctionRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if let Expr::BinaryExpr(BinaryExpr {
+            ref left,
+            op,
+            ref right,
+        }) = expr
+        {
+            if let Some(fun) = rewrite_array_concat_operator_to_func_for_column(
+                left.as_ref(),
                 op,
-                ref right,
-            }) => {
-                if let Some(fun) = rewrite_array_concat_operator_to_func_for_column(
-                    left.as_ref(),
-                    op,
-                    right.as_ref(),
-                    self.schema.as_ref(),
-                )?
-                .or_else(|| {
-                    rewrite_array_concat_operator_to_func(
-                        left.as_ref(),
-                        op,
-                        right.as_ref(),
-                    )
-                }) {
-                    // Convert &Box<Expr> -> Expr
-                    let left = (**left).clone();
-                    let right = (**right).clone();
-                    return Ok(Expr::ScalarFunction(ScalarFunction {
-                        func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                        args: vec![left, right],
-                    }));
-                }
-
-                Ok(expr)
+                right.as_ref(),
+                self.schema.as_ref(),
+            )?
+            .or_else(|| {
+                rewrite_array_concat_operator_to_func(left.as_ref(), op, right.as_ref())
+            }) {
+                // Convert &Box<Expr> -> Expr
+                let left = (**left).clone();
+                let right = (**right).clone();
+                return Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
+                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                    args: vec![left, right],
+                })));
             }
-            _ => Ok(expr),
         }
+        Ok(Transformed::no(expr))
     }
 }
 

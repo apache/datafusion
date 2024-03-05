@@ -21,19 +21,18 @@
 
 //! Regex expressions
 
+use std::sync::{Arc, OnceLock};
+
 use arrow::array::{
     new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
     OffsetSizeTrait,
 };
-
-use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
-use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
-};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
 use regex::Regex;
-use std::sync::{Arc, OnceLock};
+
+use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
+use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
+use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 use crate::functions::{
     make_scalar_function_inner, make_scalar_function_with_hints, Hint,
@@ -52,78 +51,6 @@ macro_rules! fetch_string_arg {
             array.value(0)
         }
     }};
-}
-
-/// Tests a string using a regular expression returning true if at
-/// least one match, false otherwise.
-///
-/// The full list of supported features and syntax can be found at
-/// <https://docs.rs/regex/latest/regex/#syntax>
-///
-/// Supported flags can be found at
-/// <https://docs.rs/regex/latest/regex/#grouping-and-flags>
-///
-/// # Examples
-///
-/// ```ignore
-/// # use datafusion::prelude::*;
-/// # use datafusion::error::Result;
-/// # #[tokio::main]
-/// # async fn main() -> Result<()> {
-/// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/data/regex.csv", CsvReadOptions::new()).await?;
-///
-/// // use the regexp_like function to test col 'values',
-/// // against patterns in col 'patterns' without flags
-/// let df = df.with_column(
-///     "a",
-///     regexp_like(vec![col("values"), col("patterns")])
-/// )?;
-/// // use the regexp_like function to test col 'values',
-/// // against patterns in col 'patterns' with flags
-/// let df = df.with_column(
-///     "b",
-///     regexp_like(vec![col("values"), col("patterns"), col("flags")])
-/// )?;
-/// // literals can be used as well with dataframe calls
-/// let df = df.with_column(
-///     "c",
-///     regexp_like(vec![lit("foobarbequebaz"), lit("(bar)(beque)")])
-/// )?;
-///
-/// df.show().await?;
-///
-/// # Ok(())
-/// # }
-/// ```
-pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        2 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let array = arrow_string::regexp::regexp_is_match_utf8(values, regex, None)
-                .map_err(|e| arrow_datafusion_err!(e))?;
-
-            Ok(Arc::new(array) as ArrayRef)
-        }
-        3 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let flags = as_generic_string_array::<T>(&args[2])?;
-
-            if flags.iter().any(|s| s == Some("g")) {
-                return plan_err!("regexp_like() does not support the \"global\" option");
-            }
-
-            let array = arrow_string::regexp::regexp_is_match_utf8(values, regex, Some(flags))
-                .map_err(|e| arrow_datafusion_err!(e))?;
-
-            Ok(Arc::new(array) as ArrayRef)
-        }
-        other => exec_err!(
-            "regexp_like was called with {other} arguments. It requires at least 2 and at most 3."
-        ),
-    }
 }
 
 /// Extract a specific group from a string column, using a regular expression.
@@ -188,7 +115,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             arrow_string::regexp::regexp_match(values, regex, Some(flags))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
-        other => internal_err!(
+        other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -341,7 +268,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => internal_err!(
+        other => exec_err!(
             "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
         ),
     }
@@ -374,7 +301,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         3 => None,
         4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
-            return internal_err!(
+            return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
             )
         }
@@ -487,64 +414,6 @@ mod tests {
     use datafusion_common::ScalarValue;
 
     use super::*;
-
-    #[test]
-    fn test_case_sensitive_regexp_like() {
-        let values = StringArray::from(vec!["abc"; 5]);
-
-        let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-
-        let mut expected_builder: BooleanBuilder = BooleanBuilder::new();
-        expected_builder.append_value(true);
-        expected_builder.append_value(false);
-        expected_builder.append_value(true);
-        expected_builder.append_value(false);
-        expected_builder.append_value(false);
-        let expected = expected_builder.finish();
-
-        let re = regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
-
-        assert_eq!(re.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_case_insensitive_regexp_like() {
-        let values = StringArray::from(vec!["abc"; 5]);
-        let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from(vec!["i"; 5]);
-
-        let mut expected_builder: BooleanBuilder = BooleanBuilder::new();
-        expected_builder.append_value(true);
-        expected_builder.append_value(true);
-        expected_builder.append_value(true);
-        expected_builder.append_value(true);
-        expected_builder.append_value(false);
-        let expected = expected_builder.finish();
-
-        let re =
-            regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .unwrap();
-
-        assert_eq!(re.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_unsupported_global_flag_regexp_like() {
-        let values = StringArray::from(vec!["abc"]);
-        let patterns = StringArray::from(vec!["^(a)"]);
-        let flags = StringArray::from(vec!["g"]);
-
-        let re_err =
-            regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .expect_err("unsupported flag should have failed");
-
-        assert_eq!(
-            re_err.strip_backtrace(),
-            "Error during planning: regexp_like() does not support the \"global\" option"
-        );
-    }
 
     #[test]
     fn test_case_sensitive_regexp_match() {

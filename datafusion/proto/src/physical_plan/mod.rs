@@ -60,6 +60,7 @@ use datafusion::physical_plan::{
     WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::ScalarUDF;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -1911,6 +1912,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+
+    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
+    }
+
+    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

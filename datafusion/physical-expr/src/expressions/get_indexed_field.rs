@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{
     cast::{as_map_array, as_struct_array},
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::{field_util::GetFieldAccessSchema, ColumnarValue};
 use std::fmt::Debug;
@@ -252,14 +252,14 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             GetFieldAccessExpr::ListIndex{key} => {
             let key = key.evaluate(batch)?.into_array(batch.num_rows())?;
             match (array.data_type(), key.data_type()) {
-                (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
+                (DataType::List(_), DataType::Int64) | (DataType::LargeList(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
                     array, key
                 ])?)),
-                (DataType::List(_), key) => exec_err!(
-                                "get indexed field is only possible on lists with int64 indexes. \
+                (DataType::List(_), key) | (DataType::LargeList(_), key) => exec_err!(
+                                "get indexed field is only possible on List/LargeList with int64 indexes. \
                                     Tried with {key:?} index"),
                             (dt, key) => exec_err!(
-                                        "get indexed field is only possible on lists with int64 indexes or struct \
+                                        "get indexed field is only possible on List/LargeList with int64 indexes or struct \
                                                  with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },
@@ -268,16 +268,18 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 let stop = stop.evaluate(batch)?.into_array(batch.num_rows())?;
                 let stride = stride.evaluate(batch)?.into_array(batch.num_rows())?;
                 match (array.data_type(), start.data_type(), stop.data_type(), stride.data_type()) {
-                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) => {
+                    (DataType::List(_), DataType::Int64, DataType::Int64, DataType::Int64) |
+                    (DataType::LargeList(_), DataType::Int64, DataType::Int64, DataType::Int64)=> {
                         Ok(ColumnarValue::Array((array_slice(&[
                             array, start, stop, stride
                         ]))?))
                     },
-                    (DataType::List(_), start, stop, stride) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes. \
+                    (DataType::List(_), start, stop, stride) |
+                    (DataType::LargeList(_), start, stop, stride)=> exec_err!(
+                        "get indexed field is only possible on List/LargeList with int64 indexes. \
                                  Tried with {start:?}, {stop:?} and {stride:?} indices"),
                     (dt, start, stop, stride) => exec_err!(
-                        "get indexed field is only possible on lists with int64 indexes or struct \
+                        "get indexed field is only possible on List/LargeList with int64 indexes or struct \
                                  with utf8 indexes. Tried {dt:?} with {start:?}, {stop:?} and {stride:?} indices"),
                 }
             }

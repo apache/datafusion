@@ -40,7 +40,7 @@ use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -783,7 +783,7 @@ impl SessionContext {
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(&table).await {
+            if let Some(table_provider) = schema.table(&table).await? {
                 if table_provider.table_type() == table_type {
                     schema.deregister_table(&table)?;
                     return Ok(true);
@@ -847,6 +847,21 @@ impl SessionContext {
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
         self.state.write().register_udwf(Arc::new(f)).ok();
+    }
+
+    /// Deregisters a UDF within this context.
+    pub fn deregister_udf(&self, name: &str) {
+        self.state.write().deregister_udf(name).ok();
+    }
+
+    /// Deregisters a UDAF within this context.
+    pub fn deregister_udaf(&self, name: &str) {
+        self.state.write().deregister_udaf(name).ok();
+    }
+
+    /// Deregisters a UDWF within this context.
+    pub fn deregister_udwf(&self, name: &str) {
+        self.state.write().deregister_udwf(name).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -1115,7 +1130,7 @@ impl SessionContext {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(&table).await {
+        match schema.table(&table).await? {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => plan_err!("No table named '{table}'"),
         }
@@ -1714,7 +1729,7 @@ impl SessionState {
             let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(table).await {
+                    if let Some(table) = schema.table(table).await? {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -2026,6 +2041,24 @@ impl FunctionRegistry for SessionState {
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
+
+    fn deregister_udf(&mut self, name: &str) -> Result<Option<Arc<ScalarUDF>>> {
+        let udf = self.scalar_functions.remove(name);
+        if let Some(udf) = &udf {
+            for alias in udf.aliases() {
+                self.scalar_functions.remove(alias);
+            }
+        }
+        Ok(udf)
+    }
+
+    fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.aggregate_functions.remove(name))
+    }
+
+    fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.window_functions.remove(name))
+    }
 }
 
 impl OptimizerConfig for SessionState {
@@ -2156,9 +2189,9 @@ impl<'a> BadPlanVisitor<'a> {
 }
 
 impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
@@ -2172,7 +2205,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            _ => Ok(VisitRecursion::Continue),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
     }
 }
@@ -2189,6 +2222,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
     use async_trait::async_trait;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
     use std::env;
     use std::path::PathBuf;
@@ -2298,7 +2332,7 @@ mod tests {
         let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
             .map(|ctx| {
-                tokio::spawn(async move {
+                SpawnedTask::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
                     ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
                         .await
@@ -2307,7 +2341,7 @@ mod tests {
             .collect();
 
         for handle in threads {
-            handle.await.unwrap().unwrap();
+            handle.join().await.unwrap().unwrap();
         }
         Ok(())
     }

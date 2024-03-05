@@ -52,10 +52,10 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, Expr as SQLExpr, Expr, Ident, ObjectName,
-    ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter,
-    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode,
-    UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, DescribeAlias, Expr as SQLExpr, Expr,
+    FromTable, Ident, ObjectName, ObjectType, Query, SchemaName, SetExpr,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -177,7 +177,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let sql = Some(statement.to_string());
         match statement {
             Statement::ExplainTable {
-                describe_alias: true, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                hive_format: _,
                 table_name,
             } => self.describe_table_to_plan(table_name),
             Statement::Explain {
@@ -630,7 +631,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+    fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
+        let mut from = match from {
+            FromTable::WithFromKeyword(v) => v,
+            FromTable::WithoutKeyword(v) => v,
+        };
+
         if from.len() != 1 {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got {}: {from:?}",

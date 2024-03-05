@@ -17,27 +17,27 @@
 
 //! Logical Expressions: [`Expr`]
 
-use crate::expr_fn::binary_expr;
-use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
-use crate::window_frame;
-
-use crate::Operator;
-use crate::{aggregate_function, ExprSchemable};
-use crate::{built_in_function, BuiltinScalarFunction};
-use crate::{built_in_window_function, udaf};
-use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
-use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
-use std::fmt;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{self, Display, Formatter, Write};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::Signature;
+use crate::expr_fn::binary_expr;
+use crate::logical_plan::Subquery;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::window_frame;
+use crate::{
+    aggregate_function, built_in_function, built_in_window_function, udaf,
+    BuiltinScalarFunction, ExprSchemable, Operator, Signature,
+};
+
+use arrow::datatypes::DataType;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    internal_err, plan_err, Column, DFSchema, OwnedTableReference, Result, ScalarValue,
+};
+use sqlparser::ast::NullTreatment;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -646,6 +646,7 @@ pub struct WindowFunction {
     pub order_by: Vec<Expr>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 impl WindowFunction {
@@ -656,6 +657,7 @@ impl WindowFunction {
         partition_by: Vec<Expr>,
         order_by: Vec<Expr>,
         window_frame: window_frame::WindowFrame,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             fun,
@@ -663,6 +665,7 @@ impl WindowFunction {
             partition_by,
             order_by,
             window_frame,
+            null_treatment,
         }
     }
 }
@@ -1271,8 +1274,9 @@ impl Expr {
                 rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
                 rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
             }
-            Ok(Transformed::Yes(expr))
+            Ok(Transformed::yes(expr))
         })
+        .data()
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
@@ -1440,8 +1444,14 @@ impl fmt::Display for Expr {
                 partition_by,
                 order_by,
                 window_frame,
+                null_treatment,
             }) => {
                 fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                if let Some(nt) = null_treatment {
+                    write!(f, "{}", nt)?;
+                }
+
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
                 }
@@ -1760,7 +1770,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::Unnest(Unnest { exprs }) => Ok(format!("UNNEST({exprs:?})")),
+        Expr::Unnest(Unnest { exprs }) => create_function_name("unnest", false, exprs),
         Expr::ScalarFunction(fun) => create_function_name(fun.name(), false, &fun.args),
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1768,15 +1778,23 @@ fn create_name(e: &Expr) -> Result<String> {
             window_frame,
             partition_by,
             order_by,
+            null_treatment,
         }) => {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
+
+            if let Some(nt) = null_treatment {
+                parts.push(format!("{}", nt));
+            }
+
             if !partition_by.is_empty() {
                 parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
             }
+
             if !order_by.is_empty() {
                 parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
             }
+
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
         }
@@ -2012,11 +2030,6 @@ mod test {
         // BuiltIn
         assert!(
             ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Random)
-                .is_volatile()
-                .unwrap()
-        );
-        assert!(
-            !ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Abs)
                 .is_volatile()
                 .unwrap()
         );

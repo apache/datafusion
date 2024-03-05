@@ -17,4 +17,5 @@
 
 import * as wasm from "datafusion-wasmtest";
 
-wasm.try_datafusion();
+wasm.basic_exprs();
+wasm.basic_parse();

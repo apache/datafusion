@@ -24,12 +24,12 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use parking_lot::Mutex;
-
 use chrono::{DateTime, Utc};
+use datafusion_common::instant::Instant;
+use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows
 ///

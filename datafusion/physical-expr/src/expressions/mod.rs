@@ -80,7 +80,7 @@ pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_column, cast_with_options, CastExpr};
+pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
 pub use get_indexed_field::{GetFieldAccessExpr, GetIndexedFieldExpr};
 pub use in_list::{in_list, InListExpr};
@@ -133,7 +133,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 
@@ -166,7 +166,7 @@ pub(crate) mod tests {
             let actual = aggregate_new(&batch, agg)?;
             assert_eq!($EXPECTED, &actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 

@@ -3580,7 +3580,7 @@ SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 --ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW@5 as avg_d]
 ----BoundedWindowAggExec: wdw=[AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW: Ok(Field { name: "AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: CurrentRow }], mode=[Linear]
 ------CoalesceBatchesExec: target_batch_size=4096
---------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
+--------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
 ----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]]
 
@@ -4102,3 +4102,170 @@ ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRE
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id) as x,
+       lag(a, 1, null) ignore nulls over (order by id) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id) as x2,
+       lag(a) respect nulls over (order by id) as x3,
+       lag(a, 1, null) respect nulls over (order by id) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+NULL NULL def NULL NULL NULL
+b b b b b b
+b b b NULL NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id desc) as x,
+       lag(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a) respect nulls over (order by id desc) as x3,
+       lag(a, 1, null) respect nulls over (order by id desc) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+x x x x x x
+x x x NULL NULL NULL
+b b b b b b
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset
+query TTTT
+select lag(a, 2, null) ignore nulls over (order by id) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id) as x2,
+       lag(a, 2, null) respect nulls over (order by id) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def
+NULL def NULL def
+NULL def NULL NULL
+NULL def b b
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+query TTTT
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def
+NULL def NULL def
+NULL def x x
+x x NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
+# To trigger WindowAggExec, we added a sum window function with all of the ranges.
+statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+
+# LEAD window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
+query TTTTTT
+select lead(a) ignore nulls over (order by id) as x,
+       lead(a, 1, null) ignore nulls over (order by id) as x1,
+       lead(a, 1, 'def') ignore nulls over (order by id) as x2,
+       lead(a) respect nulls over (order by id) as x3,
+       lead(a, 1, null) respect nulls over (order by id) as x4,
+       lead(a, 1, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+b b b b b b
+x x x NULL NULL NULL
+x x x x x x
+NULL NULL def NULL NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and default offset 1
+query TTTTTT
+select lead(a) ignore nulls over (order by id desc) as x,
+       lead(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a) respect nulls over (order by id desc) as x3,
+       lead(a, 1, null) respect nulls over (order by id desc) as x4,
+       lead(a, 1, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+b b b NULL NULL NULL
+b b b b b b
+NULL NULL def NULL NULL NULL
+NULL NULL def NULL NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset
+query TTTT
+select lead(a, 2, null) ignore nulls over (order by id) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id) as x2,
+       lead(a, 2, null) respect nulls over (order by id) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+x x NULL NULL
+NULL def x x
+NULL def NULL def
+NULL def NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+query TTTT
+select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a, 2, null) respect nulls over (order by id desc) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b
+NULL def NULL NULL
+NULL def NULL def
+NULL def NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
+# To trigger WindowAggExec, we added a sum window function with all of the ranges.
+statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a, 2, null) respect nulls over (order by id desc) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+
+statement ok
+set datafusion.execution.batch_size = 1000;
+
+query II
+SELECT LAG(c1, 2) IGNORE NULLS OVER(),
+       LEAD(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78 50
+63 38
+3 53
+24 31
+14 94
+
+# result should be same with above, when LAG/LEAD algorithm work with pruned data.
+# decreasing batch size, causes data to be produced in smaller chunks at the source.
+# Hence sliding window algorithm is used during calculations.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+SELECT LAG(c1, 2) IGNORE NULLS OVER(),
+       LEAD(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78 50
+63 38
+3 53
+24 31
+14 94

@@ -32,11 +32,13 @@ use std::{
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDWF is different from a UDF in that it is stateful across batches.
 ///
-/// See the documetnation on [`PartitionEvaluator`] for more details
+/// See the documentation on [`PartitionEvaluator`] for more details
 ///
-/// 1. For simple (less performant) use cases, use [`create_udwf`] and [`simple_udwf.rs`].
+/// 1. For simple use cases, use [`create_udwf`] (examples in
+/// [`simple_udwf.rs`]).
 ///
-/// 2. For advanced use cases, use [`WindowUDFImpl`] and [`advanced_udwf.rs`].
+/// 2. For advanced use cases, use [`WindowUDFImpl`] which provides full API
+/// access (examples in [`advanced_udwf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `WindowUDFImpl` to maintain backwards
@@ -130,6 +132,7 @@ impl WindowUDF {
             partition_by,
             order_by,
             window_frame,
+            null_treatment: None,
         })
     }
 
