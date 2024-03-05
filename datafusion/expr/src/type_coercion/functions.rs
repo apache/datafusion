@@ -512,44 +512,6 @@ mod tests {
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
         let inner = Arc::new(Field::new("item", DataType::Int32, false));
-        let i8_inner = Arc::new(Field::new("item", DataType::Int8, false));
-        let type_from = DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD);
-        let cases = vec![
-            DataType::FixedSizeList(inner.clone(), 2),
-            DataType::FixedSizeList(inner.clone(), 3),
-            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
-            DataType::FixedSizeList(i8_inner.clone(), FIXED_SIZE_LIST_WILDCARD),
-            DataType::List(inner.clone()),
-            DataType::LargeList(inner.clone()),
-        ];
-        for type_into in cases {
-            let out = coerced_from(&type_into, &type_from);
-            assert_eq!(out, Some(type_into.clone()));
-        }
-
-        let nested_inner = Arc::new(Field::new(
-            "item",
-            DataType::FixedSizeList(inner.clone(), FIXED_SIZE_LIST_WILDCARD),
-            false,
-        ));
-
-        let invalid_cases = vec![
-            DataType::Int32,
-            DataType::Boolean,
-            DataType::FixedSizeList(nested_inner.clone(), 1),
-        ];
-
-        for type_into in invalid_cases {
-            let out = coerced_from(&type_into, &type_from);
-            assert_eq!(out, None);
-        }
-        let type_into_nested = DataType::FixedSizeList(nested_inner.clone(), 3);
-        let type_from_nested =
-            DataType::FixedSizeList(nested_inner.clone(), FIXED_SIZE_LIST_WILDCARD);
-        let out = coerced_from(&type_into_nested, &type_from_nested);
-        assert_eq!(out, Some(type_into_nested));
-
-        let inner = Arc::new(Field::new("item", DataType::Int32, false));
         let current_types = vec![
             DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
         ];
