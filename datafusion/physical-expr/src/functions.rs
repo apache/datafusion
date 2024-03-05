@@ -117,14 +117,6 @@ macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     };
 }
 
-#[cfg(feature = "regex_expressions")]
-macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        use crate::regex_expressions;
-        regex_expressions::$FUNC::<$T>
-    }};
-}
-
 #[cfg(not(feature = "regex_expressions"))]
 macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
