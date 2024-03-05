@@ -277,8 +277,8 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
-            if let Some(valid_type) = coerced_from(valid_type, current_type) {
-                new_type.push(valid_type)
+            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
+                new_type.push(coerced_type)
             } else {
                 // not possible
                 return None;
@@ -416,7 +416,15 @@ fn coerced_from<'a>(
         // Note that not all rules in `comparison_coercion` can be reused here.
         // For example, all numeric types can be coerced into Utf8 for comparison,
         // but not for function arguments.
-        _ => comparison_binary_numeric_coercion(type_into, type_from),
+        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
+            |coerced_type| {
+                if *type_into == coerced_type {
+                    Some(coerced_type)
+                } else {
+                    None
+                }
+            },
+        ),
     }
 }
 
