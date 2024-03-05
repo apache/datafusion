@@ -19,6 +19,8 @@
 
 use std::{collections::VecDeque, ops::Range, sync::Arc};
 
+use arrow::compute::concat_batches;
+use arrow::datatypes::SchemaRef;
 use arrow::{
     array::ArrayRef,
     compute::{concat, SortOptions},
@@ -248,10 +250,38 @@ impl WindowFrameContext {
 pub struct PartitionBatchState {
     /// The record_batch belonging to current partition
     pub record_batch: RecordBatch,
+    /// The record batch that keeps the most recent row at the input
+    /// Please note that, this batch doesn't necessarily have same partitioning with `record_batch`.
+    /// Keeping track of this batch enables us to prune `record_batch` when partition is sparse.
+    pub most_recent_row: Option<RecordBatch>,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
     /// Number of rows emitted for each partition
     pub n_out_row: usize,
+}
+
+impl PartitionBatchState {
+    pub fn new(schema: SchemaRef) -> Self {
+        let empty_batch = RecordBatch::new_empty(schema);
+        Self {
+            record_batch: empty_batch.clone(),
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
+    pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.record_batch = concat_batches(&batch.schema(), [&self.record_batch, batch])?;
+        Ok(())
+    }
+
+    pub fn set_most_recent_row(&mut self, batch: RecordBatch) {
+        // Make sure, batch contains only single row.
+        // Prior information is unnecessary.
+        assert_eq!(batch.num_rows(), 1);
+        self.most_recent_row = Some(batch);
+    }
 }
 
 /// This structure encapsulates all the state information we require as we scan

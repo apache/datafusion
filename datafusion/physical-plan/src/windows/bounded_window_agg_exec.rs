@@ -371,23 +371,23 @@ trait PartitionSearcher: Send {
         window_expr: &[Arc<dyn WindowExpr>],
         partition_buffers: &mut PartitionBatches,
     ) -> Result<()> {
-        if record_batch.num_rows() > 0 {
-            let partition_batches =
-                self.evaluate_partition_batches(&record_batch, window_expr)?;
-            for (partition_row, partition_batch) in partition_batches {
-                let partition_batch_state = partition_buffers
-                    .entry(partition_row)
-                    .or_insert_with(|| PartitionBatchState {
-                        record_batch: RecordBatch::new_empty(partition_batch.schema()),
-                        is_end: false,
-                        n_out_row: 0,
-                    });
-                partition_batch_state.record_batch = concat_batches(
-                    &partition_batch.schema(),
-                    [&partition_batch_state.record_batch, &partition_batch],
-                )?;
-            }
+        if record_batch.num_rows() == 0 {
+            return Ok(());
         }
+        let partition_batches =
+            self.evaluate_partition_batches(&record_batch, window_expr)?;
+        for (partition_row, partition_batch) in partition_batches {
+            let partition_batch_state = partition_buffers
+                .entry(partition_row)
+                .or_insert_with(|| PartitionBatchState::new(partition_batch.schema()));
+            partition_batch_state.extend(&partition_batch)?;
+        }
+
+        let last_row = get_last_row_batch(&record_batch)?;
+        for (_partition_row, partition_batch) in partition_buffers.iter_mut() {
+            partition_batch.set_most_recent_row(last_row.clone());
+        }
+
         self.mark_partition_end(partition_buffers);
 
         *input_buffer = if input_buffer.num_rows() == 0 {
@@ -1115,6 +1115,16 @@ fn get_aggregate_result_out_column(
         .ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
 }
 
+/// Constructs a batch from the last row of batch in the argument.
+pub(crate) fn get_last_row_batch(batch: &RecordBatch) -> Result<RecordBatch> {
+    if batch.num_rows() == 0 {
+        return exec_err!(
+            "Latest batch should have at least 1 row to generate watermark"
+        );
+    }
+    Ok(batch.slice(batch.num_rows() - 1, 1))
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
@@ -1596,6 +1606,12 @@ mod tests {
             "+----+----------+-------------+-----------------+-------+",
             "| 0  | 0        | 0           | 0               | 2     |",
             "| 1  | 1        | 0           | 0               | 2     |",
+            "| 2  | 2        | 0           | 0               | 2     |",
+            "| 3  | 3        | 0           | 0               | 1     |",
+            "| 4  | 4        | 0           | 1               | 2     |",
+            "| 5  | 5        | 0           | 1               | 2     |",
+            "| 6  | 6        | 0           | 1               | 2     |",
+            "| 7  | 7        | 0           | 1               | 1     |",
             "+----+----------+-------------+-----------------+-------+",
         ];
         assert_batches_eq!(expected, &batches);

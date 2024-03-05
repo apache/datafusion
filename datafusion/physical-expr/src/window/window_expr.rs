@@ -24,7 +24,7 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::SortOptions;
+use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
@@ -157,6 +157,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         self.get_result_column(
             &mut accumulator,
             batch,
+            None,
             &mut last_range,
             &mut window_frame_ctx,
             0,
@@ -194,6 +195,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
+            let most_recent_row = partition_batch_state.most_recent_row.as_ref();
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
@@ -204,6 +206,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
+                most_recent_row,
                 // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
@@ -217,28 +220,53 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Calculates the window expression result for the given record batch.
     /// Assumes that `record_batch` belongs to a single partition.
+    #[allow(clippy::too_many_arguments)]
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
+        most_recent_row: Option<&RecordBatch>,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let values = self.evaluate_args(record_batch)?;
-        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+        let mut contains_most_recent_row = false;
+        let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
+            contains_most_recent_row = true;
+            let batch =
+                concat_batches(&record_batch.schema(), [record_batch, most_recent_row])?;
+            let values = self.evaluate_args(&batch)?;
+            let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
+            (values, order_bys)
+        } else {
+            let values = self.evaluate_args(record_batch)?;
+            let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+            (values, order_bys)
+        };
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
+        let end_point = if contains_most_recent_row {
+            length - 1
+        } else {
+            length
+        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         let is_causal = self.get_window_frame().is_causal();
-        while idx < length {
+        while idx < end_point {
             // Start search from the last_range. This squeezes searched range.
-            let cur_range =
+            let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // Exit if the range is non-causal and extends all the way:
             if cur_range.end == length && !is_causal && not_end {
+                if contains_most_recent_row {
+                    cur_range.end -= 1;
+                }
                 break;
+            }
+            if contains_most_recent_row && cur_range.end == length {
+                // Do not use watermark row, as valid index
+                cur_range.end -= 1;
             }
             let value = self.get_aggregate_result_inside_range(
                 last_range,
