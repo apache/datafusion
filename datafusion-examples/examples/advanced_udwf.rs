@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
     // creating a new `PartitionEvaluator`)
     //
     // `ORDER BY time`: within each partition ('green' or 'red') the
-    // rows will be be ordered by the value in the `time` column
+    // rows will be ordered by the value in the `time` column
     //
     // `evaluate_inside_range` is invoked with a window defined by the
     // SQL. In this case:

@@ -29,7 +29,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -193,15 +193,17 @@ impl PhysicalOptimizerRule for OutputRequirements {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match self.mode {
             RuleMode::Add => require_top_ordering(plan),
-            RuleMode::Remove => plan.transform_up(&|plan| {
-                if let Some(sort_req) =
-                    plan.as_any().downcast_ref::<OutputRequirementExec>()
-                {
-                    Ok(Transformed::Yes(sort_req.input()))
-                } else {
-                    Ok(Transformed::No(plan))
-                }
-            }),
+            RuleMode::Remove => plan
+                .transform_up(&|plan| {
+                    if let Some(sort_req) =
+                        plan.as_any().downcast_ref::<OutputRequirementExec>()
+                    {
+                        Ok(Transformed::yes(sort_req.input()))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                })
+                .data(),
         }
     }
 

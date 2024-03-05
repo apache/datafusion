@@ -4451,7 +4451,7 @@ mod tests {
         // per distinct value.
         //
         // The alignment requirements differ across architectures and
-        // thus the size of the enum appears to as as well
+        // thus the size of the enum appears to as well
 
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }

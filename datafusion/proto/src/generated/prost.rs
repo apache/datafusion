@@ -895,6 +895,8 @@ pub struct ScalarUdfExprNode {
     pub fun_name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2723,17 +2725,17 @@ pub enum ScalarFunction {
     Gcd = 85,
     ArrayAppend = 86,
     ArrayConcat = 87,
-    ArrayDims = 88,
+    /// 88 was ArrayDims
     ArrayRepeat = 89,
     ArrayLength = 90,
-    ArrayNdims = 91,
+    /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
     ArrayPrepend = 94,
     ArrayRemove = 95,
     ArrayReplace = 96,
     /// 97 was ArrayToString
-    Cardinality = 98,
+    /// 98 was Cardinality
     ArrayElement = 99,
     ArraySlice = 100,
     Cot = 103,
@@ -2765,10 +2767,11 @@ pub enum ScalarFunction {
     ArrayDistinct = 129,
     ArrayResize = 130,
     EndsWith = 131,
-    InStr = 132,
+    /// / 132 was InStr
     MakeDate = 133,
     ArrayReverse = 134,
-    RegexpLike = 135,
+    /// / 135 is RegexpLike
+    ///
     /// / 137 was ToDate
     ToChar = 136,
 }
@@ -2859,16 +2862,13 @@ impl ScalarFunction {
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
-            ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
-            ScalarFunction::ArrayNdims => "ArrayNdims",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
@@ -2897,10 +2897,8 @@ impl ScalarFunction {
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::InStr => "InStr",
             ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
-            ScalarFunction::RegexpLike => "RegexpLike",
             ScalarFunction::ToChar => "ToChar",
         }
     }
@@ -2987,16 +2985,13 @@ impl ScalarFunction {
             "Gcd" => Some(Self::Gcd),
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
-            "ArrayDims" => Some(Self::ArrayDims),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
-            "ArrayNdims" => Some(Self::ArrayNdims),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
-            "Cardinality" => Some(Self::Cardinality),
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
@@ -3025,10 +3020,8 @@ impl ScalarFunction {
             "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
-            "InStr" => Some(Self::InStr),
             "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
-            "RegexpLike" => Some(Self::RegexpLike),
             "ToChar" => Some(Self::ToChar),
             _ => None,
         }

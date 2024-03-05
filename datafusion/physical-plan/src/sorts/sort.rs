@@ -27,7 +27,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter, SpawnedTask};
+use crate::common::{spawn_buffered, IPCWriter};
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -41,11 +41,15 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::compute::{concat_batches, lexsort_to_indices, take};
+use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, SortField};
+use arrow_array::{Array, UInt32Array};
+use arrow_schema::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
@@ -587,7 +591,13 @@ pub(crate) fn sort_batch(
         .map(|expr| expr.evaluate_to_sort_column(batch))
         .collect::<Result<Vec<_>>>()?;
 
-    let indices = lexsort_to_indices(&sort_columns, fetch)?;
+    let indices = if is_multi_column_with_lists(&sort_columns) {
+        // lex_sort_to_indices doesn't support List with more than one colum
+        // https://github.com/apache/arrow-rs/issues/5454
+        lexsort_to_indices_multi_columns(sort_columns, fetch)?
+    } else {
+        lexsort_to_indices(&sort_columns, fetch)?
+    };
 
     let columns = batch
         .columns()
@@ -596,6 +606,48 @@ pub(crate) fn sort_batch(
         .collect::<Result<_, _>>()?;
 
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
+}
+
+#[inline]
+fn is_multi_column_with_lists(sort_columns: &[SortColumn]) -> bool {
+    sort_columns.iter().any(|c| {
+        matches!(
+            c.values.data_type(),
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        )
+    })
+}
+
+pub(crate) fn lexsort_to_indices_multi_columns(
+    sort_columns: Vec<SortColumn>,
+    limit: Option<usize>,
+) -> Result<UInt32Array> {
+    let (fields, columns) = sort_columns.into_iter().fold(
+        (vec![], vec![]),
+        |(mut fields, mut columns), sort_column| {
+            fields.push(SortField::new_with_options(
+                sort_column.values.data_type().clone(),
+                sort_column.options.unwrap_or_default(),
+            ));
+            columns.push(sort_column.values);
+            (fields, columns)
+        },
+    );
+
+    // TODO reuse converter and rows, refer to TopK.
+    let converter = RowConverter::new(fields)?;
+    let rows = converter.convert_columns(&columns)?;
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+    let mut len = rows.num_rows();
+    if let Some(limit) = limit {
+        len = limit.min(len);
+    }
+    let indices =
+        UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
+
+    Ok(indices)
 }
 
 async fn spill_sorted_batches(
@@ -1154,6 +1206,82 @@ mod tests {
         // explicitlty ensure the metadata is present
         assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lex_sort_by_mixed_types() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(2), None, Some(1), Some(2)])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(3)]),
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(6), None]),
+                    Some(vec![Some(5)]),
+                ])),
+            ],
+        )?;
+
+        let sort_exec = Arc::new(SortExec::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: col("a", &schema)?,
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: true,
+                    },
+                },
+                PhysicalSortExpr {
+                    expr: col("b", &schema)?,
+                    options: SortOptions {
+                        descending: true,
+                        nulls_first: false,
+                    },
+                },
+            ],
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None)?),
+        ));
+
+        assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
+        assert_eq!(
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            *sort_exec.schema().field(1).data_type()
+        );
+
+        let result: Vec<RecordBatch> = collect(sort_exec.clone(), task_ctx).await?;
+        let metrics = sort_exec.metrics().unwrap();
+        assert!(metrics.elapsed_compute().unwrap() > 0);
+        assert_eq!(metrics.output_rows().unwrap(), 4);
+        assert_eq!(result.len(), 1);
+
+        let expected = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(1), Some(2), Some(2)])),
+                Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1)]),
+                    Some(vec![Some(6), None]),
+                    Some(vec![Some(5)]),
+                    Some(vec![Some(3)]),
+                ])),
+            ],
+        )?;
+
+        assert_eq!(expected, result[0]);
 
         Ok(())
     }

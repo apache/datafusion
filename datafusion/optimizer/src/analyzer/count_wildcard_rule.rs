@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::analyzer::AnalyzerRule;
+
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
+};
 use datafusion_common::Result;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
@@ -27,7 +32,6 @@ use datafusion_expr::{
     aggregate_function, expr, lit, Aggregate, Expr, Filter, LogicalPlan,
     LogicalPlanBuilder, Projection, Sort, Subquery,
 };
-use std::sync::Arc;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -43,7 +47,7 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down(&analyze_internal)
+        plan.transform_down(&analyze_internal).data()
     }
 
     fn name(&self) -> &str {
@@ -61,7 +65,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Transformed::Yes(
+            Ok(Transformed::yes(
                 LogicalPlanBuilder::from((*window.input).clone())
                     .window(window_expr)?
                     .build()?,
@@ -74,7 +78,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Transformed::Yes(LogicalPlan::Aggregate(
+            Ok(Transformed::yes(LogicalPlan::Aggregate(
                 Aggregate::try_new(agg.input.clone(), agg.group_expr, aggr_expr)?,
             )))
         }
@@ -83,7 +87,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .iter()
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Transformed::Yes(LogicalPlan::Sort(Sort {
+            Ok(Transformed::yes(LogicalPlan::Sort(Sort {
                 expr: sort_expr,
                 input,
                 fetch,
@@ -95,7 +99,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .iter()
                 .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Transformed::Yes(LogicalPlan::Projection(
+            Ok(Transformed::yes(LogicalPlan::Projection(
                 Projection::try_new(projection_expr, projection.input)?,
             )))
         }
@@ -103,22 +107,22 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             predicate, input, ..
         }) => {
             let predicate = rewrite_preserving_name(predicate, &mut rewriter)?;
-            Ok(Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+            Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
                 predicate, input,
             )?)))
         }
 
-        _ => Ok(Transformed::No(plan)),
+        _ => Ok(Transformed::no(plan)),
     }
 }
 
 struct CountWildcardRewriter {}
 
 impl TreeNodeRewriter for CountWildcardRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
-        let new_expr = match old_expr.clone() {
+    fn f_up(&mut self, old_expr: Expr) -> Result<Transformed<Expr>> {
+        Ok(match old_expr.clone() {
             Expr::WindowFunction(expr::WindowFunction {
                 fun:
                     expr::WindowFunctionDefinition::AggregateFunction(
@@ -131,7 +135,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 null_treatment,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
-                    Expr::WindowFunction(expr::WindowFunction {
+                    Transformed::yes(Expr::WindowFunction(expr::WindowFunction {
                         fun: expr::WindowFunctionDefinition::AggregateFunction(
                             aggregate_function::AggregateFunction::Count,
                         ),
@@ -140,10 +144,10 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                         order_by,
                         window_frame,
                         null_treatment,
-                    })
+                    }))
                 }
 
-                _ => old_expr,
+                _ => Transformed::no(old_expr),
             },
             Expr::AggregateFunction(AggregateFunction {
                 func_def:
@@ -156,68 +160,65 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 order_by,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard { qualifier: None } => {
-                    Expr::AggregateFunction(AggregateFunction::new(
+                    Transformed::yes(Expr::AggregateFunction(AggregateFunction::new(
                         aggregate_function::AggregateFunction::Count,
                         vec![lit(COUNT_STAR_EXPANSION)],
                         distinct,
                         filter,
                         order_by,
-                    ))
+                    )))
                 }
-                _ => old_expr,
+                _ => Transformed::no(old_expr),
             },
 
             ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
-            }) => {
-                let new_plan = subquery
-                    .as_ref()
-                    .clone()
-                    .transform_down(&analyze_internal)?;
-                ScalarSubquery(Subquery {
-                    subquery: Arc::new(new_plan),
-                    outer_ref_columns,
-                })
-            }
+            }) => subquery
+                .as_ref()
+                .clone()
+                .transform_down(&analyze_internal)?
+                .update_data(|new_plan| {
+                    ScalarSubquery(Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns,
+                    })
+                }),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            }) => {
-                let new_plan = subquery
-                    .subquery
-                    .as_ref()
-                    .clone()
-                    .transform_down(&analyze_internal)?;
-
-                Expr::InSubquery(InSubquery::new(
-                    expr,
-                    Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                    },
-                    negated,
-                ))
-            }
-            Expr::Exists(expr::Exists { subquery, negated }) => {
-                let new_plan = subquery
-                    .subquery
-                    .as_ref()
-                    .clone()
-                    .transform_down(&analyze_internal)?;
-
-                Expr::Exists(expr::Exists {
-                    subquery: Subquery {
-                        subquery: Arc::new(new_plan),
-                        outer_ref_columns: subquery.outer_ref_columns,
-                    },
-                    negated,
-                })
-            }
-            _ => old_expr,
-        };
-        Ok(new_expr)
+            }) => subquery
+                .subquery
+                .as_ref()
+                .clone()
+                .transform_down(&analyze_internal)?
+                .update_data(|new_plan| {
+                    Expr::InSubquery(InSubquery::new(
+                        expr,
+                        Subquery {
+                            subquery: Arc::new(new_plan),
+                            outer_ref_columns: subquery.outer_ref_columns,
+                        },
+                        negated,
+                    ))
+                }),
+            Expr::Exists(expr::Exists { subquery, negated }) => subquery
+                .subquery
+                .as_ref()
+                .clone()
+                .transform_down(&analyze_internal)?
+                .update_data(|new_plan| {
+                    Expr::Exists(expr::Exists {
+                        subquery: Subquery {
+                            subquery: Arc::new(new_plan),
+                            outer_ref_columns: subquery.outer_ref_columns,
+                        },
+                        negated,
+                    })
+                }),
+            _ => Transformed::no(old_expr),
+        })
     }
 }
 

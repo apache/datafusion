@@ -40,9 +40,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::common::SpawnedTask;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::path::Path;
@@ -729,16 +729,7 @@ impl DataSink for ParquetSink {
             }
         }
 
-        match demux_task.join().await {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
-            }
-        }
+        demux_task.join_unwind().await?;
 
         Ok(row_count as u64)
     }
@@ -831,19 +822,8 @@ fn spawn_rg_join_and_finalize_task(
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
         for task in column_writer_tasks.into_iter() {
-            match task.join().await {
-                Ok(r) => {
-                    let w = r?;
-                    finalized_rg.push(w.close()?);
-                }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic())
-                    } else {
-                        unreachable!()
-                    }
-                }
-            }
+            let writer = task.join_unwind().await?;
+            finalized_rg.push(writer.close()?);
         }
 
         Ok((finalized_rg, rg_rows))
@@ -952,31 +932,21 @@ async fn concatenate_parallel_row_groups(
     let mut row_count = 0;
 
     while let Some(task) = serialize_rx.recv().await {
-        match task.join().await {
-            Ok(result) => {
-                let mut rg_out = parquet_writer.next_row_group()?;
-                let (serialized_columns, cnt) = result?;
-                row_count += cnt;
-                for chunk in serialized_columns {
-                    chunk.append_to_row_group(&mut rg_out)?;
-                    let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
-                        object_store_writer
-                            .write_all(buff_to_flush.as_slice())
-                            .await?;
-                        buff_to_flush.clear();
-                    }
-                }
-                rg_out.close()?;
-            }
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
+        let result = task.join_unwind().await;
+        let mut rg_out = parquet_writer.next_row_group()?;
+        let (serialized_columns, cnt) = result?;
+        row_count += cnt;
+        for chunk in serialized_columns {
+            chunk.append_to_row_group(&mut rg_out)?;
+            let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+            if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
+                object_store_writer
+                    .write_all(buff_to_flush.as_slice())
+                    .await?;
+                buff_to_flush.clear();
             }
         }
+        rg_out.close()?;
     }
 
     let inner_writer = parquet_writer.into_inner()?;
@@ -1020,18 +990,7 @@ async fn output_single_parquet_file_parallelized(
     )
     .await?;
 
-    match launch_serialization_task.join().await {
-        Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => {
-            if e.is_panic() {
-                std::panic::resume_unwind(e.into_panic())
-            } else {
-                unreachable!()
-            }
-        }
-    }
-
+    launch_serialization_task.join_unwind().await?;
     Ok(row_count)
 }
 
