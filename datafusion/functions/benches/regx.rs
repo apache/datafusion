@@ -17,8 +17,6 @@
 
 extern crate criterion;
 
-use std::sync::Arc;
-
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -29,6 +27,8 @@ use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use std::iter;
+use std::sync::Arc;
 fn data(rng: &mut ThreadRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
