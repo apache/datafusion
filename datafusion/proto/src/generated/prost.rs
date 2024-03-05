@@ -2676,7 +2676,7 @@ pub enum ScalarFunction {
     ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
-    RegexpReplace = 39,
+    /// 39 was RegexpReplace
     Repeat = 40,
     Replace = 41,
     Reverse = 42,
@@ -2817,7 +2817,6 @@ impl ScalarFunction {
             ScalarFunction::Md5 => "MD5",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
-            ScalarFunction::RegexpReplace => "RegexpReplace",
             ScalarFunction::Repeat => "Repeat",
             ScalarFunction::Replace => "Replace",
             ScalarFunction::Reverse => "Reverse",
@@ -2940,7 +2939,6 @@ impl ScalarFunction {
             "MD5" => Some(Self::Md5),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
-            "RegexpReplace" => Some(Self::RegexpReplace),
             "Repeat" => Some(Self::Repeat),
             "Replace" => Some(Self::Replace),
             "Reverse" => Some(Self::Reverse),

@@ -15,112 +15,112 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Some of these functions reference the Postgres documentation
-// or implementation to ensure compatibility and are subject to
-// the Postgres license.
-
-//! Regex expressions
-
-use std::sync::{Arc, OnceLock};
-
-use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
-    OffsetSizeTrait,
+//! Regx expressions
+use arrow::array::new_null_array;
+use arrow::array::ArrayDataBuilder;
+use arrow::array::BufferBuilder;
+use arrow::array::GenericStringArray;
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::datatypes::DataType;
+use datafusion_common::exec_err;
+use datafusion_common::plan_err;
+use datafusion_common::ScalarValue;
+use datafusion_common::{
+    cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
-use hashbrown::HashMap;
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_physical_expr::functions::Hint;
 use regex::Regex;
-
-use datafusion_common::{arrow_datafusion_err, exec_err, plan_err};
-use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-
-use crate::functions::{
-    make_scalar_function_inner, make_scalar_function_with_hints, Hint,
-};
-
-/// Get the first argument from the given string array.
-///
-/// Note: If the array is empty or the first argument is null,
-/// then calls the given early abort function.
-macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident) => {{
-        let array = as_generic_string_array::<T>($ARG)?;
-        if array.len() == 0 || array.is_null(0) {
-            return $EARLY_ABORT(array);
-        } else {
-            array.value(0)
-        }
-    }};
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::OnceLock;
+#[derive(Debug)]
+pub(super) struct RegexpReplaceFunc {
+    signature: Signature,
 }
-
-/// Extract a specific group from a string column, using a regular expression.
-///
-/// The full list of supported features and syntax can be found at
-/// <https://docs.rs/regex/latest/regex/#syntax>
-///
-/// Supported flags can be found at
-/// <https://docs.rs/regex/latest/regex/#grouping-and-flags>
-///
-/// # Examples
-///
-/// ```ignore
-/// # use datafusion::prelude::*;
-/// # use datafusion::error::Result;
-/// # #[tokio::main]
-/// # async fn main() -> Result<()> {
-/// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/data/regex.csv", CsvReadOptions::new()).await?;
-///
-/// // use  the regexp_match function to test col 'values',
-/// // against patterns in col 'patterns' without flags
-/// let df = df.with_column(
-///     "a",
-///     regexp_match(vec![col("values"), col("patterns")])
-/// )?;
-/// // use the regexp_match function to test col 'values',
-/// // against patterns in col 'patterns' with flags
-/// let df = df.with_column(
-///     "b",
-///     regexp_match(vec![col("values"), col("patterns"), col("flags")]),
-/// )?;
-///
-/// // literals can be used as well with dataframe calls
-/// let df = df.with_column(
-///     "c",
-///     regexp_match(vec![lit("foobarbequebaz"), lit("(bar)(beque)")]),
-/// )?;
-///
-/// df.show().await?;
-///
-/// # Ok(())
-/// # }
-/// ```
-pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        2 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            arrow_string::regexp::regexp_match(values, regex, None)
-                .map_err(|e| arrow_datafusion_err!(e))
+impl RegexpReplaceFunc {
+    pub fn new() -> Self {
+        use DataType::*;
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                ],
+                Volatility::Immutable,
+            ),
         }
-        3 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let flags = as_generic_string_array::<T>(&args[2])?;
-
-            if flags.iter().any(|s| s == Some("g")) {
-                return plan_err!("regexp_match() does not support the \"global\" option")
-            }
-
-            arrow_string::regexp::regexp_match(values, regex, Some(flags))
-                .map_err(|e| arrow_datafusion_err!(e))
-        }
-        other => exec_err!(
-            "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
-        ),
     }
 }
 
+impl ScalarUDFImpl for RegexpReplaceFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "regexp_replace"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        Ok(match &arg_types[0] {
+            LargeUtf8 | LargeBinary => LargeUtf8,
+            Utf8 | Binary => Utf8,
+            Null => Null,
+            Dictionary(_, t) => match **t {
+                LargeUtf8 | LargeBinary => LargeUtf8,
+                Utf8 | Binary => Utf8,
+                Null => Null,
+                _ => {
+                    return plan_err!(
+                        "the regexp_replace can only accept strings but got {:?}",
+                        **t
+                    );
+                }
+            },
+            other => {
+                return plan_err!(
+                    "The regexp_replace function can only accept strings. Got {other}"
+                );
+            }
+        })
+    }
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let is_scalar = len.is_none();
+        let result = regexp_replace_func(args);
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
+    }
+}
+fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Utf8 => specialize_regexp_replace::<i32>(args),
+        DataType::LargeUtf8 => specialize_regexp_replace::<i64>(args),
+        other => {
+            internal_err!("Unsupported data type {other:?} for function regexp_replace")
+        }
+    }
+}
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
@@ -283,7 +283,20 @@ fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
     // Also acts like an early abort mechanism when the input array is empty.
     Ok(new_null_array(input_array.data_type(), input_array.len()))
 }
-
+/// Get the first argument from the given string array.
+///
+/// Note: If the array is empty or the first argument is null,
+/// then calls the given early abort function.
+macro_rules! fetch_string_arg {
+    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident) => {{
+        let array = as_generic_string_array::<T>($ARG)?;
+        if array.len() == 0 || array.is_null(0) {
+            return $EARLY_ABORT(array);
+        } else {
+            array.value(0)
+        }
+    }};
+}
 /// Special cased regex_replace implementation for the scenario where
 /// the pattern, replacement and flags are static (arrays that are derived
 /// from scalars). This means we can skip regex caching system and basically
@@ -358,7 +371,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 /// on the given set of arguments.
 pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
     args: &[ColumnarValue],
-) -> Result<ScalarFunctionImplementation> {
+) -> Result<ArrayRef> {
     // This will serve as a dispatch table where we can
     // leverage it in order to determine whether the scalarity
     // of the given set of arguments fits a better specialized
@@ -371,7 +384,13 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         // it is not available, we'll claim that it is scalar.
         matches!(args.get(3), Some(ColumnarValue::Scalar(_)) | None),
     );
-
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
+    let inferred_length = len.unwrap_or(1);
     match (
         is_source_scalar,
         is_pattern_scalar,
@@ -391,91 +410,45 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         // we will create many regexes and it is best to use the implementation
         // that caches it. If there are no flags, we can simply ignore it here,
         // and let the specialized function handle it.
-        (_, true, true, true) => Ok(make_scalar_function_with_hints(
-            _regexp_replace_static_pattern_replace::<T>,
-            vec![
+        (_, true, true, true) => {
+            let hints = [
                 Hint::Pad,
                 Hint::AcceptsSingular,
                 Hint::AcceptsSingular,
                 Hint::AcceptsSingular,
-            ],
-        )),
+            ];
+            let args = args
+                .iter()
+                .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
+                .map(|(arg, hint)| {
+                    // Decide on the length to expand this scalar to depending
+                    // on the given hints.
+                    let expansion_len = match hint {
+                        Hint::AcceptsSingular => 1,
+                        Hint::Pad => inferred_length,
+                    };
+                    arg.clone().into_array(expansion_len)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            _regexp_replace_static_pattern_replace::<T>(&args)
+        }
 
         // If there are no specialized implementations, we'll fall back to the
         // generic implementation.
-        (_, _, _, _) => Ok(make_scalar_function_inner(regexp_replace::<T>)),
+        (_, _, _, _) => {
+            let args = args
+                .iter()
+                .map(|arg| arg.clone().into_array(inferred_length))
+                .collect::<Result<Vec<_>>>()?;
+            regexp_replace::<T>(&args)
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use arrow::array::*;
 
-    use datafusion_common::ScalarValue;
-
     use super::*;
-
-    #[test]
-    fn test_case_sensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
-        let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
-        let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a");
-        expected_builder.append(true);
-        expected_builder.append(false);
-        expected_builder.values().append_value("b");
-        expected_builder.append(true);
-        expected_builder.append(false);
-        expected_builder.append(false);
-        let expected = expected_builder.finish();
-
-        let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
-
-        assert_eq!(re.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_case_insensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
-        let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from(vec!["i"; 5]);
-
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
-        let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a");
-        expected_builder.append(true);
-        expected_builder.values().append_value("a");
-        expected_builder.append(true);
-        expected_builder.values().append_value("b");
-        expected_builder.append(true);
-        expected_builder.values().append_value("b");
-        expected_builder.append(true);
-        expected_builder.append(false);
-        let expected = expected_builder.finish();
-
-        let re =
-            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .unwrap();
-
-        assert_eq!(re.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_unsupported_global_flag_regexp_match() {
-        let values = StringArray::from(vec!["abc"]);
-        let patterns = StringArray::from(vec!["^(a)"]);
-        let flags = StringArray::from(vec!["g"]);
-
-        let re_err =
-            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .expect_err("unsupported flag should have failed");
-
-        assert_eq!(re_err.strip_backtrace(), "Error during planning: regexp_match() does not support the \"global\" option");
-    }
 
     #[test]
     fn test_static_pattern_regexp_replace() {
@@ -585,39 +558,6 @@ mod tests {
             pattern_err.strip_backtrace(),
             "External error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
         );
-    }
-
-    #[test]
-    fn test_regexp_can_specialize_all_cases() {
-        macro_rules! make_scalar {
-            () => {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("foo".to_string())))
-            };
-        }
-
-        macro_rules! make_array {
-            () => {
-                ColumnarValue::Array(
-                    Arc::new(StringArray::from(vec!["bar"; 2])) as ArrayRef
-                )
-            };
-        }
-
-        for source in [make_scalar!(), make_array!()] {
-            for pattern in [make_scalar!(), make_array!()] {
-                for replacement in [make_scalar!(), make_array!()] {
-                    for flags in [Some(make_scalar!()), Some(make_array!()), None] {
-                        let mut args =
-                            vec![source.clone(), pattern.clone(), replacement.clone()];
-                        if let Some(flags) = flags {
-                            args.push(flags.clone());
-                        }
-                        let regex_func = specialize_regexp_replace::<i32>(&args);
-                        assert!(regex_func.is_ok());
-                    }
-                }
-            }
-        }
     }
 
     #[test]
