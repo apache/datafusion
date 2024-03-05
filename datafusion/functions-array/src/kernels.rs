@@ -19,15 +19,17 @@
 
 use arrow::array::ListArray;
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, OffsetSizeTrait,
-    StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array,
+    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
+    OffsetSizeTrait, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::Field;
-use arrow::datatypes::{DataType, UInt64Type};
+use arrow::datatypes::UInt64Type;
+use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
 use datafusion_common::cast::{
-    as_int64_array, as_large_list_array, as_list_array, as_string_array,
+    as_date32_array, as_int64_array, as_interval_mdn_array, as_large_list_array,
+    as_list_array, as_string_array,
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use std::any::type_name;
@@ -437,4 +439,47 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         array_type => exec_err!("array_ndims does not support type {array_type:?}"),
     }
+}
+pub fn gen_range_date(
+    args: &[ArrayRef],
+    include_upper: i32,
+) -> datafusion_common::Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!("arguments length does not match");
+    }
+    let (start_array, stop_array, step_array) = (
+        Some(as_date32_array(&args[0])?),
+        as_date32_array(&args[1])?,
+        Some(as_interval_mdn_array(&args[2])?),
+    );
+
+    let mut values = vec![];
+    let mut offsets = vec![0];
+    for (idx, stop) in stop_array.iter().enumerate() {
+        let mut stop = stop.unwrap_or(0);
+        let start = start_array.as_ref().map(|x| x.value(idx)).unwrap_or(0);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
+        let neg = months < 0 || days < 0;
+        if include_upper == 0 {
+            stop = Date32Type::subtract_month_day_nano(stop, step);
+        }
+        let mut new_date = start;
+        loop {
+            if neg && new_date < stop || !neg && new_date > stop {
+                break;
+            }
+            values.push(new_date);
+            new_date = Date32Type::add_month_day_nano(new_date, step);
+        }
+        offsets.push(values.len() as i32);
+    }
+
+    let arr = Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Date32, true)),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(Date32Array::from(values)),
+        None,
+    )?);
+    Ok(arr)
 }

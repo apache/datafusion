@@ -1949,8 +1949,13 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_has](#array_has)
+- [array_has_all](#array_has_all)
+- [array_has_any](#array_has_any)]
 - [array_element](#array_element)
+- [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_fill](#array_fill)
 - [array_indexof](#array_indexof)
 - [array_join](#array_join)
 - [array_length](#array_length)
@@ -1972,6 +1977,7 @@ from_unixtime(expression)
 - [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
+- [array_union](#array_union)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -3144,11 +3150,38 @@ trim_array(array, n)
 
 ### `range`
 
-Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]` or `SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);`
 
 The range start..end contains all values with start <= x < end. It is empty if start >= end.
 
 Step can not be 0 (then the range will be nonsense.).
+
+Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+For example,
+
+```
+SELECT range(3);
+SELECT range(1,5);
+SELECT range(1,5,1);
+```
+
+are allowed in number ranges
+
+but in date ranges, only
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
+```
+
+is allowed, and
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+SELECT range(NULL, DATE '1993-03-01', INTERVAL '1' MONTH);
+SELECT range(DATE '1992-09-01', NULL, INTERVAL '1' MONTH);
+```
+
+are not allowed
 
 #### Arguments
 
