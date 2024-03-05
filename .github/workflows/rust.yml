@@ -82,9 +82,6 @@ jobs:
       - name: Check function packages (array_expressions)
         run: cargo check --no-default-features --features=array_expressions -p datafusion
 
-      - name: Check function packages (core_expressions)
-        run: cargo check --no-default-features --features=core_expressions -p datafusion
-
       - name: Check function packages (datetime_expressions)
         run: cargo check --no-default-features --features=datetime_expressions -p datafusion
 
