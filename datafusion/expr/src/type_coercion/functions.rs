@@ -522,6 +522,7 @@ mod tests {
         let current_types = vec![
             DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
         ];
+
         let signature = Signature::exact(
             vec![DataType::FixedSizeList(
                 inner.clone(),
@@ -529,11 +530,21 @@ mod tests {
             )],
             Volatility::Stable,
         );
+
         let coerced_data_types = data_types(&current_types, &signature).unwrap();
         assert_eq!(coerced_data_types, current_types);
 
+        // make sure it can't coerce to a different size
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 3)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature);
+        assert!(coerced_data_types.is_err());
+
         Ok(())
     }
+
     #[test]
     fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
         let type_into = DataType::FixedSizeList(
