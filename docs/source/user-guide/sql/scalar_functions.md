@@ -3158,6 +3158,7 @@ SELECT range(3);
 SELECT range(1,5);
 SELECT range(1,5,1);
 ```
+
 are allowed in number ranges
 
 but in date ranges, only
@@ -3165,14 +3166,17 @@ but in date ranges, only
 ```
 SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
 ```
-is allowed, and 
+
+is allowed, and
 
 ```
 SELECT range(DATE '1992-09-01', DATE '1993-03-01', NULL);
 SELECT range(NULL, DATE '1993-03-01', INTERVAL '1' MONTH);
 SELECT range(DATE '1992-09-01', NULL, INTERVAL '1' MONTH);
 ```
+
 are not allowed
+
 #### Arguments
 
 - **start**: start of the range
