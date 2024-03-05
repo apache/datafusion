@@ -22,7 +22,6 @@ use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
@@ -30,7 +29,6 @@ use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::ScalarFunctionImplementation;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::functions::Hint;
@@ -104,7 +102,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             });
 
         let is_scalar = len.is_none();
-        let result = regexp_replace_func(&args);
+        let result = regexp_replace_func(args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
@@ -393,7 +391,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
             ColumnarValue::Array(a) => Some(a.len()),
         });
     let inferred_length = len.unwrap_or(1);
-    let result = match (
+    match (
         is_source_scalar,
         is_pattern_scalar,
         is_replacement_scalar,
@@ -413,7 +411,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         // that caches it. If there are no flags, we can simply ignore it here,
         // and let the specialized function handle it.
         (_, true, true, true) => {
-            let hints = vec![
+            let hints = [
                 Hint::Pad,
                 Hint::AcceptsSingular,
                 Hint::AcceptsSingular,
@@ -444,8 +442,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                 .collect::<Result<Vec<_>>>()?;
             regexp_replace::<T>(&args)
         }
-    };
-    result
+    }
 }
 #[cfg(test)]
 mod tests {
