@@ -211,19 +211,19 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let name = match field {
                 GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
-                GetFieldAccess::ListIndex { key } => {
-                    let key = create_physical_name(key, false)?;
-                    format!("{expr}[{key}]")
+                GetFieldAccess::ListIndex { key: _ } => {
+                    unreachable!(
+                        "ListIndex should have been rewritten in OperatorToFunction"
+                    )
                 }
                 GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
+                    start: _,
+                    stop: _,
+                    stride: _,
                 } => {
-                    let start = create_physical_name(start, false)?;
-                    let stop = create_physical_name(stop, false)?;
-                    let stride = create_physical_name(stride, false)?;
-                    format!("{expr}[{start}:{stop}:{stride}]")
+                    unreachable!(
+                        "ListIndex should have been rewritten in OperatorToFunction"
+                    )
                 }
             };
 
