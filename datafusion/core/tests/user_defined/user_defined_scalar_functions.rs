@@ -17,10 +17,12 @@
 
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
+    Array, ArrayRef, ArrowNativeTypeOp, Float32Array, Float64Array, Int32Array,
+    RecordBatch, UInt8Array,
 };
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
@@ -31,10 +33,12 @@ use datafusion_common::{
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
+    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+use parking_lot::Mutex;
 
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
@@ -731,6 +735,128 @@ async fn verify_udf_return_type() -> Result<()> {
         "+-------+-------+",
     ];
     assert_batches_sorted_eq!(&expected, &df.collect().await?);
+
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct MockFunctionFactory {
+    pub captured_expr: Mutex<Option<Expr>>,
+}
+
+#[async_trait::async_trait]
+impl FunctionFactory for MockFunctionFactory {
+    #[doc = r" Crates and registers a function from [CreateFunction] statement"]
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    async fn create(
+        &self,
+        _config: &SessionConfig,
+        statement: CreateFunction,
+    ) -> datafusion::error::Result<RegisterFunction> {
+        // In this example, we always create a function that adds its arguments
+        // with the name specified in `CREATE FUNCTION`. In a real implementation
+        // the body of the created UDF would also likely be a function of the contents
+        // of the `CreateFunction`
+        let mock_add = Arc::new(|args: &[datafusion_expr::ColumnarValue]| {
+            let args = datafusion_expr::ColumnarValue::values_to_arrays(args)?;
+            let base =
+                datafusion_common::cast::as_float64_array(&args[0]).expect("cast failed");
+            let exponent =
+                datafusion_common::cast::as_float64_array(&args[1]).expect("cast failed");
+
+            let array = base
+                .iter()
+                .zip(exponent.iter())
+                .map(|(base, exponent)| match (base, exponent) {
+                    (Some(base), Some(exponent)) => Some(base.add_wrapping(exponent)),
+                    _ => None,
+                })
+                .collect::<arrow_array::Float64Array>();
+            Ok(datafusion_expr::ColumnarValue::from(
+                Arc::new(array) as arrow_array::ArrayRef
+            ))
+        });
+
+        let args = statement.args.unwrap();
+        let mock_udf = create_udf(
+            &statement.name,
+            vec![args[0].data_type.clone(), args[1].data_type.clone()],
+            Arc::new(statement.return_type.unwrap()),
+            datafusion_expr::Volatility::Immutable,
+            mock_add,
+        );
+
+        // capture expression so we can verify
+        // it has been parsed
+        *self.captured_expr.lock() = statement.params.return_;
+
+        Ok(RegisterFunction::Scalar(Arc::new(mock_udf)))
+    }
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement() -> Result<()> {
+    let function_factory = Arc::new(MockFunctionFactory::default());
+    let runtime_config = RuntimeConfig::new();
+    let runtime_environment = RuntimeEnv::new(runtime_config)?;
+
+    let session_config = SessionConfig::new();
+    let state =
+        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
+            .with_function_factory(function_factory.clone());
+
+    let ctx = SessionContext::new_with_state(state);
+    let options = SQLOptions::new().with_allow_ddl(false);
+
+    let sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+
+    // try to `create function` when sql options have allow ddl disabled
+    assert!(ctx.sql_with_options(sql, options).await.is_err());
+
+    // Create the `better_add` function dynamically via CREATE FUNCTION statement
+    assert!(ctx.sql(sql).await.is_ok());
+    // try to `drop function` when sql options have allow ddl disabled
+    assert!(ctx
+        .sql_with_options("drop function better_add", options)
+        .await
+        .is_err());
+
+    ctx.sql("select better_add(2.0, 2.0)").await?.show().await?;
+
+    // check if we sql expr has been converted to datafusion expr
+    let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
+    assert_eq!("$1 + $2", captured_expression.to_string());
+
+    // statement drops  function
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+    // no function, it panics
+    assert!(ctx.sql("drop function better_add").await.is_err());
+    // no function, it dies not care
+    assert!(ctx.sql("drop function if exists better_add").await.is_ok());
+    // query should fail as there is no function
+    assert!(ctx.sql("select better_add(2.0, 2.0)").await.is_err());
+
+    // tests expression parsing
+    // if expression is not correct
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
+
+    // tests bad function definition
+    let bad_definition_sql = r#"
+    CREATE FUNCTION bad_definition_fun(DOUBLE, DOUBLE)
+        RET BAD_TYPE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_definition_sql).await.is_err());
 
     Ok(())
 }
