@@ -542,6 +542,14 @@ mod tests {
         let coerced_data_types = data_types(&current_types, &signature);
         assert!(coerced_data_types.is_err());
 
+        // make sure it works with the same type.
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 2)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
         Ok(())
     }
 
