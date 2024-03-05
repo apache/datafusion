@@ -980,6 +980,9 @@ impl ExecutionPlan for SortExec {
                         let batch = batch?;
                         sorter.insert_batch(batch).await?;
                     }
+                    // Test whether benchmarks catch this
+                    // TODO: remove before merge!
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     sorter.sort()
                 })
                 .try_flatten(),

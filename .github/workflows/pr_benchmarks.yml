@@ -1,0 +1,63 @@
+name: Run and Cache Benchmarks
+
+on:
+  pull_request:
+    types: [labeled, opened, reopened, synchronize]
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+        run: echo "$GITHUB_CONTEXT"
+
+      - name: Checkout PR changes
+        uses: actions/checkout@v4
+
+      - name: Setup data and generate unique result names
+        run: |
+          cd benchmarks
+          mkdir data
+          
+          # Setup the TPC-H data set with a scale factor of 10
+          ./bench.sh data tpch
+          
+          # Generate a unique-ish identifier for the results using 
+          # branch name and commit sha
+          short_ref=$(echo "${{ github.head_ref }}" | cut -c1-20)
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "HEAD_REF_SHA=$short_ref-$short_sha" >> "$GITHUB_ENV" 
+          
+          short_sha=$(echo "${{ github.event.pull_request.base.sha }}" | cut -c1-7)
+          echo "BASE_REF_SHA=${{ github.base_ref }}-$short_sha" >> "$GITHUB_ENV"
+
+      - name: Benchmark PR changes
+        env:
+          RESULTS_NAME: ${{ env.HEAD_REF_SHA }}
+        run: |
+          cd benchmarks
+
+          ./bench.sh run tpch
+
+      - name: Checkout base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          clean: false
+
+      - name: Benchmark baseline and compare
+        env:
+          RESULTS_NAME: ${{ env.BASE_REF_SHA }}
+        run: |
+          cd benchmarks
+
+          ./bench.sh run tpch
+          
+          # Temporary workaround, until `RESULTS_NAME` var lands into main
+          mv -f results/HEAD results/${{ env.BASE_REF_SHA }}
+          
+          pip3 install rich
+          ./bench.sh compare ${{ env.BASE_REF_SHA }} ${{ env.HEAD_REF_SHA }}
