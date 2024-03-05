@@ -832,12 +832,7 @@ initcap(str)
 
 ### `instr`
 
-Returns the location where substr first appeared in str (counting from 1).
-If substr does not appear in str, return 0.
-
-```
-instr(str, substr)
-```
+_Alias of [strpos](#strpos)._
 
 #### Arguments
 
@@ -1107,6 +1102,10 @@ strpos(str, substr)
   Can be a constant, column, or function, and any combination of string operators.
 - **substr**: Substring expression to search for.
   Can be a constant, column, or function, and any combination of string operators.
+
+#### Aliases
+
+- instr
 
 ### `substr`
 
@@ -1440,7 +1439,8 @@ Additional examples can be found [here](https://github.com/apache/arrow-datafusi
 
 ### `position`
 
-Returns the position of substr in orig_str
+Returns the position of `substr` in `origstr` (counting from 1). If `substr` does
+not appear in `origstr`, return 0.
 
 ```
 position(substr in origstr)
@@ -1448,7 +1448,7 @@ position(substr in origstr)
 
 #### Arguments
 
-- **substr**: he pattern string.
+- **substr**: The pattern string.
 - **origstr**: The model string.
 
 ## Time and Date Functions
@@ -3144,11 +3144,38 @@ trim_array(array, n)
 
 ### `range`
 
-Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]` or `SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);`
 
 The range start..end contains all values with start <= x < end. It is empty if start >= end.
 
 Step can not be 0 (then the range will be nonsense.).
+
+Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+For example,
+
+```
+SELECT range(3);
+SELECT range(1,5);
+SELECT range(1,5,1);
+```
+
+are allowed in number ranges
+
+but in date ranges, only
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
+```
+
+is allowed, and
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+SELECT range(NULL, DATE '1993-03-01', INTERVAL '1' MONTH);
+SELECT range(DATE '1992-09-01', NULL, INTERVAL '1' MONTH);
+```
+
+are not allowed
 
 #### Arguments
 

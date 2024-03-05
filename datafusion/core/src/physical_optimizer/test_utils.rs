@@ -40,7 +40,7 @@ use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunctionDefinition};
@@ -376,15 +376,19 @@ pub fn sort_exec(
 /// TODO: Once [`ExecutionPlan`] implements [`PartialEq`], string comparisons should be
 /// replaced with direct plan equality checks.
 pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<T>> {
-    context.transform_up(&|node| {
-        let children_plans = node.plan.children();
-        assert_eq!(node.children.len(), children_plans.len());
-        for (child_plan, child_node) in children_plans.iter().zip(node.children.iter()) {
-            assert_eq!(
-                displayable(child_plan.as_ref()).one_line().to_string(),
-                displayable(child_node.plan.as_ref()).one_line().to_string()
-            );
-        }
-        Ok(Transformed::No(node))
-    })
+    context
+        .transform_up(&|node| {
+            let children_plans = node.plan.children();
+            assert_eq!(node.children.len(), children_plans.len());
+            for (child_plan, child_node) in
+                children_plans.iter().zip(node.children.iter())
+            {
+                assert_eq!(
+                    displayable(child_plan.as_ref()).one_line().to_string(),
+                    displayable(child_node.plan.as_ref()).one_line().to_string()
+                );
+            }
+            Ok(Transformed::no(node))
+        })
+        .data()
 }

@@ -28,6 +28,8 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
+use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -62,8 +64,8 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::from_proto;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
 
 #[cfg(feature = "json")]
@@ -78,13 +80,15 @@ fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 
 // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
 // equality.
-fn roundtrip_expr_test<T, E>(initial_struct: T, ctx: SessionContext)
-where
-    for<'a> &'a T: TryInto<protobuf::LogicalExprNode, Error = E> + Debug,
-    E: Debug,
-{
-    let proto: protobuf::LogicalExprNode = (&initial_struct).try_into().unwrap();
-    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx).unwrap();
+fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
+    let extension_codec = DefaultLogicalExtensionCodec {};
+    let proto: protobuf::LogicalExprNode =
+        match serialize_expr(&initial_struct, &extension_codec) {
+            Ok(p) => p,
+            Err(e) => panic!("Error serializing expression: {:?}", e),
+        };
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
@@ -579,6 +583,11 @@ async fn roundtrip_expr_api() -> Result<()> {
         encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
         decode(lit("1234"), lit("hex")),
         array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+        array_dims(array(vec![lit(1), lit(2), lit(3)])),
+        array_ndims(array(vec![lit(1), lit(2), lit(3)])),
+        cardinality(array(vec![lit(1), lit(2), lit(3)])),
+        range(lit(1), lit(10), lit(2)),
+        gen_series(lit(1), lit(10), lit(2)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -630,6 +639,12 @@ pub mod proto {
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
         pub k: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct MyRegexUdfNode {
+        #[prost(string, tag = "1")]
+        pub pattern: String,
     }
 }
 
@@ -707,7 +722,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
                 let node = TopKPlanNode::new(
                     proto.k as usize,
                     input.clone(),
-                    from_proto::parse_expr(expr, ctx)?,
+                    from_proto::parse_expr(expr, ctx, self)?,
                 );
 
                 Ok(Extension {
@@ -725,7 +740,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
             let proto = proto::TopKPlanProto {
                 k: exec.k as u64,
-                expr: Some((&exec.expr).try_into()?),
+                expr: Some(serialize_expr(&exec.expr, self)?),
             };
 
             proto.encode(buf).map_err(|e| {
@@ -753,6 +768,109 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         internal_err!("unsupported plan type")
+    }
+}
+
+#[derive(Debug)]
+struct MyRegexUdf {
+    signature: Signature,
+    // regex as original string
+    pattern: String,
+}
+
+impl MyRegexUdf {
+    fn new(pattern: String) -> Self {
+        Self {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int32],
+                Volatility::Immutable,
+            ),
+            pattern,
+        }
+    }
+}
+
+/// Implement the ScalarUDFImpl trait for MyRegexUdf
+impl ScalarUDFImpl for MyRegexUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "regex_udf"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        if !matches!(args.first(), Some(&DataType::Utf8)) {
+            return plan_err!("regex_udf only accepts Utf8 arguments");
+        }
+        Ok(DataType::Int32)
+    }
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct ScalarUDFExtensionCodec {}
+
+impl LogicalExtensionCodec for ScalarUDFExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+        _ctx: &SessionContext,
+    ) -> Result<Extension> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>> {
+        internal_err!("unsupported plan type")
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _node: Arc<dyn TableProvider>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        internal_err!("unsupported plan type")
+    }
+
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        if name == "regex_udf" {
+            let proto = proto::MyRegexUdfNode::decode(buf).map_err(|err| {
+                DataFusionError::Internal(format!("failed to decode regex_udf: {}", err))
+            })?;
+
+            Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
+                proto.pattern,
+            ))))
+        } else {
+            not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        let binding = node.inner();
+        let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
+        let proto = proto::MyRegexUdfNode {
+            pattern: udf.pattern.clone(),
+        };
+        proto.encode(buf).map_err(|e| {
+            DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+        })?;
+        Ok(())
     }
 }
 
@@ -1662,6 +1780,30 @@ fn roundtrip_scalar_udf() {
     ctx.register_udf(udf);
 
     roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_scalar_udf_extension_codec() {
+    let pattern = ".*";
+    let udf = ScalarUDF::from(MyRegexUdf::new(pattern.to_string()));
+    let test_expr =
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf.clone()), vec![]));
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(udf);
+
+    let extension_codec = ScalarUDFExtensionCodec {};
+    let proto: protobuf::LogicalExprNode =
+        match serialize_expr(&test_expr, &extension_codec) {
+            Ok(p) => p,
+            Err(e) => panic!("Error serializing expression: {:?}", e),
+        };
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
+
+    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+
+    roundtrip_json_test(&proto);
 }
 
 #[test]

@@ -603,10 +603,10 @@ enum ScalarFunction {
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
   Now = 59;
   Translate = 60;
   Trim = 61;
@@ -636,17 +636,17 @@ enum ScalarFunction {
   Gcd = 85;
   ArrayAppend = 86;
   ArrayConcat = 87;
-  ArrayDims = 88;
+  // 88 was ArrayDims
   ArrayRepeat = 89;
   ArrayLength = 90;
-  ArrayNdims = 91;
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
   // 97 was ArrayToString
-  Cardinality = 98;
+  // 98 was Cardinality
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
@@ -664,7 +664,7 @@ enum ScalarFunction {
   ArrayEmpty = 115;
   ArrayPopBack = 116;
   StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
@@ -678,12 +678,12 @@ enum ScalarFunction {
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
-  InStr = 132;
+  /// 132 was InStr
   MakeDate = 133;
   ArrayReverse = 134;
-  RegexpLike = 135;
+  /// 135 is RegexpLike
   ToChar = 136;
-  ToDate = 137;
+  /// 137 was ToDate
 }
 
 message ScalarFunctionNode {
@@ -751,6 +751,7 @@ message AggregateUDFExprNode {
 message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
 }
 
 enum BuiltInWindowFunction {

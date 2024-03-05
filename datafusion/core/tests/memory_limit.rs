@@ -473,7 +473,7 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
-    /// N partitions of of sorted, dictionary encoded strings.
+    /// N partitions of sorted, dictionary encoded strings.
     DictionaryStrings {
         partitions: usize,
         /// If true, splits all input batches into 1 row each

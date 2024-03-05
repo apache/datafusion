@@ -206,6 +206,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         if self.is_lag() {
             let start = if self.non_null_offsets.len() == self.shift_offset as usize {
+                // How many rows needed previous than the current row to get necessary lag result
                 let offset: usize = self.non_null_offsets.iter().sum();
                 idx.saturating_sub(offset + 1)
             } else {
@@ -214,8 +215,13 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             let end = idx + 1;
             Ok(Range { start, end })
         } else {
-            let offset = (-self.shift_offset) as usize;
-            let end = min(idx + offset, n_rows);
+            let end = if self.non_null_offsets.len() == (-self.shift_offset) as usize {
+                // How many rows needed further than the current row to get necessary lead result
+                let offset: usize = self.non_null_offsets.iter().sum();
+                min(idx + offset + 1, n_rows)
+            } else {
+                n_rows
+            };
             Ok(Range { start: idx, end })
         }
     }
@@ -244,10 +250,10 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             range.start as i64 - self.shift_offset
         };
 
-        // Support LAG only for now, as LEAD requires some brainstorm first
         // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
         // If current row index points to NULL value the row is NOT counted
         if self.ignore_nulls && self.is_lag() {
+            // LAG when NULLS are ignored.
             // Find the nonNULL row index that shifted by offset comparing to current row index
             idx = if self.non_null_offsets.len() == self.shift_offset as usize {
                 let total_offset: usize = self.non_null_offsets.iter().sum();
@@ -270,10 +276,55 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 self.non_null_offsets[end_idx] += 1;
             }
         } else if self.ignore_nulls && !self.is_lag() {
-            // IGNORE NULLS and LEAD mode.
-            return Err(exec_datafusion_err!(
-                "IGNORE NULLS mode for LEAD is not supported for BoundedWindowAggExec"
-            ));
+            // LEAD when NULLS are ignored.
+            // Stores the necessary non-null entry number further than the current row.
+            let non_null_row_count = (-self.shift_offset) as usize;
+
+            if self.non_null_offsets.is_empty() {
+                // When empty, fill non_null offsets with the data further than the current row.
+                let mut offset_val = 1;
+                for idx in range.start + 1..range.end {
+                    if array.is_valid(idx) {
+                        self.non_null_offsets.push_back(offset_val);
+                        offset_val = 1;
+                    } else {
+                        offset_val += 1;
+                    }
+                    // It is enough to keep track of `non_null_row_count + 1` non-null offset.
+                    // further data is unnecessary for the result.
+                    if self.non_null_offsets.len() == non_null_row_count + 1 {
+                        break;
+                    }
+                }
+            } else if range.end < len as usize && array.is_valid(range.end) {
+                // Update `non_null_offsets` with the new end data.
+                if array.is_valid(range.end) {
+                    // When non-null, append a new offset.
+                    self.non_null_offsets.push_back(1);
+                } else {
+                    // When null, increment offset count of the last entry
+                    let last_idx = self.non_null_offsets.len() - 1;
+                    self.non_null_offsets[last_idx] += 1;
+                }
+            }
+
+            // Find the nonNULL row index that shifted by offset comparing to current row index
+            idx = if self.non_null_offsets.len() >= non_null_row_count {
+                let total_offset: usize =
+                    self.non_null_offsets.iter().take(non_null_row_count).sum();
+                (range.start + total_offset) as i64
+            } else {
+                -1
+            };
+            // Prune `self.non_null_offsets` from the start. so that at next iteration
+            // start of the `self.non_null_offsets` matches with current row.
+            if !self.non_null_offsets.is_empty() {
+                self.non_null_offsets[0] -= 1;
+                if self.non_null_offsets[0] == 0 {
+                    // When offset is 0. Remove it.
+                    self.non_null_offsets.pop_front();
+                }
+            }
         }
 
         // Set the default value if

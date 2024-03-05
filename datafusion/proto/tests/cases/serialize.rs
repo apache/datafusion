@@ -25,6 +25,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_expr::{col, create_udf, lit, ColumnarValue};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_proto::bytes::Serializeable;
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
 #[test]
 #[should_panic(
@@ -252,7 +254,6 @@ fn test_expression_serialization_roundtrip() {
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::BuiltinScalarFunction;
     use datafusion_proto::logical_plan::from_proto::parse_expr;
-    use datafusion_proto::protobuf::LogicalExprNode;
     use strum::IntoEnumIterator;
 
     let ctx = SessionContext::new();
@@ -266,8 +267,9 @@ fn test_expression_serialization_roundtrip() {
         let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
         let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
 
-        let proto = LogicalExprNode::try_from(&expr).unwrap();
-        let deserialize = parse_expr(&proto, &ctx).unwrap();
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        let proto = serialize_expr(&expr, &extension_codec).unwrap();
+        let deserialize = parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
         let serialize_name = extract_function_name(&expr);
         let deserialize_name = extract_function_name(&deserialize);

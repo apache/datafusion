@@ -629,12 +629,6 @@ scalar_expr!(
     "flattens an array of arrays into a single array."
 );
 scalar_expr!(
-    ArrayDims,
-    array_dims,
-    array,
-    "returns an array of the array's dimensions."
-);
-scalar_expr!(
     ArrayElement,
     array_element,
     array element,
@@ -651,12 +645,6 @@ scalar_expr!(
     array_length,
     array dimension,
     "returns the length of the array dimension."
-);
-scalar_expr!(
-    ArrayNdims,
-    array_ndims,
-    array,
-    "returns the number of dimensions of the array."
 );
 scalar_expr!(
     ArrayDistinct,
@@ -739,13 +727,6 @@ scalar_expr!(
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
-    Cardinality,
-    cardinality,
-    array,
-    "returns the total number of elements in the array."
-);
-
-scalar_expr!(
     ArrayResize,
     array_resize,
     array size value,
@@ -786,7 +767,6 @@ scalar_expr!(
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -843,11 +823,6 @@ nary_scalar_expr!(
     "fill up a string to the length by appending the characters"
 );
 nary_scalar_expr!(
-    RegexpLike,
-    regexp_like,
-    "matches a regular expression against a string and returns true or false if there was at least one match or not"
-);
-nary_scalar_expr!(
     RegexpReplace,
     regexp_replace,
     "replace strings that match a regular expression"
@@ -880,36 +855,6 @@ scalar_expr!(
     to_char,
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
-);
-nary_scalar_expr!(
-    ToDate,
-    to_date,
-    "converts string to date according to the given format"
-);
-nary_scalar_expr!(
-    ToTimestamp,
-    to_timestamp,
-    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMillis,
-    to_timestamp_millis,
-    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMicros,
-    to_timestamp_micros,
-    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampNanos,
-    to_timestamp_nanos,
-    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampSeconds,
-    to_timestamp_seconds,
-    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
 );
 scalar_expr!(
     FromUnixtime,
@@ -1362,7 +1307,6 @@ mod test {
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
@@ -1370,8 +1314,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern);
-        test_nary_scalar_expr!(RegexpLike, regexp_like, string, pattern, flags);
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,
@@ -1419,9 +1361,7 @@ mod test {
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
-        test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
@@ -1432,7 +1372,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);

@@ -23,15 +23,11 @@ use std::sync::Arc;
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_physical_expr::regex_expressions::{regexp_match, regexp_replace};
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
-
-use datafusion_physical_expr::regex_expressions::{
-    regexp_like, regexp_match, regexp_replace,
-};
-
 fn data(rng: &mut ThreadRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
@@ -78,20 +74,6 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("regexp_like_1000", |b| {
-        let mut rng = rand::thread_rng();
-        let data = Arc::new(data(&mut rng)) as ArrayRef;
-        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
-        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
-
-        b.iter(|| {
-            black_box(
-                regexp_like::<i32>(&[data.clone(), regex.clone(), flags.clone()])
-                    .expect("regexp_like should work on valid values"),
-            )
-        })
-    });
-
     c.bench_function("regexp_match_1000", |b| {
         let mut rng = rand::thread_rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;

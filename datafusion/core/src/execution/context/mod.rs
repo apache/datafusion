@@ -40,7 +40,7 @@ use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -2189,9 +2189,9 @@ impl<'a> BadPlanVisitor<'a> {
 }
 
 impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
@@ -2205,7 +2205,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            _ => Ok(VisitRecursion::Continue),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
     }
 }
@@ -2222,6 +2222,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
     use async_trait::async_trait;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
     use std::env;
     use std::path::PathBuf;
@@ -2321,7 +2322,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::disallowed_methods)]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
@@ -2332,7 +2332,7 @@ mod tests {
         let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
             .map(|ctx| {
-                tokio::spawn(async move {
+                SpawnedTask::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
                     ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
                         .await
@@ -2341,7 +2341,7 @@ mod tests {
             .collect();
 
         for handle in threads {
-            handle.await.unwrap().unwrap();
+            handle.join().await.unwrap().unwrap();
         }
         Ok(())
     }
