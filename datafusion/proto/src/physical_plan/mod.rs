@@ -468,6 +468,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
+                                                false,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
