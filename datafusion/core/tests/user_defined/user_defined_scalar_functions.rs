@@ -702,9 +702,7 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     let runtime_config = RuntimeConfig::new();
     let runtime_environment = RuntimeEnv::new(runtime_config)?;
 
-    // TODO: remove dialect once new version of sql parser arrives
-    let session_config =
-        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let session_config = SessionConfig::new();
     let state =
         SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
             .with_function_factory(function_factory.clone());
@@ -718,12 +716,12 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
         RETURN $1 + $2
     "#;
 
-    // try to create function when sql options have allow ddl disabled
+    // try to `create function` when sql options have allow ddl disabled
     assert!(ctx.sql_with_options(sql, options).await.is_err());
 
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
-    // try to drop function when sql options have allow ddl disabled
+    // try to `drop function` when sql options have allow ddl disabled
     assert!(ctx
         .sql_with_options("drop function better_add", options)
         .await
