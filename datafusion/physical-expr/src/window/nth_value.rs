@@ -29,7 +29,7 @@ use crate::PhysicalExpr;
 
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
@@ -132,7 +132,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
             finalized_result: None,
             kind: self.kind,
         };
-        Ok(Box::new(NthValueEvaluator { state, ignore_nulls: self.ignore_nulls }))
+        Ok(Box::new(NthValueEvaluator {
+            state,
+            ignore_nulls: self.ignore_nulls,
+        }))
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
@@ -223,8 +226,16 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
             match self.state.kind {
-                NthValueKind::First => ScalarValue::try_from_array_ignore_nulls_first(arr, range.start, self.ignore_nulls),
-                NthValueKind::Last => ScalarValue::try_from_array_ignore_nulls_last(arr, range.end - 1, self.ignore_nulls),
+                 NthValueKind::First => ScalarValue::try_from_array_ignore_nulls_first(
+                    arr,
+                    range.start,
+                    self.ignore_nulls,
+                 ),
+                NthValueKind::Last => ScalarValue::try_from_array_ignore_nulls_last(
+                    arr,
+                    range.end - 1,
+                    self.ignore_nulls,
+                ),
                 NthValueKind::Nth(n) => {
                     match n.cmp(&0) {
                         Ordering::Greater => {

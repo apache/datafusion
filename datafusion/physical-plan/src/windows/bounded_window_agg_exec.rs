@@ -1186,8 +1186,12 @@ mod tests {
             NthValue::nth("nth_value(-2)", col_a.clone(), DataType::Int32, 2, false)?
                 .reverse_expr()
                 .unwrap();
-        let last_value_func =
-            Arc::new(NthValue::last("last", col_a.clone(), DataType::Int32, false)) as _;
+        let last_value_func = Arc::new(NthValue::last(
+            "last",
+            col_a.clone(),
+            DataType::Int32,
+            false,
+        )) as _;
         let window_exprs = vec![
             // LAST_VALUE(a)
             Arc::new(BuiltInWindowExpr::new(

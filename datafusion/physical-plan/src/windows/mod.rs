@@ -250,7 +250,13 @@ fn create_built_in_window_expr(
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
-            Arc::new(NthValue::nth(name, arg, data_type.clone(), n, ignore_nulls)?)
+            Arc::new(NthValue::nth(
+                name,
+                arg,
+                data_type.clone(),
+                n,
+                ignore_nulls,
+            )?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
