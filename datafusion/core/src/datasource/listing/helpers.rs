@@ -33,12 +33,10 @@ use arrow::{
 use arrow_schema::Fields;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
-use datafusion_physical_expr::execution_props::ExecutionProps;
-
-use futures::stream::{BoxStream, FuturesUnordered};
-use futures::{StreamExt, TryStreamExt};
+use futures::stream::{BoxStream, FuturesUnordered, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};

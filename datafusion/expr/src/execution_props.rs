@@ -24,14 +24,12 @@ use std::sync::Arc;
 /// Holds per-query execution properties and data (such as statement
 /// starting timestamps).
 ///
-/// An [`ExecutionProps`] is created each time a [`LogicalPlan`] is
+/// An [`ExecutionProps`] is created each time a `LogicalPlan` is
 /// prepared for execution (optimized). If the same plan is optimized
 /// multiple times, a new `ExecutionProps` is created each time.
 ///
 /// It is important that this structure be cheap to create as it is
 /// done so during predicate pruning and expression simplification
-///
-/// [`LogicalPlan`]: datafusion_expr::LogicalPlan
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,

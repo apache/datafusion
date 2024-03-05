@@ -38,6 +38,7 @@ use datafusion_common::{
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
     ScalarFunctionDefinition, Volatility,
@@ -46,6 +47,40 @@ use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterva
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// This structure handles API for expression simplification
+///
+/// Provides simplification information based on DFSchema and
+/// [`ExecutionProps`]. This is the default implementation used by DataFusion
+///
+/// For example:
+/// ```
+/// use arrow::datatypes::{Schema, Field, DataType};
+/// use datafusion_expr::{col, lit};
+/// use datafusion_common::{DataFusionError, ToDFSchema};
+/// use datafusion_expr::execution_props::ExecutionProps;
+/// use datafusion_expr::simplify::SimplifyContext;
+/// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+///
+/// // Create the schema
+/// let schema = Schema::new(vec![
+///     Field::new("i", DataType::Int64, false),
+///   ])
+///   .to_dfschema_ref().unwrap();
+///
+/// // Create the simplifier
+/// let props = ExecutionProps::new();
+/// let context = SimplifyContext::new(&props)
+///    .with_schema(schema);
+/// let simplifier = ExprSimplifier::new(context);
+///
+/// // Use the simplifier
+///
+/// // b < 2 or (1 > 3)
+/// let expr = col("b").lt(lit(2)).or(lit(1).gt(lit(3)));
+///
+/// // b < 2
+/// let simplified = simplifier.simplify(expr).unwrap();
+/// assert_eq!(simplified, col("b").lt(lit(2)));
+/// ```
 pub struct ExprSimplifier<S> {
     info: S,
     /// Guarantees about the values of columns. This is provided by the user
@@ -63,7 +98,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// instance of [`SimplifyContext`]. See
     /// [`simplify`](Self::simplify) for an example.
     ///
-    /// [`SimplifyContext`]: crate::simplify_expressions::context::SimplifyContext
+    /// [`SimplifyContext`]: datafusion_expr::simplify::SimplifyContext
     pub fn new(info: S) -> Self {
         Self {
             info,
@@ -91,8 +126,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use arrow::datatypes::DataType;
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::Result;
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::simplify::SimplifyInfo;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+    /// use datafusion_common::DFSchema;
+    /// use std::sync::Arc;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
@@ -192,9 +231,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{
-    ///     ExprSimplifier, SimplifyContext};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
     ///   Field::new("x", DataType::Int64, false),
@@ -251,9 +290,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_optimizer::simplify_expressions::{
-    ///     ExprSimplifier, SimplifyContext};
+    /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
     ///   Field::new("a", DataType::Int64, false),
@@ -1263,6 +1302,19 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
             }
+
+            Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(udf),
+                args,
+            }) => match udf.simplify(args, info)? {
+                ExprSimplifyResult::Original(args) => {
+                    Transformed::yes(Expr::ScalarFunction(ScalarFunction {
+                        func_def: ScalarFunctionDefinition::UDF(udf),
+                        args,
+                    }))
+                }
+                ExprSimplifyResult::Simplified(expr) => Transformed::no(expr),
+            },
 
             // log
             Expr::ScalarFunction(ScalarFunction {

@@ -19,11 +19,10 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{Expr, ExprSchemable};
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
-#[allow(rustdoc::private_intra_doc_links)]
-/// The information necessary to apply algebraic simplification to an
+use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
+
+/// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.
 ///
 /// This trait exists so that other systems can plug schema
@@ -46,35 +45,11 @@ pub trait SimplifyInfo {
 /// Provides simplification information based on DFSchema and
 /// [`ExecutionProps`]. This is the default implementation used by DataFusion
 ///
-/// For example:
-/// ```
-/// use arrow::datatypes::{Schema, Field, DataType};
-/// use datafusion_expr::{col, lit};
-/// use datafusion_common::{DataFusionError, ToDFSchema};
-/// use datafusion_physical_expr::execution_props::ExecutionProps;
-/// use datafusion_optimizer::simplify_expressions::{SimplifyContext, ExprSimplifier};
+/// # Example
+/// See the `simplify_demo` in the [`expr_api` example]
 ///
-/// // Create the schema
-/// let schema = Schema::new(vec![
-///     Field::new("i", DataType::Int64, false),
-///   ])
-///   .to_dfschema_ref().unwrap();
-///
-/// // Create the simplifier
-/// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props)
-///    .with_schema(schema);
-/// let simplifier = ExprSimplifier::new(context);
-///
-/// // Use the simplifier
-///
-/// // b < 2 or (1 > 3)
-/// let expr = col("b").lt(lit(2)).or(lit(1).gt(lit(3)));
-///
-/// // b < 2
-/// let simplified = simplifier.simplify(expr).unwrap();
-/// assert_eq!(simplified, col("b").lt(lit(2)));
-/// ```
+/// [`expr_api` example]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+#[derive(Debug, Clone)]
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
     props: &'a ExecutionProps,
@@ -131,4 +106,13 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
     fn execution_props(&self) -> &ExecutionProps {
         self.props
     }
+}
+
+/// Was the expression simplified?
+pub enum ExprSimplifyResult {
+    /// The function call was simplified to an entirely new Expr
+    Simplified(Expr),
+    /// the function call could not be simplified, and the arguments
+    /// are return unmodified.
+    Original(Vec<Expr>),
 }
