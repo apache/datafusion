@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::signature::{ArrayFunctionSignature, TIMEZONE_WILDCARD};
+use std::sync::Arc;
+
+use crate::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+};
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -379,13 +383,28 @@ fn coerced_from<'a>(
         List(_) if matches!(type_from, FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
-        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this.
+        // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         List(_) | LargeList(_)
             if datafusion_common::utils::base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
         }
+        // should be able to coerce wildcard fixed size list to non wildcard fixed size list
+        FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD) => match type_from {
+            FixedSizeList(f_from, size_from) => {
+                match coerced_from(f_into.data_type(), f_from.data_type()) {
+                    Some(data_type) if &data_type != f_into.data_type() => {
+                        let new_field =
+                            Arc::new(f_into.as_ref().clone().with_data_type(data_type));
+                        Some(FixedSizeList(new_field, *size_from))
+                    }
+                    Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
 
         Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
@@ -415,8 +434,12 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::Volatility;
+
     use super::*;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
 
     #[test]
     fn test_maybe_data_types() {
@@ -489,6 +512,87 @@ mod tests {
         let valid_types = get_valid_types(&signature, &args)?;
         assert_eq!(valid_types.len(), 1);
         assert_eq!(valid_types[0], args);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fixed_list_wildcard_coerce() -> Result<()> {
+        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let current_types = vec![
+            DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
+        ];
+
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(
+                inner.clone(),
+                FIXED_SIZE_LIST_WILDCARD,
+            )],
+            Volatility::Stable,
+        );
+
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
+        // make sure it can't coerce to a different size
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 3)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature);
+        assert!(coerced_data_types.is_err());
+
+        // make sure it works with the same type.
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(inner.clone(), 2)],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
+        let type_into = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    FIXED_SIZE_LIST_WILDCARD,
+                ),
+                false,
+            )),
+            FIXED_SIZE_LIST_WILDCARD,
+        );
+
+        let type_from = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    4,
+                ),
+                false,
+            )),
+            3,
+        );
+
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(DataType::FixedSizeList(
+                Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        4,
+                    ),
+                    false,
+                )),
+                3,
+            ))
+        );
 
         Ok(())
     }

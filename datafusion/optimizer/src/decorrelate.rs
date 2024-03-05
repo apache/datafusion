@@ -18,7 +18,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 
-use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
+use crate::simplify_expressions::ExprSimplifier;
 use crate::utils::collect_subquery_cols;
 
 use datafusion_common::tree_node::{
@@ -26,6 +26,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
