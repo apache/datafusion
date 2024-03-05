@@ -757,32 +757,37 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <h3>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Link to this heading">¶</a></h3>
 <p>Below is a checklist of what you need to do to add a new scalar function to DataFusion:</p>
 <ul class="simple">
-<li><p>Add the actual implementation of the function:</p>
+<li><p>Add the actual implementation of the function to a new module file within:</p>
 <ul>
-<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/physical-expr/src/string_expressions.rs">here</a> for string functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/physical-expr/src/math_expressions.rs">here</a> for math functions</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/physical-expr/src/datetime_expressions.rs">here</a> for datetime functions</p></li>
-<li><p>create a new module <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/physical-expr/src">here</a> for other functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions-array/src">here</a> for array functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/crypto">here</a> for crypto functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/datetime">here</a> for datetime functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/encoding">here</a> for encoding functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/math">here</a> for math functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/regex">here</a> for regex functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/string">here</a> for string functions</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src/unicode">here</a> for unicode functions</p></li>
+<li><p>create a new module <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/functions/src">here</a> for other functions.</p></li>
 </ul>
 </li>
-<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/physical-expr/src/functions.rs">physical-expr/src</a>, add:</p>
+<li><p>New function modules - for example a <code class="docutils literal notranslate"><span class="pre">vector</span></code> module, should use a <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/features.html">rust feature</a> (for example <code class="docutils literal notranslate"><span class="pre">vector_expressions</span></code>) to allow DataFusion
+users to enable or disable the new module as desired.</p></li>
+<li><p>The implementation of the function is done via implementing <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait for the function struct.</p>
 <ul>
-<li><p>a new variant to <code class="docutils literal notranslate"><span class="pre">BuiltinScalarFunction</span></code></p></li>
-<li><p>a new entry to <code class="docutils literal notranslate"><span class="pre">FromStr</span></code> with the name of the function as called by SQL</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">return_type</span></code> with the expected return type of the function, given an incoming type</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">signature</span></code> with the signature of the function (number and types of its arguments)</p></li>
-<li><p>a new line in <code class="docutils literal notranslate"><span class="pre">create_physical_expr</span></code>/<code class="docutils literal notranslate"><span class="pre">create_physical_fun</span></code> mapping the built-in to the implementation</p></li>
-<li><p>tests to the function.</p></li>
+<li><p>See the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs">advanced_udf.rs</a> example for an example implementation</p></li>
+<li><p>Add tests for the new function</p></li>
+</ul>
+</li>
+<li><p>To connect the implementation of the function add to the mod.rs file:</p>
+<ul>
+<li><p>a <code class="docutils literal notranslate"><span class="pre">mod</span> <span class="pre">xyz;</span></code> where xyz is the new module file</p></li>
+<li><p>a call to <code class="docutils literal notranslate"><span class="pre">make_udf_function!(..);</span></code></p></li>
+<li><p>an item in <code class="docutils literal notranslate"><span class="pre">export_functions!(..);</span></code></p></li>
 </ul>
 </li>
 <li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
 <ul>
 <li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
-</ul>
-</li>
-<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/expr/src/expr_fn.rs">expr/src/expr_fn.rs</a>, add:</p>
-<ul>
-<li><p>a new entry of the <code class="docutils literal notranslate"><span class="pre">unary_scalar_expr!</span></code> macro for the new function.</p></li>
 </ul>
 </li>
 <li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md">here</a></p></li>
