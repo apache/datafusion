@@ -40,9 +40,7 @@ unicode_expressions = []
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
-datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions = { workspace = true }
 log = { workspace = true }
 sqlparser = { workspace = true }
 

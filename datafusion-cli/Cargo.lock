@@ -1296,7 +1296,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions",
  "half",
  "hashbrown 0.14.3",
  "hex",
@@ -1350,9 +1349,7 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "datafusion-common",
- "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions",
  "log",
  "sqlparser",
 ]

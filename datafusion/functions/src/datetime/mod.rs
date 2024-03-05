@@ -59,8 +59,7 @@ make_udf_function!(
 // functions with varargs currently
 
 pub mod expr_fn {
-    use datafusion_expr::{Expr, ScalarUDF};
-    use std::sync::Arc;
+    use datafusion_expr::Expr;
 
     #[doc = "coerces an arbitrary timestamp to the start of the nearest specified interval"]
     pub fn date_bin(args: Vec<Expr>) -> Expr {
@@ -150,14 +149,6 @@ pub mod expr_fn {
     #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
     pub fn to_timestamp_nanos(args: Vec<Expr>) -> Expr {
         super::to_timestamp_nanos().call(args)
-    }
-
-    pub fn _date_bin_scalar_udf() -> Arc<ScalarUDF> {
-        super::date_bin()
-    }
-
-    pub fn _date_part_scalar_udf() -> Arc<ScalarUDF> {
-        super::date_part()
     }
 }
 

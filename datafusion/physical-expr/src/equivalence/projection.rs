@@ -119,50 +119,33 @@ mod tests {
     };
     use crate::equivalence::EquivalenceProperties;
     use crate::execution_props::ExecutionProps;
-    use crate::expressions::{col, BinaryExpr, Literal};
+    use crate::expressions::{col, BinaryExpr};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::Result;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
     use itertools::Itertools;
 
     #[test]
     fn project_orderings() -> Result<()> {
-        let s = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
             Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]);
-        let df_schema = s.clone().to_dfschema()?;
-        let schema = Arc::new(s);
+        ]));
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let expr_col_ts = datafusion_common::Column::from_qualified_name("ts");
-        let interval_value = ScalarValue::IntervalDayTime(Some(2));
-        let expr_interval = Expr::Literal(interval_value.clone());
-        let interval = Arc::new(Literal::new(interval_value)) as Arc<dyn PhysicalExpr>;
-        let date_bin_udf = _date_bin_scalar_udf();
-        let date_bin_func = &crate::udf::create_physical_expr(
-            &date_bin_udf,
-            &[interval.clone(), col_ts.clone()],
-            date_bin_udf
-                .return_type_from_exprs(
-                    &[expr_interval, Expr::Column(expr_col_ts)],
-                    &df_schema,
-                )
-                .unwrap(),
-        )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),
             Operator::Plus,
@@ -234,12 +217,9 @@ mod tests {
                     (col_b, "b_new".to_string()),
                     (col_a, "a_new".to_string()),
                     (col_ts, "ts_new".to_string()),
-                    (date_bin_func, "date_bin_res".to_string()),
                 ],
                 // expected
                 vec![
-                    // [date_bin_res ASC]
-                    vec![("date_bin_res", option_asc)],
                     // [ts_new ASC]
                     vec![("ts_new", option_asc)],
                 ],
@@ -258,18 +238,13 @@ mod tests {
                     (col_b, "b_new".to_string()),
                     (col_a, "a_new".to_string()),
                     (col_ts, "ts_new".to_string()),
-                    (date_bin_func, "date_bin_res".to_string()),
                 ],
                 // expected
                 vec![
                     // [a_new ASC, ts_new ASC]
                     vec![("a_new", option_asc), ("ts_new", option_asc)],
-                    // [a_new ASC, date_bin_res ASC]
-                    vec![("a_new", option_asc), ("date_bin_res", option_asc)],
                     // [b_new ASC, ts_new ASC]
                     vec![("b_new", option_asc), ("ts_new", option_asc)],
-                    // [b_new ASC, date_bin_res ASC]
-                    vec![("b_new", option_asc), ("date_bin_res", option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------
@@ -654,39 +629,22 @@ mod tests {
 
     #[test]
     fn project_orderings2() -> Result<()> {
-        let s = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
             Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]);
-        let df_schema = s.clone().to_dfschema()?;
-        let schema = Arc::new(s.clone());
+        ]));
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let expr_col_ts = datafusion_common::Column::from_qualified_name("ts");
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),
             Operator::Plus,
             col_b.clone(),
         )) as Arc<dyn PhysicalExpr>;
-        let interval_value = ScalarValue::IntervalDayTime(Some(2));
-        let expr_interval = Expr::Literal(interval_value.clone());
-        let interval = Arc::new(Literal::new(interval_value)) as Arc<dyn PhysicalExpr>;
-        let date_bin_udf = _date_bin_scalar_udf();
-        let date_bin_ts = &crate::udf::create_physical_expr(
-            &date_bin_udf,
-            &[interval.clone(), col_ts.clone()],
-            date_bin_udf
-                .return_type_from_exprs(
-                    &[expr_interval, Expr::Column(expr_col_ts)],
-                    &df_schema,
-                )
-                .unwrap(),
-        )?;
 
         let round_c = &create_physical_expr(
             &BuiltinScalarFunction::Round,
@@ -704,7 +662,6 @@ mod tests {
             (col_b, "b_new".to_string()),
             (col_a, "a_new".to_string()),
             (col_c, "c_new".to_string()),
-            (date_bin_ts, "date_bin_res".to_string()),
             (round_c, "round_c_res".to_string()),
         ];
         let proj_exprs = proj_exprs
@@ -717,7 +674,6 @@ mod tests {
         let col_a_new = &col("a_new", &output_schema)?;
         let col_b_new = &col("b_new", &output_schema)?;
         let col_c_new = &col("c_new", &output_schema)?;
-        let col_date_bin_res = &col("date_bin_res", &output_schema)?;
         let col_round_c_res = &col("round_c_res", &output_schema)?;
         let a_new_plus_b_new = Arc::new(BinaryExpr::new(
             col_a_new.clone(),
@@ -762,7 +718,7 @@ mod tests {
                 // expected
                 vec![
                     // [a_new ASC, date_bin_res ASC]
-                    vec![(col_a_new, option_asc), (col_date_bin_res, option_asc)],
+                    vec![(col_a_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 4 ------------
@@ -779,10 +735,7 @@ mod tests {
                 // expected
                 vec![
                     // [a_new ASC, date_bin_res ASC]
-                    // Please note that result is not [a_new ASC, date_bin_res ASC, b_new ASC]
-                    // because, datebin_res may not be 1-1 function. Hence without introducing ts
-                    // dependency we cannot guarantee any ordering after date_bin_res column.
-                    vec![(col_a_new, option_asc), (col_date_bin_res, option_asc)],
+                    vec![(col_a_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------

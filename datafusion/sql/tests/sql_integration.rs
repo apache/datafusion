@@ -18,15 +18,15 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::{sync::Arc, vec};
 
+use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::{
-    assert_contains, config::ConfigOptions, exec_err, not_impl_err, DataFusionError,
-    Result, ScalarValue, TableReference,
+    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
@@ -39,7 +39,6 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, SqlToRel},
 };
 
-use datafusion_execution::FunctionRegistry;
 use rstest::rstest;
 
 #[test]
@@ -2663,8 +2662,7 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let mut context = MockContextProvider::default();
-    datafusion_functions::register_all(&mut context)?;
+    let context = MockContextProvider::default();
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2676,13 +2674,17 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let mut context = MockContextProvider::default().with_udf(make_udf(
-        "nullif",
-        vec![DataType::Int32, DataType::Int32],
-        DataType::Int32,
-    ));
-    datafusion_functions::register_all(&mut context)?;
-
+    let context = MockContextProvider::default()
+        .with_udf(make_udf(
+            "nullif",
+            vec![DataType::Int32, DataType::Int32],
+            DataType::Int32,
+        ))
+        .with_udf(make_udf(
+            "date_trunc",
+            vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
+            DataType::Int32,
+        ));
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2909,54 +2911,6 @@ impl ContextProvider for MockContextProvider {
         schema: SchemaRef,
     ) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(EmptyTable::new(schema)))
-    }
-}
-
-impl FunctionRegistry for MockContextProvider {
-    fn udfs(&self) -> HashSet<String> {
-        self.udfs
-            .keys()
-            .map(|s| s.to_string())
-            .collect::<HashSet<String>>()
-    }
-
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        let opt = self.udfs.get(name);
-        match opt {
-            Some(udf) => Ok(udf.clone()),
-            None => exec_err!("Not found"),
-        }
-    }
-
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        let opt = self.udafs.get(name);
-        match opt {
-            Some(udaf) => Ok(udaf.clone()),
-            None => exec_err!("Not found"),
-        }
-    }
-
-    fn udwf(&self, _name: &str) -> Result<Arc<WindowUDF>> {
-        not_impl_err!("not implemented")
-    }
-
-    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
-        Ok(self.udfs.insert(String::from(udf.name()), udf))
-    }
-
-    fn register_udaf(
-        &mut self,
-        udaf: Arc<AggregateUDF>,
-    ) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.udafs.insert(String::from(udaf.name()), udaf))
-    }
-
-    fn deregister_udf(&mut self, name: &str) -> Result<Option<Arc<ScalarUDF>>> {
-        Ok(self.udfs.remove(name))
-    }
-
-    fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.udafs.remove(name))
     }
 }
 

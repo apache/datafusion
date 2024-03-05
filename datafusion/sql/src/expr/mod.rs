@@ -31,7 +31,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
+    Result, ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -40,7 +41,6 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
-use datafusion_functions::expr_fn::_date_part_scalar_udf;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -170,12 +170,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
+                let date_part = self
+                    .context_provider
+                    .get_function_meta("date_part")
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Unable to find expected 'date_part' function"
+                        )
+                    })?;
+                let args = vec![
+                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+                ];
                 Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                    _date_part_scalar_udf(),
-                    vec![
-                        Expr::Literal(ScalarValue::from(format!("{field}"))),
-                        self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                    ],
+                    date_part, args,
                 )))
             }
 
