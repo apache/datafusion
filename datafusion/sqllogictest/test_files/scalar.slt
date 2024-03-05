@@ -1822,6 +1822,51 @@ SELECT COALESCE(c1 * c2, 0) FROM test
 statement ok
 drop table test
 
+# coalesce date32
+
+statement ok
+CREATE TABLE test(
+  d1_date DATE,
+  d2_date DATE,
+  d3_date DATE
+) as VALUES
+  ('2022-12-12','2022-12-12','2022-12-12'),
+  (NULL,'2022-12-11','2022-12-12'),
+  ('2022-12-12','2022-12-10','2022-12-12'),
+  ('2022-12-12',NULL,'2022-12-12'),
+  ('2022-12-12','2022-12-8','2022-12-12'),
+  ('2022-12-12','2022-12-7',NULL),
+  ('2022-12-12',NULL,'2022-12-12'),
+  (NULL,'2022-12-5','2022-12-12')
+;
+
+query D
+SELECT COALESCE(d1_date, d2_date, d3_date) FROM test
+----
+2022-12-12
+2022-12-11
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-05
+
+query T
+SELECT arrow_typeof(COALESCE(d1_date, d2_date, d3_date)) FROM test
+----
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+
+statement ok
+drop table test
+
 statement ok
 CREATE TABLE test(
   i32 INT,

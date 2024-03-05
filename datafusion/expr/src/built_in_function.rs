@@ -26,9 +26,7 @@ use std::sync::{Arc, OnceLock};
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
-use crate::{
-    conditional_expressions, FuncMonotonicity, Signature, TypeSignature, Volatility,
-};
+use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
@@ -941,10 +939,9 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
             }
-            BuiltinScalarFunction::Coalesce => Signature::variadic(
-                conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::Coalesce => {
+                Signature::variadic_equal(self.volatility())
+            }
             BuiltinScalarFunction::SHA224
             | BuiltinScalarFunction::SHA256
             | BuiltinScalarFunction::SHA384
@@ -1642,5 +1639,14 @@ mod tests {
             let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
             assert_eq!(func_from_str, *func_original);
         }
+    }
+
+    #[test]
+    fn test_coalesce_return_types() {
+        let coalesce = BuiltinScalarFunction::Coalesce;
+        let return_type = coalesce
+            .return_type(&[DataType::Date32, DataType::Date32])
+            .unwrap();
+        assert_eq!(return_type, DataType::Date32);
     }
 }
