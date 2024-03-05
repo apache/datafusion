@@ -2226,6 +2226,26 @@ impl ScalarValue {
     }
 
     /// Converts a value in `array` at `index` into a ScalarValue
+    pub fn try_from_array_ignore_nulls_first(array: &dyn Array, mut index: usize, ignore_nulls: bool) -> Result<Self> {
+        if ignore_nulls {
+            while index < (array.len() - 1) && !array.is_valid(index.clone()) {
+                index += 1;
+            }
+        }
+        Self::try_from_array(array, index)
+    }
+
+    pub fn try_from_array_ignore_nulls_last(array: &dyn Array, mut index: usize, ignore_nulls: bool) -> Result<Self> {
+        // If ignoring nulls, find the next non-null index.
+        if ignore_nulls {
+            while index > 0 && !array.is_valid(index.clone()) {
+                index -= 1;
+            }
+        }
+        Self::try_from_array(array, index)
+    }
+
+    /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
         if !array.is_valid(index) {
