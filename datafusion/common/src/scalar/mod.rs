@@ -2230,6 +2230,7 @@ impl ScalarValue {
         mut index: usize,
         ignore_nulls: bool,
     ) -> Result<Self> {
+        // If ignoring nulls, find the next non-null index.
         if ignore_nulls {
             while index < (array.len() - 1) && !array.is_valid(index) {
                 index += 1;
