@@ -99,7 +99,7 @@ impl GetIndexedFieldExpr {
         &self.arg
     }
 
-    fn schema_access(&self, input_schema: &Schema) -> Result<GetFieldAccessSchema> {
+    fn schema_access(&self, _input_schema: &Schema) -> Result<GetFieldAccessSchema> {
         Ok(match &self.field {
             GetFieldAccessExpr::NamedStructField { name } => {
                 GetFieldAccessSchema::NamedStructField { name: name.clone() }

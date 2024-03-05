@@ -233,13 +233,13 @@ pub fn create_physical_expr(
                 GetFieldAccess::NamedStructField { name } => {
                     GetFieldAccessExpr::NamedStructField { name: name.clone() }
                 }
-                GetFieldAccess::ListIndex { key } => {
+                GetFieldAccess::ListIndex { key: _ } => {
                     unreachable!("ListIndex should be rewritten in OperatorToFunction")
                 }
                 GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
+                    start: _,
+                    stop: _,
+                    stride: _,
                 } => {
                     unreachable!("ListRange should be rewritten in OperatorToFunction")
                 }
