@@ -24,7 +24,7 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
-use super::binary::comparison_coercion;
+use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
 /// Performs type coercion for function arguments.
 ///
@@ -183,6 +183,10 @@ fn get_valid_types(
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
                 |acc, x| {
+                    // The coerced types found by `comparison_coercion` are not guaranteed to be
+                    // coercible for the arguments. `comparison_coercion` returns more loose
+                    // types that can be coerced to both `acc` and `x` for comparison purpose.
+                    // See `maybe_data_types` for the actual coercion.
                     let coerced_type = comparison_coercion(&acc, x);
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
@@ -273,8 +277,7 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce.
-            // here we follow `get_valid_types` to use `comparison_coercion`.
-            if let Some(valid_type) = comparison_coercion(valid_type, current_type) {
+            if let Some(valid_type) = coerced_from(valid_type, current_type) {
                 new_type.push(valid_type)
             } else {
                 // not possible
@@ -410,7 +413,7 @@ fn coerced_from<'a>(
         }
 
         // cannot coerce
-        _ => None,
+        _ => comparison_binary_numeric_coercion(type_into, type_from),
     }
 }
 
@@ -459,7 +462,7 @@ mod tests {
                 vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
                 Some(vec![
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+TZ".into())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00".into())),
                     DataType::Timestamp(TimeUnit::Nanosecond, Some("+01".into())),
                 ]),
             ),
