@@ -16,7 +16,10 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{Array, ArrayRef, ArrowNativeTypeOp, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array};
+use arrow_array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Float32Array, Float64Array, Int32Array,
+    RecordBatch, UInt8Array,
+};
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
@@ -35,11 +38,11 @@ use datafusion_expr::{
 };
 use parking_lot::Mutex;
 
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
 use std::sync::Arc;
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
