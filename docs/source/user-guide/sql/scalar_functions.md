@@ -3150,7 +3150,7 @@ The range start..end contains all values with start <= x < end. It is empty if s
 
 Step can not be 0 (then the range will be nonsense.).
 
-Note that when the required range is a number, it accepts 1, 2, and 3 parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
 For example,
 
 ```
