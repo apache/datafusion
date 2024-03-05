@@ -272,8 +272,9 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
-            // attempt to coerce
-            if let Some(valid_type) = coerced_from(valid_type, current_type) {
+            // attempt to coerce.
+            // here we follow `get_valid_types` to use `comparison_coercion`.
+            if let Some(valid_type) = comparison_coercion(valid_type, current_type) {
                 new_type.push(valid_type)
             } else {
                 // not possible
