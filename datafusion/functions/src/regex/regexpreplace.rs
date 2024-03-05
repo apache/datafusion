@@ -448,8 +448,6 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
 mod tests {
     use arrow::array::*;
 
-    use datafusion_common::ScalarValue;
-
     use super::*;
 
     #[test]
