@@ -23,30 +23,27 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
 
-use crate::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinHashMap, JoinHashMapOffset, JoinHashMapType,
-};
-use crate::{
-    coalesce_partitions::CoalescePartitionsExec,
-    expressions::Column,
-    expressions::PhysicalSortExpr,
-    hash_utils::create_hashes,
-    joins::utils::{
-        adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, partitioned_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn, StatefulStreamResult,
-    },
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-use crate::{handle_state, DisplayAs};
-
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
+};
+use crate::ExecutionPlanProperties;
+use crate::{
+    coalesce_partitions::CoalescePartitionsExec,
+    execution_mode_from_children, handle_state,
+    hash_utils::create_hashes,
+    joins::utils::{
+        adjust_indices_by_join_type, adjust_right_output_partitioning,
+        apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+        check_join_is_valid, estimate_join_statistics, get_final_indices_from_bit_map,
+        need_produce_result_in_final, partitioned_join_output_partitioning,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
+        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+    },
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::array::{
@@ -67,7 +64,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -278,7 +275,7 @@ pub struct HashJoinExec {
     /// right (probe) side which are filtered by the hash table
     pub right: Arc<dyn ExecutionPlan>,
     /// Set of equijoin columns from the relations: `(left_col, right_col)`
-    pub on: Vec<(Column, Column)>,
+    pub on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
     /// Filters which are applied while finding matching rows
     pub filter: Option<JoinFilter>,
     /// How the join is performed (`OUTER`, `INNER`, etc)
@@ -289,8 +286,6 @@ pub struct HashJoinExec {
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
-    /// Output order
-    output_order: Option<Vec<PhysicalSortExpr>>,
     /// Partitioning mode to use
     pub mode: PartitionMode,
     /// Execution metrics
@@ -302,6 +297,8 @@ pub struct HashJoinExec {
     /// Otherwise, rows that have `null`s in the join columns will not be
     /// matched and thus will not appear in the output.
     pub null_equals_null: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl HashJoinExec {
@@ -331,14 +328,13 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let output_order = calculate_join_output_ordering(
-            left.output_ordering().unwrap_or(&[]),
-            right.output_ordering().unwrap_or(&[]),
+        let cache = Self::compute_properties(
+            &left,
+            &right,
+            Arc::new(schema.clone()),
             *join_type,
             &on,
-            left_schema.fields.len(),
-            &Self::maintains_input_order(*join_type),
-            Some(Self::probe_side()),
+            partition_mode,
         );
 
         Ok(HashJoinExec {
@@ -354,7 +350,7 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
-            output_order,
+            cache,
         })
     }
 
@@ -369,7 +365,7 @@ impl HashJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
@@ -409,6 +405,77 @@ impl HashJoinExec {
         // In current implementation right side is always probe side.
         JoinSide::Right
     }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        on: JoinOnRef,
+        mode: PartitionMode,
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = join_equivalence_properties(
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &Self::maintains_input_order(join_type),
+            Some(Self::probe_side()),
+            on,
+        );
+
+        // Get output partitioning:
+        let left_columns_len = left.schema().fields.len();
+        let output_partitioning = match mode {
+            PartitionMode::CollectLeft => match join_type {
+                JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
+                    right.output_partitioning(),
+                    left_columns_len,
+                ),
+                JoinType::RightSemi | JoinType::RightAnti => {
+                    right.output_partitioning().clone()
+                }
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::Full => Partitioning::UnknownPartitioning(
+                    right.output_partitioning().partition_count(),
+                ),
+            },
+            PartitionMode::Partitioned => partitioned_join_output_partitioning(
+                join_type,
+                left.output_partitioning(),
+                right.output_partitioning(),
+                left_columns_len,
+            ),
+            PartitionMode::Auto => Partitioning::UnknownPartitioning(
+                right.output_partitioning().partition_count(),
+            ),
+        };
+
+        // Determine execution mode by checking whether this join is pipeline
+        // breaking. This happens when the left side is unbounded, or the right
+        // side is unbounded with `Left`, `Full`, `LeftAnti` or `LeftSemi` join types.
+        let pipeline_breaking = left.execution_mode().is_unbounded()
+            || (right.execution_mode().is_unbounded()
+                && matches!(
+                    join_type,
+                    JoinType::Left
+                        | JoinType::Full
+                        | JoinType::LeftAnti
+                        | JoinType::LeftSemi
+                ));
+
+        let mode = if pipeline_breaking {
+            ExecutionMode::PipelineBreaking
+        } else {
+            execution_mode_from_children([left, right])
+        };
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
+    }
 }
 
 impl DisplayAs for HashJoinExec {
@@ -440,8 +507,8 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -451,16 +518,8 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| {
-                        (
-                            Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                            Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                        )
-                    })
-                    .unzip();
+                let (left_expr, right_expr) =
+                    self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
                     Distribution::HashPartitioned(right_expr),
@@ -471,71 +530,6 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
         }
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        let (left, right) = (children[0], children[1]);
-        // If left is unbounded, or right is unbounded with JoinType::Right,
-        // JoinType::Full, JoinType::RightAnti types.
-        let breaking = left
-            || (right
-                && matches!(
-                    self.join_type,
-                    JoinType::Left
-                        | JoinType::Full
-                        | JoinType::LeftAnti
-                        | JoinType::LeftSemi
-                ));
-
-        if breaking {
-            plan_err!(
-                "Join Error: The join with cannot be executed with unbounded inputs. {}",
-                if left && right {
-                    "Currently, we do not support unbounded inputs on both sides."
-                } else {
-                    "Please consider a different type of join or sources."
-                }
-            )
-        } else {
-            Ok(left || right)
-        }
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        match self.mode {
-            PartitionMode::CollectLeft => match self.join_type {
-                JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
-                    self.right.output_partitioning(),
-                    left_columns_len,
-                ),
-                JoinType::RightSemi | JoinType::RightAnti => {
-                    self.right.output_partitioning()
-                }
-                JoinType::Left
-                | JoinType::LeftSemi
-                | JoinType::LeftAnti
-                | JoinType::Full => Partitioning::UnknownPartitioning(
-                    self.right.output_partitioning().partition_count(),
-                ),
-            },
-            PartitionMode::Partitioned => partitioned_join_output_partitioning(
-                self.join_type,
-                self.left.output_partitioning(),
-                self.right.output_partitioning(),
-                left_columns_len,
-            ),
-            PartitionMode::Auto => Partitioning::UnknownPartitioning(
-                self.right.output_partitioning().partition_count(),
-            ),
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_order.as_deref()
     }
 
     // For [JoinType::Inner] and [JoinType::RightSemi] in hash joins, the probe phase initiates by
@@ -556,18 +550,6 @@ impl ExecutionPlan for HashJoinExec {
     // as results, these results tend to retain the order of the probe side table.
     fn maintains_input_order(&self) -> Vec<bool> {
         Self::maintains_input_order(self.join_type)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            Some(Self::probe_side()),
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -697,7 +679,7 @@ async fn collect_left_input(
     partition: Option<usize>,
     random_state: RandomState,
     left: Arc<dyn ExecutionPlan>,
-    on_left: Vec<Column>,
+    on_left: Vec<PhysicalExprRef>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -793,7 +775,7 @@ async fn collect_left_input(
 /// as a chain head for rows with equal hash values.
 #[allow(clippy::too_many_arguments)]
 pub fn update_hash<T>(
-    on: &[Column],
+    on: &[PhysicalExprRef],
     batch: &RecordBatch,
     hash_map: &mut T,
     offset: usize,
@@ -955,9 +937,9 @@ struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// equijoin columns from the left (build side)
-    on_left: Vec<Column>,
+    on_left: Vec<PhysicalExprRef>,
     /// equijoin columns from the right (probe side)
-    on_right: Vec<Column>,
+    on_right: Vec<PhysicalExprRef>,
     /// optional join filter
     filter: Option<JoinFilter>,
     /// type of the join (left, right, semi, etc)
@@ -1043,8 +1025,8 @@ fn lookup_join_hashmap(
     build_hashmap: &JoinHashMap,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_on: &[Column],
-    probe_on: &[Column],
+    build_on: &[PhysicalExprRef],
+    probe_on: &[PhysicalExprRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
     limit: usize,
@@ -1437,6 +1419,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
@@ -1529,15 +1512,8 @@ mod tests {
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
 
-        let (left_expr, right_expr) = on
-            .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
-            .unzip();
+        let (left_expr, right_expr) =
+            on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
 
         let join = HashJoinExec::try_new(
             Arc::new(RepartitionExec::try_new(
@@ -1588,8 +1564,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = join_collect(
@@ -1635,8 +1611,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -1679,8 +1655,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1718,8 +1694,8 @@ mod tests {
             ("c2", &vec![80, 90, 70]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1760,12 +1736,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1822,12 +1798,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1884,8 +1860,8 @@ mod tests {
             ("c2", &vec![80, 90, 70]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -1934,8 +1910,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -2016,8 +1992,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
@@ -2059,8 +2035,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
@@ -2099,8 +2075,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -2136,8 +2112,8 @@ mod tests {
         );
         let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
@@ -2177,8 +2153,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = join_collect(
@@ -2221,8 +2197,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) = partitioned_join_collect(
@@ -2278,8 +2254,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::LeftSemi, false)?;
@@ -2314,8 +2290,8 @@ mod tests {
 
         // left_table left semi join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 10
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2401,8 +2377,8 @@ mod tests {
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::RightSemi, false)?;
@@ -2438,8 +2414,8 @@ mod tests {
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2527,8 +2503,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::LeftAnti, false)?;
@@ -2561,8 +2537,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2654,8 +2630,8 @@ mod tests {
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let join = join(left, right, on, &JoinType::RightAnti, false)?;
@@ -2689,8 +2665,8 @@ mod tests {
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let column_indices = vec![ColumnIndex {
@@ -2797,8 +2773,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -2836,8 +2812,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (columns, batches) =
@@ -2876,8 +2852,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Full, false)?;
@@ -2930,7 +2906,7 @@ mod tests {
         );
 
         // Join key column for both join sides
-        let key_column = Column::new("a", 0);
+        let key_column: PhysicalExprRef = Arc::new(Column::new("a", 0)) as _;
 
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
@@ -2981,8 +2957,8 @@ mod tests {
         );
         let on = vec![(
             // join on a=b so there are duplicate column names on unjoined columns
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -3045,8 +3021,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3086,8 +3062,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3130,8 +3106,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3173,8 +3149,8 @@ mod tests {
             ("c", &vec![7, 5, 6, 4]),
         );
         let on = vec![(
-            Column::new_with_schema("a", &left.schema()).unwrap(),
-            Column::new_with_schema("b", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
         let filter = prepare_join_filter();
 
@@ -3223,8 +3199,8 @@ mod tests {
         let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
 
         let on = vec![(
-            Column::new_with_schema("date", &left.schema()).unwrap(),
-            Column::new_with_schema("date", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
         )];
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
@@ -3261,8 +3237,8 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
@@ -3317,8 +3293,8 @@ mod tests {
             ("c2", &vec![0, 0, 0, 0, 0]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -3451,8 +3427,8 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
         let on = vec![(
-            Column::new_with_schema("a1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -3520,8 +3496,8 @@ mod tests {
             .unwrap(),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left_batch.schema())?,
-            Column::new_with_schema("b2", &right_batch.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
         )];
 
         let join_types = vec![

@@ -30,19 +30,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::expressions::{Column, PhysicalSortExpr};
+use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;
-use arrow::compute::{concat_batches, take, SortOptions};
+use arrow::compute::{self, concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -52,7 +53,7 @@ use datafusion_common::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
 
@@ -66,6 +67,8 @@ pub struct SortMergeJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
     pub on: JoinOn,
+    /// Filters which are applied while finding matching rows
+    pub filter: Option<JoinFilter>,
     /// How the join is performed
     pub join_type: JoinType,
     /// The schema once the join is applied
@@ -76,12 +79,12 @@ pub struct SortMergeJoinExec {
     left_sort_exprs: Vec<PhysicalSortExpr>,
     /// The right SortExpr
     right_sort_exprs: Vec<PhysicalSortExpr>,
-    /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
     pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl SortMergeJoinExec {
@@ -93,6 +96,7 @@ impl SortMergeJoinExec {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
+        filter: Option<JoinFilter>,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
         null_equals_null: bool,
@@ -120,42 +124,34 @@ impl SortMergeJoinExec {
             .zip(sort_options.iter())
             .map(|((l, r), sort_op)| {
                 let left = PhysicalSortExpr {
-                    expr: Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    expr: l.clone(),
                     options: *sort_op,
                 };
                 let right = PhysicalSortExpr {
-                    expr: Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                    expr: r.clone(),
                     options: *sort_op,
                 };
                 (left, right)
             })
             .unzip();
 
-        let output_ordering = calculate_join_output_ordering(
-            left.output_ordering().unwrap_or(&[]),
-            right.output_ordering().unwrap_or(&[]),
-            join_type,
-            &on,
-            left_schema.fields.len(),
-            &Self::maintains_input_order(join_type),
-            Some(Self::probe_side(&join_type)),
-        );
-
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-
+        let cache =
+            Self::compute_properties(&left, &right, schema.clone(), join_type, &on);
         Ok(Self {
             left,
             right,
             on,
+            filter,
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
             left_sort_exprs,
             right_sort_exprs,
-            output_ordering,
             sort_options,
             null_equals_null,
+            cache,
         })
     }
 
@@ -189,25 +185,64 @@ impl SortMergeJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
-    pub fn right(&self) -> &dyn ExecutionPlan {
-        self.right.as_ref()
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
     }
 
     pub fn join_type(&self) -> JoinType {
         self.join_type
     }
 
-    pub fn left(&self) -> &dyn ExecutionPlan {
-        self.left.as_ref()
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        join_on: JoinOnRef,
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = join_equivalence_properties(
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &Self::maintains_input_order(join_type),
+            Some(Self::probe_side(&join_type)),
+            join_on,
+        );
+
+        // Get output partitioning:
+        let left_columns_len = left.schema().fields.len();
+        let output_partitioning = partitioned_join_output_partitioning(
+            join_type,
+            left.output_partitioning(),
+            right.output_partitioning(),
+            left_columns_len,
+        );
+
+        // Determine execution mode:
+        let mode = execution_mode_from_children([left, right]);
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
 impl DisplayAs for SortMergeJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        let display_filter = self.filter.as_ref().map_or_else(
+            || "".to_string(),
+            |f| format!(", filter={}", f.expression()),
+        );
+
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let on = self
@@ -218,8 +253,8 @@ impl DisplayAs for SortMergeJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]",
-                    self.join_type, on
+                    "SortMergeJoin: join_type={:?}, on=[{}]{}",
+                    self.join_type, on, display_filter
                 )
             }
         }
@@ -231,21 +266,13 @@ impl ExecutionPlan for SortMergeJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let (left_expr, right_expr) = self
-            .on
-            .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
-            .unzip();
+        let (left_expr, right_expr) =
+            self.on.iter().map(|(l, r)| (l.clone(), r.clone())).unzip();
         vec![
             Distribution::HashPartitioned(left_expr),
             Distribution::HashPartitioned(right_expr),
@@ -263,34 +290,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         Self::maintains_input_order(self.join_type)
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            Some(Self::probe_side(&self.join_type)),
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -306,6 +307,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 left.clone(),
                 right.clone(),
                 self.on.clone(),
+                self.filter.clone(),
                 self.join_type,
                 self.sort_options.clone(),
                 self.null_equals_null,
@@ -355,6 +357,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             buffered,
             on_streamed,
             on_buffered,
+            self.filter.clone(),
             self.join_type,
             batch_size,
             SortMergeJoinMetrics::new(partition, &self.metrics),
@@ -462,8 +465,9 @@ enum BufferedState {
     Exhausted,
 }
 
+/// Represents a chunk of joined data from streamed and buffered side
 struct StreamedJoinedChunk {
-    /// Index of batch buffered_data
+    /// Index of batch in buffered_data
     buffered_batch_idx: Option<usize>,
     /// Array builder for streamed indices
     streamed_indices: UInt64Builder,
@@ -472,18 +476,22 @@ struct StreamedJoinedChunk {
 }
 
 struct StreamedBatch {
+    /// The streamed record batch
     pub batch: RecordBatch,
+    /// The index of row in the streamed batch to compare with buffered batches
     pub idx: usize,
+    /// The join key arrays of streamed batch which are used to compare with buffered batches
+    /// and to produce output. They are produced by evaluating `on` expressions.
     pub join_arrays: Vec<ArrayRef>,
 
-    // Chunks of indices from buffered side (may be nulls) joined to streamed
+    /// Chunks of indices from buffered side (may be nulls) joined to streamed
     pub output_indices: Vec<StreamedJoinedChunk>,
-    // Index of currently scanned batch from buffered data
+    /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
 }
 
 impl StreamedBatch {
-    fn new(batch: RecordBatch, on_column: &[Column]) -> Self {
+    fn new(batch: RecordBatch, on_column: &[Arc<dyn PhysicalExpr>]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
         StreamedBatch {
             batch,
@@ -511,6 +519,8 @@ impl StreamedBatch {
         buffered_batch_idx: Option<usize>,
         buffered_idx: Option<usize>,
     ) {
+        // If no current chunk exists or current chunk is not for current buffered batch,
+        // create a new chunk
         if self.output_indices.is_empty() || self.buffered_batch_idx != buffered_batch_idx
         {
             self.output_indices.push(StreamedJoinedChunk {
@@ -522,6 +532,7 @@ impl StreamedBatch {
         };
         let current_chunk = self.output_indices.last_mut().unwrap();
 
+        // Append index of streamed batch and index of buffered batch into current chunk
         current_chunk.streamed_indices.append_value(self.idx as u64);
         if let Some(idx) = buffered_idx {
             current_chunk.buffered_indices.append_value(idx as u64);
@@ -547,7 +558,11 @@ struct BufferedBatch {
 }
 
 impl BufferedBatch {
-    fn new(batch: RecordBatch, range: Range<usize>, on_column: &[Column]) -> Self {
+    fn new(
+        batch: RecordBatch,
+        range: Range<usize>,
+        on_column: &[PhysicalExprRef],
+    ) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
 
         // Estimation is calculated as
@@ -609,12 +624,16 @@ struct SMJStream {
     /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
     /// Join key columns of streamed
-    pub on_streamed: Vec<Column>,
+    pub on_streamed: Vec<PhysicalExprRef>,
     /// Join key columns of buffered
-    pub on_buffered: Vec<Column>,
+    pub on_buffered: Vec<PhysicalExprRef>,
+    /// optional join filter
+    pub filter: Option<JoinFilter>,
     /// Staging output array builders
     pub output_record_batches: Vec<RecordBatch>,
-    /// Staging output size, including output batches and staging joined results
+    /// Staging output size, including output batches and staging joined results.
+    /// Increased when we put rows into buffer and decreased after we actually output batches.
+    /// Used to trigger output when sufficient rows are ready
     pub output_size: usize,
     /// Target output batch size
     pub batch_size: usize,
@@ -736,8 +755,9 @@ impl SMJStream {
         null_equals_null: bool,
         streamed: SendableRecordBatchStream,
         buffered: SendableRecordBatchStream,
-        on_streamed: Vec<Column>,
-        on_buffered: Vec<Column>,
+        on_streamed: Vec<Arc<dyn PhysicalExpr>>,
+        on_buffered: Vec<Arc<dyn PhysicalExpr>>,
+        filter: Option<JoinFilter>,
         join_type: JoinType,
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
@@ -763,6 +783,7 @@ impl SMJStream {
             current_ordering: Ordering::Equal,
             on_streamed,
             on_buffered,
+            filter,
             output_record_batches: vec![],
             output_size: 0,
             batch_size,
@@ -945,7 +966,9 @@ impl SMJStream {
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
     fn join_partial(&mut self) -> Result<()> {
+        // Whether to join streamed rows
         let mut join_streamed = false;
+        // Whether to join buffered rows
         let mut join_buffered = false;
 
         // determine whether we need to join streamed/buffered rows
@@ -993,11 +1016,13 @@ impl SMJStream {
             {
                 let scanning_idx = self.buffered_data.scanning_idx();
                 if join_streamed {
+                    // Join streamed row and buffered row
                     self.streamed_batch.append_output_pair(
                         Some(self.buffered_data.scanning_batch_idx),
                         Some(scanning_idx),
                     );
                 } else {
+                    // Join nulls and buffered row
                     self.buffered_data
                         .scanning_batch_mut()
                         .null_joined
@@ -1061,6 +1086,7 @@ impl SMJStream {
             }
             buffered_batch.null_joined.clear();
 
+            // Take buffered (right) columns
             let buffered_columns = buffered_batch
                 .batch
                 .columns()
@@ -1069,6 +1095,7 @@ impl SMJStream {
                 .collect::<Result<Vec<_>, ArrowError>>()
                 .map_err(Into::<DataFusionError>::into)?;
 
+            // Create null streamed (left) columns
             let mut streamed_columns = self
                 .streamed_schema
                 .fields()
@@ -1123,16 +1150,162 @@ impl SMJStream {
                         .collect::<Vec<_>>()
                 };
 
+            let streamed_columns_length = streamed_columns.len();
+            let buffered_columns_length = buffered_columns.len();
+
+            // Prepare the columns we apply join filter on later.
+            // Only for joined rows between streamed and buffered.
+            let filter_columns = if chunk.buffered_batch_idx.is_some() {
+                if matches!(self.join_type, JoinType::Right) {
+                    get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
+                } else {
+                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                }
+            } else {
+                // This chunk is for null joined rows (outer join), we don't need to apply join filter.
+                vec![]
+            };
+
             let columns = if matches!(self.join_type, JoinType::Right) {
-                buffered_columns.extend(streamed_columns);
+                buffered_columns.extend(streamed_columns.clone());
                 buffered_columns
             } else {
                 streamed_columns.extend(buffered_columns);
                 streamed_columns
             };
 
-            self.output_record_batches
-                .push(RecordBatch::try_new(self.schema.clone(), columns)?);
+            let output_batch =
+                RecordBatch::try_new(self.schema.clone(), columns.clone())?;
+
+            // Apply join filter if any
+            if !filter_columns.is_empty() {
+                if let Some(f) = &self.filter {
+                    // Construct batch with only filter columns
+                    let filter_batch = RecordBatch::try_new(
+                        Arc::new(f.schema().clone()),
+                        filter_columns,
+                    )?;
+
+                    let filter_result = f
+                        .expression()
+                        .evaluate(&filter_batch)?
+                        .into_array(filter_batch.num_rows())?;
+
+                    // The selection mask of the filter
+                    let mask = datafusion_common::cast::as_boolean_array(&filter_result)?;
+
+                    // Push the filtered batch to the output
+                    let filtered_batch =
+                        compute::filter_record_batch(&output_batch, mask)?;
+                    self.output_record_batches.push(filtered_batch);
+
+                    // For outer joins, we need to push the null joined rows to the output.
+                    if matches!(
+                        self.join_type,
+                        JoinType::Left | JoinType::Right | JoinType::Full
+                    ) {
+                        // The reverse of the selection mask. For the rows not pass join filter above,
+                        // we need to join them (left or right) with null rows for outer joins.
+                        let not_mask = if mask.null_count() > 0 {
+                            // If the mask contains nulls, we need to use `prep_null_mask_filter` to
+                            // handle the nulls in the mask as false to produce rows where the mask
+                            // was null itself.
+                            compute::not(&compute::prep_null_mask_filter(mask))?
+                        } else {
+                            compute::not(mask)?
+                        };
+
+                        let null_joined_batch =
+                            compute::filter_record_batch(&output_batch, &not_mask)?;
+
+                        let mut buffered_columns = self
+                            .buffered_schema
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                new_null_array(
+                                    f.data_type(),
+                                    null_joined_batch.num_rows(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        let columns = if matches!(self.join_type, JoinType::Right) {
+                            let streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(buffered_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            buffered_columns.extend(streamed_columns);
+                            buffered_columns
+                        } else {
+                            // Left join or full outer join
+                            let mut streamed_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .take(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+                            streamed_columns
+                        };
+
+                        let null_joined_streamed_batch =
+                            RecordBatch::try_new(self.schema.clone(), columns.clone())?;
+                        self.output_record_batches.push(null_joined_streamed_batch);
+
+                        // For full join, we also need to output the null joined rows from the buffered side
+                        if matches!(self.join_type, JoinType::Full) {
+                            // Handle not mask for buffered side further.
+                            // For buffered side, we want to output the rows that are not null joined with
+                            // the streamed side. i.e. the rows that are not null in the `buffered_indices`.
+                            let not_mask = if let Some(nulls) = buffered_indices.nulls() {
+                                let mask = not_mask.values() & nulls.inner();
+                                BooleanArray::new(mask, None)
+                            } else {
+                                not_mask
+                            };
+
+                            let null_joined_batch =
+                                compute::filter_record_batch(&output_batch, &not_mask)?;
+
+                            let mut streamed_columns = self
+                                .streamed_schema
+                                .fields()
+                                .iter()
+                                .map(|f| {
+                                    new_null_array(
+                                        f.data_type(),
+                                        null_joined_batch.num_rows(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            let buffered_columns = null_joined_batch
+                                .columns()
+                                .iter()
+                                .skip(streamed_columns_length)
+                                .cloned()
+                                .collect::<Vec<_>>();
+
+                            streamed_columns.extend(buffered_columns);
+
+                            let null_joined_buffered_batch = RecordBatch::try_new(
+                                self.schema.clone(),
+                                streamed_columns,
+                            )?;
+                            self.output_record_batches.push(null_joined_buffered_batch);
+                        }
+                    }
+                } else {
+                    self.output_record_batches.push(output_batch);
+                }
+            } else {
+                self.output_record_batches.push(output_batch);
+            }
         }
 
         self.streamed_batch.output_indices.clear();
@@ -1144,10 +1317,47 @@ impl SMJStream {
         let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
-        self.output_size -= record_batch.num_rows();
+        // If join filter exists, `self.output_size` is not accurate as we don't know the exact
+        // number of rows in the output record batch. If streamed row joined with buffered rows,
+        // once join filter is applied, the number of output rows may be more than 1.
+        if record_batch.num_rows() > self.output_size {
+            self.output_size = 0;
+        } else {
+            self.output_size -= record_batch.num_rows();
+        }
         self.output_record_batches.clear();
         Ok(record_batch)
     }
+}
+
+/// Gets the arrays which join filters are applied on.
+fn get_filter_column(
+    join_filter: &Option<JoinFilter>,
+    streamed_columns: &[ArrayRef],
+    buffered_columns: &[ArrayRef],
+) -> Vec<ArrayRef> {
+    let mut filter_columns = vec![];
+
+    if let Some(f) = join_filter {
+        let left_columns = f
+            .column_indices()
+            .iter()
+            .filter(|col_index| col_index.side == JoinSide::Left)
+            .map(|i| streamed_columns[i.index].clone())
+            .collect::<Vec<_>>();
+
+        let right_columns = f
+            .column_indices()
+            .iter()
+            .filter(|col_index| col_index.side == JoinSide::Right)
+            .map(|i| buffered_columns[i.index].clone())
+            .collect::<Vec<_>>();
+
+        filter_columns.extend(left_columns);
+        filter_columns.extend(right_columns);
+    }
+
+    filter_columns
 }
 
 /// Buffered data contains all buffered batches with one unique join key
@@ -1218,10 +1428,14 @@ impl BufferedData {
 }
 
 /// Get join array refs of given batch and join columns
-fn join_arrays(batch: &RecordBatch, on_column: &[Column]) -> Vec<ArrayRef> {
+fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayRef> {
     on_column
         .iter()
-        .map(|c| batch.column(c.index()).clone())
+        .map(|c| {
+            let num_rows = batch.num_rows();
+            let c = c.evaluate(batch).unwrap();
+            c.into_array(num_rows).unwrap()
+        })
         .collect()
 }
 
@@ -1496,7 +1710,7 @@ mod tests {
         join_type: JoinType,
     ) -> Result<SortMergeJoinExec> {
         let sort_options = vec![SortOptions::default(); on.len()];
-        SortMergeJoinExec::try_new(left, right, on, join_type, sort_options, false)
+        SortMergeJoinExec::try_new(left, right, on, None, join_type, sort_options, false)
     }
 
     fn join_with_options(
@@ -1511,6 +1725,7 @@ mod tests {
             left,
             right,
             on,
+            None,
             join_type,
             sort_options,
             null_equals_null,
@@ -1582,8 +1797,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -1616,12 +1831,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1654,12 +1869,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1693,12 +1908,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1731,12 +1946,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
         let (_, batches) = join_collect_with_options(
@@ -1783,12 +1998,12 @@ mod tests {
         );
         let on = vec![
             (
-                Column::new_with_schema("a1", &left.schema())?,
-                Column::new_with_schema("a1", &right.schema())?,
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
             ),
             (
-                Column::new_with_schema("b2", &left.schema())?,
-                Column::new_with_schema("b2", &right.schema())?,
+                Arc::new(Column::new_with_schema("b2", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
             ),
         ];
 
@@ -1824,8 +2039,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -1856,8 +2071,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -1888,8 +2103,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
@@ -1920,8 +2135,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::LeftAnti).await?;
@@ -1951,8 +2166,8 @@ mod tests {
             ("c2", &vec![70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::LeftSemi).await?;
@@ -1984,8 +2199,8 @@ mod tests {
         );
         let on = vec![(
             // join on a=b so there are duplicate column names on unjoined columns
-            Column::new_with_schema("a", &left.schema())?,
-            Column::new_with_schema("b", &right.schema())?,
+            Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2016,8 +2231,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2048,8 +2263,8 @@ mod tests {
         );
 
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
@@ -2079,8 +2294,8 @@ mod tests {
             ("c2", &vec![50, 60, 70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -2115,8 +2330,8 @@ mod tests {
             ("c2", &vec![60, 70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -2159,8 +2374,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
@@ -2208,8 +2423,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
@@ -2257,8 +2472,8 @@ mod tests {
         let left = build_table_from_batches(vec![left_batch_1, left_batch_2]);
         let right = build_table_from_batches(vec![right_batch_1, right_batch_2]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
         let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
@@ -2296,8 +2511,8 @@ mod tests {
             ("c2", &vec![50, 60, 70, 80, 90]),
         );
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
@@ -2376,8 +2591,8 @@ mod tests {
         let right =
             build_table_from_batches(vec![right_batch_1, right_batch_2, right_batch_3]);
         let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b2", &right.schema())?,
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 

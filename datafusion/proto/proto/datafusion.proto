@@ -1,4 +1,5 @@
 /*
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -322,12 +323,12 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    bool single_file_output = 3;
     oneof CopyOptions {
         SQLOptions sql_options = 4;
         FileTypeWriterOptions writer_options = 5;
     }
     string file_type = 6;
+    repeated string partition_by = 7;
 }
 
 message SQLOptions {
@@ -426,6 +427,8 @@ message LogicalExprNode {
     SimilarToNode similar_to = 33;
 
     PlaceholderNode placeholder = 34;
+
+    Unnest unnest = 35;
 
   }
 }
@@ -532,6 +535,10 @@ message NegativeNode {
   LogicalExprNode expr = 1;
 }
 
+message Unnest {
+  repeated LogicalExprNode exprs = 1;
+}
+
 message InListNode {
   LogicalExprNode expr = 1;
   repeated LogicalExprNode list = 2;
@@ -539,9 +546,11 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs = 0;
-  Acos = 1;
-  Asin = 2;
+  //  0 was Abs before
+  //  The first enum value must be zero for open enums
+  unknown = 0;
+  //  1 was Acos
+  //  2 was Asin
   Atan = 3;
   Ascii = 4;
   Ceil = 5;
@@ -560,7 +569,7 @@ enum ScalarFunction {
   Tan = 18;
   Trunc = 19;
   Array = 20;
-  RegexpMatch = 21;
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;
@@ -575,7 +584,7 @@ enum ScalarFunction {
   Lower = 33;
   Ltrim = 34;
   MD5 = 35;
-  NullIf = 36;
+  //  36 was NullIf
   OctetLength = 37;
   Random = 38;
   RegexpReplace = 39;
@@ -594,10 +603,10 @@ enum ScalarFunction {
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
   Now = 59;
   Translate = 60;
   Trim = 61;
@@ -627,21 +636,19 @@ enum ScalarFunction {
   Gcd = 85;
   ArrayAppend = 86;
   ArrayConcat = 87;
-  ArrayDims = 88;
+  // 88 was ArrayDims
   ArrayRepeat = 89;
   ArrayLength = 90;
-  ArrayNdims = 91;
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
   ArrayPrepend = 94;
   ArrayRemove = 95;
   ArrayReplace = 96;
-  ArrayToString = 97;
-  Cardinality = 98;
+  // 97 was ArrayToString
+  // 98 was Cardinality
   ArrayElement = 99;
   ArraySlice = 100;
-  Encode = 101;
-  Decode = 102;
   Cot = 103;
   ArrayHas = 104;
   ArrayHasAny = 105;
@@ -652,16 +659,16 @@ enum ScalarFunction {
   ArrayReplaceAll = 110;
   Nanvl = 111;
   Flatten = 112;
-  Isnan = 113;
+  // 113 was IsNan
   Iszero = 114;
   ArrayEmpty = 115;
   ArrayPopBack = 116;
   StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Range = 122;
+  /// 122 is Range
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;
@@ -671,7 +678,12 @@ enum ScalarFunction {
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
-  InStr = 132;
+  /// 132 was InStr
+  MakeDate = 133;
+  ArrayReverse = 134;
+  /// 135 is RegexpLike
+  ToChar = 136;
+  /// 137 was ToDate
 }
 
 message ScalarFunctionNode {
@@ -739,6 +751,7 @@ message AggregateUDFExprNode {
 message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
 }
 
 enum BuiltInWindowFunction {
@@ -939,7 +952,8 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-message ScalarListValue {
+// Used for List/FixedSizeList/LargeList/Struct
+message ScalarNestedValue {
   bytes ipc_message = 1;
   bytes arrow_data = 2;
   Schema schema = 3;
@@ -980,14 +994,6 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
-message StructValue {
-  // Note that a null struct value must have one or more fields, so we
-  // encode a null StructValue as one witth an empty field_values
-  // list.
-  repeated ScalarValue field_values = 2;
-  repeated Field fields = 3;
-}
-
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1018,9 +1024,10 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
-    ScalarListValue large_list_value = 16;
-    ScalarListValue list_value = 17;
-    ScalarListValue fixed_size_list_value = 18;
+    ScalarNestedValue large_list_value = 16;
+    ScalarNestedValue list_value = 17;
+    ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue struct_value = 32;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1040,7 +1047,6 @@ message ScalarValue{
     bytes large_binary_value = 29;
     ScalarTime64Value time64_value = 30;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
-    StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
   }
 }
@@ -1267,7 +1273,6 @@ message FileSinkConfig {
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool single_file_output = 7;
   bool overwrite = 8;
   FileTypeWriterOptions file_type_writer_options = 9;
 }
@@ -1581,8 +1586,8 @@ message PhysicalColumn {
 }
 
 message JoinOn {
-  PhysicalColumn left = 1;
-  PhysicalColumn right = 2;
+  PhysicalExprNode left = 1;
+  PhysicalExprNode right = 2;
 }
 
 message EmptyExecNode {

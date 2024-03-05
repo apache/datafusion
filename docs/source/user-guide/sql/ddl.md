@@ -56,7 +56,7 @@ file system or remote object store as a named table which can be queried.
 The supported syntax is:
 
 ```
-CREATE EXTERNAL TABLE
+CREATE [UNBOUNDED] EXTERNAL TABLE
 [ IF NOT EXISTS ]
 <TABLE_NAME>[ (<column_definition>) ]
 STORED AS <file_type>
@@ -147,6 +147,16 @@ WITH HEADER ROW
 LOCATION '/path/to/directory/of/files';
 ```
 
+With `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement. We can create unbounded data sources such as following:
+
+```sql
+CREATE UNBOUNDED EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+Note that this statement actually reads data from a fixed-size file, so a better example would involve reading from a FIFO file. Nevertheless, once Datafusion sees the `UNBOUNDED` keyword in a data source, it tries to execute queries that refer to this unbounded source in streaming fashion. If this is not possible according to query specifications, plan generation fails stating it is not possible to execute given query in streaming fashion. Note that queries that can run with unbounded sources (i.e. in streaming mode) are a subset of those that can with bounded sources. A query that fails with unbounded source(s) may work with bounded source(s).
+
 When creating an output from a data source that is already ordered by
 an expression, you can pre-specify the order of the data using the
 `WITH ORDER` clause. This applies even if the expression used for
@@ -178,7 +188,7 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 Where `WITH ORDER` clause specifies the sort order:
 
-```sql
+```
 WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
 ```

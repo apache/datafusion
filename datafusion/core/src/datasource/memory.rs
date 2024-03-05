@@ -17,23 +17,10 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use futures::StreamExt;
-use log::debug;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
-
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
-use datafusion_common::{
-    not_impl_err, plan_err, Constraints, DataFusionError, SchemaExt,
-};
-use datafusion_execution::TaskContext;
-use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
@@ -41,9 +28,25 @@ use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::{common, SendableRecordBatchStream};
-use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::{
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, SendableRecordBatchStream,
+};
+use crate::physical_planner::create_physical_sort_expr;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use futures::StreamExt;
+use log::debug;
+use parking_lot::Mutex;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -58,6 +61,9 @@ pub struct MemTable {
     pub(crate) batches: Vec<PartitionData>,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
+    /// Optional pre-known sort order(s). Must be `SortExpr`s.
+    /// inserting data into this table removes the order
+    pub sort_order: Arc<Mutex<Vec<Vec<Expr>>>>,
 }
 
 impl MemTable {
@@ -82,6 +88,7 @@ impl MemTable {
                 .collect::<Vec<_>>(),
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
+            sort_order: Arc::new(Mutex::new(vec![])),
         })
     }
 
@@ -97,6 +104,21 @@ impl MemTable {
         column_defaults: HashMap<String, Expr>,
     ) -> Self {
         self.column_defaults = column_defaults;
+        self
+    }
+
+    /// Specify an optional pre-known sort order(s). Must be `SortExpr`s.
+    ///
+    /// If the data is not sorted by this order, DataFusion may produce
+    /// incorrect results.
+    ///
+    /// DataFusion may take advantage of this ordering to omit sorts
+    /// or use more efficient algorithms.
+    ///
+    /// Note that multiple sort orders are supported, if some are known to be
+    /// equivalent,
+    pub fn with_sort_order(self, mut sort_order: Vec<Vec<Expr>>) -> Self {
+        std::mem::swap(self.sort_order.lock().as_mut(), &mut sort_order);
         self
     }
 
@@ -147,7 +169,7 @@ impl MemTable {
 
             // execute and collect results
             let mut output_partitions = vec![];
-            for i in 0..exec.output_partitioning().partition_count() {
+            for i in 0..exec.properties().output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
                 let task_ctx = state.task_ctx();
                 let mut stream = exec.execute(i, task_ctx)?;
@@ -184,7 +206,7 @@ impl TableProvider for MemTable {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -194,11 +216,33 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
-        Ok(Arc::new(MemoryExec::try_new(
-            &partitions,
-            self.schema(),
-            projection.cloned(),
-        )?))
+        let mut exec =
+            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+
+        // add sort information if present
+        let sort_order = self.sort_order.lock();
+        if !sort_order.is_empty() {
+            let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+
+            let file_sort_order = sort_order
+                .iter()
+                .map(|sort_exprs| {
+                    sort_exprs
+                        .iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                &df_schema,
+                                state.execution_props(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            exec = exec.with_sort_information(file_sort_order);
+        }
+
+        Ok(Arc::new(exec))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
@@ -219,6 +263,9 @@ impl TableProvider for MemTable {
         input: Arc<dyn ExecutionPlan>,
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // If we are inserting into the table, any sort order may be messed up so reset it here
+        *self.sort_order.lock() = vec![];
+
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
         if !self
@@ -317,16 +364,20 @@ impl DataSink for MemSink {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::datasource::provider_as_source;
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
+
     use arrow::array::{AsArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
+    use datafusion_common::DataFusionError;
     use datafusion_expr::LogicalPlanBuilder;
+
     use futures::StreamExt;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {

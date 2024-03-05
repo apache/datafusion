@@ -59,10 +59,12 @@ use crate::physical_plan::windows::{
 };
 use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::plan_err;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -158,34 +160,40 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
+        let adjusted = plan_requirements.transform_up(&ensure_sorting)?.data;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            let parallel =
-                plan_with_coalesce_partitions.transform_up(&parallelize_sorts)?;
+            let parallel = plan_with_coalesce_partitions
+                .transform_up(&parallelize_sorts)
+                .data()?;
             parallel.plan
         } else {
             adjusted.plan
         };
 
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
-        let updated_plan =
-            plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
+        let updated_plan = plan_with_pipeline_fixer
+            .transform_up(&|plan_with_pipeline_fixer| {
                 replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
                     true,
                     config,
                 )
-            })?;
+            })
+            .data()?;
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        Ok(adjusted.plan)
+        let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?.data;
+
+        adjusted
+            .plan
+            .transform_up(&|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -195,6 +203,42 @@ impl PhysicalOptimizerRule for EnforceSorting {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+fn replace_with_partial_sort(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let plan_any = plan.as_any();
+    if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
+        let child = sort_plan.children()[0].clone();
+        if !child.execution_mode().is_unbounded() {
+            return Ok(plan);
+        }
+
+        // here we're trying to find the common prefix for sorted columns that is required for the
+        // sort and already satisfied by the given ordering
+        let child_eq_properties = child.equivalence_properties();
+        let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_plan.expr());
+
+        let mut common_prefix_length = 0;
+        while child_eq_properties
+            .ordering_satisfy_requirement(&sort_req[0..common_prefix_length + 1])
+        {
+            common_prefix_length += 1;
+        }
+        if common_prefix_length > 0 {
+            return Ok(Arc::new(
+                PartialSortExec::new(
+                    sort_plan.expr().to_vec(),
+                    sort_plan.input().clone(),
+                    common_prefix_length,
+                )
+                .with_preserve_partitioning(sort_plan.preserve_partitioning())
+                .with_fetch(sort_plan.fetch()),
+            ));
+        }
+    }
+    Ok(plan)
 }
 
 /// This function turns plans of the form
@@ -221,7 +265,7 @@ fn parallelize_sorts(
         // `SortPreservingMergeExec` or a `CoalescePartitionsExec`, and they
         // all have a single child. Therefore, if the first child has no
         // connection, we can return immediately.
-        Ok(Transformed::No(requirements))
+        Ok(Transformed::no(requirements))
     } else if (is_sort(&requirements.plan)
         || is_sort_preserving_merge(&requirements.plan))
         && requirements.plan.output_partitioning().partition_count() <= 1
@@ -250,7 +294,7 @@ fn parallelize_sorts(
         }
 
         let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
-        Ok(Transformed::Yes(
+        Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(spm.with_fetch(fetch)),
                 false,
@@ -264,7 +308,7 @@ fn parallelize_sorts(
         // For the removal of self node which is also a `CoalescePartitionsExec`.
         requirements = requirements.children.swap_remove(0);
 
-        Ok(Transformed::Yes(
+        Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
                 false,
@@ -272,7 +316,7 @@ fn parallelize_sorts(
             ),
         ))
     } else {
-        Ok(Transformed::Yes(requirements))
+        Ok(Transformed::yes(requirements))
     }
 }
 
@@ -285,10 +329,12 @@ fn ensure_sorting(
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
     if requirements.children.is_empty() {
-        return Ok(Transformed::No(requirements));
+        return Ok(Transformed::no(requirements));
     }
     let maybe_requirements = analyze_immediate_sort_removal(requirements);
-    let Transformed::No(mut requirements) = maybe_requirements else {
+    requirements = if !maybe_requirements.transformed {
+        maybe_requirements.data
+    } else {
         return Ok(maybe_requirements);
     };
 
@@ -327,17 +373,17 @@ fn ensure_sorting(
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
     if is_window(plan) && child_node.data {
-        return adjust_window_sort_removal(requirements).map(Transformed::Yes);
+        return adjust_window_sort_removal(requirements).map(Transformed::yes);
     } else if is_sort_preserving_merge(plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition.
         let child_node = requirements.children.swap_remove(0);
-        return Ok(Transformed::Yes(child_node));
+        return Ok(Transformed::yes(child_node));
     }
 
-    update_sort_ctx_children(requirements, false).map(Transformed::Yes)
+    update_sort_ctx_children(requirements, false).map(Transformed::yes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
@@ -350,7 +396,7 @@ fn analyze_immediate_sort_removal(
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
-            .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
+            .ordering_satisfy(sort_exec.properties().output_ordering().unwrap_or(&[]))
         {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -367,10 +413,10 @@ fn analyze_immediate_sort_removal(
                 child.data = false;
             }
             node.data = false;
-            return Transformed::Yes(node);
+            return Transformed::yes(node);
         }
     }
-    Transformed::No(node)
+    Transformed::no(node)
 }
 
 /// Adjusts a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
@@ -533,7 +579,7 @@ fn remove_corresponding_sort_from_sub_plan(
         {
             node.plan = Arc::new(RepartitionExec::try_new(
                 node.children[0].plan.clone(),
-                repartition.output_partitioning(),
+                repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
     };
@@ -642,6 +688,7 @@ mod tests {
                 let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
                 let adjusted = plan_requirements
                     .transform_up(&ensure_sorting)
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
@@ -650,6 +697,7 @@ mod tests {
                         PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
                     let parallel = plan_with_coalesce_partitions
                         .transform_up(&parallelize_sorts)
+                        .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     parallel.plan
@@ -667,6 +715,7 @@ mod tests {
                             state.config_options(),
                         )
                     })
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
 
@@ -674,6 +723,7 @@ mod tests {
                 assign_initial_requirements(&mut sort_pushdown);
                 sort_pushdown
                     .transform_down(&pushdown_sorts)
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }
@@ -985,8 +1035,8 @@ mod tests {
         let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
 
         let on = vec![(
-            Column::new_with_schema("col_a", &left_schema)?,
-            Column::new_with_schema("c", &right_schema)?,
+            Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
         )];
         let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
         let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
@@ -1639,8 +1689,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1711,8 +1762,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join_types = vec![
@@ -1785,8 +1837,9 @@ mod tests {
 
         // Join on (nullable_col == col_a)
         let join_on = vec![(
-            Column::new_with_schema("nullable_col", &left.schema()).unwrap(),
-            Column::new_with_schema("col_a", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap())
+                as _,
+            Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
         )];
 
         let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
@@ -2200,6 +2253,103 @@ mod tests {
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_with_partial_sort() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let input_sort_exprs = vec![sort_expr("a", &schema)];
+        let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+
+        let physical_plan = sort_exec(
+            vec![sort_expr("a", &schema), sort_expr("c", &schema)],
+            unbounded_input,
+        );
+
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC,c@2 ASC]",
+            "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]"
+        ];
+        let expected_optimized = [
+            "PartialSortExec: expr=[a@0 ASC,c@2 ASC], common_prefix_length=[1]",
+            "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_with_partial_sort2() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let input_sort_exprs = vec![sort_expr("a", &schema), sort_expr("c", &schema)];
+        let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("a", &schema),
+                sort_expr("c", &schema),
+                sort_expr("d", &schema),
+            ],
+            unbounded_input,
+        );
+
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC,c@2 ASC,d@3 ASC]",
+            "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC, c@2 ASC]"
+        ];
+        // let optimized
+        let expected_optimized = [
+            "PartialSortExec: expr=[a@0 ASC,c@2 ASC,d@3 ASC], common_prefix_length=[2]",
+            "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC, c@2 ASC]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+        let parquet_input = parquet_exec_sorted(&schema, input_sort_exprs);
+
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("a", &schema),
+                sort_expr("b", &schema),
+                sort_expr("c", &schema),
+            ],
+            parquet_input,
+        );
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[b@1 ASC, c@2 ASC]"
+        ];
+        let expected_no_change = expected_input;
+        assert_optimized!(expected_input, expected_no_change, physical_plan, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+        let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("a", &schema),
+                sort_expr("b", &schema),
+                sort_expr("c", &schema),
+            ],
+            unbounded_input,
+        );
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
+            "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+        ];
+        let expected_no_change = expected_input;
+        assert_optimized!(expected_input, expected_no_change, physical_plan, true);
         Ok(())
     }
 }

@@ -148,10 +148,10 @@ OPTIONS:
 
 ## Querying data from the files directly
 
-Files can be queried directly by enclosing the file or
-directory name in single `'` quotes as shown in the example.
+Files can be queried directly by enclosing the file, directory name
+or a remote location in single `'` quotes as shown in the examples.
 
-## Example
+## Examples
 
 Create a CSV file to query.
 
@@ -192,6 +192,29 @@ DataFusion CLI v16.0.0
 | 1 | 2 |
 +---+---+
 2 rows in set. Query took 0.007 seconds.
+```
+
+You can also query directly from any remote location supported by DataFusion without
+registering the location as a table.
+For example, to read from a remote parquet file via HTTP(S) you can use the following:
+
+```sql
+select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet'
++----------+
+| COUNT(*) |
++----------+
+| 1000000  |
++----------+
+1 row in set. Query took 0.595 seconds.
+```
+
+To read from an AWS S3 or GCS, use `s3` or `gs` as a protocol prefix. For example, this will read a file  
+in S3 bucket named `my-data-bucket`. Note that this is not a real file location and therefore the query
+will fail, you need to use your own file location in S3. Also, you need to set the relevent access credentials
+as environmental variables (e.g. for AWS S3 you need to at least `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
+
+```sql
+select count(*) from 's3://my-data-bucket/athena_partitioned/hits.parquet'
 ```
 
 ## Creating External Tables
@@ -258,6 +281,27 @@ CREATE EXTERNAL TABLE test (
 )
 STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+## Registering Remote Data Sources
+
+`datafusion-cli` can read from remote locations using a variety of protocols.
+For example to read from a remote parquet file via HTTP(S) you can use the following:
+
+```sql
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet';
+```
+
+```sql
+select count(*) from hits;
++----------+
+| COUNT(*) |
++----------+
+| 1000000  |
++----------+
+1 row in set. Query took 0.344 seconds.
 ```
 
 ## Registering S3 Data Sources
@@ -549,7 +593,7 @@ For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
 appropriately:
 
-```SQL
+```shell
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
 ❯ show all;
@@ -569,10 +613,9 @@ DataFusion CLI v12.0.0
 
 You can change the configuration options using `SET` statement as well
 
-```SQL
+```shell
 $ datafusion-cli
 DataFusion CLI v13.0.0
-
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
 | name                            | value   |

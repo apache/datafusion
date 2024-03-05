@@ -16,9 +16,6 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
-use std::ops::Deref;
-use std::sync::Arc;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
@@ -28,7 +25,8 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileScanConfig, FileSinkConfig, ParquetExec,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    FileSinkConfig, ParquetExec,
 };
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
@@ -36,6 +34,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -49,6 +48,7 @@ use datafusion::physical_plan::expressions::{
     StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::functions;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -63,7 +63,7 @@ use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    functions, udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -79,6 +79,9 @@ use datafusion_expr::{
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -191,8 +194,8 @@ fn roundtrip_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);
@@ -337,17 +340,16 @@ fn rountrip_aggregate() -> Result<()> {
             "AVG(b)".to_string(),
             DataType::Float64,
         ))],
-        // TODO: See <https://github.com/apache/arrow-datafusion/issues/9028>
-        // // NTH_VALUE
-        // vec![Arc::new(NthValueAgg::new(
-        //     col("b", &schema)?,
-        //     1,
-        //     "NTH_VALUE(b, 1)".to_string(),
-        //     DataType::Int64,
-        //     false,
-        //     Vec::new(),
-        //     Vec::new(),
-        // ))],
+        // NTH_VALUE
+        vec![Arc::new(NthValueAgg::new(
+            col("b", &schema)?,
+            1,
+            "NTH_VALUE(b, 1)".to_string(),
+            DataType::Int64,
+            false,
+            Vec::new(),
+            Vec::new(),
+        ))],
         // STRING_AGG
         vec![Arc::new(StringAgg::new(
             cast(col("b", &schema)?, &schema, DataType::Utf8)?,
@@ -561,6 +563,32 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     )))
 }
 
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
+    let mut file_group =
+        PartitionedFile::new("/path/to/part=0/file.parquet".to_string(), 1024);
+    file_group.partition_values =
+        vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![file_group]],
+        statistics: Statistics::new_unknown(&schema),
+        file_schema: schema,
+        projection: Some(vec![0, 1]),
+        limit: None,
+        table_partition_cols: vec![Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        )],
+        output_ordering: vec![],
+    };
+
+    roundtrip_test(Arc::new(ParquetExec::new(scan_config, None, None)))
+}
+
 #[test]
 fn roundtrip_builtin_scalar_function() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
@@ -572,14 +600,15 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
     let execution_props = ExecutionProps::new();
 
     let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Acos, &execution_props)?;
+        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
 
     let expr = ScalarFunctionExpr::new(
-        "acos",
+        "sin",
         fun_expr,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        DataType::Float64,
         None,
+        false,
     );
 
     let project =
@@ -617,6 +646,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
+        false,
     );
 
     let project =
@@ -792,7 +822,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::JSON(JsonWriterOptions::new(
             CompressionTypeVariant::UNCOMPRESSED,
@@ -828,7 +857,6 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::CSV(CsvWriterOptions::new(
             WriterBuilder::default(),
@@ -887,7 +915,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        single_file_output: true,
         overwrite: true,
         file_type_writer_options: FileTypeWriterOptions::Parquet(
             ParquetWriterOptions::new(WriterProperties::default()),
@@ -916,8 +943,8 @@ fn roundtrip_sym_hash_join() -> Result<()> {
     let schema_left = Schema::new(vec![field_a.clone()]);
     let schema_right = Schema::new(vec![field_a]);
     let on = vec![(
-        Column::new("col", schema_left.index_of("col")?),
-        Column::new("col", schema_right.index_of("col")?),
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
     let schema_left = Arc::new(schema_left);

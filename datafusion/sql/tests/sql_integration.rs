@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::{sync::Arc, vec};
@@ -29,7 +30,8 @@ use datafusion_common::{
 use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
+    Volatility, WindowUDF,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -386,7 +388,7 @@ fn plan_rollback_transaction_chained() {
 fn plan_copy_to() {
     let sql = "COPY test_decimal to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   TableScan: test_decimal
     "#
     .trim();
@@ -398,7 +400,7 @@ fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
     let plan = r#"
 Explain
-  CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+  CopyTo: format=csv output_url=output.csv options: ()
     TableScan: test_decimal
     "#
     .trim();
@@ -409,7 +411,7 @@ Explain
 fn plan_copy_to_query() {
     let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
     let plan = r#"
-CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
     Projection: test_decimal.id, test_decimal.price
       TableScan: test_decimal
@@ -465,7 +467,7 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
-    "Error during planning: Placeholder type could not be resolved"
+    "Error during planning: Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
@@ -2671,11 +2673,60 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default();
+    let context = MockContextProvider::default().with_udf(make_udf(
+        "nullif",
+        vec![DataType::Int32, DataType::Int32],
+        DataType::Int32,
+    ));
+
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
     planner.statement_to_plan(ast.pop_front().unwrap())
+}
+
+fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> ScalarUDF {
+    ScalarUDF::new_from_impl(DummyUDF::new(name, args, return_type))
+}
+
+/// Mocked UDF
+#[derive(Debug)]
+struct DummyUDF {
+    name: &'static str,
+    signature: Signature,
+    return_type: DataType,
+}
+
+impl DummyUDF {
+    fn new(name: &'static str, args: Vec<DataType>, return_type: DataType) -> Self {
+        Self {
+            name,
+            signature: Signature::exact(args, Volatility::Immutable),
+            return_type,
+        }
+    }
+}
+
+impl ScalarUDFImpl for DummyUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!("DummyUDF::invoke")
+    }
 }
 
 /// Create logical plan, write with formatter, compare to expected output
@@ -2724,12 +2775,18 @@ fn prepare_stmt_replace_params_quick_test(
 #[derive(Default)]
 struct MockContextProvider {
     options: ConfigOptions,
+    udfs: HashMap<String, Arc<ScalarUDF>>,
     udafs: HashMap<String, Arc<AggregateUDF>>,
 }
 
 impl MockContextProvider {
     fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
+    }
+
+    fn with_udf(mut self, udf: ScalarUDF) -> Self {
+        self.udfs.insert(udf.name().to_string(), Arc::new(udf));
+        self
     }
 }
 
@@ -2823,12 +2880,12 @@ impl ContextProvider for MockContextProvider {
         }
     }
 
-    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        None
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.udfs.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).map(Arc::clone)
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -4341,6 +4398,54 @@ fn test_multi_grouping_sets() {
         (person.id, person.age, person.state, person.birth_date))]], aggr=[[]]\
     \n    TableScan: person";
     quick_test(sql, expected);
+}
+
+#[test]
+fn test_field_not_found_window_function() {
+    let order_by_sql = "SELECT count() OVER (order by a);";
+    let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
+    assert_eq!(
+        "Schema error: No field named a.",
+        order_by_err.strip_backtrace()
+    );
+
+    let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
+    let partition_by_err =
+        logical_plan(partition_by_sql).expect_err("query should have failed");
+    assert_eq!(
+        "Schema error: No field named a.",
+        partition_by_err.strip_backtrace()
+    );
+
+    let qualified_sql =
+        "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
+    let expected = "Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\n    TableScan: orders";
+    quick_test(qualified_sql, expected);
+}
+
+#[test]
+fn test_parse_escaped_string_literal_value() {
+    let sql = r"SELECT length('\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let expected =
+        "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\000') AS len";
+    assert_eq!(
+        logical_plan(sql).unwrap_err().strip_backtrace(),
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+    )
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {

@@ -236,7 +236,6 @@ impl DataSink for ArrowFileSink {
             part_col,
             self.config.table_paths[0].clone(),
             "arrow".into(),
-            self.config.single_file_output,
         );
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
@@ -296,16 +295,7 @@ impl DataSink for ArrowFileSink {
             }
         }
 
-        match demux_task.await {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
-            }
-        }
+        demux_task.join_unwind().await?;
         Ok(row_count as u64)
     }
 }

@@ -22,21 +22,20 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
+use super::metrics::BaselineMetrics;
+use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
+
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
-use datafusion_common::{exec_err, internal_err};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
-
-use super::metrics::BaselineMetrics;
-use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
@@ -116,9 +115,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // nothing to report
                             Ok(_) => continue,
                             // This means a blocking task error
-                            Err(e) => {
-                                return Some(exec_err!("Spawned Task error: {e}"));
-                            }
+                            Err(error) => return Some(Err(error)),
                         }
                     }
                     // This means a tokio task error, likely a panic
@@ -460,12 +457,12 @@ impl futures::Stream for ObservedStream {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::exec_err;
-
     use crate::test::exec::{
         assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
     };
+
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::exec_err;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))
@@ -557,7 +554,7 @@ mod test {
         let task_ctx = Arc::new(TaskContext::default());
 
         let input = Arc::new(input);
-        let num_partitions = input.output_partitioning().partition_count();
+        let num_partitions = input.properties().output_partitioning().partition_count();
 
         // Configure a RecordBatchReceiverStream to consume all the input partitions
         let mut builder =

@@ -29,17 +29,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tempfile::TempDir;
-
 use crate::dataframe::DataFrame;
 use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::stream::{StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
 
@@ -47,18 +46,16 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::Stream;
+use tempfile::TempDir;
 
 // backwards compatibility
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
-
-use crate::datasource::stream::{StreamConfig, StreamTable};
-pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -230,7 +227,7 @@ impl TableProvider for TestTableProvider {
 pub struct UnboundedExec {
     batch_produce: Option<usize>,
     batch: RecordBatch,
-    partitions: usize,
+    cache: PlanProperties,
 }
 impl UnboundedExec {
     /// Create new exec that clones the given record batch to its output.
@@ -241,11 +238,31 @@ impl UnboundedExec {
         batch: RecordBatch,
         partitions: usize,
     ) -> Self {
+        let cache = Self::compute_properties(batch.schema(), batch_produce, partitions);
         Self {
             batch_produce,
             batch,
-            partitions,
+            cache,
         }
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        batch_produce: Option<usize>,
+        n_partitions: usize,
+    ) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+        let mode = if batch_produce.is_none() {
+            ExecutionMode::Unbounded
+        } else {
+            ExecutionMode::Bounded
+        };
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions),
+            mode,
+        )
     }
 }
 
@@ -272,19 +289,8 @@ impl ExecutionPlan for UnboundedExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.batch.schema()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions)
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(self.batch_produce.is_none())
-    }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

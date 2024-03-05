@@ -509,10 +509,10 @@ pub struct CopyToNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(string, tag = "2")]
     pub output_url: ::prost::alloc::string::String,
-    #[prost(bool, tag = "3")]
-    pub single_file_output: bool,
     #[prost(string, tag = "6")]
     pub file_type: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "7")]
+    pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
     pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
 }
@@ -587,7 +587,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -672,6 +672,8 @@ pub mod logical_expr_node {
         SimilarTo(::prost::alloc::boxed::Box<super::SimilarToNode>),
         #[prost(message, tag = "34")]
         Placeholder(super::PlaceholderNode),
+        #[prost(message, tag = "35")]
+        Unnest(super::Unnest),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -838,6 +840,12 @@ pub struct NegativeNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Unnest {
+    #[prost(message, repeated, tag = "1")]
+    pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InListNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
@@ -887,6 +895,8 @@ pub struct ScalarUdfExprNode {
     pub fun_name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1143,9 +1153,10 @@ pub struct Union {
     #[prost(int32, repeated, tag = "3")]
     pub type_ids: ::prost::alloc::vec::Vec<i32>,
 }
+/// Used for List/FixedSizeList/LargeList/Struct
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ScalarListValue {
+pub struct ScalarNestedValue {
     #[prost(bytes = "vec", tag = "1")]
     pub ipc_message: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
@@ -1230,17 +1241,6 @@ pub struct IntervalMonthDayNanoValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct StructValue {
-    /// Note that a null struct value must have one or more fields, so we
-    /// encode a null StructValue as one witth an empty field_values
-    /// list.
-    #[prost(message, repeated, tag = "2")]
-    pub field_values: ::prost::alloc::vec::Vec<ScalarValue>,
-    #[prost(message, repeated, tag = "3")]
-    pub fields: ::prost::alloc::vec::Vec<Field>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarFixedSizeBinary {
     #[prost(bytes = "vec", tag = "1")]
     pub values: ::prost::alloc::vec::Vec<u8>,
@@ -1252,7 +1252,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1297,11 +1297,13 @@ pub mod scalar_value {
         #[prost(message, tag = "15")]
         Time32Value(super::ScalarTime32Value),
         #[prost(message, tag = "16")]
-        LargeListValue(super::ScalarListValue),
+        LargeListValue(super::ScalarNestedValue),
         #[prost(message, tag = "17")]
-        ListValue(super::ScalarListValue),
+        ListValue(super::ScalarNestedValue),
         #[prost(message, tag = "18")]
-        FixedSizeListValue(super::ScalarListValue),
+        FixedSizeListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "32")]
+        StructValue(super::ScalarNestedValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
         #[prost(message, tag = "39")]
@@ -1332,8 +1334,6 @@ pub mod scalar_value {
         Time64Value(super::ScalarTime64Value),
         #[prost(message, tag = "31")]
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
-        #[prost(message, tag = "32")]
-        StructValue(super::StructValue),
         #[prost(message, tag = "34")]
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
     }
@@ -1740,8 +1740,6 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "7")]
-    pub single_file_output: bool,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
     #[prost(message, optional, tag = "9")]
@@ -2244,9 +2242,9 @@ pub struct PhysicalColumn {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinOn {
     #[prost(message, optional, tag = "1")]
-    pub left: ::core::option::Option<PhysicalColumn>,
+    pub left: ::core::option::Option<PhysicalExprNode>,
     #[prost(message, optional, tag = "2")]
-    pub right: ::core::option::Option<PhysicalColumn>,
+    pub right: ::core::option::Option<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2637,9 +2635,11 @@ impl JoinConstraint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ScalarFunction {
-    Abs = 0,
-    Acos = 1,
-    Asin = 2,
+    ///   0 was Abs before
+    ///   The first enum value must be zero for open enums
+    Unknown = 0,
+    ///   1 was Acos
+    ///   2 was Asin
     Atan = 3,
     Ascii = 4,
     Ceil = 5,
@@ -2658,7 +2658,7 @@ pub enum ScalarFunction {
     Tan = 18,
     Trunc = 19,
     Array = 20,
-    RegexpMatch = 21,
+    /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
     CharacterLength = 24,
@@ -2673,7 +2673,7 @@ pub enum ScalarFunction {
     Lower = 33,
     Ltrim = 34,
     Md5 = 35,
-    NullIf = 36,
+    ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
     RegexpReplace = 39,
@@ -2692,10 +2692,10 @@ pub enum ScalarFunction {
     Strpos = 52,
     Substr = 53,
     ToHex = 54,
-    ToTimestamp = 55,
-    ToTimestampMillis = 56,
-    ToTimestampMicros = 57,
-    ToTimestampSeconds = 58,
+    /// 55 was ToTimestamp
+    /// 56 was ToTimestampMillis
+    /// 57 was ToTimestampMicros
+    /// 58 was ToTimestampSeconds
     Now = 59,
     Translate = 60,
     Trim = 61,
@@ -2725,21 +2725,19 @@ pub enum ScalarFunction {
     Gcd = 85,
     ArrayAppend = 86,
     ArrayConcat = 87,
-    ArrayDims = 88,
+    /// 88 was ArrayDims
     ArrayRepeat = 89,
     ArrayLength = 90,
-    ArrayNdims = 91,
+    /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
     ArrayPrepend = 94,
     ArrayRemove = 95,
     ArrayReplace = 96,
-    ArrayToString = 97,
-    Cardinality = 98,
+    /// 97 was ArrayToString
+    /// 98 was Cardinality
     ArrayElement = 99,
     ArraySlice = 100,
-    Encode = 101,
-    Decode = 102,
     Cot = 103,
     ArrayHas = 104,
     ArrayHasAny = 105,
@@ -2750,16 +2748,16 @@ pub enum ScalarFunction {
     ArrayReplaceAll = 110,
     Nanvl = 111,
     Flatten = 112,
-    Isnan = 113,
+    /// 113 was IsNan
     Iszero = 114,
     ArrayEmpty = 115,
     ArrayPopBack = 116,
     StringToArray = 117,
-    ToTimestampNanos = 118,
+    /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
-    Range = 122,
+    /// / 122 is Range
     ArrayExcept = 123,
     ArrayPopFront = 124,
     Levenshtein = 125,
@@ -2769,7 +2767,13 @@ pub enum ScalarFunction {
     ArrayDistinct = 129,
     ArrayResize = 130,
     EndsWith = 131,
-    InStr = 132,
+    /// / 132 was InStr
+    MakeDate = 133,
+    ArrayReverse = 134,
+    /// / 135 is RegexpLike
+    ///
+    /// / 137 was ToDate
+    ToChar = 136,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2778,9 +2782,7 @@ impl ScalarFunction {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ScalarFunction::Abs => "Abs",
-            ScalarFunction::Acos => "Acos",
-            ScalarFunction::Asin => "Asin",
+            ScalarFunction::Unknown => "unknown",
             ScalarFunction::Atan => "Atan",
             ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
@@ -2799,7 +2801,6 @@ impl ScalarFunction {
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
-            ScalarFunction::RegexpMatch => "RegexpMatch",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
@@ -2814,7 +2815,6 @@ impl ScalarFunction {
             ScalarFunction::Lower => "Lower",
             ScalarFunction::Ltrim => "Ltrim",
             ScalarFunction::Md5 => "MD5",
-            ScalarFunction::NullIf => "NullIf",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::RegexpReplace => "RegexpReplace",
@@ -2833,10 +2833,6 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::ToTimestamp => "ToTimestamp",
-            ScalarFunction::ToTimestampMillis => "ToTimestampMillis",
-            ScalarFunction::ToTimestampMicros => "ToTimestampMicros",
-            ScalarFunction::ToTimestampSeconds => "ToTimestampSeconds",
             ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
@@ -2866,21 +2862,15 @@ impl ScalarFunction {
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
-            ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
-            ScalarFunction::ArrayNdims => "ArrayNdims",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::ArrayToString => "ArrayToString",
-            ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
-            ScalarFunction::Encode => "Encode",
-            ScalarFunction::Decode => "Decode",
             ScalarFunction::Cot => "Cot",
             ScalarFunction::ArrayHas => "ArrayHas",
             ScalarFunction::ArrayHasAny => "ArrayHasAny",
@@ -2891,16 +2881,13 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
-            ScalarFunction::Isnan => "Isnan",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
-            ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::Range => "Range",
             ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
@@ -2910,15 +2897,15 @@ impl ScalarFunction {
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::InStr => "InStr",
+            ScalarFunction::MakeDate => "MakeDate",
+            ScalarFunction::ArrayReverse => "ArrayReverse",
+            ScalarFunction::ToChar => "ToChar",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "Abs" => Some(Self::Abs),
-            "Acos" => Some(Self::Acos),
-            "Asin" => Some(Self::Asin),
+            "unknown" => Some(Self::Unknown),
             "Atan" => Some(Self::Atan),
             "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
@@ -2937,7 +2924,6 @@ impl ScalarFunction {
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
-            "RegexpMatch" => Some(Self::RegexpMatch),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),
@@ -2952,7 +2938,6 @@ impl ScalarFunction {
             "Lower" => Some(Self::Lower),
             "Ltrim" => Some(Self::Ltrim),
             "MD5" => Some(Self::Md5),
-            "NullIf" => Some(Self::NullIf),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "RegexpReplace" => Some(Self::RegexpReplace),
@@ -2971,10 +2956,6 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "ToTimestamp" => Some(Self::ToTimestamp),
-            "ToTimestampMillis" => Some(Self::ToTimestampMillis),
-            "ToTimestampMicros" => Some(Self::ToTimestampMicros),
-            "ToTimestampSeconds" => Some(Self::ToTimestampSeconds),
             "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
@@ -3004,21 +2985,15 @@ impl ScalarFunction {
             "Gcd" => Some(Self::Gcd),
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
-            "ArrayDims" => Some(Self::ArrayDims),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
-            "ArrayNdims" => Some(Self::ArrayNdims),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
-            "ArrayToString" => Some(Self::ArrayToString),
-            "Cardinality" => Some(Self::Cardinality),
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
-            "Encode" => Some(Self::Encode),
-            "Decode" => Some(Self::Decode),
             "Cot" => Some(Self::Cot),
             "ArrayHas" => Some(Self::ArrayHas),
             "ArrayHasAny" => Some(Self::ArrayHasAny),
@@ -3029,16 +3004,13 @@ impl ScalarFunction {
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Flatten" => Some(Self::Flatten),
-            "Isnan" => Some(Self::Isnan),
             "Iszero" => Some(Self::Iszero),
             "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
-            "ToTimestampNanos" => Some(Self::ToTimestampNanos),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
-            "Range" => Some(Self::Range),
             "ArrayExcept" => Some(Self::ArrayExcept),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
@@ -3048,7 +3020,9 @@ impl ScalarFunction {
             "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
-            "InStr" => Some(Self::InStr),
+            "MakeDate" => Some(Self::MakeDate),
+            "ArrayReverse" => Some(Self::ArrayReverse),
+            "ToChar" => Some(Self::ToChar),
             _ => None,
         }
     }

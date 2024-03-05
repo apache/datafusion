@@ -25,20 +25,21 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.70"
+# Specify MSRV here as `cargo msrv` doesn't support workspace version
+rust-version = "1.72"
 
 [dependencies]
 async-recursion = "1.0"
 chrono = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 prost = "0.12"
 prost-types = "0.12"
-substrait = "0.23.0"
+substrait = "0.25.1"
 
 [dev-dependencies]
-tokio = "1.17"
+tokio = { workspace = true }
 
 [features]
 protoc = ["substrait/protoc"]

@@ -32,7 +32,6 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
-mod nullif;
 mod try_cast;
 
 /// Module with some convenient methods used in expression building
@@ -81,7 +80,7 @@ pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_column, cast_with_options, CastExpr};
+pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
 pub use get_indexed_field::{GetFieldAccessExpr, GetIndexedFieldExpr};
 pub use in_list::{in_list, InListExpr};
@@ -92,7 +91,6 @@ pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
-pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state
@@ -135,7 +133,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 
@@ -168,7 +166,7 @@ pub(crate) mod tests {
             let actual = aggregate_new(&batch, agg)?;
             assert_eq!($EXPECTED, &actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 

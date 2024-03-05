@@ -45,17 +45,17 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, LexRequirementRef, PhysicalExpr,
-    PhysicalSortRequirement,
+    PhysicalExprRef, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 
@@ -197,22 +197,25 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new_default(plan);
-            let adjusted =
-                plan_requirements.transform_down(&adjust_input_keys_ordering)?;
+            let adjusted = plan_requirements
+                .transform_down(&adjust_input_keys_ordering)
+                .data()?;
             adjusted.plan
         } else {
             // Run a bottom-up process
             plan.transform_up(&|plan| {
-                Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-            })?
+                Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
+            })
+            .data()?
         };
 
         let distribution_context = DistributionContext::new_default(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
-        let distribution_context =
-            distribution_context.transform_up(&|distribution_context| {
+        let distribution_context = distribution_context
+            .transform_up(&|distribution_context| {
                 ensure_distribution(distribution_context, config)
-            })?;
+            })
+            .data()?;
         Ok(distribution_context.plan)
     }
 
@@ -285,26 +288,28 @@ fn adjust_input_keys_ordering(
     {
         match mode {
             PartitionMode::Partitioned => {
-                let join_constructor =
-                    |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                        HashJoinExec::try_new(
-                            left.clone(),
-                            right.clone(),
-                            new_conditions.0,
-                            filter.clone(),
-                            join_type,
-                            PartitionMode::Partitioned,
-                            *null_equals_null,
-                        )
-                        .map(|e| Arc::new(e) as _)
-                    };
+                let join_constructor = |new_conditions: (
+                    Vec<(PhysicalExprRef, PhysicalExprRef)>,
+                    Vec<SortOptions>,
+                )| {
+                    HashJoinExec::try_new(
+                        left.clone(),
+                        right.clone(),
+                        new_conditions.0,
+                        filter.clone(),
+                        join_type,
+                        PartitionMode::Partitioned,
+                        *null_equals_null,
+                    )
+                    .map(|e| Arc::new(e) as _)
+                };
                 return reorder_partitioned_join_keys(
                     requirements,
                     on,
                     vec![],
                     &join_constructor,
                 )
-                .map(Transformed::Yes);
+                .map(Transformed::yes);
             }
             PartitionMode::CollectLeft => {
                 // Push down requirements to the right side
@@ -340,42 +345,46 @@ fn adjust_input_keys_ordering(
         left,
         right,
         on,
+        filter,
         join_type,
         sort_options,
         null_equals_null,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
-        let join_constructor =
-            |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                SortMergeJoinExec::try_new(
-                    left.clone(),
-                    right.clone(),
-                    new_conditions.0,
-                    *join_type,
-                    new_conditions.1,
-                    *null_equals_null,
-                )
-                .map(|e| Arc::new(e) as _)
-            };
+        let join_constructor = |new_conditions: (
+            Vec<(PhysicalExprRef, PhysicalExprRef)>,
+            Vec<SortOptions>,
+        )| {
+            SortMergeJoinExec::try_new(
+                left.clone(),
+                right.clone(),
+                new_conditions.0,
+                filter.clone(),
+                *join_type,
+                new_conditions.1,
+                *null_equals_null,
+            )
+            .map(|e| Arc::new(e) as _)
+        };
         return reorder_partitioned_join_keys(
             requirements,
             on,
             sort_options.clone(),
             &join_constructor,
         )
-        .map(Transformed::Yes);
+        .map(Transformed::yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
             if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
-                    .map(Transformed::Yes);
+                    .map(Transformed::yes);
             } else {
                 requirements.data.clear();
             }
         } else {
             // Keep everything unchanged
-            return Ok(Transformed::No(requirements));
+            return Ok(Transformed::no(requirements));
         }
     } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
@@ -403,47 +412,45 @@ fn adjust_input_keys_ordering(
             child.data = requirements.data.clone();
         }
     }
-    Ok(Transformed::Yes(requirements))
+    Ok(Transformed::yes(requirements))
 }
 
 fn reorder_partitioned_join_keys<F>(
     mut join_plan: PlanWithKeyRequirements,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
     sort_options: Vec<SortOptions>,
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where
-    F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Result<Arc<dyn ExecutionPlan>>,
+    F: Fn(
+        (Vec<(PhysicalExprRef, PhysicalExprRef)>, Vec<SortOptions>),
+    ) -> Result<Arc<dyn ExecutionPlan>>,
 {
     let parent_required = &join_plan.data;
     let join_key_pairs = extract_join_keys(on);
     let eq_properties = join_plan.plan.equivalence_properties();
 
-    if let Some((
+    let (
         JoinKeyPairs {
             left_keys,
             right_keys,
         },
-        new_positions,
-    )) = try_reorder(join_key_pairs.clone(), parent_required, &eq_properties)
-    {
-        if !new_positions.is_empty() {
+        positions,
+    ) = try_reorder(join_key_pairs, parent_required, eq_properties);
+
+    if let Some(positions) = positions {
+        if !positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
             let new_sort_options = (0..sort_options.len())
-                .map(|idx| sort_options[new_positions[idx]])
+                .map(|idx| sort_options[positions[idx]])
                 .collect();
             join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
-        let mut requirements = join_plan;
-        requirements.children[0].data = left_keys;
-        requirements.children[1].data = right_keys;
-        Ok(requirements)
-    } else {
-        let mut requirements = join_plan;
-        requirements.children[0].data = join_key_pairs.left_keys;
-        requirements.children[1].data = join_key_pairs.right_keys;
-        Ok(requirements)
     }
+
+    join_plan.children[0].data = left_keys;
+    join_plan.children[1].data = right_keys;
+    Ok(join_plan)
 }
 
 fn reorder_aggregate_keys(
@@ -597,67 +604,63 @@ pub(crate) fn reorder_join_keys_to_inputs(
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
         if matches!(mode, PartitionMode::Partitioned) {
-            let join_key_pairs = extract_join_keys(on);
-            if let Some((
-                JoinKeyPairs {
-                    left_keys,
-                    right_keys,
-                },
-                new_positions,
-            )) = reorder_current_join_keys(
-                join_key_pairs,
+            let (join_keys, positions) = reorder_current_join_keys(
+                extract_join_keys(on),
                 Some(left.output_partitioning()),
                 Some(right.output_partitioning()),
-                &left.equivalence_properties(),
-                &right.equivalence_properties(),
-            ) {
-                if !new_positions.is_empty() {
-                    let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                    return Ok(Arc::new(HashJoinExec::try_new(
-                        left.clone(),
-                        right.clone(),
-                        new_join_on,
-                        filter.clone(),
-                        join_type,
-                        PartitionMode::Partitioned,
-                        *null_equals_null,
-                    )?));
-                }
+                left.equivalence_properties(),
+                right.equivalence_properties(),
+            );
+            if positions.map_or(false, |idxs| !idxs.is_empty()) {
+                let JoinKeyPairs {
+                    left_keys,
+                    right_keys,
+                } = join_keys;
+                let new_join_on = new_join_conditions(&left_keys, &right_keys);
+                return Ok(Arc::new(HashJoinExec::try_new(
+                    left.clone(),
+                    right.clone(),
+                    new_join_on,
+                    filter.clone(),
+                    join_type,
+                    PartitionMode::Partitioned,
+                    *null_equals_null,
+                )?));
             }
         }
     } else if let Some(SortMergeJoinExec {
         left,
         right,
         on,
+        filter,
         join_type,
         sort_options,
         null_equals_null,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
-        let join_key_pairs = extract_join_keys(on);
-        if let Some((
-            JoinKeyPairs {
-                left_keys,
-                right_keys,
-            },
-            new_positions,
-        )) = reorder_current_join_keys(
-            join_key_pairs,
+        let (join_keys, positions) = reorder_current_join_keys(
+            extract_join_keys(on),
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &left.equivalence_properties(),
-            &right.equivalence_properties(),
-        ) {
-            if !new_positions.is_empty() {
+            left.equivalence_properties(),
+            right.equivalence_properties(),
+        );
+        if let Some(positions) = positions {
+            if !positions.is_empty() {
+                let JoinKeyPairs {
+                    left_keys,
+                    right_keys,
+                } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
                 let new_sort_options = (0..sort_options.len())
-                    .map(|idx| sort_options[new_positions[idx]])
+                    .map(|idx| sort_options[positions[idx]])
                     .collect();
                 return SortMergeJoinExec::try_new(
                     left.clone(),
                     right.clone(),
                     new_join_on,
+                    filter.clone(),
                     *join_type,
                     new_sort_options,
                     *null_equals_null,
@@ -672,28 +675,28 @@ pub(crate) fn reorder_join_keys_to_inputs(
 /// Reorder the current join keys ordering based on either left partition or right partition
 fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
-    left_partition: Option<Partitioning>,
-    right_partition: Option<Partitioning>,
+    left_partition: Option<&Partitioning>,
+    right_partition: Option<&Partitioning>,
     left_equivalence_properties: &EquivalenceProperties,
     right_equivalence_properties: &EquivalenceProperties,
-) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    match (left_partition, right_partition.clone()) {
+) -> (JoinKeyPairs, Option<Vec<usize>>) {
+    match (left_partition, right_partition) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
-            try_reorder(join_keys.clone(), &left_exprs, left_equivalence_properties)
-                .or_else(|| {
-                    reorder_current_join_keys(
-                        join_keys,
-                        None,
-                        right_partition,
-                        left_equivalence_properties,
-                        right_equivalence_properties,
-                    )
-                })
+            match try_reorder(join_keys, left_exprs, left_equivalence_properties) {
+                (join_keys, None) => reorder_current_join_keys(
+                    join_keys,
+                    None,
+                    right_partition,
+                    left_equivalence_properties,
+                    right_equivalence_properties,
+                ),
+                result => result,
+            }
         }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
-            try_reorder(join_keys, &right_exprs, right_equivalence_properties)
+            try_reorder(join_keys, right_exprs, right_equivalence_properties)
         }
-        _ => None,
+        _ => (join_keys, None),
     }
 }
 
@@ -701,66 +704,65 @@ fn try_reorder(
     join_keys: JoinKeyPairs,
     expected: &[Arc<dyn PhysicalExpr>],
     equivalence_properties: &EquivalenceProperties,
-) -> Option<(JoinKeyPairs, Vec<usize>)> {
+) -> (JoinKeyPairs, Option<Vec<usize>>) {
     let eq_groups = equivalence_properties.eq_group();
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
     if join_keys.left_keys.len() != expected.len() {
-        return None;
+        return (join_keys, None);
     }
     if physical_exprs_equal(expected, &join_keys.left_keys)
         || physical_exprs_equal(expected, &join_keys.right_keys)
     {
-        return Some((join_keys, vec![]));
+        return (join_keys, Some(vec![]));
     } else if !equivalence_properties.eq_group().is_empty() {
         normalized_expected = expected
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect();
-        assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
         if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
             || physical_exprs_equal(&normalized_expected, &normalized_right_keys)
         {
-            return Some((join_keys, vec![]));
+            return (join_keys, Some(vec![]));
         }
     }
 
-    let new_positions = expected_expr_positions(&join_keys.left_keys, expected)
+    let Some(positions) = expected_expr_positions(&join_keys.left_keys, expected)
         .or_else(|| expected_expr_positions(&join_keys.right_keys, expected))
         .or_else(|| expected_expr_positions(&normalized_left_keys, &normalized_expected))
         .or_else(|| {
             expected_expr_positions(&normalized_right_keys, &normalized_expected)
-        });
+        })
+    else {
+        return (join_keys, None);
+    };
 
-    new_positions.map(|positions| {
-        let mut new_left_keys = vec![];
-        let mut new_right_keys = vec![];
-        for pos in positions.iter() {
-            new_left_keys.push(join_keys.left_keys[*pos].clone());
-            new_right_keys.push(join_keys.right_keys[*pos].clone());
-        }
-        let pairs = JoinKeyPairs {
-            left_keys: new_left_keys,
-            right_keys: new_right_keys,
-        };
-        (pairs, positions)
-    })
+    let mut new_left_keys = vec![];
+    let mut new_right_keys = vec![];
+    for pos in positions.iter() {
+        new_left_keys.push(join_keys.left_keys[*pos].clone());
+        new_right_keys.push(join_keys.right_keys[*pos].clone());
+    }
+    let pairs = JoinKeyPairs {
+        left_keys: new_left_keys,
+        right_keys: new_right_keys,
+    };
+
+    (pairs, Some(positions))
 }
 
 /// Return the expected expressions positions.
@@ -788,10 +790,10 @@ fn expected_expr_positions(
     Some(indexes)
 }
 
-fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
+fn extract_join_keys(on: &[(PhysicalExprRef, PhysicalExprRef)]) -> JoinKeyPairs {
     let (left_keys, right_keys) = on
         .iter()
-        .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+        .map(|(l, r)| (l.clone() as _, r.clone() as _))
         .unzip();
     JoinKeyPairs {
         left_keys,
@@ -802,16 +804,11 @@ fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
 fn new_join_conditions(
     new_left_keys: &[Arc<dyn PhysicalExpr>],
     new_right_keys: &[Arc<dyn PhysicalExpr>],
-) -> Vec<(Column, Column)> {
+) -> Vec<(PhysicalExprRef, PhysicalExprRef)> {
     new_left_keys
         .iter()
         .zip(new_right_keys.iter())
-        .map(|(l_key, r_key)| {
-            (
-                l_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-                r_key.as_any().downcast_ref::<Column>().unwrap().clone(),
-            )
-        })
+        .map(|(l_key, r_key)| (l_key.clone(), r_key.clone()))
         .collect()
 }
 
@@ -878,12 +875,11 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
+    let dist = Distribution::HashPartitioned(hash_exprs);
     let satisfied = input
         .plan
         .output_partitioning()
-        .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
-            input.plan.equivalence_properties()
-        });
+        .satisfy(&dist, input.plan.equivalence_properties());
 
     // Add hash repartitioning when:
     // - The hash distribution requirement is not satisfied, or
@@ -896,7 +892,7 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        let partitioning = Partitioning::Hash(hash_exprs, n_target);
+        let partitioning = dist.create_partitioning(n_target);
         let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
             .with_preserve_order();
         let plan = Arc::new(repartition) as _;
@@ -1064,7 +1060,7 @@ fn ensure_distribution(
     let dist_context = update_children(dist_context)?;
 
     if dist_context.plan.children().is_empty() {
-        return Ok(Transformed::No(dist_context));
+        return Ok(Transformed::no(dist_context));
     }
 
     let target_partitions = config.execution.target_partitions;
@@ -1072,7 +1068,7 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
-    let is_unbounded = unbounded_output(&dist_context.plan);
+    let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
@@ -1244,7 +1240,7 @@ fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
-    Ok(Transformed::Yes(DistributionContext::new(
+    Ok(Transformed::yes(DistributionContext::new(
         plan, data, children,
     )))
 }
@@ -1307,8 +1303,7 @@ pub(crate) mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::ParquetExec;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_optimizer::test_utils::{
@@ -1331,6 +1326,7 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::tree_node::TransformedResult;
     use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
@@ -1339,6 +1335,7 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, expressions::Column,
         LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
+    use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
@@ -1346,22 +1343,34 @@ pub(crate) mod tests {
     struct SortRequiredExec {
         input: Arc<dyn ExecutionPlan>,
         expr: LexOrdering,
+        cache: PlanProperties,
     }
 
     impl SortRequiredExec {
         fn new(input: Arc<dyn ExecutionPlan>) -> Self {
             let expr = input.output_ordering().unwrap_or(&[]).to_vec();
-            Self { input, expr }
+            Self::new_with_requirement(input, expr)
         }
 
         fn new_with_requirement(
             input: Arc<dyn ExecutionPlan>,
             requirement: Vec<PhysicalSortExpr>,
         ) -> Self {
+            let cache = Self::compute_properties(&input);
             Self {
                 input,
                 expr: requirement,
+                cache,
             }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+            PlanProperties::new(
+                input.equivalence_properties().clone(), // Equivalence Properties
+                input.output_partitioning().clone(),    // Output Partitioning
+                input.execution_mode(),                 // Execution Mode
+            )
         }
     }
 
@@ -1384,20 +1393,12 @@ pub(crate) mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.input.schema()
-        }
-
-        fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
-            self.input.output_partitioning()
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
         }
 
         fn benefits_from_input_partitioning(&self) -> Vec<bool> {
             vec![false]
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            self.input.output_ordering()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -1407,6 +1408,7 @@ pub(crate) mod tests {
         // model that it requires the output ordering of its input
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
             vec![self
+                .properties()
                 .output_ordering()
                 .map(PhysicalSortRequirement::from_sort_exprs)]
         }
@@ -1641,6 +1643,7 @@ pub(crate) mod tests {
                 left,
                 right,
                 join_on.clone(),
+                None,
                 *join_type,
                 vec![SortOptions::default(); join_on.len()],
                 false,
@@ -1717,7 +1720,7 @@ pub(crate) mod tests {
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
         config.optimizer.prefer_existing_sort = prefer_existing_sort;
-        ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
+        ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
     }
 
     /// Test whether plan matches with expected plan
@@ -1786,14 +1789,16 @@ pub(crate) mod tests {
                         PlanWithKeyRequirements::new_default($PLAN.clone());
                     let adjusted = plan_requirements
                         .transform_down(&adjust_input_keys_ordering)
+                        .data()
                         .and_then(check_integrity)?;
                     // TODO: End state payloads will be checked here.
                     adjusted.plan
                 } else {
                     // Run reorder_join_keys_to_inputs rule
                     $PLAN.clone().transform_up(&|plan| {
-                        Ok(Transformed::Yes(reorder_join_keys_to_inputs(plan)?))
-                    })?
+                        Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
+                    })
+                    .data()?
                 };
 
                 // Then run ensure_distribution rule
@@ -1801,6 +1806,7 @@ pub(crate) mod tests {
                     .transform_up(&|distribution_context| {
                         ensure_distribution(distribution_context, &config)
                     })
+                    .data()
                     .and_then(check_integrity)?;
                 // TODO: End state payloads will be checked here.
             }
@@ -1886,8 +1892,8 @@ pub(crate) mod tests {
 
         // Join on (a == b1)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         for join_type in join_types {
@@ -1905,8 +1911,9 @@ pub(crate) mod tests {
                 | JoinType::LeftAnti => {
                     // Join on (a == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("a", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("a", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
                     let top_join = hash_join_exec(
                         join.clone(),
@@ -1966,8 +1973,9 @@ pub(crate) mod tests {
                     // This time we use (b1 == c) for top join
                     // Join on (b1 == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("b1", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
 
                     let top_join =
@@ -2031,8 +2039,8 @@ pub(crate) mod tests {
 
         // Join on (a == b)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
         )];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
@@ -2045,8 +2053,8 @@ pub(crate) mod tests {
 
         // Join on (a1 == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a1", &projection.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &projection.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(
@@ -2076,8 +2084,8 @@ pub(crate) mod tests {
 
         // Join on (a2 == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a2", &projection.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a2", &projection.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(projection, right, &top_join_on, &JoinType::Inner);
@@ -2110,8 +2118,8 @@ pub(crate) mod tests {
 
         // Join on (a == b)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
         )];
 
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
@@ -2128,8 +2136,8 @@ pub(crate) mod tests {
 
         // Join on (a == c)
         let top_join_on = vec![(
-            Column::new_with_schema("a", &projection2.schema()).unwrap(),
-            Column::new_with_schema("c", &schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &projection2.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
 
         let top_join = hash_join_exec(projection2, right, &top_join_on, &JoinType::Inner);
@@ -2174,8 +2182,8 @@ pub(crate) mod tests {
 
         // Join on (a1 == a2)
         let join_on = vec![(
-            Column::new_with_schema("a1", &left.schema()).unwrap(),
-            Column::new_with_schema("a2", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema()).unwrap()) as _,
         )];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
@@ -2221,12 +2229,12 @@ pub(crate) mod tests {
         // Join on (b1 == b && a1 == a)
         let join_on = vec![
             (
-                Column::new_with_schema("b1", &left.schema()).unwrap(),
-                Column::new_with_schema("b", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a1", &left.schema()).unwrap(),
-                Column::new_with_schema("a", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a", &right.schema()).unwrap()) as _,
             ),
         ];
         let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
@@ -2265,16 +2273,16 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1 and c == c1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_left_join =
@@ -2293,16 +2301,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join =
@@ -2311,16 +2319,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2382,16 +2405,16 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1 and c == c1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
         ];
 
@@ -2414,16 +2437,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join = ensure_distribution_helper(
@@ -2435,16 +2458,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2512,12 +2550,12 @@ pub(crate) mod tests {
         // Join on (a == a1 and b == b1)
         let join_on = vec![
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_left_join = ensure_distribution_helper(
@@ -2539,16 +2577,16 @@ pub(crate) mod tests {
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
             (
-                Column::new_with_schema("c", &schema()).unwrap(),
-                Column::new_with_schema("c1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("b", &schema()).unwrap(),
-                Column::new_with_schema("b1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a", &schema()).unwrap(),
-                Column::new_with_schema("a1", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema()).unwrap()) as _,
             ),
         ];
         let bottom_right_join = ensure_distribution_helper(
@@ -2560,16 +2598,31 @@ pub(crate) mod tests {
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("B", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("C", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
             (
-                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                Arc::new(
+                    Column::new_with_schema("AA", &bottom_left_projection.schema())
+                        .unwrap(),
+                ) as _,
+                Arc::new(
+                    Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+                ) as _,
             ),
         ];
 
@@ -2648,8 +2701,8 @@ pub(crate) mod tests {
 
         // Join on (a == b1)
         let join_on = vec![(
-            Column::new_with_schema("a", &schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
         for join_type in join_types {
@@ -2660,8 +2713,8 @@ pub(crate) mod tests {
 
             // Top join on (a == c)
             let top_join_on = vec![(
-                Column::new_with_schema("a", &join.schema()).unwrap(),
-                Column::new_with_schema("c", &schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
             )];
             let top_join = sort_merge_join_exec(
                 join.clone(),
@@ -2783,8 +2836,9 @@ pub(crate) mod tests {
                     // This time we use (b1 == c) for top join
                     // Join on (b1 == c)
                     let top_join_on = vec![(
-                        Column::new_with_schema("b1", &join.schema()).unwrap(),
-                        Column::new_with_schema("c", &schema()).unwrap(),
+                        Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
+                            as _,
+                        Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                     )];
                     let top_join = sort_merge_join_exec(
                         join,
@@ -2933,12 +2987,12 @@ pub(crate) mod tests {
         // Join on (b3 == b2 && a3 == a2)
         let join_on = vec![
             (
-                Column::new_with_schema("b3", &left.schema()).unwrap(),
-                Column::new_with_schema("b2", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("b3", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
             ),
             (
-                Column::new_with_schema("a3", &left.schema()).unwrap(),
-                Column::new_with_schema("a2", &right.schema()).unwrap(),
+                Arc::new(Column::new_with_schema("a3", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("a2", &right.schema()).unwrap()) as _,
             ),
         ];
         let join = sort_merge_join_exec(left, right.clone(), &join_on, &JoinType::Inner);

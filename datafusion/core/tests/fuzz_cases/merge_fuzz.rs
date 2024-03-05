@@ -89,7 +89,7 @@ async fn test_merge_3_gaps() {
 /// Merge a set of input streams using SortPreservingMergeExec and
 /// `Vec::sort` and ensure the results are the same.
 ///
-/// For each case, the `input` streams are turned into a set of of
+/// For each case, the `input` streams are turned into a set of
 /// streams which are then merged together by [SortPreservingMerge]
 ///
 /// Each `Vec<RecordBatch>` in `input` must be sorted and have a

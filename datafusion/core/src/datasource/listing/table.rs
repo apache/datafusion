@@ -27,7 +27,9 @@ use super::PartitionedFile;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::{
-    create_ordering,
+    create_ordering, get_statistics_with_limit, TableProvider, TableType,
+};
+use crate::datasource::{
     file_format::{
         arrow::ArrowFormat,
         avro::AvroFormat,
@@ -36,10 +38,8 @@ use crate::datasource::{
         json::JsonFormat,
         FileFormat,
     },
-    get_statistics_with_limit,
     listing::ListingTableUrl,
     physical_plan::{FileScanConfig, FileSinkConfig},
-    TableProvider, TableType,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -548,7 +548,7 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut builder = SchemaBuilder::from(file_schema.fields());
+        let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
@@ -776,7 +776,6 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            single_file_output: false,
             overwrite,
             file_type_writer_options,
         };
@@ -881,8 +880,13 @@ impl ListingTable {
             .boxed()
             .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (files, statistics) =
-            get_statistics_with_limit(files, self.schema(), limit).await?;
+        let (files, statistics) = get_statistics_with_limit(
+            files,
+            self.schema(),
+            limit,
+            self.options.collect_stat,
+        )
+        .await?;
 
         Ok((
             split_files(files, self.options.target_partitions),
@@ -916,6 +920,8 @@ mod tests {
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::ExecutionPlanProperties;
+
     use tempfile::TempDir;
 
     #[tokio::test]

@@ -26,8 +26,7 @@ use crate::{
 };
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::{
@@ -259,7 +258,7 @@ pub fn create_physical_expr(
         }
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let mut physical_args = args
+            let physical_args = args
                 .iter()
                 .map(|e| create_physical_expr(e, input_dfschema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
@@ -273,14 +272,12 @@ pub fn create_physical_expr(
                     )
                 }
                 ScalarFunctionDefinition::UDF(fun) => {
-                    // udfs with zero params expect null array as input
-                    if args.is_empty() {
-                        physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
-                    }
+                    let return_type = fun.return_type_from_exprs(args, input_dfschema)?;
+
                     udf::create_physical_expr(
                         fun.clone().as_ref(),
                         &physical_args,
-                        input_schema,
+                        return_type,
                     )
                 }
                 ScalarFunctionDefinition::Name(_) => {

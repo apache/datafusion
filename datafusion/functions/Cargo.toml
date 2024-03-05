@@ -1,0 +1,74 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-functions"
+description = "Function packages for the DataFusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[features]
+# enable core functions
+core_expressions = []
+# enable datetime functions
+datetime_expressions = []
+# Enable encoding by default so the doctests work. In general don't automatically enable all packages.
+default = ["core_expressions", "datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions"]
+# enable encode/decode functions
+encoding_expressions = ["base64", "hex"]
+# enable math functions
+math_expressions = []
+regex_expressions = []
+
+[lib]
+name = "datafusion_functions"
+path = "src/lib.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+base64 = { version = "0.21", optional = true }
+chrono = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+hex = { version = "0.4", optional = true }
+itertools = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+rand = { workspace = true }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[[bench]]
+harness = false
+name = "to_timestamp"
+
+[[bench]]
+harness = false
+name = "regx"

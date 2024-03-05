@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
 use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use DataType::*;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::sort_properties::SortProperties;
-use crate::PhysicalExpr;
-
-use arrow::compute::{can_cast_types, kernels, CastOptions};
+use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
@@ -41,7 +41,7 @@ const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 #[derive(Debug, Clone)]
 pub struct CastExpr {
     /// The expression to cast
-    expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
     /// Cast options
@@ -76,6 +76,26 @@ impl CastExpr {
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
     }
+    pub fn is_bigger_cast(&self, src: DataType) -> bool {
+        if src == self.cast_type {
+            return true;
+        }
+        matches!(
+            (src, &self.cast_type),
+            (Int8, Int16 | Int32 | Int64)
+                | (Int16, Int32 | Int64)
+                | (Int32, Int64)
+                | (UInt8, UInt16 | UInt32 | UInt64)
+                | (UInt16, UInt32 | UInt64)
+                | (UInt32, UInt64)
+                | (
+                    Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32,
+                    Float32 | Float64
+                )
+                | (Int64 | UInt64, Float64)
+                | (Utf8, LargeUtf8)
+        )
+    }
 }
 
 impl fmt::Display for CastExpr {
@@ -100,7 +120,7 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        cast_column(&value, &self.cast_type, Some(&self.cast_options))
+        value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -159,43 +179,6 @@ impl PartialEq<dyn Any> for CastExpr {
                     && self.cast_options == x.cast_options
             })
             .unwrap_or(false)
-    }
-}
-
-/// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
-pub fn cast_column(
-    value: &ColumnarValue,
-    cast_type: &DataType,
-    cast_options: Option<&CastOptions<'static>>,
-) -> Result<ColumnarValue> {
-    let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
-    match value {
-        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-        )),
-        ColumnarValue::Scalar(scalar) => {
-            let scalar_array = if cast_type
-                == &DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
-            {
-                if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                    ScalarValue::Int64(
-                        Some((float_ts * 1_000_000_000_f64).trunc() as i64),
-                    )
-                    .to_array()?
-                } else {
-                    scalar.to_array()?
-                }
-            } else {
-                scalar.to_array()?
-            };
-            let cast_array = kernels::cast::cast_with_options(
-                &scalar_array,
-                cast_type,
-                &cast_options,
-            )?;
-            let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-            Ok(ColumnarValue::Scalar(cast_scalar))
-        }
     }
 }
 

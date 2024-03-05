@@ -28,11 +28,14 @@
 /// - A `PARTITION BY a, b` or a `PARTITION BY b, a` can use `Sorted` mode.
 ///
 /// ## Aggregations
-/// - A `GROUP BY b` clause can use `Linear` mode.
-/// - A `GROUP BY a, c` or a `GROUP BY BY c, a` can use
-///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
+/// - A `GROUP BY b` clause can use `Linear` mode, as the only one permutation `[b]`
+///   cannot satisfy the existing ordering.
+/// - A `GROUP BY a, c` or a `GROUP BY c, a` can use
+///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively, as
+///   the permutation `[a]` satisfies the existing ordering.
 ///   (The vector stores the index of `a` in the respective PARTITION BY expression.)
-/// - A `GROUP BY a, b` or a `GROUP BY b, a` can use `Sorted` mode.
+/// - A `GROUP BY a, b` or a `GROUP BY b, a` can use `Sorted` mode, as the
+///   full permutation `[a, b]` satisfies the existing ordering.
 ///
 /// Note these are the same examples as above, but with `GROUP BY` instead of
 /// `PARTITION BY` to make the examples easier to read.

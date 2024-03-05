@@ -32,7 +32,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
@@ -40,6 +40,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
@@ -303,155 +304,71 @@ fn summarize_min_max(
     i: usize,
     stat: &ParquetStatistics,
 ) {
+    if !stat.has_min_max_set() {
+        max_values[i] = None;
+        min_values[i] = None;
+        return;
+    }
     match stat {
-        ParquetStatistics::Boolean(s) => {
-            if let DataType::Boolean = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(BooleanArray::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(BooleanArray::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Boolean(s) if DataType::Boolean == *fields[i].data_type() => {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(BooleanArray::from(vec![*s.max()]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(BooleanArray::from(vec![*s.min()]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Int32(s) => {
-            if let DataType::Int32 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Int32Array::from_value(
-                            *s.max(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Int32Array::from_value(
-                            *s.min(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Int32(s) if DataType::Int32 == *fields[i].data_type() => {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Int32Array::from_value(*s.max(), 1))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Int32Array::from_value(*s.min(), 1))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Int64(s) => {
-            if let DataType::Int64 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Int64Array::from_value(
-                            *s.max(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Int64Array::from_value(
-                            *s.min(),
-                            1,
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Int64(s) if DataType::Int64 == *fields[i].data_type() => {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Int64Array::from_value(*s.max(), 1))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Int64Array::from_value(*s.min(), 1))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Float(s) => {
-            if let DataType::Float32 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Float32Array::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Float32Array::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Float(s) if DataType::Float32 == *fields[i].data_type() => {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Float32Array::from(vec![*s.max()]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Float32Array::from(vec![*s.min()]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
-        ParquetStatistics::Double(s) => {
-            if let DataType::Float64 = fields[i].data_type() {
-                if s.has_min_max_set() {
-                    if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update_batch(&[Arc::new(Float64Array::from(
-                            vec![Some(*s.max())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
-                        }
-                    }
-                    if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update_batch(&[Arc::new(Float64Array::from(
-                            vec![Some(*s.min())],
-                        ))]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+        ParquetStatistics::Double(s) if DataType::Float64 == *fields[i].data_type() => {
+            if let Some(max_value) = &mut max_values[i] {
+                max_value
+                    .update_batch(&[Arc::new(Float64Array::from(vec![*s.max()]))])
+                    .unwrap_or_else(|_| max_values[i] = None);
             }
-            max_values[i] = None;
-            min_values[i] = None;
+            if let Some(min_value) = &mut min_values[i] {
+                min_value
+                    .update_batch(&[Arc::new(Float64Array::from(vec![*s.min()]))])
+                    .unwrap_or_else(|_| min_values[i] = None);
+            }
         }
         _ => {
             max_values[i] = None;
@@ -749,7 +666,6 @@ impl DataSink for ParquetSink {
             part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
-            self.config.single_file_output,
         );
 
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
@@ -813,16 +729,8 @@ impl DataSink for ParquetSink {
             }
         }
 
-        match demux_task.await {
-            Ok(r) => r?,
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
-            }
-        }
+        demux_task.join_unwind().await?;
+
         Ok(row_count as u64)
     }
 }
@@ -839,8 +747,9 @@ async fn column_serializer_task(
     Ok(writer)
 }
 
-type ColumnJoinHandle = JoinHandle<Result<ArrowColumnWriter>>;
+type ColumnWriterTask = SpawnedTask<Result<ArrowColumnWriter>>;
 type ColSender = Sender<ArrowLeafColumn>;
+
 /// Spawns a parallel serialization task for each column
 /// Returns join handles for each columns serialization task along with a send channel
 /// to send arrow arrays to each serialization task.
@@ -848,23 +757,24 @@ fn spawn_column_parallel_row_group_writer(
     schema: Arc<Schema>,
     parquet_props: Arc<WriterProperties>,
     max_buffer_size: usize,
-) -> Result<(Vec<ColumnJoinHandle>, Vec<ColSender>)> {
+) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
     let schema_desc = arrow_to_parquet_schema(&schema)?;
     let col_writers = get_column_writers(&schema_desc, &parquet_props, &schema)?;
     let num_columns = col_writers.len();
 
-    let mut col_writer_handles = Vec::with_capacity(num_columns);
+    let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
     for writer in col_writers.into_iter() {
         // Buffer size of this channel limits the number of arrays queued up for column level serialization
         let (send_array, recieve_array) =
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
-        col_writer_handles
-            .push(tokio::spawn(column_serializer_task(recieve_array, writer)))
+
+        let task = SpawnedTask::spawn(column_serializer_task(recieve_array, writer));
+        col_writer_tasks.push(task);
     }
 
-    Ok((col_writer_handles, col_array_channels))
+    Ok((col_writer_tasks, col_array_channels))
 }
 
 /// Settings related to writing parquet files in parallel
@@ -905,26 +815,15 @@ async fn send_arrays_to_col_writers(
 /// Spawns a tokio task which joins the parallel column writer tasks,
 /// and finalizes the row group
 fn spawn_rg_join_and_finalize_task(
-    column_writer_handles: Vec<JoinHandle<Result<ArrowColumnWriter>>>,
+    column_writer_tasks: Vec<ColumnWriterTask>,
     rg_rows: usize,
-) -> JoinHandle<RBStreamSerializeResult> {
-    tokio::spawn(async move {
-        let num_cols = column_writer_handles.len();
+) -> SpawnedTask<RBStreamSerializeResult> {
+    SpawnedTask::spawn(async move {
+        let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
-        for handle in column_writer_handles.into_iter() {
-            match handle.await {
-                Ok(r) => {
-                    let w = r?;
-                    finalized_rg.push(w.close()?);
-                }
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic())
-                    } else {
-                        unreachable!()
-                    }
-                }
-            }
+        for task in column_writer_tasks.into_iter() {
+            let writer = task.join_unwind().await?;
+            finalized_rg.push(writer.close()?);
         }
 
         Ok((finalized_rg, rg_rows))
@@ -941,12 +840,12 @@ fn spawn_rg_join_and_finalize_task(
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
     mut data: Receiver<RecordBatch>,
-    serialize_tx: Sender<JoinHandle<RBStreamSerializeResult>>,
+    serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
     parallel_options: ParallelParquetWriterOptions,
-) -> JoinHandle<Result<(), DataFusionError>> {
-    tokio::spawn(async move {
+) -> SpawnedTask<Result<(), DataFusionError>> {
+    SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
         let max_row_group_rows = writer_props.max_row_group_size();
         let (mut column_writer_handles, mut col_array_channels) =
@@ -1016,7 +915,7 @@ fn spawn_parquet_parallel_serialization_task(
 /// Consume RowGroups serialized by other parallel tasks and concatenate them in
 /// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
 async fn concatenate_parallel_row_groups(
-    mut serialize_rx: Receiver<JoinHandle<RBStreamSerializeResult>>,
+    mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
     mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
@@ -1032,33 +931,22 @@ async fn concatenate_parallel_row_groups(
 
     let mut row_count = 0;
 
-    while let Some(handle) = serialize_rx.recv().await {
-        let join_result = handle.await;
-        match join_result {
-            Ok(result) => {
-                let mut rg_out = parquet_writer.next_row_group()?;
-                let (serialized_columns, cnt) = result?;
-                row_count += cnt;
-                for chunk in serialized_columns {
-                    chunk.append_to_row_group(&mut rg_out)?;
-                    let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-                    if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
-                        object_store_writer
-                            .write_all(buff_to_flush.as_slice())
-                            .await?;
-                        buff_to_flush.clear();
-                    }
-                }
-                rg_out.close()?;
-            }
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
+    while let Some(task) = serialize_rx.recv().await {
+        let result = task.join_unwind().await;
+        let mut rg_out = parquet_writer.next_row_group()?;
+        let (serialized_columns, cnt) = result?;
+        row_count += cnt;
+        for chunk in serialized_columns {
+            chunk.append_to_row_group(&mut rg_out)?;
+            let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+            if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
+                object_store_writer
+                    .write_all(buff_to_flush.as_slice())
+                    .await?;
+                buff_to_flush.clear();
             }
         }
+        rg_out.close()?;
     }
 
     let inner_writer = parquet_writer.into_inner()?;
@@ -1084,7 +972,7 @@ async fn output_single_parquet_file_parallelized(
     let max_rowgroups = parallel_options.max_parallel_row_groups;
     // Buffer size of this channel limits maximum number of RowGroups being worked on in parallel
     let (serialize_tx, serialize_rx) =
-        mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_rowgroups);
+        mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
     let arc_props = Arc::new(parquet_props.clone());
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
@@ -1102,18 +990,7 @@ async fn output_single_parquet_file_parallelized(
     )
     .await?;
 
-    match launch_serialization_task.await {
-        Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => {
-            if e.is_panic() {
-                std::panic::resume_unwind(e.into_panic())
-            } else {
-                unreachable!()
-            }
-        }
-    };
-
+    launch_serialization_task.join_unwind().await?;
     Ok(row_count)
 }
 

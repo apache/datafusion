@@ -58,6 +58,8 @@ pub struct ScalarFunctionExpr {
     // and it specifies the effect of an increase or decrease in
     // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
+    // Whether this function can be invoked with zero arguments
+    supports_zero_argument: bool,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -67,6 +69,8 @@ impl Debug for ScalarFunctionExpr {
             .field("name", &self.name)
             .field("args", &self.args)
             .field("return_type", &self.return_type)
+            .field("monotonicity", &self.monotonicity)
+            .field("supports_zero_argument", &self.supports_zero_argument)
             .finish()
     }
 }
@@ -79,6 +83,7 @@ impl ScalarFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
+        supports_zero_argument: bool,
     ) -> Self {
         Self {
             fun,
@@ -86,6 +91,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             monotonicity,
+            supports_zero_argument,
         }
     }
 
@@ -138,15 +144,23 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
-        let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
+        let inputs = match (
+            self.args.is_empty(),
+            self.name.parse::<BuiltinScalarFunction>(),
+        ) {
             // MakeArray support zero argument but has the different behavior from the array with one null.
-            (0, Ok(scalar_fun))
+            (true, Ok(scalar_fun))
                 if scalar_fun
                     .signature()
                     .type_signature
                     .supports_zero_argument()
                     && scalar_fun != BuiltinScalarFunction::MakeArray =>
             {
+                vec![ColumnarValue::create_null_array(batch.num_rows())]
+            }
+            // If the function supports zero argument, we pass in a null array indicating the batch size.
+            // This is for user-defined functions.
+            (true, Err(_)) if self.supports_zero_argument => {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
@@ -175,6 +189,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             children,
             self.return_type().clone(),
             self.monotonicity.clone(),
+            self.supports_zero_argument,
         )))
     }
 

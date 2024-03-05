@@ -15,38 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod strings;
+mod bytes;
+mod native;
 
 use std::any::Any;
-use std::cmp::Eq;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float16Type, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_array::PrimitiveArray;
 
-use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::count_distinct::strings::StringDistinctCountAccumulator;
-use crate::aggregate::utils::{down_cast_any_ref, Hashable};
+use crate::aggregate::count_distinct::bytes::BytesDistinctCountAccumulator;
+use crate::aggregate::count_distinct::native::{
+    FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
+};
+use crate::aggregate::utils::down_cast_any_ref;
+use crate::binary_map::OutputType;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-
-type DistinctScalarValues = ScalarValue;
 
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -72,18 +71,6 @@ impl DistinctCount {
             expr,
         }
     }
-}
-
-macro_rules! native_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(NativeDistinctCountAccumulator::<$TYPE>::new()))
-    }};
-}
-
-macro_rules! float_distinct_count_accumulator {
-    ($TYPE:ident) => {{
-        Ok(Box::new(FloatDistinctCountAccumulator::<$TYPE>::new()))
-    }};
 }
 
 impl AggregateExpr for DistinctCount {
@@ -112,57 +99,69 @@ impl AggregateExpr for DistinctCount {
         use DataType::*;
         use TimeUnit::*;
 
-        match &self.state_data_type {
-            Int8 => native_distinct_count_accumulator!(Int8Type),
-            Int16 => native_distinct_count_accumulator!(Int16Type),
-            Int32 => native_distinct_count_accumulator!(Int32Type),
-            Int64 => native_distinct_count_accumulator!(Int64Type),
-            UInt8 => native_distinct_count_accumulator!(UInt8Type),
-            UInt16 => native_distinct_count_accumulator!(UInt16Type),
-            UInt32 => native_distinct_count_accumulator!(UInt32Type),
-            UInt64 => native_distinct_count_accumulator!(UInt64Type),
-            Decimal128(_, _) => native_distinct_count_accumulator!(Decimal128Type),
-            Decimal256(_, _) => native_distinct_count_accumulator!(Decimal256Type),
-
-            Date32 => native_distinct_count_accumulator!(Date32Type),
-            Date64 => native_distinct_count_accumulator!(Date64Type),
-            Time32(Millisecond) => {
-                native_distinct_count_accumulator!(Time32MillisecondType)
+        Ok(match &self.state_data_type {
+            Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new()),
+            Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new()),
+            Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new()),
+            Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new()),
+            UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new()),
+            UInt16 => Box::new(PrimitiveDistinctCountAccumulator::<UInt16Type>::new()),
+            UInt32 => Box::new(PrimitiveDistinctCountAccumulator::<UInt32Type>::new()),
+            UInt64 => Box::new(PrimitiveDistinctCountAccumulator::<UInt64Type>::new()),
+            Decimal128(_, _) => {
+                Box::new(PrimitiveDistinctCountAccumulator::<Decimal128Type>::new())
             }
+            Decimal256(_, _) => {
+                Box::new(PrimitiveDistinctCountAccumulator::<Decimal256Type>::new())
+            }
+
+            Date32 => Box::new(PrimitiveDistinctCountAccumulator::<Date32Type>::new()),
+            Date64 => Box::new(PrimitiveDistinctCountAccumulator::<Date64Type>::new()),
+            Time32(Millisecond) => Box::new(PrimitiveDistinctCountAccumulator::<
+                Time32MillisecondType,
+            >::new()),
             Time32(Second) => {
-                native_distinct_count_accumulator!(Time32SecondType)
+                Box::new(PrimitiveDistinctCountAccumulator::<Time32SecondType>::new())
             }
-            Time64(Microsecond) => {
-                native_distinct_count_accumulator!(Time64MicrosecondType)
-            }
+            Time64(Microsecond) => Box::new(PrimitiveDistinctCountAccumulator::<
+                Time64MicrosecondType,
+            >::new()),
             Time64(Nanosecond) => {
-                native_distinct_count_accumulator!(Time64NanosecondType)
+                Box::new(PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new())
             }
-            Timestamp(Microsecond, _) => {
-                native_distinct_count_accumulator!(TimestampMicrosecondType)
-            }
-            Timestamp(Millisecond, _) => {
-                native_distinct_count_accumulator!(TimestampMillisecondType)
-            }
-            Timestamp(Nanosecond, _) => {
-                native_distinct_count_accumulator!(TimestampNanosecondType)
-            }
+            Timestamp(Microsecond, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+                TimestampMicrosecondType,
+            >::new()),
+            Timestamp(Millisecond, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+                TimestampMillisecondType,
+            >::new()),
+            Timestamp(Nanosecond, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+                TimestampNanosecondType,
+            >::new()),
             Timestamp(Second, _) => {
-                native_distinct_count_accumulator!(TimestampSecondType)
+                Box::new(PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new())
             }
 
-            Float16 => float_distinct_count_accumulator!(Float16Type),
-            Float32 => float_distinct_count_accumulator!(Float32Type),
-            Float64 => float_distinct_count_accumulator!(Float64Type),
+            Float16 => Box::new(FloatDistinctCountAccumulator::<Float16Type>::new()),
+            Float32 => Box::new(FloatDistinctCountAccumulator::<Float32Type>::new()),
+            Float64 => Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
 
-            Utf8 => Ok(Box::new(StringDistinctCountAccumulator::<i32>::new())),
-            LargeUtf8 => Ok(Box::new(StringDistinctCountAccumulator::<i64>::new())),
+            Utf8 => Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8)),
+            LargeUtf8 => {
+                Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
+            }
+            Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
+                OutputType::Binary,
+            )),
+            LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
+                OutputType::Binary,
+            )),
 
-            _ => Ok(Box::new(DistinctCountAccumulator {
+            _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
                 state_data_type: self.state_data_type.clone(),
-            })),
-        }
+            }),
+        })
     }
 
     fn name(&self) -> &str {
@@ -183,9 +182,13 @@ impl PartialEq<dyn Any> for DistinctCount {
     }
 }
 
+/// General purpose distinct accumulator that works for any DataType by using
+/// [`ScalarValue`]. Some types have specialized accumulators that are (much)
+/// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
+/// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
 struct DistinctCountAccumulator {
-    values: HashSet<DistinctScalarValues, RandomState>,
+    values: HashSet<ScalarValue, RandomState>,
     state_data_type: DataType,
 }
 
@@ -194,7 +197,7 @@ impl DistinctCountAccumulator {
     // This method is faster than .full_size(), however it is not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
         std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
@@ -207,7 +210,7 @@ impl DistinctCountAccumulator {
     // calculates the size as accurate as possible, call to this method is expensive
     fn full_size(&self) -> usize {
         std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
@@ -248,11 +251,10 @@ impl Accumulator for DistinctCountAccumulator {
             return Ok(());
         }
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
-        for scalars in scalar_vec.into_iter() {
-            self.values.extend(scalars);
-        }
-        Ok(())
+        let array = &states[0];
+        let list_array = array.as_list::<i32>();
+        let inner_array = list_array.value(0);
+        self.update_batch(&[inner_array])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -265,182 +267,6 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
-    }
-}
-
-#[derive(Debug)]
-struct NativeDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
-{
-    values: HashSet<T::Native, RandomState>,
-}
-
-impl<T> NativeDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
-{
-    fn new() -> Self {
-        Self {
-            values: HashSet::default(),
-        }
-    }
-}
-
-impl<T> Accumulator for NativeDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send + Debug,
-    T::Native: Eq + Hash,
-{
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
-            self.values.iter().cloned(),
-        )) as ArrayRef;
-        let list = Arc::new(array_into_list_array(arr));
-        Ok(vec![ScalarValue::List(list)])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
-                self.values.insert(value);
-            }
-        });
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        assert_eq!(
-            states.len(),
-            1,
-            "count_distinct states must be single array"
-        );
-
-        let arr = as_list_array(&states[0])?;
-        arr.iter().try_for_each(|maybe_list| {
-            if let Some(list) = maybe_list {
-                let list = as_primitive_array::<T>(&list)?;
-                self.values.extend(list.values())
-            };
-            Ok(())
-        })
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
-    }
-
-    fn size(&self) -> usize {
-        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
-            / 7)
-        .next_power_of_two();
-
-        // Size of accumulator
-        // + size of entry * number of buckets
-        // + 1 byte for each bucket
-        // + fixed size of HashSet
-        std::mem::size_of_val(self)
-            + std::mem::size_of::<T::Native>() * estimated_buckets
-            + estimated_buckets
-            + std::mem::size_of_val(&self.values)
-    }
-}
-
-#[derive(Debug)]
-struct FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-{
-    values: HashSet<Hashable<T::Native>, RandomState>,
-}
-
-impl<T> FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send,
-{
-    fn new() -> Self {
-        Self {
-            values: HashSet::default(),
-        }
-    }
-}
-
-impl<T> Accumulator for FloatDistinctCountAccumulator<T>
-where
-    T: ArrowPrimitiveType + Send + Debug,
-{
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
-            self.values.iter().map(|v| v.0),
-        )) as ArrayRef;
-        let list = Arc::new(array_into_list_array(arr));
-        Ok(vec![ScalarValue::List(list)])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
-                self.values.insert(Hashable(value));
-            }
-        });
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        assert_eq!(
-            states.len(),
-            1,
-            "count_distinct states must be single array"
-        );
-
-        let arr = as_list_array(&states[0])?;
-        arr.iter().try_for_each(|maybe_list| {
-            if let Some(list) = maybe_list {
-                let list = as_primitive_array::<T>(&list)?;
-                self.values
-                    .extend(list.values().iter().map(|v| Hashable(*v)));
-            };
-            Ok(())
-        })
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
-    }
-
-    fn size(&self) -> usize {
-        let estimated_buckets = (self.values.len().checked_mul(8).unwrap_or(usize::MAX)
-            / 7)
-        .next_power_of_two();
-
-        // Size of accumulator
-        // + size of entry * number of buckets
-        // + 1 byte for each bucket
-        // + fixed size of HashSet
-        std::mem::size_of_val(self)
-            + std::mem::size_of::<T::Native>() * estimated_buckets
-            + estimated_buckets
-            + std::mem::size_of_val(&self.values)
     }
 }
 

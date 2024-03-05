@@ -20,6 +20,9 @@ use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
+use arrow_array::types::Int32Type;
+use arrow_array::ListArray;
+use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -31,14 +34,20 @@ use datafusion::prelude::*;
 use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
+use datafusion_common::DFSchema;
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{approx_median, cast};
+use datafusion_expr::{approx_median, cast, ExprSchemable};
 
-async fn create_test_table() -> Result<DataFrame> {
-    let schema = Arc::new(Schema::new(vec![
+fn test_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
-    ]));
+        Field::new("l", DataType::new_list(DataType::Int32, true), true),
+    ]))
+}
+
+async fn create_test_table() -> Result<DataFrame> {
+    let schema = test_schema();
 
     // define data.
     let batch = RecordBatch::try_new(
@@ -51,6 +60,12 @@ async fn create_test_table() -> Result<DataFrame> {
                 "123AbcDef",
             ])),
             Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ])),
         ],
     )?;
 
@@ -61,7 +76,7 @@ async fn create_test_table() -> Result<DataFrame> {
     ctx.table("test").await
 }
 
-/// Excutes an expression on the test dataframe as a select.
+/// Executes an expression on the test dataframe as a select.
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, using the assert_batch_eq! macro
 macro_rules! assert_fn_batches {
@@ -268,26 +283,6 @@ async fn test_fn_initcap() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fn_instr() -> Result<()> {
-    let expr = instr(col("a"), lit("b"));
-
-    let expected = [
-        "+-------------------------+",
-        "| instr(test.a,Utf8(\"b\")) |",
-        "+-------------------------+",
-        "| 2                       |",
-        "| 2                       |",
-        "| 0                       |",
-        "| 5                       |",
-        "+-------------------------+",
-    ];
-
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_left() -> Result<()> {
     let expr = left(col("a"), lit(3));
@@ -430,8 +425,29 @@ async fn test_fn_md5() -> Result<()> {
 
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
+async fn test_fn_regexp_like() -> Result<()> {
+    let expr = regexp_like(col("a"), lit("[a-z]"));
+
+    let expected = [
+        "+-----------------------------------+",
+        "| regexp_like(test.a,Utf8(\"[a-z]\")) |",
+        "+-----------------------------------+",
+        "| true                              |",
+        "| true                              |",
+        "| true                              |",
+        "| true                              |",
+        "+-----------------------------------+",
+    ];
+
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
-    let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
+    let expr = regexp_match(col("a"), lit("[a-z]"));
 
     let expected = [
         "+------------------------------------+",
@@ -785,6 +801,70 @@ async fn test_fn_upper() -> Result<()> {
         "| CBADEF        |",
         "| 123ABCDEF     |",
         "+---------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_encode() -> Result<()> {
+    let expr = encode(col("a"), lit("hex"));
+
+    let expected = [
+        "+----------------------------+",
+        "| encode(test.a,Utf8(\"hex\")) |",
+        "+----------------------------+",
+        "| 616263444546               |",
+        "| 616263313233               |",
+        "| 434241646566               |",
+        "| 313233416263446566         |",
+        "+----------------------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_decode() -> Result<()> {
+    // Note that the decode function returns binary, and the default display of
+    // binary is "hexadecimal" and therefore the output looks like decode did
+    // nothing. So compare to a constant.
+    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
+        // need to cast to utf8 otherwise the default display of binary array is hex
+        // so it looks like nothing is done
+        .cast_to(&DataType::Utf8, &df_schema)?;
+
+    let expected = [
+        "+------------------------------------------------+",
+        "| decode(encode(test.a,Utf8(\"hex\")),Utf8(\"hex\")) |",
+        "+------------------------------------------------+",
+        "| abcDEF                                         |",
+        "| abc123                                         |",
+        "| CBAdef                                         |",
+        "| 123AbcDef                                      |",
+        "+------------------------------------------------+",
+    ];
+    assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_array_to_string() -> Result<()> {
+    let expr = array_to_string(col("l"), lit("***"));
+
+    let expected = [
+        "+-------------------------------------+",
+        "| array_to_string(test.l,Utf8(\"***\")) |",
+        "+-------------------------------------+",
+        "| 0***1***2                           |",
+        "|                                     |",
+        "| 3***5                               |",
+        "| 6***7                               |",
+        "+-------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
 

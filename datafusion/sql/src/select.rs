@@ -24,13 +24,12 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
-use datafusion_common::Column;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_expr::expr::Alias;
+use datafusion_common::{Column, UnnestOptions};
+use datafusion_expr::expr::{Alias, Unnest};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
-use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
@@ -78,7 +77,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -89,8 +87,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
-        let mut combined_schema = (**projected_plan.schema()).clone();
-        combined_schema.merge(base_plan.schema());
+        // Place the fields of the base plan at the front so that when there are references
+        // with the same name, the fields of the base plan will be searched first.
+        // See https://github.com/apache/arrow-datafusion/issues/9162
+        let mut combined_schema = base_plan.schema().as_ref().clone();
+        combined_schema.merge(projected_plan.schema());
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -221,8 +222,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        // final projection
-        let plan = project(plan, select_exprs_post_aggr)?;
+        // try process unnest expression or do the final projection
+        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
         let plan = match select.distinct {
@@ -273,6 +274,48 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         Ok(plan)
+    }
+
+    // Try converting Expr::Unnest to LogicalPlan::Unnest if possible, otherwise do the final projection
+    pub(super) fn try_process_unnest(
+        &self,
+        input: LogicalPlan,
+        select_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        let mut unnest_columns = vec![];
+        // Map unnest expressions to their argument
+        let projection_exprs = select_exprs
+            .into_iter()
+            .map(|expr| {
+                if let Expr::Unnest(Unnest { ref exprs }) = expr {
+                    let column_name = expr.display_name()?;
+                    unnest_columns.push(column_name.clone());
+                    // Add alias for the argument expression, to avoid naming conflicts with other expressions
+                    // in the select list. For example: `select unnest(col1), col1 from t`.
+                    Ok(exprs[0].clone().alias(column_name))
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Do the final projection
+        if unnest_columns.is_empty() {
+            LogicalPlanBuilder::from(input)
+                .project(projection_exprs)?
+                .build()
+        } else {
+            if unnest_columns.len() > 1 {
+                return not_impl_err!("Only support single unnest expression for now");
+            }
+            let unnest_column = unnest_columns.pop().unwrap();
+            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+            let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+            LogicalPlanBuilder::from(input)
+                .project(projection_exprs)?
+                .unnest_column_with_options(unnest_column, unnest_options)?
+                .build()
+        }
     }
 
     fn plan_selection(

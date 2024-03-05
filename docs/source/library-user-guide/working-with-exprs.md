@@ -92,7 +92,7 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 ### Rewriting with `transform`
 
-To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::No` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::Yes` is used to wrap the new `Expr`.
+To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::no` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::yes` is used to wrap the new `Expr`.
 
 ```rust
 fn rewrite_add_one(expr: Expr) -> Result<Expr> {
@@ -102,9 +102,9 @@ fn rewrite_add_one(expr: Expr) -> Result<Expr> {
                 let input_arg = scalar_fun.args[0].clone();
                 let new_expression = input_arg + lit(1i64);
 
-                Transformed::Yes(new_expression)
+                Transformed::yes(new_expression)
             }
-            _ => Transformed::No(expr),
+            _ => Transformed::no(expr),
         })
     })
 }
@@ -179,6 +179,34 @@ Projection: Int64(1) + Int64(1) AS added_one
 ```
 
 I.e. the `add_one` UDF has been inlined into the projection.
+
+## Getting the data type of the expression
+
+The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
+
+```rust
+use arrow_schema::DataType;
+use datafusion::common::{DFField, DFSchema};
+use datafusion::logical_expr::{col, ExprSchemable};
+use std::collections::HashMap;
+
+let expr = col("c1") + col("c2");
+let schema = DFSchema::new_with_metadata(
+    vec![
+        DFField::new_unqualified("c1", DataType::Int32, true),
+        DFField::new_unqualified("c2", DataType::Float32, true),
+    ],
+    HashMap::new(),
+)
+.unwrap();
+print!("type = {}", expr.get_type(&schema).unwrap());
+```
+
+This results in the following output:
+
+```text
+type = Float32
+```
 
 ## Conclusion
 

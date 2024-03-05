@@ -38,7 +38,7 @@
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
-<img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
+<img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
@@ -62,9 +62,9 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 ## Contributing to DataFusion
 
-Please see the [developer’s guide] for contributing and [communication] for getting in touch with us.
+Please see the [contributor guide] and [communication] pages for more information.
 
-[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
+[contributor guide]: https://arrow.apache.org/datafusion/contributor-guide
 [communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
 
 ## Crate features
@@ -75,8 +75,10 @@ This crate has several [features] which can be specified in your `Cargo.toml`.
 
 Default features:
 
+- `array_expressions`: functions for working with arrays such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
+- `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
@@ -94,4 +96,4 @@ Optional features:
 
 ## Rust Version Compatibility
 
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+Datafusion crate is tested with the [minimum required stable Rust version](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

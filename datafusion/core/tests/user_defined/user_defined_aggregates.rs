@@ -19,7 +19,7 @@
 //! user defined aggregate functions
 
 use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray};
+use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
 use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -42,9 +42,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{
-    assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
-};
+use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
     create_udaf, AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
 };
@@ -251,6 +249,29 @@ async fn simple_udaf() -> Result<()> {
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn deregister_udaf() -> Result<()> {
+    let ctx = SessionContext::new();
+    let my_avg = create_udaf(
+        "my_avg",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg.clone());
+
+    assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    ctx.deregister_udaf("my_avg");
+
+    assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
 
     Ok(())
 }
@@ -582,36 +603,29 @@ impl FirstSelector {
 
     // Internally, keep the data types as this type
     fn state_datatypes() -> Vec<DataType> {
-        vec![
-            DataType::Float64,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]
+        vec![Self::output_datatype()]
     }
 
     /// Convert to a set of ScalarValues
-    fn to_state(&self) -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::Float64(Some(self.value)),
-            ScalarValue::TimestampNanosecond(Some(self.time), None),
-        ]
-    }
+    fn to_state(&self) -> Result<ScalarValue> {
+        let f64arr = Arc::new(Float64Array::from(vec![self.value])) as ArrayRef;
+        let timearr =
+            Arc::new(TimestampNanosecondArray::from(vec![self.time])) as ArrayRef;
 
-    /// return this selector as a single scalar (struct) value
-    fn to_scalar(&self) -> ScalarValue {
-        ScalarValue::Struct(Some(self.to_state()), Self::fields())
+        let struct_arr =
+            StructArray::try_new(Self::fields(), vec![f64arr, timearr], None)?;
+        Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
 }
 
 impl Accumulator for FirstSelector {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let state = self.to_state().into_iter().collect::<Vec<_>>();
-
-        Ok(state)
+        self.evaluate().map(|s| vec![s])
     }
 
     /// produce the output structure
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.to_scalar())
+        self.to_state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

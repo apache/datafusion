@@ -39,7 +39,6 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     DataFusionError, Result, ScalarValue,
 };
-
 use itertools::Itertools;
 
 macro_rules! downcast_arg {
@@ -194,28 +193,6 @@ fn compute_array_length(
     }
 }
 
-/// Returns the length of each array dimension
-fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let mut res = vec![Some(value.len() as u64)];
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res.push(Some(value.len() as u64));
-            }
-            _ => return Ok(Some(res)),
-        }
-    }
-}
-
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
     if !args.iter().all(|arg| {
@@ -227,46 +204,6 @@ fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     }
 
     Ok(())
-}
-
-macro_rules! call_array_function {
-    ($DATATYPE:expr, false) => {
-        match $DATATYPE {
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
-        }
-    };
-    ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
-        match $DATATYPE {
-            DataType::List(_) => array_function!(ListArray),
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
-        }
-    }};
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
@@ -925,64 +862,6 @@ where
         arrow_array::make_array(data),
         None,
     )?))
-}
-
-/// Generates an array of integers from start to stop with a given step.
-///
-/// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
-/// It returns a `Result<ArrayRef>` representing the resulting ListArray after the operation.
-///
-/// # Arguments
-///
-/// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
-///
-/// # Examples
-///
-/// gen_range(3) => [0, 1, 2]
-/// gen_range(1, 4) => [1, 2, 3]
-/// gen_range(1, 7, 2) => [1, 3, 5]
-pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let (start_array, stop_array, step_array) = match args.len() {
-        1 => (None, as_int64_array(&args[0])?, None),
-        2 => (
-            Some(as_int64_array(&args[0])?),
-            as_int64_array(&args[1])?,
-            None,
-        ),
-        3 => (
-            Some(as_int64_array(&args[0])?),
-            as_int64_array(&args[1])?,
-            Some(as_int64_array(&args[2])?),
-        ),
-        _ => return exec_err!("gen_range expects 1 to 3 arguments"),
-    };
-
-    let mut values = vec![];
-    let mut offsets = vec![0];
-    for (idx, stop) in stop_array.iter().enumerate() {
-        let stop = stop.unwrap_or(0);
-        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
-        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
-        if step == 0 {
-            return exec_err!("step can't be 0 for function range(start [, stop, step]");
-        }
-        if step < 0 {
-            // Decreasing range
-            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
-        } else {
-            // Increasing range
-            values.extend((start..stop).step_by(step as usize));
-        }
-
-        offsets.push(values.len() as i32);
-    }
-    let arr = Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", DataType::Int64, true)),
-        OffsetBuffer::new(offsets.into()),
-        Arc::new(Int64Array::from(values)),
-        None,
-    )?);
-    Ok(arr)
 }
 
 /// Array_sort SQL function
@@ -1870,27 +1749,6 @@ pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        for x in arr {
-            match x {
-                Some(x) => {
-                    $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMITER);
-                }
-                None => {
-                    if $WITH_NULL_STRING {
-                        $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMITER);
-                    }
-                }
-            }
-        }
-        Ok($ARG)
-    }};
-}
-
 #[derive(Debug, PartialEq)]
 enum SetOp {
     Union,
@@ -2058,226 +1916,42 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_set_op(array1, array2, SetOp::Intersect)
 }
 
-/// Array_to_string SQL function
-pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
-        return exec_err!("array_to_string expects two or three arguments");
-    }
-
-    let arr = &args[0];
-
-    let delimiters = as_string_array(&args[1])?;
-    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
-
-    let mut null_string = String::from("");
-    let mut with_null_string = false;
-    if args.len() == 3 {
-        null_string = as_string_array(&args[2])?.value(0).to_string();
-        with_null_string = true;
-    }
-
-    fn compute_array_to_string(
-        arg: &mut String,
-        arr: ArrayRef,
-        delimiter: String,
-        null_string: String,
-        with_null_string: bool,
-    ) -> Result<&mut String> {
-        match arr.data_type() {
-            DataType::List(..) => {
-                let list_array = as_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::LargeList(..) => {
-                let list_array = as_large_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::Null => Ok(arg),
-            data_type => {
-                macro_rules! array_function {
-                    ($ARRAY_TYPE:ident) => {
-                        to_string!(
-                            arg,
-                            arr,
-                            &delimiter,
-                            &null_string,
-                            with_null_string,
-                            $ARRAY_TYPE
-                        )
-                    };
-                }
-                call_array_function!(data_type, false)
-            }
-        }
-    }
-
-    fn generate_string_array<O: OffsetSizeTrait>(
-        list_arr: &GenericListArray<O>,
-        delimiters: Vec<Option<&str>>,
-        null_string: String,
-        with_null_string: bool,
-    ) -> Result<StringArray> {
-        let mut res: Vec<Option<String>> = Vec::new();
-        for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
-                let mut arg = String::from("");
-                let s = compute_array_to_string(
-                    &mut arg,
-                    arr,
-                    delimiter.to_string(),
-                    null_string.clone(),
-                    with_null_string,
-                )?
-                .clone();
-
-                if let Some(s) = s.strip_suffix(delimiter) {
-                    res.push(Some(s.to_string()));
-                } else {
-                    res.push(Some(s));
-                }
-            } else {
-                res.push(None);
-            }
-        }
-
-        Ok(StringArray::from(res))
-    }
-
-    let arr_type = arr.data_type();
-    let string_arr = match arr_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) => {
-            let list_array = as_list_array(&arr)?;
-            generate_string_array::<i32>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&arr)?;
-            generate_string_array::<i64>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        _ => {
-            let mut arg = String::from("");
-            let mut res: Vec<Option<String>> = Vec::new();
-            // delimiter length is 1
-            assert_eq!(delimiters.len(), 1);
-            let delimiter = delimiters[0].unwrap();
-            let s = compute_array_to_string(
-                &mut arg,
-                arr.clone(),
-                delimiter.to_string(),
-                null_string,
-                with_null_string,
-            )?
-            .clone();
-
-            if !s.is_empty() {
-                let s = s.strip_suffix(delimiter).unwrap().to_string();
-                res.push(Some(s));
-            } else {
-                res.push(Some(s));
-            }
-            StringArray::from(res)
-        }
-    };
-
-    Ok(Arc::new(string_arr))
-}
-
-/// Cardinality SQL function
-pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("cardinality expects one argument");
-    }
-
-    match &args[0].data_type() {
-        DataType::List(_) => {
-            let list_array = as_list_array(&args[0])?;
-            generic_list_cardinality::<i32>(list_array)
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&args[0])?;
-            generic_list_cardinality::<i64>(list_array)
-        }
-        other => {
-            exec_err!("cardinality does not support type '{:?}'", other)
-        }
-    }
-}
-
-fn generic_list_cardinality<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
-) -> Result<ArrayRef> {
-    let result = array
-        .iter()
-        .map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
-            None => Ok(None),
-        })
-        .collect::<Result<UInt64Array>>()?;
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 // Create new offsets that are euqiavlent to `flatten` the array.
-fn get_offsets_for_flatten(
-    offsets: OffsetBuffer<i32>,
-    indexes: OffsetBuffer<i32>,
-) -> OffsetBuffer<i32> {
+fn get_offsets_for_flatten<O: OffsetSizeTrait>(
+    offsets: OffsetBuffer<O>,
+    indexes: OffsetBuffer<O>,
+) -> OffsetBuffer<O> {
     let buffer = offsets.into_inner();
-    let offsets: Vec<i32> = indexes.iter().map(|i| buffer[*i as usize]).collect();
+    let offsets: Vec<O> = indexes
+        .iter()
+        .map(|i| buffer[i.to_usize().unwrap()])
+        .collect();
     OffsetBuffer::new(offsets.into())
 }
 
-fn flatten_internal(
-    array: &dyn Array,
-    indexes: Option<OffsetBuffer<i32>>,
-) -> Result<ListArray> {
-    let list_arr = as_list_array(array)?;
+fn flatten_internal<O: OffsetSizeTrait>(
+    list_arr: GenericListArray<O>,
+    indexes: Option<OffsetBuffer<O>>,
+) -> Result<GenericListArray<O>> {
     let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
     match data_type {
         // Recursively get the base offsets for flattened array
-        DataType::List(_) => {
+        DataType::List(_) | DataType::LargeList(_) => {
+            let sub_list = as_generic_list_array::<O>(&values)?;
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                flatten_internal(&values, Some(offsets))
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
             } else {
-                flatten_internal(&values, Some(offsets))
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
             }
         }
         // Reach the base level, create a new list array
         _ => {
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                let list_arr = ListArray::new(field, offsets, values, None);
+                let list_arr = GenericListArray::<O>::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
                 Ok(list_arr.clone())
@@ -2292,8 +1966,25 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("flatten expects one argument");
     }
 
-    let flattened_array = flatten_internal(&args[0], None)?;
-    Ok(Arc::new(flattened_array) as ArrayRef)
+    let array_type = args[0].data_type();
+    match array_type {
+        DataType::List(_) => {
+            let list_arr = as_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i32>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::LargeList(_) => {
+            let list_arr = as_large_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i64>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::Null => Ok(args[0].clone()),
+        _ => {
+            exec_err!("flatten does not support type '{array_type:?}'")
+        }
+    }
+
+    // Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
 /// Dispatch array length computation based on the offset type.
@@ -2324,73 +2015,6 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(_) => array_length_dispatch::<i32>(args),
         DataType::LargeList(_) => array_length_dispatch::<i64>(args),
         array_type => exec_err!("array_length does not support type '{array_type:?}'"),
-    }
-}
-
-/// Array_dims SQL function
-pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_dims needs one argument");
-    }
-
-    let data = match args[0].data_type() {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        array_type => {
-            return exec_err!("array_dims does not support type '{array_type:?}'");
-        }
-    };
-
-    let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Array_ndims SQL function
-pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_ndims needs one argument");
-    }
-
-    fn general_list_ndims<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-    ) -> Result<ArrayRef> {
-        let mut data = Vec::new();
-        let ndims = datafusion_common::utils::list_ndims(array.data_type());
-
-        for arr in array.iter() {
-            if arr.is_some() {
-                data.push(Some(ndims))
-            } else {
-                data.push(None)
-            }
-        }
-
-        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    }
-
-    match args[0].data_type() {
-        DataType::List(_) => {
-            let array = as_list_array(&args[0])?;
-            general_list_ndims::<i32>(array)
-        }
-        DataType::LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            general_list_ndims::<i64>(array)
-        }
-        _ => Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef),
     }
 }
 
@@ -2763,6 +2387,75 @@ where
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
         None,
+    )?))
+}
+
+/// array_reverse SQL function
+pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() != 1 {
+        return exec_err!("array_reverse needs one argument");
+    }
+
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
+            general_array_reverse::<i32>(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_array_reverse::<i64>(array, field)
+        }
+        DataType::Null => Ok(arg[0].clone()),
+        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
+    }
+}
+
+fn general_array_reverse<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    field: &FieldRef,
+) -> Result<ArrayRef>
+where
+    O: TryFrom<i64>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut nulls = vec![];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let mut index = end - O::one();
+        let mut cnt = 0;
+
+        while index >= start {
+            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            index = index - O::one();
+            cnt += 1;
+        }
+        offsets.push(offsets[row_index] + O::usize_as(cnt));
+    }
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field.clone(),
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(nulls.into()),
     )?))
 }
 

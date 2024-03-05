@@ -40,11 +40,11 @@ ahash = { version = "0.8", default-features = false, features = [
 ] }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
 paste = "^1.0"
 sqlparser = { workspace = true }
-strum = { version = "0.25.0", features = ["derive"] }
-strum_macros = "0.25.0"
+strum = { version = "0.26.1", features = ["derive"] }
+strum_macros = "0.26.0"
 
 [dev-dependencies]
 ctor = { workspace = true }

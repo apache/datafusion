@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -23,18 +22,19 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{Column, Literal};
+use crate::expressions::{CastExpr, Literal};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
-use arrow_schema::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{JoinSide, JoinType};
+use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinSide, JoinType, Result};
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
@@ -425,6 +425,71 @@ impl EquivalenceProperties {
         (!meet.is_empty()).then_some(meet)
     }
 
+    /// we substitute the ordering according to input expression type, this is a simplified version
+    /// In this case, we just substitute when the expression satisfy the following condition:
+    /// I. just have one column and is a CAST expression
+    /// TODO: Add one-to-ones analysis for monotonic ScalarFunctions.
+    /// TODO: we could precompute all the scenario that is computable, for example: atan(x + 1000) should also be substituted if
+    ///  x is DESC or ASC
+    /// After substitution, we may generate more than 1 `LexOrdering`. As an example,
+    /// `[a ASC, b ASC]` will turn into `[a ASC, b ASC], [CAST(a) ASC, b ASC]` when projection expressions `a, b, CAST(a)` is applied.
+    pub fn substitute_ordering_component(
+        &self,
+        mapping: &ProjectionMapping,
+        sort_expr: &[PhysicalSortExpr],
+    ) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        let new_orderings = sort_expr
+            .iter()
+            .map(|sort_expr| {
+                let referring_exprs: Vec<_> = mapping
+                    .iter()
+                    .map(|(source, _target)| source)
+                    .filter(|source| expr_refers(source, &sort_expr.expr))
+                    .cloned()
+                    .collect();
+                let mut res = vec![sort_expr.clone()];
+                // TODO: Add one-to-ones analysis for ScalarFunctions.
+                for r_expr in referring_exprs {
+                    // we check whether this expression is substitutable or not
+                    if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
+                        // we need to know whether the Cast Expr matches or not
+                        let expr_type = sort_expr.expr.data_type(&self.schema)?;
+                        if cast_expr.expr.eq(&sort_expr.expr)
+                            && cast_expr.is_bigger_cast(expr_type)
+                        {
+                            res.push(PhysicalSortExpr {
+                                expr: r_expr.clone(),
+                                options: sort_expr.options,
+                            });
+                        }
+                    }
+                }
+                Ok(res)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Generate all valid orderings, given substituted expressions.
+        let res = new_orderings
+            .into_iter()
+            .multi_cartesian_product()
+            .collect::<Vec<_>>();
+        Ok(res)
+    }
+
+    /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression
+    /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
+    /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
+    /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
+    /// dependency map, happen in issue 8838: <https://github.com/apache/arrow-datafusion/issues/8838>
+    pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
+        let orderings = &self.oeq_class.orderings;
+        let new_order = orderings
+            .iter()
+            .map(|order| self.substitute_ordering_component(mapping, order))
+            .collect::<Result<Vec<_>>>()?;
+        let new_order = new_order.into_iter().flatten().collect();
+        self.oeq_class = OrderingEquivalenceClass::new(new_order);
+        Ok(())
+    }
     /// Projects argument `expr` according to `projection_mapping`, taking
     /// equivalences into account.
     ///
@@ -476,7 +541,7 @@ impl EquivalenceProperties {
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        let mut dependency_map = HashMap::new();
+        let mut dependency_map = IndexMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
                 let target_sort_expr =
@@ -502,7 +567,7 @@ impl EquivalenceProperties {
                         .entry(sort_expr.clone())
                         .or_insert_with(|| DependencyNode {
                             target_sort_expr: target_sort_expr.clone(),
-                            dependencies: HashSet::new(),
+                            dependencies: IndexSet::new(),
                         })
                         .insert_dependency(dependency);
                 }
@@ -563,7 +628,6 @@ impl EquivalenceProperties {
 
         // Get dependency map for existing orderings:
         let dependency_map = self.construct_dependency_map(&mapping);
-
         let orderings = mapping.iter().flat_map(|(source, target)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
@@ -709,10 +773,16 @@ impl EquivalenceProperties {
                 .flat_map(|&idx| {
                     let ExprOrdering { expr, data, .. } =
                         eq_properties.get_expr_ordering(exprs[idx].clone());
-                    if let SortProperties::Ordered(options) = data {
-                        Some((PhysicalSortExpr { expr, options }, idx))
-                    } else {
-                        None
+                    match data {
+                        SortProperties::Ordered(options) => {
+                            Some((PhysicalSortExpr { expr, options }, idx))
+                        }
+                        SortProperties::Singleton => {
+                            // Assign default ordering to constant expressions
+                            let options = SortOptions::default();
+                            Some((PhysicalSortExpr { expr, options }, idx))
+                        }
+                        SortProperties::Unordered => None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -777,6 +847,7 @@ impl EquivalenceProperties {
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
     }
@@ -815,9 +886,9 @@ fn update_ordering(
         // We have a Literal, which is the other possible leaf node type:
         node.data = node.expr.get_ordering(&[]);
     } else {
-        return Transformed::No(node);
+        return Transformed::no(node);
     }
-    Transformed::Yes(node)
+    Transformed::yes(node)
 }
 
 /// This function determines whether the provided expression is constant
@@ -838,7 +909,7 @@ fn is_constant_recurse(
     constants: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
 ) -> bool {
-    if physical_exprs_contains(constants, expr) {
+    if physical_exprs_contains(constants, expr) || expr.as_any().is::<Literal>() {
         return true;
     }
     let children = expr.children();
@@ -889,7 +960,7 @@ fn referred_dependencies(
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Dependencies> {
     // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
-    let mut expr_to_sort_exprs = HashMap::<ExprWrapper, Dependencies>::new();
+    let mut expr_to_sort_exprs = IndexMap::<ExprWrapper, Dependencies>::new();
     for sort_expr in dependency_map
         .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
@@ -1047,8 +1118,13 @@ impl DependencyNode {
     }
 }
 
-type DependencyMap = HashMap<PhysicalSortExpr, DependencyNode>;
-type Dependencies = HashSet<PhysicalSortExpr>;
+// Using `IndexMap` and `IndexSet` makes sure to generate consistent results across different executions for the same query.
+// We could have used `HashSet`, `HashMap` in place of them without any loss of functionality.
+// As an example, if existing orderings are `[a ASC, b ASC]`, `[c ASC]` for output ordering
+// both `[a ASC, b ASC, c ASC]` and `[c ASC, a ASC, b ASC]` are valid (e.g. concatenated version of the alternative orderings).
+// When using `HashSet`, `HashMap` it is not guaranteed to generate consistent result, among the possible 2 results in the example above.
+type DependencyMap = IndexMap<PhysicalSortExpr, DependencyNode>;
+type Dependencies = IndexSet<PhysicalSortExpr>;
 
 /// This function recursively analyzes the dependencies of the given sort
 /// expression within the given dependency map to construct lexicographical
@@ -1099,7 +1175,7 @@ pub fn join_equivalence_properties(
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> EquivalenceProperties {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);
@@ -1221,10 +1297,12 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
+
     use itertools::Itertools;
 
     #[test]
@@ -1880,6 +1958,36 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_find_longest_permutation2() -> Result<()> {
+        // Schema satisfies following orderings:
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        // and
+        // Column [a=c] (e.g they are aliases).
+        // At below we add [d ASC, h DESC] also, for test purposes
+        let (test_schema, mut eq_properties) = create_test_params()?;
+        let col_h = &col("h", &test_schema)?;
+
+        // Add column h as constant
+        eq_properties = eq_properties.add_constants(vec![col_h.clone()]);
+
+        let test_cases = vec![
+            // TEST CASE 1
+            // ordering of the constants are treated as default ordering.
+            // This is the convention currently used.
+            (vec![col_h], vec![(col_h, SortOptions::default())]),
+        ];
+        for (exprs, expected) in test_cases {
+            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            let expected = convert_to_sort_exprs(&expected);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn test_get_meet_ordering() -> Result<()> {
         let schema = create_test_schema()?;

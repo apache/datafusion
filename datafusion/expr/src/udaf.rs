@@ -23,7 +23,7 @@ use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -37,16 +37,17 @@ use std::sync::Arc;
 /// functions (`GROUP BY` clause) as well as window functions (`OVER`
 /// clause).
 ///
-/// `AggregateUDF` provides DataFusion the information needed to plan
-/// and call aggregate functions, including name, type information,
-/// and a factory function to create [`Accumulator`], which peform the
-/// actual aggregation.
+/// `AggregateUDF` provides DataFusion the information needed to plan and call
+/// aggregate functions, including name, type information, and a factory
+/// function to create an [`Accumulator`] instance, to perform the actual
+/// aggregation.
 ///
-/// For more information, please see [the examples].
+/// For more information, please see [the examples]:
 ///
-/// 1. For simple (less performant) use cases, use [`create_udaf`] and [`simple_udaf.rs`].
+/// 1. For simple use cases, use [`create_udaf`] (examples in [`simple_udaf.rs`]).
 ///
-/// 2. For advanced use cases, use [`AggregateUDFImpl`] and [`advanced_udaf.rs`].
+/// 2. For advanced use cases, use [`AggregateUDFImpl`] which provides full API
+/// access (examples in [`advanced_udaf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `AggregateUDFImpl` to maintain backwards
@@ -58,7 +59,6 @@ use std::sync::Arc;
 /// [`create_udaf`]: crate::expr_fn::create_udaf
 /// [`simple_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
 /// [`advanced_udaf.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-
 #[derive(Debug, Clone)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -153,7 +153,7 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
-    /// Return an accumualator the given aggregate, given
+    /// Return an accumulator the given aggregate, given
     /// its return datatype.
     pub fn accumulator(&self, return_type: &DataType) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(return_type)

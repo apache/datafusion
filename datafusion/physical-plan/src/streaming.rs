@@ -20,16 +20,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, DisplayFormatType};
-use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
+use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
+use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Schema;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -58,6 +58,7 @@ pub struct StreamingTableExec {
     projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
+    cache: PlanProperties,
 }
 
 impl StreamingTableExec {
@@ -84,13 +85,21 @@ impl StreamingTableExec {
             Some(p) => Arc::new(schema.project(p)?),
             None => schema,
         };
-
+        let projected_output_ordering =
+            projected_output_ordering.into_iter().collect::<Vec<_>>();
+        let cache = Self::compute_properties(
+            projected_schema.clone(),
+            &projected_output_ordering,
+            &partitions,
+            infinite,
+        );
         Ok(Self {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
-            projected_output_ordering: projected_output_ordering.into_iter().collect(),
+            projected_output_ordering,
             infinite,
+            cache,
         })
     }
 
@@ -116,6 +125,29 @@ impl StreamingTableExec {
 
     pub fn is_infinite(&self) -> bool {
         self.infinite
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        partitions: &[Arc<dyn PartitionStream>],
+        is_infinite: bool,
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+
+        // Get output partitioning:
+        let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
+
+        // Determine execution mode:
+        let mode = if is_infinite {
+            ExecutionMode::Unbounded
+        } else {
+            ExecutionMode::Bounded
+        };
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -149,18 +181,9 @@ impl DisplayAs for StreamingTableExec {
                     write!(f, ", infinite_source=true")?;
                 }
 
-                self.projected_output_ordering
-                    .first()
-                    .map_or(Ok(()), |ordering| {
-                        if !ordering.is_empty() {
-                            write!(
-                                f,
-                                ", output_ordering={}",
-                                OutputOrderingDisplay(ordering)
-                            )?;
-                        }
-                        Ok(())
-                    })
+                display_orderings(f, &self.projected_output_ordering)?;
+
+                Ok(())
             }
         }
     }
@@ -172,29 +195,8 @@ impl ExecutionPlan for StreamingTableExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.partitions.len())
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(self.infinite)
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

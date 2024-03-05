@@ -176,6 +176,7 @@ pub fn parse_physical_window_expr(
         &order_by,
         Arc::new(window_frame),
         input_schema,
+        false,
     )
 }
 
@@ -340,21 +341,17 @@ pub fn parse_physical_expr(
             // TODO Do not create new the ExecutionProps
             let execution_props = ExecutionProps::new();
 
-            let fun_expr = functions::create_physical_fun(
+            functions::create_physical_expr(
                 &(&scalar_function).into(),
+                &args,
+                input_schema,
                 &execution_props,
-            )?;
-
-            Arc::new(ScalarFunctionExpr::new(
-                &e.name,
-                fun_expr,
-                args,
-                convert_required!(e.return_type)?,
-                None,
-            ))
+            )?
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
+            let udf = registry.udf(e.name.as_str())?;
+            let signature = udf.signature();
+            let scalar_fun = udf.fun().clone();
 
             let args = e
                 .args
@@ -368,6 +365,7 @@ pub fn parse_physical_expr(
                 args,
                 convert_required!(e.return_type)?,
                 None,
+                signature.type_signature.supports_zero_argument(),
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -533,12 +531,24 @@ pub fn parse_protobuf_file_scan_config(
         true => ObjectStoreUrl::local_filesystem(),
     };
 
-    // extract types of partition columns
+    // Reacquire the partition column types from the schema before removing them below.
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
         .map(|col| Ok(schema.field_with_name(col)?.clone()))
         .collect::<Result<Vec<_>>>()?;
+
+    // Remove partition columns from the schema after recreating table_partition_cols
+    // because the partition columns are not in the file. They are present to allow the
+    // the partition column types to be reconstructed after serde.
+    let file_schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| !table_partition_cols.contains(field))
+            .cloned()
+            .collect::<Vec<_>>(),
+    ));
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
@@ -565,7 +575,7 @@ pub fn parse_protobuf_file_scan_config(
 
     Ok(FileScanConfig {
         object_store_url,
-        file_schema: schema,
+        file_schema,
         file_groups,
         statistics,
         projection,
@@ -801,7 +811,6 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            single_file_output: conf.single_file_output,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })

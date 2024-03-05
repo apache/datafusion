@@ -36,10 +36,11 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -164,7 +165,7 @@ where
 ///
 /// [`SessionContext`] provides the following functionality:
 ///
-/// * Create a DataFrame from a CSV or Parquet data source.
+/// * Create a [`DataFrame`] from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
@@ -172,7 +173,7 @@ where
 /// # Example: DataFrame API
 ///
 /// The following example demonstrates how to use the context to execute a query against a CSV
-/// data source using the DataFrame API:
+/// data source using the [`DataFrame`] API:
 ///
 /// ```
 /// use datafusion::prelude::*;
@@ -782,7 +783,7 @@ impl SessionContext {
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(&table).await {
+            if let Some(table_provider) = schema.table(&table).await? {
                 if table_provider.table_type() == table_type {
                     schema.deregister_table(&table)?;
                     return Ok(true);
@@ -823,15 +824,7 @@ impl SessionContext {
     /// Any functions registered with the udf name or its aliases will be overwritten with this new function
     pub fn register_udf(&self, f: ScalarUDF) {
         let mut state = self.state.write();
-        let aliases = f.aliases();
-        for alias in aliases {
-            state
-                .scalar_functions
-                .insert(alias.to_string(), Arc::new(f.clone()));
-        }
-        state
-            .scalar_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        state.register_udf(Arc::new(f)).ok();
     }
 
     /// Registers an aggregate UDF within this context.
@@ -842,10 +835,7 @@ impl SessionContext {
     /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
     /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&self, f: AggregateUDF) {
-        self.state
-            .write()
-            .aggregate_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        self.state.write().register_udaf(Arc::new(f)).ok();
     }
 
     /// Registers a window UDF within this context.
@@ -856,10 +846,22 @@ impl SessionContext {
     /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
-        self.state
-            .write()
-            .window_functions
-            .insert(f.name().to_string(), Arc::new(f));
+        self.state.write().register_udwf(Arc::new(f)).ok();
+    }
+
+    /// Deregisters a UDF within this context.
+    pub fn deregister_udf(&self, name: &str) {
+        self.state.write().deregister_udf(name).ok();
+    }
+
+    /// Deregisters a UDAF within this context.
+    pub fn deregister_udaf(&self, name: &str) {
+        self.state.write().deregister_udaf(name).ok();
+    }
+
+    /// Deregisters a UDWF within this context.
+    pub fn deregister_udwf(&self, name: &str) {
+        self.state.write().deregister_udwf(name).ok();
     }
 
     /// Creates a [`DataFrame`] for reading a data source.
@@ -948,7 +950,29 @@ impl SessionContext {
             .build()?,
         ))
     }
-
+    /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
+    pub fn read_batches(
+        &self,
+        batches: impl IntoIterator<Item = RecordBatch>,
+    ) -> Result<DataFrame> {
+        // check schema uniqueness
+        let mut batches = batches.into_iter().peekable();
+        let schema = if let Some(batch) = batches.peek() {
+            batch.schema().clone()
+        } else {
+            Arc::new(Schema::empty())
+        };
+        let provider = MemTable::try_new(schema, vec![batches.collect()])?;
+        Ok(DataFrame::new(
+            self.state(),
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        ))
+    }
     /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
@@ -1106,7 +1130,7 @@ impl SessionContext {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(&table).await {
+        match schema.table(&table).await? {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => plan_err!("No table named '{table}'"),
         }
@@ -1194,6 +1218,18 @@ impl FunctionRegistry for SessionContext {
 
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.state.read().udwf(name)
+    }
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        self.state.write().register_udf(udf)
+    }
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        self.state.write().register_udaf(udaf)
+    }
+    fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        self.state.write().register_udwf(udwf)
     }
 }
 
@@ -1340,7 +1376,7 @@ impl SessionState {
             );
         }
 
-        SessionState {
+        let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
@@ -1356,7 +1392,18 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
-        }
+        };
+
+        // register built in functions
+        datafusion_functions::register_all(&mut new_self)
+            .expect("can not register built in functions");
+
+        // register crate of array expressions (if enabled)
+        #[cfg(feature = "array_expressions")]
+        datafusion_functions_array::register_all(&mut new_self)
+            .expect("can not register array expressions");
+
+        new_self
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
@@ -1682,7 +1729,7 @@ impl SessionState {
             let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(table).await {
+                    if let Some(table) = schema.table(table).await? {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -1976,6 +2023,42 @@ impl FunctionRegistry for SessionState {
             plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
         })
     }
+
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        udf.aliases().iter().for_each(|alias| {
+            self.scalar_functions.insert(alias.clone(), udf.clone());
+        });
+        Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn register_udaf(
+        &mut self,
+        udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
+    }
+
+    fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.window_functions.insert(udwf.name().into(), udwf))
+    }
+
+    fn deregister_udf(&mut self, name: &str) -> Result<Option<Arc<ScalarUDF>>> {
+        let udf = self.scalar_functions.remove(name);
+        if let Some(udf) = &udf {
+            for alias in udf.aliases() {
+                self.scalar_functions.remove(alias);
+            }
+        }
+        Ok(udf)
+    }
+
+    fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.aggregate_functions.remove(name))
+    }
+
+    fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
+        Ok(self.window_functions.remove(name))
+    }
 }
 
 impl OptimizerConfig for SessionState {
@@ -2106,9 +2189,9 @@ impl<'a> BadPlanVisitor<'a> {
 }
 
 impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
@@ -2122,7 +2205,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            _ => Ok(VisitRecursion::Continue),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
     }
 }
@@ -2139,6 +2222,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
     use async_trait::async_trait;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
     use std::env;
     use std::path::PathBuf;
@@ -2248,7 +2332,7 @@ mod tests {
         let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
             .map(|ctx| {
-                tokio::spawn(async move {
+                SpawnedTask::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
                     ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
                         .await
@@ -2257,7 +2341,7 @@ mod tests {
             .collect();
 
         for handle in threads {
-            handle.await.unwrap().unwrap();
+            handle.join().await.unwrap().unwrap();
         }
         Ok(())
     }

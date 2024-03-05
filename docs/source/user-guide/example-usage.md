@@ -23,7 +23,7 @@ In this example some simple processing is performed on the [`example.csv`](https
 
 Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
 
-## Update `Cargo.toml`
+## Add DataFusion as a dependency
 
 Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
@@ -32,6 +32,29 @@ crates.io] page. Add the dependency to your `Cargo.toml` file:
 datafusion = "31"
 tokio = "1.0"
 ```
+
+## Add DataFusion latest codebase as a dependency
+
+Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
+according to the [DataFusion release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
+
+```toml
+datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main"}
+```
+
+Also it works on the package level
+
+```toml
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", package = "datafusion-common"}
+```
+
+And with features
+
+```toml
+datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
+```
+
+More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
 ## Run a SQL query against data stored in a CSV:
 
@@ -205,7 +228,7 @@ codegen-units = 1
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
 
-```rust,ignore
+```rust ,ignore
 use datafusion::prelude::*;
 
 #[global_allocator]
@@ -239,7 +262,7 @@ like error backtrace. To enable a backtrace you need to add Datafusion `backtrac
 datafusion = { version = "31.0.0", features = ["backtrace"]}
 ```
 
-Set environment [`variables`] https://doc.rust-lang.org/std/backtrace/index.html#environment-variables
+Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)
 
 ```bash
 RUST_BACKTRACE=1 ./target/debug/datafusion-cli

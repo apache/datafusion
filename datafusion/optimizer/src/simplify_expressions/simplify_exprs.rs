@@ -19,12 +19,14 @@
 
 use std::sync::Arc;
 
-use super::{ExprSimplifier, SimplifyContext};
-use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::merge_schema;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+
+use crate::{OptimizerConfig, OptimizerRule};
+
+use super::{ExprSimplifier, SimplifyContext};
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -85,44 +87,39 @@ impl SimplifyExpressions {
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        let simplifier = ExprSimplifier::new(info);
-
         let new_inputs = plan
             .inputs()
             .iter()
             .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
-        let expr = match plan {
-            // Canonicalize step won't reorder expressions in a Join on clause.
-            // The left and right expressions in a Join on clause are not commutative,
-            // since the order of the columns must match the order of the children.
-            LogicalPlan::Join(_) => {
-                plan.expressions()
-                    .into_iter()
-                    .map(|e| {
-                        // TODO: unify with `rewrite_preserving_name`
-                        let original_name = e.name_for_alias()?;
-                        let new_e = simplifier.simplify(e)?;
-                        new_e.alias_if_changed(original_name)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
-            _ => {
-                plan.expressions()
-                    .into_iter()
-                    .map(|e| {
-                        // TODO: unify with `rewrite_preserving_name`
-                        let original_name = e.name_for_alias()?;
-                        let cano_e = simplifier.canonicalize(e)?;
-                        let new_e = simplifier.simplify(cano_e)?;
-                        new_e.alias_if_changed(original_name)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            }
+        let simplifier = ExprSimplifier::new(info);
+
+        // The left and right expressions in a Join on clause are not
+        // commutative, for reasons that are not entirely clear. Thus, do not
+        // reorder expressions in Join while simplifying.
+        //
+        // This is likely related to the fact that order of the columns must
+        // match the order of the children. see
+        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
+        let simplifier = if let LogicalPlan::Join(_) = plan {
+            simplifier.with_canonicalize(false)
+        } else {
+            simplifier
         };
 
-        plan.with_new_exprs(expr, &new_inputs)
+        let exprs = plan
+            .expressions()
+            .into_iter()
+            .map(|e| {
+                // TODO: unify with `rewrite_preserving_name`
+                let original_name = e.name_for_alias()?;
+                let new_e = simplifier.simplify(e)?;
+                new_e.alias_if_changed(original_name)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        plan.with_new_exprs(exprs, new_inputs)
     }
 }
 
@@ -137,24 +134,22 @@ impl SimplifyExpressions {
 mod tests {
     use std::ops::Not;
 
-    use crate::simplify_expressions::utils::for_test::{
-        cast_to_int64_expr, now_expr, to_timestamp_expr,
-    };
-    use crate::test::{assert_fields_eq, test_table_scan_with_name};
-
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::logical_plan::builder::table_scan_with_filters;
-    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
+    use chrono::{DateTime, Utc};
 
-    use crate::OptimizerContext;
+    use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
         ExprSchemable, JoinType,
     };
+    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
+
+    use crate::simplify_expressions::utils::for_test::now_expr;
+    use crate::test::{assert_fields_eq, test_table_scan_with_name};
+    use crate::OptimizerContext;
+
+    use super::*;
 
     fn test_table_scan() -> LogicalPlan {
         let schema = Schema::new(vec![
@@ -436,23 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_expr_folded() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![to_timestamp_expr("2020-09-08T12:00:00+00:00")];
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test"
-            .to_string();
-        let actual = get_optimized_plan_formatted(&plan, &Utc::now());
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
@@ -505,59 +483,6 @@ mod tests {
         let expected =
             "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
-
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn now_less_than_timestamp() -> Result<()> {
-        let table_scan = test_table_scan();
-
-        let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = Utc.timestamp_nanos(1599566400000000000i64);
-
-        //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
-        let plan =
-            LogicalPlanBuilder::from(table_scan)
-                .filter(cast_to_int64_expr(now_expr()).lt(cast_to_int64_expr(
-                    to_timestamp_expr(ts_string),
-                ) + lit(50000_i64)))?
-                .build()?;
-
-        // Note that constant folder runs and folds the entire
-        // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true)\
-                        \n  TableScan: test";
-        let actual = get_optimized_plan_formatted(&plan, &time);
-
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn select_date_plus_interval() -> Result<()> {
-        let table_scan = test_table_scan();
-
-        let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = Utc.timestamp_nanos(1599566400000000000i64);
-
-        //  now() < cast(to_timestamp(...) as int) + 5000000000
-        let schema = table_scan.schema();
-
-        let date_plus_interval_expr = to_timestamp_expr(ts_string)
-            .cast_to(&DataType::Date32, schema)?
-            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
-
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .project(vec![date_plus_interval_expr])?
-            .build()?;
-
-        // Note that constant folder runs and folds the entire
-        // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
-  TableScan: test"#;
-        let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
         Ok(())

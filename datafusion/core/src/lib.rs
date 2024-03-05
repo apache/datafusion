@@ -480,6 +480,11 @@ pub use parquet;
 /// re-export of [`datafusion_common`] crate
 pub mod common {
     pub use datafusion_common::*;
+
+    /// re-export of [`datafusion_common_runtime`] crate
+    pub mod runtime {
+        pub use datafusion_common_runtime::*;
+    }
 }
 
 // Backwards compatibility
@@ -514,6 +519,17 @@ pub use datafusion_common::assert_batches_sorted_eq;
 /// re-export of [`datafusion_sql`] crate
 pub mod sql {
     pub use datafusion_sql::*;
+}
+
+/// re-export of [`datafusion_functions`] crate
+pub mod functions {
+    pub use datafusion_functions::*;
+}
+
+/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
+pub mod functions_array {
+    #[cfg(feature = "array_expressions")]
+    pub use datafusion_functions_array::*;
 }
 
 #[cfg(test)]

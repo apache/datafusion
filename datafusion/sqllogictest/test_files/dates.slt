@@ -107,3 +107,122 @@ query ?
 SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
 ----
 730 days 0 hours 0 mins 0.000000000 secs
+
+# to_date_test
+statement ok
+create table to_date_t1(ts bigint) as VALUES
+   (1235865600000),
+   (1235865660000),
+   (1238544000000);
+
+# query_cast_timestamp_millis
+query D
+SELECT to_date(ts / 100000000) FROM to_date_t1 LIMIT 3
+----
+2003-11-02
+2003-11-02
+2003-11-29
+
+query D
+SELECT to_date('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
+----
+2023-01-13
+
+statement error DataFusion error: Execution error: to_date function unsupported data type at index 1: List
+SELECT to_date('2022-08-03T14:38:50+05:30', make_array('%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+'));
+
+# query date with arrow_cast
+query D
+select to_date(arrow_cast(123, 'Int64'))
+----
+1970-05-04
+
+statement error DataFusion error: Arrow error:
+SELECT to_date('21311111');
+
+# verify date cast with integer input
+query DDDDDD
+SELECT to_date(null), to_date(0), to_date(19266320), to_date(1), to_date(-1), to_date(0-1)
+----
+NULL 1970-01-01 +54719-05-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date output types
+query TTT
+SELECT arrow_typeof(to_date(1)), arrow_typeof(to_date(null)), arrow_typeof(to_date('2023-01-10 12:34:56.000'))
+----
+Date32 Date32 Date32
+
+# verify date data with formatting options
+query DDDDDD
+SELECT to_date(null, '%+'), to_date(0, '%s'), to_date(192663, '%s'), to_date(1, '%+', '%s'), to_date(-1, '%c', '%+', '%s'), to_date(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01 2497-06-29 1970-01-02 1969-12-31 1969-12-31
+
+# verify date data with formatting options
+query DDDDDD
+SELECT to_date(null, '%+'), to_date(0, '%s'), to_date(192663, '%s'), to_date(1, '%+', '%s'), to_date(-1, '%c', '%+', '%s'), to_date(0-1, '%c', '%+', '%s')
+----
+NULL 1970-01-01 2497-06-29 1970-01-02 1969-12-31 1969-12-31
+
+# verify date output types with formatting options
+query TTT
+SELECT arrow_typeof(to_date(1, '%c', '%s')), arrow_typeof(to_date(null, '%+', '%s')), arrow_typeof(to_date('2023-01-10 12:34:56.000', '%Y-%m-%d %H:%M:%S%.f'))
+----
+Date32 Date32 Date32
+
+# to_date with invalid formatting
+query error input contains invalid characters
+SELECT to_date('2020-09-08 12/00/00+00:00', '%c', '%+')
+
+# to_date with broken formatting
+query error bad or unsupported format string
+SELECT to_date('2020-09-08 12/00/00+00:00', '%q')
+
+statement ok
+create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
+  ('2020-09-08 12/00/00+00:00', '%Y-%m-%d %H/%M/%S%#z'),
+  ('2031-01-19T23:33:25+05:00', '%+'),
+  ('08-09-2020 12:00:00+00:00', '%d-%m-%Y %H:%M:%S%#z'),
+  ('1926632005', '%s'),
+  ('2000-01-01T01:01:01+07:00', '%+');
+
+# verify date data using tables with formatting options
+query D
+SELECT to_date(t.ts, t.format) from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+# verify date data using tables with formatting options
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+# verify date data using tables with formatting options where at least one column cannot be parsed
+query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+
+# verify date data using tables with formatting options where one of the formats is invalid
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+# timestamp data using tables with formatting options in an array is not supported at this time
+query error function unsupported data type at index 1:
+SELECT to_date(t.ts, make_array('%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+')) from ts_utf8_data as t
+
+statement ok
+drop table ts_utf8_data

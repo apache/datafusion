@@ -465,6 +465,10 @@ SELECT TIME 'not a time' as time;
 query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type
 SELECT TIME '24:01:02' as time;
 
+# invalid timezone
+query error Arrow error: Parser error: Invalid timezone "ZZ": 'ZZ' is not a valid timezone
+SELECT TIMESTAMP '2023-12-05T21:58:10.45ZZ';
+
 statement ok
 set datafusion.optimizer.skip_failed_rules = true
 
@@ -1262,6 +1266,173 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T14:38:50
 2023-08-03T14:38:50
 
+# date_trunc with data with timezones
+statement ok
+CREATE TABLE timestamp_strings(ts varchar)
+AS VALUES
+('2024-10-27 00:00:00'),
+('2024-10-27 00:30:00'),
+('2024-10-27 01:30:00'),
+('2024-10-27 02:00:00'), -- Daylight Savings Time happens here in Berlin
+('2024-10-27 02:30:00'),
+('2024-10-27 03:00:00'),
+('2024-10-27 03:30:00')
+;
+
+statement ok
+create view timestamp_utc as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("UTC"))') as ts
+from timestamp_strings;
+
+statement ok
+create view timestamp_berlin as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("Europe/Berlin"))') as ts
+from timestamp_utc; -- have to convert to utc prior to converting to berlin
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T00:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2024-10-27T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+02:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T02:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T03:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:00:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+2024-10-27T04:30:00+01:00 Timestamp(Nanosecond, Some("Europe/Berlin"))
+
+#  date trunc in utc with DST
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_utc order by ts;
+----
+2024-10-27T00:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T00:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T00:00:00Z
+2024-10-27T01:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T01:00:00Z
+2024-10-27T02:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T02:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T02:00:00Z
+2024-10-27T03:00:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+2024-10-27T03:30:00Z 2024-10-01T00:00:00Z 2024-10-27T00:00:00Z 2024-10-27T03:00:00Z
+
+
+# date trunc in a timezone with DST across DST boundary (note the date-trunc hour value repeats)
+# Test for https://github.com/apache/arrow-datafusion/issues/8899
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_berlin order by ts;
+----
+2024-10-27T02:00:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+02:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+02:00
+2024-10-27T02:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T02:00:00+01:00
+2024-10-27T03:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T03:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T03:00:00+01:00
+2024-10-27T04:00:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
+2024-10-27T04:30:00+01:00 2024-10-01T00:00:00+02:00 2024-10-27T00:00:00+02:00 2024-10-27T04:00:00+01:00
+
+statement ok
+drop table timestamp_strings;
+
+statement ok
+drop view timestamp_utc;
+
+statement ok
+drop view timestamp_berlin;
+
+# date_trunc with data with timezones where transition happens at midnight
+statement ok
+CREATE TABLE timestamp_strings(ts varchar)
+AS VALUES
+('2018-11-04 01:00:00'),
+('2018-11-04 01:30:00'),
+('2018-11-04 02:30:00'),
+('2018-11-04 03:00:00'), -- Daylight Savings Time started here in Sao Paulo
+('2018-11-04 03:30:00'),
+('2018-11-04 04:00:00'),
+('2018-11-04 04:30:00')
+;
+
+statement ok
+create view timestamp_utc as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("UTC"))') as ts
+from timestamp_strings;
+
+statement ok
+create view timestamp_sao_paulo as
+select
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("America/Sao_Paulo"))') as ts
+from timestamp_utc; -- have to convert to utc prior to converting to Sau Paulo
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_utc order by ts;
+----
+2018-11-04T01:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T01:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T02:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T03:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T03:30:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T04:00:00Z Timestamp(Nanosecond, Some("UTC"))
+2018-11-04T04:30:00Z Timestamp(Nanosecond, Some("UTC"))
+
+query PT
+select ts, arrow_typeof(ts) from timestamp_sao_paulo order by ts;
+----
+2018-11-03T22:00:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-03T22:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-03T23:30:00-03:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T01:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T01:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T02:00:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+2018-11-04T02:30:00-02:00 Timestamp(Nanosecond, Some("America/Sao_Paulo"))
+
+#  date trunc in utc with DST
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_utc order by ts;
+----
+2018-11-04T01:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T01:00:00Z
+2018-11-04T01:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T01:00:00Z
+2018-11-04T02:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T02:00:00Z
+2018-11-04T03:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T03:00:00Z
+2018-11-04T03:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T03:00:00Z
+2018-11-04T04:00:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T04:00:00Z
+2018-11-04T04:30:00Z 2018-11-01T00:00:00Z 2018-11-04T00:00:00Z 2018-11-04T04:00:00Z
+
+
+# date trunc in a timezone with DST across DST boundary (note there is no midnight on 2018-11-04)
+# Test for https://github.com/apache/arrow-datafusion/issues/8899
+query PPPP
+select ts, date_trunc('month', ts), date_trunc('day', ts), date_trunc('hour', ts)
+from timestamp_sao_paulo order by ts;
+----
+2018-11-03T22:00:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T22:00:00-03:00
+2018-11-03T22:30:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T22:00:00-03:00
+2018-11-03T23:30:00-03:00 2018-11-01T00:00:00-03:00 2018-11-03T00:00:00-03:00 2018-11-03T23:00:00-03:00
+2018-11-04T01:00:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T01:00:00-02:00
+2018-11-04T01:30:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T01:00:00-02:00
+2018-11-04T02:00:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T02:00:00-02:00
+2018-11-04T02:30:00-02:00 2018-11-01T00:00:00-03:00 2018-11-04T01:00:00-02:00 2018-11-04T02:00:00-02:00
+
+statement ok
+drop table timestamp_strings;
+
+statement ok
+drop view timestamp_utc;
+
+statement ok
+drop view timestamp_sao_paulo;
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
 
@@ -2233,4 +2404,281 @@ SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1
 1 0 days -1 hours 0 mins 0.000000000 secs
 2 0 days -1 hours 0 mins 0.000000000 secs
 
+##########
+## make date tests
+##########
 
+query D
+select make_date(2024, 1, 27);
+----
+2024-01-27
+
+query D
+select make_date(42, 1, 27);
+----
+0042-01-27
+
+query D
+select make_date(99, 1, 27);
+----
+0099-01-27
+
+query D
+select make_date(2024, 2, 29);
+----
+2024-02-29
+
+query D
+select make_date(10001, 1, 27);
+----
++10001-01-27
+
+query D
+select make_date('2024', '01', '27');
+----
+2024-01-27
+
+query D
+select make_date(12 + 2012, '01', '27');
+----
+2024-01-27
+
+query D
+select make_date(2024::bigint, 01::bigint, 27::bigint);
+----
+2024-01-27
+
+query D
+select make_date(arrow_cast(2024, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'));
+----
+2024-01-27
+
+query D
+select make_date(arrow_cast(2024, 'Int32'), arrow_cast(1, 'Int32'), arrow_cast(27, 'Int32'));
+----
+2024-01-27
+
+statement ok
+create table table_nums (year int, month int, day int) as values
+    (2024, 1, 23),
+    (2023, 11, 30);
+
+query D
+select make_date(t.year, t.month, t.day) from table_nums t;
+----
+2024-01-23
+2023-11-30
+
+query D
+select make_date(2021, t.month, t.day) from table_nums t;
+----
+2021-01-23
+2021-11-30
+
+query D
+select make_date(t.year, 3, t.day) from table_nums t;
+----
+2024-03-23
+2023-03-30
+
+query D
+select make_date(t.year, t.month, 4) from table_nums t;
+----
+2024-01-04
+2023-11-04
+
+query D
+select make_date('2021', t.month, t.day) from table_nums t;
+----
+2021-01-23
+2021-11-30
+
+query D
+select make_date(t.year, '3', t.day) from table_nums t;
+----
+2024-03-23
+2023-03-30
+
+query D
+select make_date(t.year, t.month, '4') from table_nums t;
+----
+2024-01-04
+2023-11-04
+
+statement ok
+insert into table_nums values (2024, null, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(t.year, t.month, t.day) from table_nums t;
+
+statement ok
+drop table table_nums;
+
+statement ok
+create table table_strings (year varchar(4), month varchar(2), day varchar(2)) as values
+    ('2024', '1', '23'),
+    ('2023', '11', '30');
+
+query D
+select make_date(t.year, t.month, t.day) from table_strings t;
+----
+2024-01-23
+2023-11-30
+
+statement ok
+insert into table_strings values (2024, null, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(t.year, t.month, t.day) from table_strings t;
+
+statement ok
+drop table table_strings;
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 13, 23
+select make_date(2024, 13, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 1, 32
+select make_date(2024, 01, 32);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+select make_date(2024, 0, 23);
+
+query error DataFusion error: Execution error: Month value '\-1' is out of range
+select make_date(2024, -1, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from 2024, 12, 0
+select make_date(2024, 12, 0);
+
+query error DataFusion error: Execution error: Day value '\-1' is out of range
+select make_date(2024, 13, -1);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(null, 1, 23);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date('', 1, 23);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(2024, null, 23);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date(2024, '', 27);
+
+query error DataFusion error: Execution error: Unable to parse date from null/empty value
+select make_date(2024, 1, null);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_date(2024, 1, '');
+
+
+##########
+## to_char tests
+##########
+
+statement ok
+create table formats (
+    dates date,
+    times time,
+    timestamps timestamp,
+    date_format varchar,
+    time_format varchar,
+    timestamp_format varchar)
+as values
+    ('2000-01-01'::date, '23:45:01'::time, '2024-01-01 06:00:00'::timestamp, '%d:%m:%Y', '%H-%M-%S', '%d:%m:%Y %H-%M-%S'),
+    ('2003-04-05'::date, '04:56:32'::time, '2025-01-01 23:59:58'::timestamp, '%d:%m:%Y', '%H::%M::%S', '%d:%m:%Y %H-%M-%S');
+
+
+query T
+select to_char(dates, date_format) from formats;
+----
+01:01:2000
+05:04:2003
+
+query T
+select date_format(dates, date_format) from formats;
+----
+01:01:2000
+05:04:2003
+
+query T
+select to_char(times, time_format) from formats;
+----
+23-45-01
+04::56::32
+
+query T
+select to_char(timestamps, date_format) from formats;
+----
+01:01:2024
+01:01:2025
+
+query T
+select to_char(timestamps, timestamp_format) from formats;
+----
+01:01:2024 06-00-00
+01:01:2025 23-59-58
+
+query T
+select to_char('2000-02-03'::date, '%Y:%d:%m');
+----
+2000:03:02
+
+query T
+select to_char(arrow_cast(12345::int, 'Time32(Second)'), '%H-%M-%S')
+----
+03-25-45
+
+query T
+select to_char(arrow_cast(12344567::int, 'Time32(Millisecond)'), '%H-%M-%S %f')
+----
+03-25-44 567000000
+
+query T
+select to_char(arrow_cast(12344567000, 'Time64(Microsecond)'), '%H-%M-%S %f')
+----
+03-25-44 567000000
+
+query T
+select to_char(arrow_cast(12344567890000, 'Time64(Nanosecond)'), '%H-%M-%S %f')
+----
+03-25-44 567890000
+
+query T
+select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)'), '%d-%m-%Y %H-%M-%S')
+----
+03-08-2023 14-38-50
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), 'pretty');
+----
+1 days 10 hours 17 mins 36 secs
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), 'iso8601');
+----
+PT123456S
+
+query T
+select to_char(arrow_cast(123456, 'Duration(Second)'), null);
+----
+PT123456S
+
+query error DataFusion error: Execution error: Cast error: Format error
+SELECT to_char(timestamps, '%X%K') from formats;
+
+query error DataFusion error: Execution error: Cast error: Format error
+SELECT to_char('2000-02-03'::date, '%X%K');
+
+query T
+SELECT to_char(timestamps, null) from formats;
+----
+2024-01-01T06:00:00Z
+2025-01-01T23:59:58Z
+
+query T
+SELECT to_char(null, '%d-%m-%Y');
+----
+(empty)
+
+statement ok
+drop table formats;

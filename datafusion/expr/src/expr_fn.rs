@@ -496,7 +496,7 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
 
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
-        #[doc = $DOC ]
+        #[doc = $DOC]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction(ScalarFunction::new(
                 built_in_function::BuiltinScalarFunction::$ENUM,
@@ -530,8 +530,6 @@ scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
-scalar_expr!(Asin, asin, num, "inverse sine");
-scalar_expr!(Acos, acos, num, "inverse cosine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
@@ -557,7 +555,6 @@ nary_scalar_expr!(
     trunc,
     "truncate toward zero, with optional precision"
 );
-scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
@@ -565,7 +562,6 @@ scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
 scalar_expr!(Log2, log2, num, "base 2 logarithm");
 scalar_expr!(Log10, log10, num, "base 10 logarithm");
 scalar_expr!(Ln, ln, num, "natural logarithm");
-scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(
@@ -612,7 +608,7 @@ scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
-    "returns 1 for an empty array or 0 for a non-empty array."
+    "returns true for an empty array or false for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -633,12 +629,6 @@ scalar_expr!(
     "flattens an array of arrays into a single array."
 );
 scalar_expr!(
-    ArrayDims,
-    array_dims,
-    array,
-    "returns an array of the array's dimensions."
-);
-scalar_expr!(
     ArrayElement,
     array_element,
     array element,
@@ -655,12 +645,6 @@ scalar_expr!(
     array_length,
     array dimension,
     "returns the length of the array dimension."
-);
-scalar_expr!(
-    ArrayNdims,
-    array_ndims,
-    array,
-    "returns the number of dimensions of the array."
 );
 scalar_expr!(
     ArrayDistinct,
@@ -729,25 +713,18 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArrayReverse,
+    array_reverse,
+    array,
+    "reverses the order of elements in the array."
+);
+scalar_expr!(
     ArraySlice,
     array_slice,
     array begin end stride,
     "returns a slice of the array."
 );
-scalar_expr!(
-    ArrayToString,
-    array_to_string,
-    array delimiter,
-    "converts each element to its text representation."
-);
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
-
-scalar_expr!(
-    Cardinality,
-    cardinality,
-    array,
-    "returns the total number of elements in the array."
-);
 
 scalar_expr!(
     ArrayResize,
@@ -766,12 +743,6 @@ scalar_expr!(
     array_intersect,
     first_array second_array,
     "Returns an array of the elements in the intersection of array1 and array2."
-);
-
-nary_scalar_expr!(
-    Range,
-    gen_range,
-    "Returns a list of values in the range between start and stop with step."
 );
 
 // string functions
@@ -795,10 +766,7 @@ scalar_expr!(
     "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
-scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
-scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(InStr, instr, string substring, "returns the position of the first occurrence of `substring` in `string`");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
@@ -860,11 +828,6 @@ nary_scalar_expr!(
     "replace strings that match a regular expression"
 );
 nary_scalar_expr!(
-    RegexpMatch,
-    regexp_match,
-    "matches a regular expression against a string and returns matched substrings."
-);
-nary_scalar_expr!(
     Btrim,
     btrim,
     "removes all characters, spaces by default, from both sides of a string"
@@ -887,30 +850,11 @@ nary_scalar_expr!(
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
-nary_scalar_expr!(
-    ToTimestamp,
-    to_timestamp,
-    "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMillis,
-    to_timestamp_millis,
-    "converts a string and optional formats  to a `Timestamp(Milliseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampMicros,
-    to_timestamp_micros,
-    "converts a string and optional formats  to a `Timestamp(Microseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampNanos,
-    to_timestamp_nanos,
-    "converts a string and optional formats  to a `Timestamp(Nanoseconds, None)`"
-);
-nary_scalar_expr!(
-    ToTimestampSeconds,
-    to_timestamp_seconds,
-    "converts a string and optional formats  to a `Timestamp(Seconds, None)`"
+scalar_expr!(
+    ToChar,
+    to_char,
+    datetime format,
+    "converts a date, time, timestamp or duration to a string based on the provided format"
 );
 scalar_expr!(
     FromUnixtime,
@@ -921,13 +865,8 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
-scalar_expr!(
-    Isnan,
-    isnan,
-    num,
-    "returns true if a given number is +NaN or -NaN otherwise returns false"
-);
 scalar_expr!(
     Iszero,
     iszero,
@@ -1336,8 +1275,6 @@ mod test {
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Tanh, tanh);
-        test_unary_scalar_expr!(Asin, asin);
-        test_unary_scalar_expr!(Acos, acos);
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
@@ -1351,7 +1288,6 @@ mod test {
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_nary_scalar_expr!(Trunc, trunc, num);
         test_nary_scalar_expr!(Trunc, trunc, num, precision);
-        test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
         test_unary_scalar_expr!(Log2, log2);
@@ -1359,7 +1295,6 @@ mod test {
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
         test_scalar_expr!(Nanvl, nanvl, x, y);
-        test_scalar_expr!(Isnan, isnan, input);
         test_scalar_expr!(Iszero, iszero, input);
 
         test_scalar_expr!(Ascii, ascii, input);
@@ -1369,12 +1304,9 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
-        test_scalar_expr!(Encode, encode, string, encoding);
-        test_scalar_expr!(Decode, decode, string, encoding);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(InStr, instr, string, substring);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
@@ -1382,8 +1314,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
-        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,
@@ -1431,9 +1361,7 @@ mod test {
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
-        test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
@@ -1444,8 +1372,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
-        test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
@@ -1479,36 +1405,6 @@ mod test {
         }) = digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn encode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = encode(col("tableA.a"), lit("base64"))
-        {
-            let name = BuiltinScalarFunction::Encode;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn decode_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = decode(col("tableA.a"), lit("hex"))
-        {
-            let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
         } else {

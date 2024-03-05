@@ -25,9 +25,7 @@ use crate::{
 };
 
 use arrow_schema::{DataType, SchemaRef};
-use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
 

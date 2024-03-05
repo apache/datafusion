@@ -28,20 +28,22 @@ from pathlib import Path
 import tomlkit
 
 crates = {
-    'datafusion': 'datafusion/core/Cargo.toml',
-    'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-common': 'datafusion/common/Cargo.toml',
-    'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion': 'datafusion/core/Cargo.toml',
     'datafusion-execution': 'datafusion/execution/Cargo.toml',
+    'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion-functions': 'datafusion/functions/Cargo.toml',
+    'datafusion-functions-array': 'datafusion/functions-array/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
     'datafusion-physical-plan': 'datafusion/physical-plan/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
     'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
+    'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
     'datafusion-wasmtest': 'datafusion/wasmtest/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
+    'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
     'datafusion-docs': 'docs/Cargo.toml',
 }
@@ -55,8 +57,17 @@ def update_workspace_version(new_version: str):
     doc = tomlkit.parse(data)
     pkg = doc.get('workspace').get('package')
 
-    print('workspace pacakge', pkg)
+    print('workspace package', pkg)
     pkg['version'] = new_version
+
+    doc = tomlkit.parse(data)
+
+    for crate in crates.keys():
+        df_dep = doc.get('workspace').get('dependencies', {}).get(crate)
+        # skip crates that pin datafusion using git hash
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dependency in {cargo_toml}')
+            df_dep['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
