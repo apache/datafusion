@@ -43,12 +43,12 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
+pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
-pub use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::string::String;

@@ -48,13 +48,13 @@ use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOpt
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
+use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
     placeholder, scalar_subquery, sum, when, wildcard, AggregateFunction, Expr,
     ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
-use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
