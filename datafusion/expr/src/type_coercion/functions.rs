@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
@@ -382,12 +384,20 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // should be able to coerce wildcard fixed size list to non wildcard fixed size list
-        FixedSizeList(_, _)
-            if matches!(type_from, FixedSizeList(_, FIXED_SIZE_LIST_WILDCARD))
-                && list_ndims(type_from) == list_ndims(type_into) =>
-        {
-            Some(type_into.clone())
-        }
+        FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD) => match type_from {
+            FixedSizeList(f_from, size_from) => {
+                match coerced_from(f_into.data_type(), f_from.data_type()) {
+                    Some(data_type) if &data_type != f_into.data_type() => {
+                        let new_field =
+                            Arc::new(f_into.as_ref().clone().with_data_type(data_type));
+                        Some(FixedSizeList(new_field, *size_from))
+                    }
+                    Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
 
         Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
@@ -418,6 +428,8 @@ fn coerced_from<'a>(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use crate::Volatility;
 
     use super::*;
     use arrow::datatypes::{DataType, Field, TimeUnit};
@@ -536,6 +548,63 @@ mod tests {
             DataType::FixedSizeList(nested_inner.clone(), FIXED_SIZE_LIST_WILDCARD);
         let out = coerced_from(&type_into_nested, &type_from_nested);
         assert_eq!(out, Some(type_into_nested));
+
+        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let current_types = vec![
+            DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
+        ];
+        let signature = Signature::exact(
+            vec![DataType::FixedSizeList(
+                inner.clone(),
+                FIXED_SIZE_LIST_WILDCARD,
+            )],
+            Volatility::Stable,
+        );
+        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        assert_eq!(coerced_data_types, current_types);
+
+        Ok(())
+    }
+    #[test]
+    fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
+        let type_into = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    FIXED_SIZE_LIST_WILDCARD,
+                ),
+                false,
+            )),
+            FIXED_SIZE_LIST_WILDCARD,
+        );
+
+        let type_from = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    4,
+                ),
+                false,
+            )),
+            3,
+        );
+
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(DataType::FixedSizeList(
+                Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        4,
+                    ),
+                    false,
+                )),
+                3,
+            ))
+        );
 
         Ok(())
     }
