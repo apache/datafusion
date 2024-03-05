@@ -249,22 +249,27 @@ These are valuable for comparative evaluation against alternative Arrow implemen
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
-- Add the actual implementation of the function:
-  - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
-  - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
-  - create a new module [here](../../../datafusion/physical-expr/src) for other functions
-- In [physical-expr/src](../../../datafusion/physical-expr/src/functions.rs), add:
-  - a new variant to `BuiltinScalarFunction`
-  - a new entry to `FromStr` with the name of the function as called by SQL
-  - a new line in `return_type` with the expected return type of the function, given an incoming type
-  - a new line in `signature` with the signature of the function (number and types of its arguments)
-  - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
-  - tests to the function.
+- Add the actual implementation of the function to a new module file within:
+  - [here](../../../datafusion/functions-array/src) for array functions
+  - [here](../../../datafusion/functions/src/crypto) for crypto functions
+  - [here](../../../datafusion/functions/src/datetime) for datetime functions
+  - [here](../../../datafusion/functions/src/encoding) for encoding functions
+  - [here](../../../datafusion/functions/src/math) for math functions
+  - [here](../../../datafusion/functions/src/regex) for regex functions
+  - [here](../../../datafusion/functions/src/string) for string functions
+  - [here](../../../datafusion/functions/src/unicode) for unicode functions
+  - create a new module [here](../../../datafusion/functions/src) for other functions.
+- New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
+  users to enable or disable the new module as desired.
+- The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
+  - See the [advanced_udf.rs](../../../datafusion-examples/examples/advanced_udf.rs) example for an example implementation
+  - Add tests for the new function
+- To connect the implementation of the function add to the mod.rs file:
+  - a `mod xyz;` where xyz is the new module file
+  - a call to `make_udf_function!(..);`
+  - an item in `export_functions!(..);`
 - In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
-- In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
-  - a new entry of the `unary_scalar_expr!` macro for the new function.
 - Add SQL reference documentation [here](../../../docs/source/user-guide/sql/scalar_functions.md)
 
 ### How to add a new aggregate function
