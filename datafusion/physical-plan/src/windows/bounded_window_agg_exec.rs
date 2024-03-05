@@ -1117,23 +1117,337 @@ fn get_aggregate_result_out_column(
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use std::time::Duration;
 
     use crate::common::collect;
     use crate::memory::MemoryExec;
-    use crate::windows::{BoundedWindowAggExec, InputOrderMode};
-    use crate::{get_plan_string, ExecutionPlan};
+    use crate::streaming::{PartitionStream, StreamingTableExec};
+    use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
+    use crate::{
+        execute_stream, get_plan_string, ExecutionPlan, ExecutionPlanProperties,
+    };
 
+    use arrow_array::builder::UInt64Builder;
     use arrow_array::RecordBatch;
-    use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use datafusion_common::{
+        assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
+    };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::TaskContext;
-    use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-    use datafusion_physical_expr::expressions::{col, NthValue};
+    use datafusion_execution::{
+        RecordBatchStream, SendableRecordBatchStream, TaskContext,
+    };
+    use datafusion_expr::{
+        AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
+        WindowFunctionDefinition,
+    };
+    use datafusion_physical_expr::expressions::{col, Column, NthValue};
     use datafusion_physical_expr::window::{
         BuiltInWindowExpr, BuiltInWindowFunctionExpr,
     };
+    use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+    use futures::future::Shared;
+    use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
+    use tokio::time::timeout;
+
+    use itertools::Itertools;
+
+    #[derive(Debug, Clone)]
+    struct TestStreamPartition {
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+        idx: usize,
+        state: PolingState,
+        sleep_duration: Duration,
+        send_exit: bool,
+    }
+
+    impl PartitionStream for TestStreamPartition {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            // We create an iterator from the record batches and map them into Ok values,
+            // converting the iterator into a futures::stream::Stream
+            Box::pin(self.clone())
+        }
+    }
+
+    impl Stream for TestStreamPartition {
+        type Item = Result<RecordBatch>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            self.poll_next_inner(cx)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum PolingState {
+        Sleep(Shared<futures::future::BoxFuture<'static, ()>>),
+        BatchReturn,
+    }
+
+    impl TestStreamPartition {
+        fn poll_next_inner(
+            self: &mut Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<RecordBatch>>> {
+            loop {
+                match &mut self.state {
+                    PolingState::BatchReturn => {
+                        // Wait for self.sleep_duration before sending any new data
+                        let f = tokio::time::sleep(self.sleep_duration).boxed().shared();
+                        self.state = PolingState::Sleep(f);
+                        let input_batch = if let Some(batch) =
+                            self.batches.clone().get(self.idx)
+                        {
+                            batch.clone()
+                        } else if self.send_exit {
+                            // Send None to signal end of data
+                            return Poll::Ready(None);
+                        } else {
+                            // Go to sleep mode
+                            let f =
+                                tokio::time::sleep(self.sleep_duration).boxed().shared();
+                            self.state = PolingState::Sleep(f);
+                            continue;
+                        };
+                        self.idx += 1;
+                        return Poll::Ready(Some(Ok(input_batch)));
+                    }
+                    PolingState::Sleep(future) => {
+                        pin_mut!(future);
+                        ready!(future.poll_unpin(cx));
+                        self.state = PolingState::BatchReturn;
+                    }
+                }
+            }
+        }
+    }
+
+    impl RecordBatchStream for TestStreamPartition {
+        fn schema(&self) -> SchemaRef {
+            self.schema.clone()
+        }
+    }
+
+    fn bounded_window_exec_pb_latent_range(
+        input: Arc<dyn ExecutionPlan>,
+        n_future_range: usize,
+        hash: &str,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = input.schema();
+        let window_fn =
+            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
+        let fn_name = "count".to_string();
+        let col_expr =
+            Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
+        let args = vec![col_expr];
+        let partitionby_exprs = vec![col(hash, &schema)?];
+        let orderby_exprs = input.output_ordering().unwrap()[0..1].to_vec();
+        let window_frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Range,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(n_future_range as u64))),
+        );
+        let input_order_mode = InputOrderMode::Linear;
+        Ok(Arc::new(BoundedWindowAggExec::try_new(
+            vec![create_window_expr(
+                &window_fn,
+                fn_name,
+                &args,
+                &partitionby_exprs,
+                &orderby_exprs,
+                Arc::new(window_frame.clone()),
+                &input.schema(),
+                false,
+            )?],
+            input,
+            partitionby_exprs,
+            input_order_mode,
+        )?))
+    }
+
+    fn task_context_helper() -> TaskContext {
+        let task_ctx = TaskContext::default();
+        // Create session context with config
+        let session_config = SessionConfig::new()
+            .with_batch_size(1)
+            .with_target_partitions(2)
+            .with_round_robin_repartition(false);
+        task_ctx.with_session_config(session_config)
+    }
+
+    fn task_context() -> Arc<TaskContext> {
+        Arc::new(task_context_helper())
+    }
+
+    pub async fn collect_stream(
+        mut stream: SendableRecordBatchStream,
+        results: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        while let Some(item) = stream.next().await {
+            results.push(item?);
+        }
+        Ok(())
+    }
+
+    /// Execute the [ExecutionPlan] and collect the results in memory
+    pub async fn collect_with_timeout(
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+        timeout_duration: Duration,
+    ) -> Result<Vec<RecordBatch>> {
+        let stream = execute_stream(plan, context)?;
+        let mut results = vec![];
+
+        // Execute the asynchronous operation with a timeout
+        if timeout(timeout_duration, collect_stream(stream, &mut results))
+            .await
+            .is_ok()
+        {
+            return Err(exec_datafusion_err!("shouldn't have completed"));
+        };
+
+        Ok(results)
+    }
+
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("sn", DataType::UInt64, true),
+            Field::new("sn_clone", DataType::UInt64, true),
+            Field::new("single_hash", DataType::UInt64, true),
+            Field::new("duplicated_hash", DataType::UInt64, true),
+        ]))
+    }
+
+    fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
+        let orderings = vec![vec![
+            PhysicalSortExpr {
+                expr: col("sn", schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("sn_clone", schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            },
+        ]];
+        Ok(orderings)
+    }
+
+    fn is_integer_division_safe(lhs: usize, rhs: usize) -> bool {
+        let res = lhs / rhs;
+        res * rhs == lhs
+    }
+    fn generate_batches(
+        schema: &SchemaRef,
+        n_row: usize,
+        n_chunk: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut batches = vec![];
+        assert!(n_row > 0);
+        assert!(n_chunk > 0);
+        assert!(is_integer_division_safe(n_row, n_chunk));
+        let hash_value = 0;
+        let hash_replicate = 4;
+
+        let chunks = (0..n_row)
+            .chunks(n_chunk)
+            .into_iter()
+            .map(|elem| elem.into_iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+
+        // Send 2 RecordBatches at the source
+        for sn_values in chunks {
+            let schema_values = sn_values
+                .into_iter()
+                .map(|sn| (sn, sn, hash_value))
+                .collect::<Vec<_>>();
+
+            let mut sn1_array = UInt64Builder::with_capacity(schema_values.len());
+            let mut sn2_array = UInt64Builder::with_capacity(schema_values.len());
+            let mut hash_array = UInt64Builder::with_capacity(schema_values.len());
+            let mut duplicated_hash_array =
+                UInt64Builder::with_capacity(schema_values.len());
+
+            for (sn1, sn2, hash_value) in schema_values {
+                sn1_array.append_value(sn1 as u64);
+                sn2_array.append_value(sn2 as u64);
+                hash_array.append_value(hash_value);
+                let duplicated_hash_value = (sn1 / hash_replicate) as u64;
+                duplicated_hash_array.append_value(duplicated_hash_value);
+            }
+
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(sn1_array.finish()),
+                    Arc::new(sn2_array.finish()),
+                    Arc::new(hash_array.finish()),
+                    Arc::new(duplicated_hash_array.finish()),
+                ],
+            )?;
+            batches.push(batch);
+        }
+        Ok(batches)
+    }
+
+    fn generate_never_ending_source(
+        n_rows: usize,
+        chunk_length: usize,
+        n_partition: usize,
+        is_infinite: bool,
+        send_exit: bool,
+        per_batch_wait_duration_in_millis: u64,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(n_partition > 0);
+
+        // We use same hash value in the table. This makes sure that
+        // After hashing computation will continue in only in one of the output partitions
+        // In this case, data flow should still continue
+        let schema = test_schema();
+        let orderings = schema_orders(&schema)?;
+
+        // Source waits per_batch_wait_duration_in_millis ms before sending other batch
+        let per_batch_wait_duration =
+            Duration::from_millis(per_batch_wait_duration_in_millis);
+
+        let batches = generate_batches(&schema, n_rows, chunk_length)?;
+
+        // Source has 2 partitions
+        let partitions = vec![
+            Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+                batches: batches.clone(),
+                idx: 0,
+                state: PolingState::BatchReturn,
+                sleep_duration: per_batch_wait_duration,
+                send_exit,
+            }) as _;
+            n_partition
+        ];
+        let source = Arc::new(StreamingTableExec::try_new(
+            schema.clone(),
+            partitions,
+            None,
+            orderings,
+            is_infinite,
+        )?) as _;
+        Ok(source)
+    }
 
     // Tests NTH_VALUE(negative index) with memoize feature.
     // To be able to trigger memoize feature for NTH_VALUE we need to
@@ -1241,6 +1555,51 @@ mod tests {
             "+---+------+---------------+---------------+",
         ];
         assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bounded_window_exec_linear_mode_range_information() -> Result<()> {
+        let n_rows = 10;
+        let chunk_length = 2;
+        let n_future_range = 1;
+
+        let timeout_duration = Duration::from_millis(2000);
+
+        let source =
+            generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;
+
+        let plan = bounded_window_exec_pb_latent_range(
+            source,
+            n_future_range,
+            "duplicated_hash",
+        )?;
+
+        let expected_plan = vec![
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
+            "  StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&plan);
+        assert_eq!(
+            expected_plan, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_plan:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let task_ctx = task_context();
+        let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
+
+        let expected = [
+            "+----+----------+-------------+-----------------+-------+",
+            "| sn | sn_clone | single_hash | duplicated_hash | count |",
+            "+----+----------+-------------+-----------------+-------+",
+            "| 0  | 0        | 0           | 0               | 2     |",
+            "| 1  | 1        | 0           | 0               | 2     |",
+            "+----+----------+-------------+-----------------+-------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
         Ok(())
     }
 }
