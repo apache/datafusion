@@ -3151,7 +3151,28 @@ The range start..end contains all values with start <= x < end. It is empty if s
 Step can not be 0 (then the range will be nonsense.).
 
 Note that when the required range is a number, it accepts 1, 2, and 3 parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+For example,
 
+```
+SELECT range(3);
+SELECT range(1,5);
+SELECT range(1,5,1);
+```
+are allowed in number ranges
+
+but in date ranges, only
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
+```
+is allowed, and 
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+SELECT range(NULL, DATE '1993-03-01', INTERVAL '1' MONTH);
+SELECT range(DATE '1992-09-01', NULL, INTERVAL '1' MONTH);
+```
+are not allowed
 #### Arguments
 
 - **start**: start of the range
