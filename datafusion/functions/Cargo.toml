@@ -50,15 +50,16 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-base64 = { version = "0.21", optional = true }
+base64 = { version = "0.22", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true, default-features = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
-
+regex = { version = "1.8" }
 [dev-dependencies]
 criterion = "0.5"
 rand = { workspace = true }

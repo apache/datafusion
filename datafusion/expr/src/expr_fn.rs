@@ -823,11 +823,6 @@ nary_scalar_expr!(
     "fill up a string to the length by appending the characters"
 );
 nary_scalar_expr!(
-    RegexpReplace,
-    regexp_replace,
-    "replace strings that match a regular expression"
-);
-nary_scalar_expr!(
     Btrim,
     btrim,
     "removes all characters, spaces by default, from both sides of a string"
@@ -1314,21 +1309,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement
-        );
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement,
-            flags
-        );
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);
