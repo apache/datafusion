@@ -43,9 +43,11 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
+datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
     "array_expressions",
     "crypto_expressions",
+    "datetime_expressions",
     "encoding_expressions",
     "regex_expressions",
     "unicode_expressions",
@@ -86,19 +88,20 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "36.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-array = { workspace = true, optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "36.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "36.0.0", default-features = false }
+datafusion-optimizer = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
-half = { version = "2.1", default-features = false }
+half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = { workspace = true }
 itertools = { workspace = true }
@@ -128,10 +131,10 @@ csv = "1.1.6"
 ctor = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
-half = { workspace = true }
+half = { workspace = true, default-features = true }
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
-rand = { version = "0.8", features = ["small_rng"] }
+rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = { workspace = true }
@@ -141,6 +144,7 @@ test-utils = { path = "../../test-utils" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 tokio-postgres = "0.7.7"
+
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.28.0", features = ["fs"] }
 

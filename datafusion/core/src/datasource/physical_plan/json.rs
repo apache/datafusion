@@ -174,14 +174,13 @@ impl ExecutionPlan for NdJsonExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
-        let (projected_schema, ..) = self.base_config.project();
 
         let object_store = context
             .runtime_env()
             .object_store(&self.base_config.object_store_url)?;
         let opener = JsonOpener {
             batch_size,
-            projected_schema,
+            projected_schema: self.base_config.projected_file_schema(),
             file_compression_type: self.file_compression_type.to_owned(),
             object_store,
         };

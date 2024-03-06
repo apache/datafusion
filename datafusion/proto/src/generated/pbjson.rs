@@ -23370,7 +23370,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Md5 => "MD5",
             Self::OctetLength => "OctetLength",
             Self::Random => "Random",
-            Self::RegexpReplace => "RegexpReplace",
             Self::Repeat => "Repeat",
             Self::Replace => "Replace",
             Self::Reverse => "Reverse",
@@ -23386,10 +23385,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Strpos => "Strpos",
             Self::Substr => "Substr",
             Self::ToHex => "ToHex",
-            Self::ToTimestamp => "ToTimestamp",
-            Self::ToTimestampMillis => "ToTimestampMillis",
-            Self::ToTimestampMicros => "ToTimestampMicros",
-            Self::ToTimestampSeconds => "ToTimestampSeconds",
             Self::Now => "Now",
             Self::Translate => "Translate",
             Self::Trim => "Trim",
@@ -23419,16 +23414,13 @@ impl serde::Serialize for ScalarFunction {
             Self::Gcd => "Gcd",
             Self::ArrayAppend => "ArrayAppend",
             Self::ArrayConcat => "ArrayConcat",
-            Self::ArrayDims => "ArrayDims",
             Self::ArrayRepeat => "ArrayRepeat",
             Self::ArrayLength => "ArrayLength",
-            Self::ArrayNdims => "ArrayNdims",
             Self::ArrayPosition => "ArrayPosition",
             Self::ArrayPositions => "ArrayPositions",
             Self::ArrayPrepend => "ArrayPrepend",
             Self::ArrayRemove => "ArrayRemove",
             Self::ArrayReplace => "ArrayReplace",
-            Self::Cardinality => "Cardinality",
             Self::ArrayElement => "ArrayElement",
             Self::ArraySlice => "ArraySlice",
             Self::Cot => "Cot",
@@ -23445,7 +23437,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayPopBack => "ArrayPopBack",
             Self::StringToArray => "StringToArray",
-            Self::ToTimestampNanos => "ToTimestampNanos",
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
@@ -23458,10 +23449,8 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayDistinct => "ArrayDistinct",
             Self::ArrayResize => "ArrayResize",
             Self::EndsWith => "EndsWith",
-            Self::InStr => "InStr",
             Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
-            Self::RegexpLike => "RegexpLike",
             Self::ToChar => "ToChar",
         };
         serializer.serialize_str(variant)
@@ -23509,7 +23498,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "MD5",
             "OctetLength",
             "Random",
-            "RegexpReplace",
             "Repeat",
             "Replace",
             "Reverse",
@@ -23525,10 +23513,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Strpos",
             "Substr",
             "ToHex",
-            "ToTimestamp",
-            "ToTimestampMillis",
-            "ToTimestampMicros",
-            "ToTimestampSeconds",
             "Now",
             "Translate",
             "Trim",
@@ -23558,16 +23542,13 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Gcd",
             "ArrayAppend",
             "ArrayConcat",
-            "ArrayDims",
             "ArrayRepeat",
             "ArrayLength",
-            "ArrayNdims",
             "ArrayPosition",
             "ArrayPositions",
             "ArrayPrepend",
             "ArrayRemove",
             "ArrayReplace",
-            "Cardinality",
             "ArrayElement",
             "ArraySlice",
             "Cot",
@@ -23584,7 +23565,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayEmpty",
             "ArrayPopBack",
             "StringToArray",
-            "ToTimestampNanos",
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
@@ -23597,10 +23577,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayDistinct",
             "ArrayResize",
             "EndsWith",
-            "InStr",
             "MakeDate",
             "ArrayReverse",
-            "RegexpLike",
             "ToChar",
         ];
 
@@ -23677,7 +23655,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "MD5" => Ok(ScalarFunction::Md5),
                     "OctetLength" => Ok(ScalarFunction::OctetLength),
                     "Random" => Ok(ScalarFunction::Random),
-                    "RegexpReplace" => Ok(ScalarFunction::RegexpReplace),
                     "Repeat" => Ok(ScalarFunction::Repeat),
                     "Replace" => Ok(ScalarFunction::Replace),
                     "Reverse" => Ok(ScalarFunction::Reverse),
@@ -23693,10 +23670,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Strpos" => Ok(ScalarFunction::Strpos),
                     "Substr" => Ok(ScalarFunction::Substr),
                     "ToHex" => Ok(ScalarFunction::ToHex),
-                    "ToTimestamp" => Ok(ScalarFunction::ToTimestamp),
-                    "ToTimestampMillis" => Ok(ScalarFunction::ToTimestampMillis),
-                    "ToTimestampMicros" => Ok(ScalarFunction::ToTimestampMicros),
-                    "ToTimestampSeconds" => Ok(ScalarFunction::ToTimestampSeconds),
                     "Now" => Ok(ScalarFunction::Now),
                     "Translate" => Ok(ScalarFunction::Translate),
                     "Trim" => Ok(ScalarFunction::Trim),
@@ -23726,16 +23699,13 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Gcd" => Ok(ScalarFunction::Gcd),
                     "ArrayAppend" => Ok(ScalarFunction::ArrayAppend),
                     "ArrayConcat" => Ok(ScalarFunction::ArrayConcat),
-                    "ArrayDims" => Ok(ScalarFunction::ArrayDims),
                     "ArrayRepeat" => Ok(ScalarFunction::ArrayRepeat),
                     "ArrayLength" => Ok(ScalarFunction::ArrayLength),
-                    "ArrayNdims" => Ok(ScalarFunction::ArrayNdims),
                     "ArrayPosition" => Ok(ScalarFunction::ArrayPosition),
                     "ArrayPositions" => Ok(ScalarFunction::ArrayPositions),
                     "ArrayPrepend" => Ok(ScalarFunction::ArrayPrepend),
                     "ArrayRemove" => Ok(ScalarFunction::ArrayRemove),
                     "ArrayReplace" => Ok(ScalarFunction::ArrayReplace),
-                    "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "ArrayElement" => Ok(ScalarFunction::ArrayElement),
                     "ArraySlice" => Ok(ScalarFunction::ArraySlice),
                     "Cot" => Ok(ScalarFunction::Cot),
@@ -23752,7 +23722,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayEmpty" => Ok(ScalarFunction::ArrayEmpty),
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
                     "StringToArray" => Ok(ScalarFunction::StringToArray),
-                    "ToTimestampNanos" => Ok(ScalarFunction::ToTimestampNanos),
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
@@ -23765,10 +23734,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayDistinct" => Ok(ScalarFunction::ArrayDistinct),
                     "ArrayResize" => Ok(ScalarFunction::ArrayResize),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
-                    "InStr" => Ok(ScalarFunction::InStr),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
-                    "RegexpLike" => Ok(ScalarFunction::RegexpLike),
                     "ToChar" => Ok(ScalarFunction::ToChar),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
@@ -24410,12 +24377,19 @@ impl serde::Serialize for ScalarUdfExprNode {
         if !self.args.is_empty() {
             len += 1;
         }
+        if self.fun_definition.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ScalarUDFExprNode", len)?;
         if !self.fun_name.is_empty() {
             struct_ser.serialize_field("funName", &self.fun_name)?;
         }
         if !self.args.is_empty() {
             struct_ser.serialize_field("args", &self.args)?;
+        }
+        if let Some(v) = self.fun_definition.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -24430,12 +24404,15 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
             "fun_name",
             "funName",
             "args",
+            "fun_definition",
+            "funDefinition",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             FunName,
             Args,
+            FunDefinition,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24459,6 +24436,7 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
                         match value {
                             "funName" | "fun_name" => Ok(GeneratedField::FunName),
                             "args" => Ok(GeneratedField::Args),
+                            "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24480,6 +24458,7 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
             {
                 let mut fun_name__ = None;
                 let mut args__ = None;
+                let mut fun_definition__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FunName => {
@@ -24494,11 +24473,20 @@ impl<'de> serde::Deserialize<'de> for ScalarUdfExprNode {
                             }
                             args__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FunDefinition => {
+                            if fun_definition__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("funDefinition"));
+                            }
+                            fun_definition__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(ScalarUdfExprNode {
                     fun_name: fun_name__.unwrap_or_default(),
                     args: args__.unwrap_or_default(),
+                    fun_definition: fun_definition__,
                 })
             }
         }

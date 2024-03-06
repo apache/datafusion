@@ -20,13 +20,14 @@
 #[cfg(target_family = "unix")]
 #[cfg(test)]
 mod unix_test {
+    use datafusion_common::instant::Instant;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use arrow::array::Array;
     use arrow::csv::ReaderBuilder;

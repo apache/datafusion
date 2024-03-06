@@ -24,8 +24,8 @@ use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::{col, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
+use datafusion_common::instant::Instant;
 use std::path::PathBuf;
-use std::time::Instant;
 use structopt::StructOpt;
 
 /// Test performance of parquet filter pushdown

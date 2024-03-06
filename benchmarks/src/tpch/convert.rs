@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::instant::Instant;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use datafusion::common::not_impl_err;
 

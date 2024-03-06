@@ -44,8 +44,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
-    VisitRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
@@ -475,7 +474,7 @@ impl LogicalPlan {
                     })?;
                 using_columns.push(columns);
             }
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         })?;
 
         Ok(using_columns)
@@ -648,31 +647,24 @@ impl LogicalPlan {
                 // Decimal128(Some(69999999999999),30,15)
                 // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
 
-                struct RemoveAliases {}
-
-                impl TreeNodeRewriter for RemoveAliases {
-                    type N = Expr;
-
-                    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+                let predicate = predicate
+                    .transform_down(&|expr| {
                         match expr {
                             Expr::Exists { .. }
                             | Expr::ScalarSubquery(_)
                             | Expr::InSubquery(_) => {
                                 // subqueries could contain aliases so we don't recurse into those
-                                Ok(RewriteRecursion::Stop)
+                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
                             }
-                            Expr::Alias(_) => Ok(RewriteRecursion::Mutate),
-                            _ => Ok(RewriteRecursion::Continue),
+                            Expr::Alias(_) => Ok(Transformed::new(
+                                expr.unalias(),
+                                true,
+                                TreeNodeRecursion::Jump,
+                            )),
+                            _ => Ok(Transformed::no(expr)),
                         }
-                    }
-
-                    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-                        Ok(expr.unalias())
-                    }
-                }
-
-                let mut remove_aliases = RemoveAliases {};
-                let predicate = predicate.rewrite(&mut remove_aliases)?;
+                    })
+                    .data()?;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -1124,9 +1116,9 @@ impl LogicalPlan {
 
 impl LogicalPlan {
     /// applies `op` to any subqueries in the plan
-    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> datafusion_common::Result<()>
+    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> Result<()>
     where
-        F: FnMut(&Self) -> datafusion_common::Result<VisitRecursion>,
+        F: FnMut(&Self) -> Result<TreeNodeRecursion>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
@@ -1150,9 +1142,9 @@ impl LogicalPlan {
     }
 
     /// applies visitor to any subqueries in the plan
-    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> datafusion_common::Result<()>
+    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> Result<()>
     where
-        V: TreeNodeVisitor<N = LogicalPlan>,
+        V: TreeNodeVisitor<Node = LogicalPlan>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
@@ -1225,11 +1217,11 @@ impl LogicalPlan {
                             _ => {}
                         }
                     }
-                    Ok(VisitRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok::<(), DataFusionError>(())
             })?;
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         })?;
 
         Ok(param_types)
@@ -1246,19 +1238,20 @@ impl LogicalPlan {
                 Expr::Placeholder(Placeholder { id, .. }) => {
                     let value = param_values.get_placeholders_with_values(id)?;
                     // Replace the placeholder with the value
-                    Ok(Transformed::Yes(Expr::Literal(value)))
+                    Ok(Transformed::yes(Expr::Literal(value)))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Transformed::Yes(Expr::ScalarSubquery(Subquery {
+                    Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
                     })))
                 }
-                _ => Ok(Transformed::No(expr)),
+                _ => Ok(Transformed::no(expr)),
             }
         })
+        .data()
     }
 }
 
@@ -1794,7 +1787,7 @@ pub struct Values {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Projection {
@@ -2836,9 +2829,9 @@ digraph {
     }
 
     impl TreeNodeVisitor for OkVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -2849,10 +2842,10 @@ digraph {
             };
 
             self.strings.push(s.into());
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2863,7 +2856,7 @@ digraph {
             };
 
             self.strings.push(s.into());
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -2919,23 +2912,23 @@ digraph {
     }
 
     impl TreeNodeVisitor for StoppingVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_pre_in.dec() {
-                return Ok(VisitRecursion::Stop);
+                return Ok(TreeNodeRecursion::Stop);
             }
-            self.inner.pre_visit(plan)?;
+            self.inner.f_down(plan)?;
 
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_false_from_post_in.dec() {
-                return Ok(VisitRecursion::Stop);
+                return Ok(TreeNodeRecursion::Stop);
             }
 
-            self.inner.post_visit(plan)
+            self.inner.f_up(plan)
         }
     }
 
@@ -2988,22 +2981,22 @@ digraph {
     }
 
     impl TreeNodeVisitor for ErrorVisitor {
-        type N = LogicalPlan;
+        type Node = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_down(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_pre_in.dec() {
                 return not_impl_err!("Error in pre_visit");
             }
 
-            self.inner.pre_visit(plan)
+            self.inner.f_down(plan)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
+        fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
             if self.return_error_from_post_in.dec() {
                 return not_impl_err!("Error in post_visit");
             }
 
-            self.inner.post_visit(plan)
+            self.inner.f_up(plan)
         }
     }
 
@@ -3311,10 +3304,11 @@ digraph {
                         Arc::new(LogicalPlan::TableScan(table)),
                     )
                     .unwrap();
-                    Ok(Transformed::Yes(LogicalPlan::Filter(filter)))
+                    Ok(Transformed::yes(LogicalPlan::Filter(filter)))
                 }
-                x => Ok(Transformed::No(x)),
+                x => Ok(Transformed::no(x)),
             })
+            .data()
             .unwrap();
 
         let expected = "Explain\

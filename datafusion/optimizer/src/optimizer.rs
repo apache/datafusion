@@ -19,7 +19,6 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -48,6 +47,7 @@ use crate::utils::log_plan;
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 

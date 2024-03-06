@@ -17,16 +17,16 @@
 
 //! This module implements a rule that simplifies the values for `InList`s
 
+use super::utils::{is_null, lit_bool_null};
+use super::THRESHOLD_INLINE_INLIST;
+
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use datafusion_common::tree_node::TreeNodeRewriter;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
-
-use super::utils::{is_null, lit_bool_null};
-use super::THRESHOLD_INLINE_INLIST;
 
 pub(super) struct ShortenInListSimplifier {}
 
@@ -37,9 +37,9 @@ impl ShortenInListSimplifier {
 }
 
 impl TreeNodeRewriter for ShortenInListSimplifier {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         // if expr is a single column reference:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(InList {
@@ -61,7 +61,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
             {
                 let first_val = list[0].clone();
                 if negated {
-                    return Ok(list.into_iter().skip(1).fold(
+                    return Ok(Transformed::yes(list.into_iter().skip(1).fold(
                         (*expr.clone()).not_eq(first_val),
                         |acc, y| {
                             // Note that `A and B and C and D` is a left-deep tree structure
@@ -83,20 +83,20 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                             // The code below maintain the left-deep tree structure.
                             acc.and((*expr.clone()).not_eq(y))
                         },
-                    ));
+                    )));
                 } else {
-                    return Ok(list.into_iter().skip(1).fold(
+                    return Ok(Transformed::yes(list.into_iter().skip(1).fold(
                         (*expr.clone()).eq(first_val),
                         |acc, y| {
                             // Same reasoning as above
                             acc.or((*expr.clone()).eq(y))
                         },
-                    ));
+                    )));
                 }
             }
         }
 
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 
@@ -109,9 +109,9 @@ impl InListSimplifier {
 }
 
 impl TreeNodeRewriter for InListSimplifier {
-    type N = Expr;
+    type Node = Expr;
 
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::InList(InList {
             expr,
             mut list,
@@ -121,11 +121,11 @@ impl TreeNodeRewriter for InListSimplifier {
             // expr IN () --> false
             // expr NOT IN () --> true
             if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
-                return Ok(lit(negated));
+                return Ok(Transformed::yes(lit(negated)));
             // null in (x, y, z) --> null
             // null not in (x, y, z) --> null
             } else if is_null(&expr) {
-                return Ok(lit_bool_null());
+                return Ok(Transformed::yes(lit_bool_null()));
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             } else if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
@@ -133,7 +133,9 @@ impl TreeNodeRewriter for InListSimplifier {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else {
                     unreachable!()
                 };
-                return Ok(Expr::InSubquery(InSubquery::new(expr, subquery, negated)));
+                return Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
+                    expr, subquery, negated,
+                ))));
             }
         }
         // Combine multiple OR expressions into a single IN list expression if possible
@@ -165,7 +167,7 @@ impl TreeNodeRewriter for InListSimplifier {
                             list,
                             negated: false,
                         };
-                        return Ok(Expr::InList(merged_inlist));
+                        return Ok(Transformed::yes(Expr::InList(merged_inlist)));
                     }
                 }
             }
@@ -191,40 +193,40 @@ impl TreeNodeRewriter for InListSimplifier {
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && !l1.negated && !l2.negated =>
                 {
-                    return inlist_intersection(l1, l2, false);
+                    return inlist_intersection(l1, l2, false).map(Transformed::yes);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && l2.negated =>
                 {
-                    return inlist_union(l1, l2, true);
+                    return inlist_union(l1, l2, true).map(Transformed::yes);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && !l1.negated && l2.negated =>
                 {
-                    return inlist_except(l1, l2);
+                    return inlist_except(l1, l2).map(Transformed::yes);
                 }
                 (Expr::InList(l1), Operator::And, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && !l2.negated =>
                 {
-                    return inlist_except(l2, l1);
+                    return inlist_except(l2, l1).map(Transformed::yes);
                 }
                 (Expr::InList(l1), Operator::Or, Expr::InList(l2))
                     if l1.expr == l2.expr && l1.negated && l2.negated =>
                 {
-                    return inlist_intersection(l1, l2, true);
+                    return inlist_intersection(l1, l2, true).map(Transformed::yes);
                 }
                 (left, op, right) => {
                     // put the expression back together
-                    return Ok(Expr::BinaryExpr(BinaryExpr {
+                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op,
                         right: Box::new(right),
-                    }));
+                    })));
                 }
             }
         }
 
-        Ok(expr)
+        Ok(Transformed::no(expr))
     }
 }
 

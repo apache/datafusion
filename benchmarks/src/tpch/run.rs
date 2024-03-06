@@ -31,9 +31,9 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 use log::info;
 
+use datafusion_common::instant::Instant;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;

@@ -19,18 +19,18 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::try_cast;
-use crate::expressions::NoOp;
+use crate::expressions::{try_cast, NoOp};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
+
 use arrow::array::*;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -414,17 +414,15 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::lit;
-    use crate::expressions::{binary, cast};
+    use crate::expressions::{binary, cast, col, lit};
+
     use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
-    use datafusion_common::plan_err;
-    use datafusion_common::tree_node::{Transformed, TreeNode};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+    use datafusion_common::{plan_err, ScalarValue};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
 
@@ -972,11 +970,12 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    Transformed::yes(transformed)
                 } else {
-                    Transformed::No(e)
+                    Transformed::no(e)
                 })
             })
+            .data()
             .unwrap();
 
         let expr3 = expr
@@ -993,11 +992,12 @@ mod tests {
                         _ => None,
                     };
                 Ok(if let Some(transformed) = transformed {
-                    Transformed::Yes(transformed)
+                    Transformed::yes(transformed)
                 } else {
-                    Transformed::No(e)
+                    Transformed::no(e)
                 })
             })
+            .data()
             .unwrap();
 
         assert!(expr.ne(&expr2));

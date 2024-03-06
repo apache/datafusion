@@ -17,6 +17,7 @@
 
 //! Interval parsing logic
 use sqlparser::parser::ParserError;
+use std::fmt::Display;
 
 use std::fmt::Display;
 use std::result;
@@ -63,8 +64,7 @@ impl Display for CompressionTypeVariant {
             Self::XZ => "XZ",
             Self::ZSTD => "ZSTD",
             Self::UNCOMPRESSED => "",
-        }
-        .to_string();
+        };
         write!(f, "{}", str)
     }
 }

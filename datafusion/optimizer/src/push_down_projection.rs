@@ -545,6 +545,7 @@ mod tests {
             false,
             Some(Box::new(col("c").gt(lit(42)))),
             None,
+            None,
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)

@@ -19,6 +19,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
+use arrow::datatypes::IntervalUnit::MonthDayNano;
+use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
@@ -26,6 +28,7 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
+
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(ArrayToString,
     array_to_string,
@@ -106,6 +109,7 @@ impl Range {
                     Exact(vec![Int64]),
                     Exact(vec![Int64, Int64]),
                     Exact(vec![Int64, Int64, Int64]),
+                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -136,7 +140,17 @@ impl ScalarUDFImpl for Range {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+        match args[0].data_type() {
+            arrow::datatypes::DataType::Int64 => {
+                crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+            }
+            arrow::datatypes::DataType::Date32 => {
+                crate::kernels::gen_range_date(&args, 0).map(ColumnarValue::Array)
+            }
+            _ => {
+                exec_err!("unsupported type for range")
+            }
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -165,6 +179,7 @@ impl GenSeries {
                     Exact(vec![Int64]),
                     Exact(vec![Int64, Int64]),
                     Exact(vec![Int64, Int64, Int64]),
+                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -195,7 +210,182 @@ impl ScalarUDFImpl for GenSeries {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
+        match args[0].data_type() {
+            arrow::datatypes::DataType::Int64 => {
+                crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
+            }
+            arrow::datatypes::DataType::Date32 => {
+                crate::kernels::gen_range_date(&args, 1).map(ColumnarValue::Array)
+            }
+            _ => {
+                exec_err!("unsupported type for range")
+            }
+        }
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    ArrayDims,
+    array_dims,
+    array,
+    "returns an array of the array's dimensions.",
+    array_dims_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayDims {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayDims {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec!["array_dims".to_string(), "list_dims".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayDims {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_dims"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => {
+                List(Arc::new(Field::new("item", UInt64, true)))
+            }
+            _ => {
+                return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_dims(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    Cardinality,
+    cardinality,
+    array,
+    "returns the total number of elements in the array.",
+    cardinality_udf
+);
+
+impl Cardinality {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("cardinality")],
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct Cardinality {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl ScalarUDFImpl for Cardinality {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "cardinality"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
+            _ => {
+                return plan_err!("The cardinality function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::cardinality(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    ArrayNdims,
+    array_ndims,
+    array,
+    "returns the number of dimensions of the array.",
+    array_ndims_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayNdims {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl ArrayNdims {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("array_ndims"), String::from("list_ndims")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayNdims {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_ndims"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
+            _ => {
+                return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_ndims(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

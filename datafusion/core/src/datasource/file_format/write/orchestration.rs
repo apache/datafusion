@@ -30,11 +30,11 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
-use datafusion_physical_plan::common::SpawnedTask;
-use futures::try_join;
+use futures::join;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinSet;
@@ -264,19 +264,12 @@ pub(crate) async fn stateless_multipart_put(
     // Signal to the write coordinator that no more files are coming
     drop(tx_file_bundle);
 
-    match try_join!(write_coordinator_task.join(), demux_task.join()) {
-        Ok((r1, r2)) => {
-            r1?;
-            r2?;
-        }
-        Err(e) => {
-            if e.is_panic() {
-                std::panic::resume_unwind(e.into_panic());
-            } else {
-                unreachable!();
-            }
-        }
-    }
+    let (r1, r2) = join!(
+        write_coordinator_task.join_unwind(),
+        demux_task.join_unwind()
+    );
+    r1?;
+    r2?;
 
     let total_count = rx_row_cnt.await.map_err(|_| {
         internal_datafusion_err!("Did not receieve row count from write coordinater")

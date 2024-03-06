@@ -37,7 +37,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
@@ -57,7 +57,7 @@ impl JoinSelection {
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
-// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
+// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
 /// Checks statistics for join swap.
 fn should_swap_join_order(
     left: &dyn ExecutionPlan,
@@ -236,7 +236,9 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan = plan.transform_up(&|p| apply_subrules(p, &subrules, config))?;
+        let new_plan = plan
+            .transform_up(&|p| apply_subrules(p, &subrules, config))
+            .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
         // - For a hash join with partition mode [`PartitionMode::Auto`], we will
@@ -251,13 +253,15 @@ impl PhysicalOptimizerRule for JoinSelection {
         let config = &config.optimizer;
         let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        new_plan.transform_up(&|plan| {
-            statistical_join_selection_subrule(
-                plan,
-                collect_threshold_byte_size,
-                collect_threshold_num_rows,
-            )
-        })
+        new_plan
+            .transform_up(&|plan| {
+                statistical_join_selection_subrule(
+                    plan,
+                    collect_threshold_byte_size,
+                    collect_threshold_num_rows,
+                )
+            })
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -433,9 +437,9 @@ fn statistical_join_selection_subrule(
         };
 
     Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
+        Transformed::yes(transformed)
     } else {
-        Transformed::No(plan)
+        Transformed::no(plan)
     })
 }
 
@@ -647,7 +651,7 @@ fn apply_subrules(
     for subrule in subrules {
         input = subrule(input, config_options)?;
     }
-    Ok(Transformed::Yes(input))
+    Ok(Transformed::yes(input))
 }
 
 #[cfg(test)]
@@ -808,8 +812,9 @@ mod tests_statistical {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan =
-            plan.transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))?;
+        let new_plan = plan
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .data()?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;

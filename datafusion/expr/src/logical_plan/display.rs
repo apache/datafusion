@@ -16,12 +16,14 @@
 // under the License.
 //! This module provides logic for displaying LogicalPlans in various styles
 
+use std::fmt;
+
 use crate::LogicalPlan;
+
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
-use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::DataFusionError;
-use std::fmt;
 
 /// Formats plans with a single line per node. For example:
 ///
@@ -49,12 +51,12 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(
+    fn f_down(
         &mut self,
         plan: &LogicalPlan,
-    ) -> datafusion_common::Result<VisitRecursion> {
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
         if self.indent > 0 {
             writeln!(self.f)?;
         }
@@ -69,15 +71,15 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
         }
 
         self.indent += 1;
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(
+    fn f_up(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> datafusion_common::Result<VisitRecursion> {
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
         self.indent -= 1;
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -171,12 +173,12 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
 }
 
 impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(
+    fn f_down(
         &mut self,
         plan: &LogicalPlan,
-    ) -> datafusion_common::Result<VisitRecursion> {
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.graphviz_builder.next_id();
 
         // Create a new graph node for `plan` such as
@@ -204,18 +206,18 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
         }
 
         self.parent_ids.push(id);
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(
+    fn f_up(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> datafusion_common::Result<VisitRecursion> {
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
         res.ok_or(DataFusionError::Internal("Fail to format".to_string()))
-            .map(|_| VisitRecursion::Continue)
+            .map(|_| TreeNodeRecursion::Continue)
     }
 }
 

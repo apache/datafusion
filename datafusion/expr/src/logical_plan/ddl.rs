@@ -22,12 +22,14 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Expr, LogicalPlan};
+use crate::{Expr, LogicalPlan, Volatility};
 
+use arrow::datatypes::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Constraints, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
 };
+use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -48,6 +50,10 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
+    /// Create function statement
+    CreateFunction(CreateFunction),
+    /// Drop function statement
+    DropFunction(DropFunction),
 }
 
 impl DdlStatement {
@@ -66,6 +72,8 @@ impl DdlStatement {
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
+            DdlStatement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
 
@@ -81,6 +89,8 @@ impl DdlStatement {
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
             DdlStatement::DropCatalogSchema(_) => "DropCatalogSchema",
+            DdlStatement::CreateFunction(_) => "CreateFunction",
+            DdlStatement::DropFunction(_) => "DropFunction",
         }
     }
 
@@ -97,6 +107,8 @@ impl DdlStatement {
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
             DdlStatement::DropCatalogSchema(_) => vec![],
+            DdlStatement::CreateFunction(_) => vec![],
+            DdlStatement::DropFunction(_) => vec![],
         }
     }
 
@@ -155,6 +167,12 @@ impl DdlStatement {
                         ..
                     }) => {
                         write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
+                    }
+                    DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
+                    }
+                    DdlStatement::DropFunction(DropFunction { name, .. }) => {
+                        write!(f, "CreateFunction: name {name:?}")
                     }
                 }
             }
@@ -301,5 +319,68 @@ pub struct DropCatalogSchema {
     /// Whether drop should cascade
     pub cascade: bool,
     /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Arguments passed to `CREATE FUNCTION`
+///
+/// Note this meant to be the same as from sqlparser's [`sqlparser::ast::Statement::CreateFunction`]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateFunction {
+    // TODO: There is open question should we expose sqlparser types or redefine them here?
+    //       At the moment it make more sense to expose sqlparser types and leave
+    //       user to convert them as needed
+    pub or_replace: bool,
+    pub temporary: bool,
+    pub name: String,
+    pub args: Option<Vec<OperateFunctionArg>>,
+    pub return_type: Option<DataType>,
+    pub params: CreateFunctionBody,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct OperateFunctionArg {
+    // TODO: figure out how to support mode
+    // pub mode: Option<ArgMode>,
+    pub name: Option<Ident>,
+    pub data_type: DataType,
+    pub default_expr: Option<Expr>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateFunctionBody {
+    /// LANGUAGE lang_name
+    pub language: Option<Ident>,
+    /// IMMUTABLE | STABLE | VOLATILE
+    pub behavior: Option<Volatility>,
+    /// AS 'definition'
+    pub as_: Option<DefinitionStatement>,
+    /// RETURN expression
+    pub return_: Option<Expr>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum DefinitionStatement {
+    SingleQuotedDef(String),
+    DoubleDollarDef(String),
+}
+
+impl From<sqlparser::ast::FunctionDefinition> for DefinitionStatement {
+    fn from(value: sqlparser::ast::FunctionDefinition) -> Self {
+        match value {
+            sqlparser::ast::FunctionDefinition::SingleQuotedDef(s) => {
+                Self::SingleQuotedDef(s)
+            }
+            sqlparser::ast::FunctionDefinition::DoubleDollarDef(s) => {
+                Self::DoubleDollarDef(s)
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct DropFunction {
+    pub name: String,
+    pub if_exists: bool,
     pub schema: DFSchemaRef,
 }

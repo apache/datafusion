@@ -17,11 +17,11 @@
 
 //! Execution functions
 
+use datafusion_common::instant::Instant;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-use std::time::Instant;
 
 use crate::print_format::PrintFormat;
 use crate::{

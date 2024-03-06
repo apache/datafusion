@@ -17,6 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
@@ -37,9 +38,10 @@ use std::sync::Arc;
 /// functions you supply such name, type signature, return type, and actual
 /// implementation.
 ///
-/// 1. For simple (less performant) use cases, use [`create_udf`] and [`simple_udf.rs`].
+/// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
-/// 2. For advanced use cases, use  [`ScalarUDFImpl`] and [`advanced_udf.rs`].
+/// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
+/// access (examples in  [`advanced_udf.rs`]).
 ///
 /// # API Note
 ///
@@ -158,6 +160,17 @@ impl ScalarUDF {
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema)
+    }
+
+    /// Do the function rewrite
+    ///
+    /// See [`ScalarUDFImpl::simplify`] for more details.
+    pub fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        self.inner.simplify(args, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -336,6 +349,33 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function specifies monotonicity behaviors for User defined scalar functions.
     fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
         Ok(None)
+    }
+
+    /// Optionally apply per-UDF simplification / rewrite rules.
+    ///
+    /// This can be used to apply function specific simplification rules during
+    /// optimization (e.g. `arrow_cast` --> `Expr::Cast`). The default
+    /// implementation does nothing.
+    ///
+    /// Note that DataFusion handles simplifying arguments and  "constant
+    /// folding" (replacing a function call with constant arguments such as
+    /// `my_add(1,2) --> 3` ). Thus, there is no need to implement such
+    /// optimizations manually for specific UDFs.
+    ///
+    /// # Arguments
+    /// * 'args': The arguments of the function
+    /// * 'schema': The schema of the function
+    ///
+    /// # Returns
+    /// [`ExprSimplifyResult`] indicating the result of the simplification NOTE
+    /// if the function cannot be simplified, the arguments *MUST* be returned
+    /// unmodified
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        Ok(ExprSimplifyResult::Original(args))
     }
 }
 

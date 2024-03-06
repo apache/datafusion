@@ -941,6 +941,25 @@ select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integ
 NaN 10 NaN
 NaN 100 NaN
 
+# sqrt scalar fraction
+query RR rowsort
+select sqrt(1.4), sqrt(2.0/3);
+----
+1.18321595662 0.816496580928
+
+# sqrt scalar cast
+query R rowsort
+select sqrt(cast(10e8 as double));
+----
+31622.776601683792
+
+
+# sqrt scalar negative
+query R rowsort
+select sqrt(-1);
+----
+NaN
+
 ## tan
 
 # tan scalar function
@@ -1858,7 +1877,7 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error DataFusion error: Failed to coerce arguments for NULLIF
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.
 SELECT nullif(1);
 
 
@@ -2023,5 +2042,5 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The INSTR/POSITION function can only accept strings, but got Int64.
+query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)

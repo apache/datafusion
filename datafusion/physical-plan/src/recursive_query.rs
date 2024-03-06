@@ -30,7 +30,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -317,16 +317,17 @@ fn assign_work_table(
                 )
             } else {
                 work_table_refs += 1;
-                Ok(Transformed::Yes(Arc::new(
+                Ok(Transformed::yes(Arc::new(
                     exec.with_work_table(work_table.clone()),
                 )))
             }
         } else if plan.as_any().is::<RecursiveQueryExec>() {
             not_impl_err!("Recursive queries cannot be nested")
         } else {
-            Ok(Transformed::No(plan))
+            Ok(Transformed::no(plan))
         }
     })
+    .data()
 }
 
 impl Stream for RecursiveQueryStream {
