@@ -24,7 +24,6 @@ pub mod conditional_expressions;
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod equivalence;
-pub mod execution_props;
 pub mod expressions;
 pub mod functions;
 pub mod intervals;
@@ -32,8 +31,6 @@ pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
 mod scalar_function;
 mod sort_expr;
 pub mod sort_properties;
@@ -44,8 +41,13 @@ pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod utils;
-pub mod var_provider;
 pub mod window;
+
+// backwards compatibility
+pub mod execution_props {
+    pub use datafusion_expr::execution_props::ExecutionProps;
+    pub use datafusion_expr::var_provider::{VarProvider, VarType};
+}
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use aggregate::AggregateExpr;

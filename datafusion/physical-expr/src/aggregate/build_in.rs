@@ -46,6 +46,7 @@ pub fn create_aggregate_expr(
     ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the result data type for this aggregate function
@@ -359,13 +360,16 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Median, true) => {
             return not_impl_err!("MEDIAN(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
-            input_phy_exprs[0].clone(),
-            name,
-            input_phy_types[0].clone(),
-            ordering_req.to_vec(),
-            ordering_types,
-        )),
+        (AggregateFunction::FirstValue, _) => Arc::new(
+            expressions::FirstValue::new(
+                input_phy_exprs[0].clone(),
+                name,
+                input_phy_types[0].clone(),
+                ordering_req.to_vec(),
+                ordering_types,
+            )
+            .with_ignore_nulls(ignore_nulls),
+        ),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
@@ -1308,7 +1312,15 @@ mod tests {
                 "Invalid or wrong number of arguments passed to aggregate: '{name}'"
             );
         }
-        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
+        create_aggregate_expr(
+            fun,
+            distinct,
+            &coerced_phy_exprs,
+            &[],
+            input_schema,
+            name,
+            false,
+        )
     }
 
     // Returns the coerced exprs for each `input_exprs`.

@@ -40,6 +40,7 @@ mod udwf;
 
 pub mod aggregate_function;
 pub mod conditional_expressions;
+pub mod execution_props;
 pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
@@ -49,9 +50,11 @@ pub mod function;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod simplify;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
+pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 

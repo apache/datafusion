@@ -16,9 +16,13 @@
 // under the License.
 
 use arrow::compute::kernels::numeric::add;
-use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, RecordBatch, UInt8Array};
+use arrow_array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Float32Array, Float64Array, Int32Array,
+    RecordBatch, UInt8Array,
+};
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::as_float64_array;
@@ -26,10 +30,15 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
     plan_err, ExprSchema, Result, ScalarValue,
 };
+use datafusion_expr::simplify::ExprSimplifyResult;
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    create_udaf, create_udf, Accumulator, ColumnarValue, ExprSchemable,
+    create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+use parking_lot::Mutex;
+
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
@@ -515,6 +524,101 @@ async fn deregister_udf() -> Result<()> {
 }
 
 #[derive(Debug)]
+struct CastToI64UDF {
+    signature: Signature,
+}
+
+impl CastToI64UDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for CastToI64UDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "cast_to_i64"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    // Demonstrate simplifying a UDF
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        // DataFusion should have ensured the function is called with just a
+        // single argument
+        assert_eq!(args.len(), 1);
+        let arg = args.pop().unwrap();
+
+        // Note that Expr::cast_to requires an ExprSchema but simplify gets a
+        // SimplifyInfo so we have to replicate some of the casting logic here.
+
+        let source_type = info.get_data_type(&arg)?;
+        let new_expr = if source_type == DataType::Int64 {
+            // the argument's data type is already the correct type
+            arg
+        } else {
+            // need to use an actual cast to get the correct type
+            Expr::Cast(datafusion_expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Int64,
+            })
+        };
+        // return the newly written argument to DataFusion
+        Ok(ExprSimplifyResult::Simplified(new_expr))
+    }
+
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        unimplemented!("Function should have been simplified prior to evaluation")
+    }
+}
+
+#[tokio::test]
+async fn test_user_defined_functions_cast_to_i64() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, false)]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]))],
+    )?;
+
+    ctx.register_batch("t", batch)?;
+
+    let cast_to_i64_udf = ScalarUDF::from(CastToI64UDF::new());
+    ctx.register_udf(cast_to_i64_udf);
+
+    let result = plan_and_collect(&ctx, "SELECT cast_to_i64(x) FROM t").await?;
+
+    assert_batches_eq!(
+        &[
+            "+------------------+",
+            "| cast_to_i64(t.x) |",
+            "+------------------+",
+            "| 1                |",
+            "| 2                |",
+            "| 3                |",
+            "+------------------+"
+        ],
+        &result
+    );
+
+    Ok(())
+}
+
+#[derive(Debug)]
 struct TakeUDF {
     signature: Signature,
 }
@@ -631,6 +735,128 @@ async fn verify_udf_return_type() -> Result<()> {
         "+-------+-------+",
     ];
     assert_batches_sorted_eq!(&expected, &df.collect().await?);
+
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct MockFunctionFactory {
+    pub captured_expr: Mutex<Option<Expr>>,
+}
+
+#[async_trait::async_trait]
+impl FunctionFactory for MockFunctionFactory {
+    #[doc = r" Crates and registers a function from [CreateFunction] statement"]
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    async fn create(
+        &self,
+        _config: &SessionConfig,
+        statement: CreateFunction,
+    ) -> datafusion::error::Result<RegisterFunction> {
+        // In this example, we always create a function that adds its arguments
+        // with the name specified in `CREATE FUNCTION`. In a real implementation
+        // the body of the created UDF would also likely be a function of the contents
+        // of the `CreateFunction`
+        let mock_add = Arc::new(|args: &[datafusion_expr::ColumnarValue]| {
+            let args = datafusion_expr::ColumnarValue::values_to_arrays(args)?;
+            let base =
+                datafusion_common::cast::as_float64_array(&args[0]).expect("cast failed");
+            let exponent =
+                datafusion_common::cast::as_float64_array(&args[1]).expect("cast failed");
+
+            let array = base
+                .iter()
+                .zip(exponent.iter())
+                .map(|(base, exponent)| match (base, exponent) {
+                    (Some(base), Some(exponent)) => Some(base.add_wrapping(exponent)),
+                    _ => None,
+                })
+                .collect::<arrow_array::Float64Array>();
+            Ok(datafusion_expr::ColumnarValue::from(
+                Arc::new(array) as arrow_array::ArrayRef
+            ))
+        });
+
+        let args = statement.args.unwrap();
+        let mock_udf = create_udf(
+            &statement.name,
+            vec![args[0].data_type.clone(), args[1].data_type.clone()],
+            Arc::new(statement.return_type.unwrap()),
+            datafusion_expr::Volatility::Immutable,
+            mock_add,
+        );
+
+        // capture expression so we can verify
+        // it has been parsed
+        *self.captured_expr.lock() = statement.params.return_;
+
+        Ok(RegisterFunction::Scalar(Arc::new(mock_udf)))
+    }
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement() -> Result<()> {
+    let function_factory = Arc::new(MockFunctionFactory::default());
+    let runtime_config = RuntimeConfig::new();
+    let runtime_environment = RuntimeEnv::new(runtime_config)?;
+
+    let session_config = SessionConfig::new();
+    let state =
+        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
+            .with_function_factory(function_factory.clone());
+
+    let ctx = SessionContext::new_with_state(state);
+    let options = SQLOptions::new().with_allow_ddl(false);
+
+    let sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+
+    // try to `create function` when sql options have allow ddl disabled
+    assert!(ctx.sql_with_options(sql, options).await.is_err());
+
+    // Create the `better_add` function dynamically via CREATE FUNCTION statement
+    assert!(ctx.sql(sql).await.is_ok());
+    // try to `drop function` when sql options have allow ddl disabled
+    assert!(ctx
+        .sql_with_options("drop function better_add", options)
+        .await
+        .is_err());
+
+    ctx.sql("select better_add(2.0, 2.0)").await?.show().await?;
+
+    // check if we sql expr has been converted to datafusion expr
+    let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
+    assert_eq!("$1 + $2", captured_expression.to_string());
+
+    // statement drops  function
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+    // no function, it panics
+    assert!(ctx.sql("drop function better_add").await.is_err());
+    // no function, it dies not care
+    assert!(ctx.sql("drop function if exists better_add").await.is_ok());
+    // query should fail as there is no function
+    assert!(ctx.sql("select better_add(2.0, 2.0)").await.is_err());
+
+    // tests expression parsing
+    // if expression is not correct
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_err());
+
+    // tests bad function definition
+    let bad_definition_sql = r#"
+    CREATE FUNCTION bad_definition_fun(DOUBLE, DOUBLE)
+        RET BAD_TYPE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_definition_sql).await.is_err());
 
     Ok(())
 }

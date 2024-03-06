@@ -225,6 +225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 agg_func.distinct,
                                 agg_func.filter.clone(),
                                 agg_func.order_by.clone(),
+                                agg_func.null_treatment,
                             )), true)
                         },
                         _ => (expr, false),
@@ -629,6 +630,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             distinct,
             None,
             order_by,
+            None,
         )))
         // see if we can rewrite it into NTH-VALUE
     }
@@ -779,6 +781,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 args,
                 distinct,
                 order_by,
+                null_treatment,
                 ..
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
@@ -790,6 +793,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                 )?)),
                 order_by,
+                null_treatment,
             ))),
             _ => plan_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
