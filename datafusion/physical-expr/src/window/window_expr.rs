@@ -266,11 +266,13 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Start search from the last_range. This squeezes searched range.
             let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
+            if cur_range.end == length && contains_most_recent_row{
+                break;
+            }
             // Exit if the range is non-causal and extends all the way:
             if cur_range.end == length
                 && !is_causal
                 && not_end
-                // && !contains_most_recent_row
             {
                 break;
             }
