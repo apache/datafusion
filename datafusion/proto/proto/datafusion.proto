@@ -607,7 +607,7 @@ enum ScalarFunction {
   // 56 was ToTimestampMillis
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
-  Now = 59;
+  // 59 was Now
   Translate = 60;
   Trim = 61;
   Upper = 62;

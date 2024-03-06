@@ -457,12 +457,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
             make_scalar_function_inner(string_expressions::concat_ws)(args)
         }),
-        BuiltinScalarFunction::Now => {
-            // bind value for now at plan time
-            Arc::new(datetime_expressions::make_now(
-                execution_props.query_execution_start_time,
-            ))
-        }
         BuiltinScalarFunction::CurrentDate => {
             // bind value for current_date at plan time
             Arc::new(datetime_expressions::make_current_date(
@@ -2839,7 +2833,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let funs = [
-            BuiltinScalarFunction::Now,
             BuiltinScalarFunction::Pi,
             BuiltinScalarFunction::Random,
             BuiltinScalarFunction::Uuid,

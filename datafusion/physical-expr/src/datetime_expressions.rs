@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::TimeUnit;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow::{
     array::{Array, ArrayRef, PrimitiveArray},
@@ -35,12 +34,6 @@ use chrono::NaiveDate;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-/// Create an implementation of `now()` that always returns the
-/// specified timestamp.
-///
-/// The semantics of `now()` require it to return the same value
-/// wherever it appears within a single statement. This value is
-/// chosen during planning time.
 pub fn make_now(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {

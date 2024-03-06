@@ -1099,8 +1099,7 @@ impl BuiltinScalarFunction {
                 // will be as good as the number of digits in the number
                 Signature::uniform(1, vec![Float64, Float32], self.volatility())
             }
-            BuiltinScalarFunction::CurrentDate
-            | BuiltinScalarFunction::CurrentTime => {
+            BuiltinScalarFunction::CurrentDate | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
             BuiltinScalarFunction::MakeDate => Signature::uniform(

@@ -2696,14 +2696,14 @@ pub enum ScalarFunction {
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
-    Now = 59,
+    /// 59 was Now
     Translate = 60,
     Trim = 61,
     Upper = 62,
     Coalesce = 63,
     Power = 64,
     StructFun = 65,
-    FromUnixtime = 66,
+    /// 66 was FromUnixtime
     Atan2 = 67,
     /// 68 was DateBin
     ArrowTypeof = 69,
@@ -2830,14 +2830,12 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
             ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::StructFun => "StructFun",
-            ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::ArrowTypeof => "ArrowTypeof",
             ScalarFunction::CurrentDate => "CurrentDate",
@@ -2949,14 +2947,12 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
             "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "StructFun" => Some(Self::StructFun),
-            "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
             "ArrowTypeof" => Some(Self::ArrowTypeof),
             "CurrentDate" => Some(Self::CurrentDate),

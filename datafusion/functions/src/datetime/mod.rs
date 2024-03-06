@@ -26,15 +26,20 @@ mod date_bin;
 mod date_part;
 mod date_trunc;
 mod from_unixtime;
+mod now;
 mod to_date;
 mod to_timestamp;
-mod now;
 
 // create UDFs
 make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
 make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
-make_udf_function!(from_unixtime::FromUnixtimeFunc, FROM_UNIXTIME, from_unixtime);
+make_udf_function!(
+    from_unixtime::FromUnixtimeFunc,
+    FROM_UNIXTIME,
+    from_unixtime
+);
+make_udf_function!(now::NowFunc, NOW, now);
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
@@ -79,11 +84,16 @@ pub mod expr_fn {
         super::date_trunc().call(args)
     }
 
-    #[doc = "todo -fixme"]
-    pub fn from_unixtime(args: Vec<Expr>) -> Expr {
-        super::from_unixtime().call(args)
+    #[doc = "converts an integer to RFC3339 timestamp format"]
+    pub fn from_unixtime(unixtime: Expr) -> Expr {
+        super::from_unixtime().call(vec![unixtime])
     }
-    
+
+    #[doc = "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement"]
+    pub fn now() -> Expr {
+        super::now().call(vec![])
+    }
+
     /// ```ignore
     /// # use std::sync::Arc;
     ///
@@ -166,6 +176,8 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_bin(),
         date_part(),
         date_trunc(),
+        from_unixtime(),
+        now(),
         to_date(),
         to_timestamp(),
         to_timestamp_seconds(),

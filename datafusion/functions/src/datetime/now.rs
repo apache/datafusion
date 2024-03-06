@@ -18,11 +18,12 @@
 use std::any::Any;
 
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Int64, Timestamp};
-use arrow::datatypes::TimeUnit::{Nanosecond, Second};
+use arrow::datatypes::DataType::Timestamp;
+use arrow::datatypes::TimeUnit::Nanosecond;
 
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub(super) struct NowFunc {
@@ -37,6 +38,12 @@ impl NowFunc {
     }
 }
 
+/// Create an implementation of `now()` that always returns the
+/// specified timestamp.
+///
+/// The semantics of `now()` require it to return the same value
+/// wherever it appears within a single statement. This value is
+/// chosen during planning time.
 impl ScalarUDFImpl for NowFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -54,5 +61,21 @@ impl ScalarUDFImpl for NowFunc {
         Ok(Timestamp(Nanosecond, Some("+00:00".into())))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {}
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        todo!()
+    }
+
+    fn simplify(
+        &self,
+        _args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let now_ts = info
+            .execution_props()
+            .query_execution_start_time
+            .timestamp_nanos_opt();
+        Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+            ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+        )))
+    }
 }

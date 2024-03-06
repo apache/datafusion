@@ -56,12 +56,12 @@ use datafusion_expr::{
     ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
     current_date, current_time, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, iszero, lcm,
-    left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, gcd, initcap, iszero, lcm, left, levenshtein,
+    ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
-    sha512, signum, sin, sinh, split_part, sqrt, starts_with, string_to_array, strpos,
+    lower, lpad, ltrim, md5, nanvl, octet_length, overlay, pi, power, radians, random,
+    repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384, sha512,
+    signum, sin, sinh, split_part, sqrt, starts_with, string_to_array, strpos,
     struct_fun, substr, substr_index, substring, tan, tanh, to_hex, translate, trim,
     trunc, upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
     BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
@@ -538,7 +538,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
             ScalarFunction::ToChar => Self::ToChar,
-            ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
             ScalarFunction::MakeDate => Self::MakeDate,
@@ -548,7 +547,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
-            ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
@@ -1751,7 +1749,6 @@ pub fn parse_expr(
                         args,
                     )))
                 }
-                ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1772,9 +1769,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::FromUnixtime => {
-                    Ok(from_unixtime(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
