@@ -158,15 +158,6 @@ impl MemoryExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        Self::try_new_with_show_sizes(partitions, schema, projection, true)
-    }
-
-    pub fn try_new_with_show_sizes(
-        partitions: &[Vec<RecordBatch>],
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        show_sizes: bool,
-    ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         let cache = Self::compute_properties(projected_schema.clone(), &[], partitions);
         Ok(Self {
@@ -176,8 +167,14 @@ impl MemoryExec {
             projection,
             sort_information: vec![],
             cache,
-            show_sizes,
+            show_sizes: true,
         })
+    }
+
+    /// set `show_sizes` to determine whether to display partition sizes
+    pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
+        self.show_sizes = show_sizes;
+        self
     }
 
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {

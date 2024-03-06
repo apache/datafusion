@@ -216,13 +216,12 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
+
+        let mut exec =
+            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+
         let show_sizes = state.config_options().explain.show_sizes;
-        let mut exec = MemoryExec::try_new_with_show_sizes(
-            &partitions,
-            self.schema(),
-            projection.cloned(),
-            show_sizes,
-        )?;
+        exec = exec.with_show_sizes(show_sizes);
 
         // add sort information if present
         let sort_order = self.sort_order.lock();
