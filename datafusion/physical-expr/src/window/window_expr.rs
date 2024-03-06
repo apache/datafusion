@@ -273,14 +273,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             if cur_range.end == length && !is_causal && not_end {
                 break;
             }
-            if contains_most_recent_row {
-                if cur_range.start == length {
-                    cur_range.start -= 1;
-                }
-                if cur_range.end == length {
-                    cur_range.end -= 1
-                }
-            }
             let value = self.get_aggregate_result_inside_range(
                 last_range,
                 &cur_range,
