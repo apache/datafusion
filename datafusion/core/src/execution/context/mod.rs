@@ -1680,7 +1680,7 @@ impl SessionState {
         self.table_option_namespace.extensions.insert(extension);
         self
     }
-    
+
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn with_function_factory(
         mut self,

@@ -17,7 +17,6 @@
 
 //! Interval parsing logic
 use sqlparser::parser::ParserError;
-use std::fmt::Display;
 
 use std::fmt::Display;
 use std::result;

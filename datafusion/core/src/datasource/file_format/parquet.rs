@@ -258,8 +258,6 @@ impl FileFormat for ParquetFormat {
         // will not prune data based on the statistics.
         let predicate = self.enable_pruning().then(|| filters.cloned()).flatten();
 
-        println!("self.options {:?}", self.options);
-
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
@@ -280,7 +278,6 @@ impl FileFormat for ParquetFormat {
         }
 
         let sink_schema = conf.output_schema().clone();
-        println!("self.options.clone() {:?}", self.options);
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(FileSinkExec::new(
@@ -647,8 +644,6 @@ impl DataSink for ParquetSink {
     ) -> Result<u64> {
         let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
 
-        println!("parquet_props {:?}", parquet_props);
-
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
@@ -712,7 +707,6 @@ impl DataSink for ParquetSink {
                 let schema = self.get_writer_schema();
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
-                println!("props.writer_options() {:?}", props.writer_options());
                 file_write_tasks.spawn(async move {
                     output_single_parquet_file_parallelized(
                         writer,
@@ -988,7 +982,6 @@ async fn output_single_parquet_file_parallelized(
         mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
     let arc_props = Arc::new(parquet_props.clone());
-    println!("arc_props {:?}", arc_props);
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         data,
         serialize_tx,

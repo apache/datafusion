@@ -33,10 +33,10 @@ use arrow_schema::DataType;
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, FileType,
-    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
-    TableReference, ToDFSchema,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
+    SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
