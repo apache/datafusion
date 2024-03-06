@@ -42,7 +42,7 @@ use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
 use arrow_array::StringArray;
-use chrono::prelude::*;
+use chrono::{prelude::*, TimeDelta};
 use chrono::{Duration, LocalResult, Months, NaiveDate};
 
 use datafusion_common::cast::{
@@ -451,7 +451,9 @@ where
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
-            .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
+            .map(|d| {
+                d - TimeDelta::try_seconds(60 * 60 * 24 * d.weekday() as i64).unwrap()
+            }),
         "month" => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
@@ -495,7 +497,7 @@ fn _date_trunc_coarse_with_tz(
                     // To account for this adjust the time by a few hours, convert to local time,
                     // and then adjust the time back.
                     truncated
-                        .sub(Duration::hours(3))
+                        .sub(TimeDelta::try_hours(3).unwrap())
                         .and_local_timezone(value.timezone())
                         .single()
                         .map(|v| v.add(Duration::hours(3)))
@@ -526,7 +528,7 @@ fn _date_trunc_coarse_without_tz(
     value: Option<NaiveDateTime>,
 ) -> Result<Option<i64>> {
     let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
-    Ok(value.and_then(|value| value.timestamp_nanos_opt()))
+    Ok(value.and_then(|value| value.and_utc().timestamp_nanos_opt()))
 }
 
 /// Tuncates the single `value`, expressed in nanoseconds since the
@@ -750,8 +752,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
 fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
-    let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
+    DateTime::from_timestamp(secs, nsec).unwrap()
 }
 
 /// DATE_BIN sql function
@@ -806,8 +807,9 @@ fn date_bin_impl(
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
-            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
-                .num_nanoseconds();
+            let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                + TimeDelta::try_milliseconds(ms as i64).unwrap())
+            .num_nanoseconds();
 
             match nanos {
                 Some(v) => Interval::Nanoseconds(v),
@@ -828,8 +830,9 @@ fn date_bin_impl(
                     Interval::Months(months as i64)
                 }
             } else {
-                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
-                    .num_nanoseconds();
+                let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                    + Duration::nanoseconds(nanos))
+                .num_nanoseconds();
                 match nanos {
                     Some(v) => Interval::Nanoseconds(v),
                     _ => return exec_err!("DATE_BIN stride argument is too large"),
