@@ -349,6 +349,10 @@ trait PartitionSearcher: Send {
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Option<Vec<ArrayRef>>>;
 
+    fn is_mode_linear(&self) -> bool {
+        false
+    }
+
     // Constructs corresponding batches for each partition for the record_batch.
     fn evaluate_partition_batches(
         &mut self,
@@ -383,9 +387,11 @@ trait PartitionSearcher: Send {
             partition_batch_state.extend(&partition_batch)?;
         }
 
-        let last_row = get_last_row_batch(&record_batch)?;
-        for (_partition_row, partition_batch) in partition_buffers.iter_mut() {
-            partition_batch.set_most_recent_row(last_row.clone());
+        if self.is_mode_linear() {
+            let last_row = get_last_row_batch(&record_batch)?;
+            for (_partition_row, partition_batch) in partition_buffers.iter_mut() {
+                partition_batch.set_most_recent_row(last_row.clone());
+            }
         }
 
         self.mark_partition_end(partition_buffers);
@@ -560,6 +566,10 @@ impl PartitionSearcher for LinearSearch {
                 }
             }
         }
+    }
+
+    fn is_mode_linear(&self) -> bool {
+        self.ordered_partition_by_indices.is_empty()
     }
 }
 
@@ -1132,7 +1142,6 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use crate::common::collect;
     use crate::memory::MemoryExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
@@ -1163,6 +1172,8 @@ mod tests {
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
 
+    use crate::common::collect;
+    use crate::projection::ProjectionExec;
     use itertools::Itertools;
 
     #[derive(Debug, Clone)]
@@ -1252,20 +1263,27 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
         n_future_range: usize,
         hash: &str,
+        order_by: &str,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
         let window_fn =
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count);
-        let fn_name = "count".to_string();
         let col_expr =
             Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
         let args = vec![col_expr];
         let partitionby_exprs = vec![col(hash, &schema)?];
-        let orderby_exprs = input.output_ordering().unwrap()[0..1].to_vec();
+        let orderby_exprs = vec![PhysicalSortExpr {
+            expr: col(order_by, &schema)?,
+            options: SortOptions::default(),
+        }];
         let window_frame = WindowFrame::new_bounds(
             WindowFrameUnits::Range,
             WindowFrameBound::CurrentRow,
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n_future_range as u64))),
+        );
+        let fn_name = format!(
+            "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
+            window_fn, args, partitionby_exprs, orderby_exprs
         );
         let input_order_mode = InputOrderMode::Linear;
         Ok(Arc::new(BoundedWindowAggExec::try_new(
@@ -1283,6 +1301,26 @@ mod tests {
             partitionby_exprs,
             input_order_mode,
         )?))
+    }
+
+    fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = input.schema();
+        let exprs = input
+            .schema()
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                let name = if field.name().len() > 20 {
+                    format!("col_{idx}")
+                } else {
+                    field.name().clone()
+                };
+                let expr = col(field.name(), &schema).unwrap();
+                (expr, name)
+            })
+            .collect::<Vec<_>>();
+        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
     }
 
     fn task_context_helper() -> TaskContext {
@@ -1325,6 +1363,18 @@ mod tests {
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
         };
+
+        Ok(results)
+    }
+
+    /// Execute the [ExecutionPlan] and collect the results in memory
+    pub async fn collect_bonafide(
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+    ) -> Result<Vec<RecordBatch>> {
+        let stream = execute_stream(plan, context)?;
+        let mut results = vec![];
+        collect_stream(stream, &mut results).await?;
 
         Ok(results)
     }
@@ -1579,15 +1629,19 @@ mod tests {
         let source =
             generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;
 
-        let plan = bounded_window_exec_pb_latent_range(
+        let window = bounded_window_exec_pb_latent_range(
             source,
             n_future_range,
             "duplicated_hash",
+            "sn",
         )?;
 
+        let plan = projection_exec(window)?;
+
         let expected_plan = vec![
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
-            "  StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
+            "ProjectionExec: expr=[sn@0 as sn, sn_clone@1 as sn_clone, single_hash@2 as single_hash, duplicated_hash@3 as duplicated_hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@4 as col_4]",
+            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"duplicated_hash\\\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
+            "    StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
         ];
 
         // Get string representation of the plan
@@ -1602,7 +1656,7 @@ mod tests {
 
         let expected = [
             "+----+----------+-------------+-----------------+-------+",
-            "| sn | sn_clone | single_hash | duplicated_hash | count |",
+            "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
             "+----+----------+-------------+-----------------+-------+",
             "| 0  | 0        | 0           | 0               | 2     |",
             "| 1  | 1        | 0           | 0               | 2     |",
@@ -1612,6 +1666,57 @@ mod tests {
             "| 5  | 5        | 0           | 1               | 2     |",
             "| 6  | 6        | 0           | 1               | 2     |",
             "| 7  | 7        | 0           | 1               | 1     |",
+            "+----+----------+-------------+-----------------+-------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bounded_window_exec_linear_mode_range_information2() -> Result<()> {
+        let n_rows = 10;
+        let chunk_length = 2;
+        let n_future_range = 1;
+
+        let timeout_duration = Duration::from_millis(2000);
+
+        let source =
+            generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;
+
+        let window = bounded_window_exec_pb_latent_range(
+            source,
+            n_future_range,
+            "duplicated_hash",
+            "duplicated_hash",
+        )?;
+
+        let plan = projection_exec(window)?;
+
+        let expected_plan = vec![
+            "ProjectionExec: expr=[sn@0 as sn, sn_clone@1 as sn_clone, single_hash@2 as single_hash, duplicated_hash@3 as duplicated_hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"duplicated_hash\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]@4 as col_4]",
+            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"duplicated_hash\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"duplicated_hash\\\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"duplicated_hash\\\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
+            "    StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&plan);
+        assert_eq!(
+            expected_plan, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_plan:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let task_ctx = task_context();
+        let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
+
+        let expected = [
+            "+----+----------+-------------+-----------------+-------+",
+            "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
+            "+----+----------+-------------+-----------------+-------+",
+            "| 0  | 0        | 0           | 0               | 4     |",
+            "| 1  | 1        | 0           | 0               | 4     |",
+            "| 2  | 2        | 0           | 0               | 4     |",
+            "| 3  | 3        | 0           | 0               | 4     |",
             "+----+----------+-------------+-----------------+-------+",
         ];
         assert_batches_eq!(expected, &batches);

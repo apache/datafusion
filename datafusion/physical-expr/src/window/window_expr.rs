@@ -266,6 +266,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
+            // println!("idx:{idx}, length:{length}, last_range:{:?}, cur_range: {:?}, contains_most_recent_row:{contains_most_recent_row}", last_range, cur_range);
             if cur_range.end == length && contains_most_recent_row && not_end {
                 break;
             }
@@ -315,10 +316,13 @@ pub(crate) fn is_record_batch_ahead(
     current_batch: &RecordBatch,
     sort_exprs: LexOrderingRef,
 ) -> Result<bool> {
-    if old_batch.num_rows() == 0 || current_batch.num_rows() == 0{
+    if old_batch.num_rows() == 0 || current_batch.num_rows() == 0 {
         return Ok(false);
     }
+    // return Ok(false);
+    // println!("OLD BATCH");
     // print_batches(&[old_batch.clone()])?;
+    // println!("NEW BATCH");
     // print_batches(&[current_batch.clone()])?;
     let last_row = get_last_order_values(old_batch, sort_exprs)?;
     let current_row = get_last_order_values(current_batch, sort_exprs)?;
