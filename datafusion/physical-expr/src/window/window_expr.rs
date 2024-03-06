@@ -264,9 +264,9 @@ pub trait AggregateWindowExpr: WindowExpr {
         let is_causal = self.get_window_frame().is_causal();
         while idx < end_point {
             // Start search from the last_range. This squeezes searched range.
-            let mut cur_range =
+            let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            if cur_range.end == length && contains_most_recent_row {
+            if cur_range.end == length && contains_most_recent_row && not_end {
                 break;
             }
             // Exit if the range is non-causal and extends all the way:
@@ -315,6 +315,9 @@ pub(crate) fn is_record_batch_ahead(
     current_batch: &RecordBatch,
     sort_exprs: LexOrderingRef,
 ) -> Result<bool> {
+    if old_batch.num_rows() == 0 || current_batch.num_rows() == 0{
+        return Ok(false);
+    }
     // print_batches(&[old_batch.clone()])?;
     // print_batches(&[current_batch.clone()])?;
     let last_row = get_last_order_values(old_batch, sort_exprs)?;
