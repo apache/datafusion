@@ -264,15 +264,23 @@ pub trait AggregateWindowExpr: WindowExpr {
         let is_causal = self.get_window_frame().is_causal();
         while idx < end_point {
             // Start search from the last_range. This squeezes searched range.
-            let cur_range =
+            let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // println!("idx:{idx}, length:{length}, last_range:{:?}, cur_range: {:?}, contains_most_recent_row:{contains_most_recent_row}", last_range, cur_range);
             if cur_range.end == length && contains_most_recent_row && not_end {
                 break;
             }
             // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length && !is_causal && not_end {
+            if cur_range.end == length && !is_causal && not_end && !contains_most_recent_row {
                 break;
+            }
+            if contains_most_recent_row {
+                if cur_range.start == length{
+                    cur_range.start = cur_range.start -1;
+                }
+                if cur_range.end == length{
+                    cur_range.end = cur_range.end -1;
+                }
             }
             let value = self.get_aggregate_result_inside_range(
                 last_range,
