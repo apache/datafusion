@@ -20,13 +20,14 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{PhysicalExpr, PhysicalSortExpr};
+use crate::{LexOrderingRef, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext,
@@ -233,12 +234,20 @@ pub trait AggregateWindowExpr: WindowExpr {
     ) -> Result<ArrayRef> {
         let mut contains_most_recent_row = false;
         let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
-            contains_most_recent_row = true;
-            let batch =
-                concat_batches(&record_batch.schema(), [record_batch, most_recent_row])?;
-            let values = self.evaluate_args(&batch)?;
-            let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
-            (values, order_bys)
+            if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
+                contains_most_recent_row = true;
+                let batch = concat_batches(
+                    &record_batch.schema(),
+                    [record_batch, most_recent_row],
+                )?;
+                let values = self.evaluate_args(&batch)?;
+                let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
+                (values, order_bys)
+            } else {
+                let values = self.evaluate_args(record_batch)?;
+                let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+                (values, order_bys)
+            }
         } else {
             let values = self.evaluate_args(record_batch)?;
             let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
@@ -257,17 +266,20 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Start search from the last_range. This squeezes searched range.
             let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            // println!("idx:{idx}, cur_range:{:?}, last_range:{:?}, idx: {idx}, end_point:{end_point}, contains_most_recent_row:{contains_most_recent_row} ", cur_range, last_range);
             // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length && !is_causal && not_end && !contains_most_recent_row {
+            if cur_range.end == length
+                && !is_causal
+                && not_end
+                && !contains_most_recent_row
+            {
                 break;
             }
-            if contains_most_recent_row{
+            if contains_most_recent_row {
                 if cur_range.start == length {
-                    cur_range.start = cur_range.start - 1;
+                    cur_range.start -= 1;
                 }
                 if cur_range.end == length {
-                    cur_range.end = cur_range.end - 1;
+                    cur_range.end -= 1
                 }
             }
             let value = self.get_aggregate_result_inside_range(
@@ -290,6 +302,40 @@ pub trait AggregateWindowExpr: WindowExpr {
         }
     }
 }
+
+fn get_last_order_values(
+    batch: &RecordBatch,
+    sort_exprs: LexOrderingRef,
+) -> Result<Vec<ScalarValue>> {
+    assert!(batch.num_rows() >= 1);
+    let last_row_idx = batch.num_rows() - 1;
+    let columns = sort_exprs
+        .iter()
+        .map(|expr| Ok(expr.evaluate_to_sort_column(batch)?.values))
+        .collect::<Result<Vec<_>>>()?;
+    get_row_at_idx(&columns, last_row_idx)
+}
+
+// TODO: Add unit test for this function
+/// Checks whether current_batch is ahead of old_batch
+/// in terms of sort_exprs.
+pub(crate) fn is_record_batch_ahead(
+    old_batch: &RecordBatch,
+    current_batch: &RecordBatch,
+    sort_exprs: LexOrderingRef,
+) -> Result<bool> {
+    // print_batches(&[old_batch.clone()])?;
+    // print_batches(&[current_batch.clone()])?;
+    let last_row = get_last_order_values(old_batch, sort_exprs)?;
+    let current_row = get_last_order_values(current_batch, sort_exprs)?;
+    let sort_options = sort_exprs
+        .iter()
+        .map(|sort_expr| sort_expr.options)
+        .collect::<Vec<_>>();
+    let cmp = compare_rows(&current_row, &last_row, &sort_options)?;
+    Ok(cmp.is_gt())
+}
+
 /// Get order by expression results inside `order_by_columns`.
 pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<ArrayRef> {
     order_by_columns.into_iter().map(|s| s.values).collect()
