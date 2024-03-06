@@ -983,6 +983,9 @@ arrow.apache.org 100 arrow.apache.org
 query TIT
 SELECT str, n, substring_index(str, 'ac', n) AS c FROM
   (VALUES
+    -- input string does not contain the delimiter
+    ROW('arrow'),
+    -- input string contains the delimiter
     ROW('arrow.apache.org')
   ) AS strings(str),
   (VALUES
@@ -997,6 +1000,10 @@ arrow.apache.org -2 arrow.apache.org
 arrow.apache.org -1 he.org
 arrow.apache.org 1 arrow.ap
 arrow.apache.org 2 arrow.apache.org
+arrow -2 arrow
+arrow -1 arrow
+arrow 1 arrow
+arrow 2 arrow
 
 # Test substring_index with NULL values
 query ?TT?
