@@ -232,55 +232,25 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let mut contains_most_recent_row = false;
-        let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
+        let mut safe_to_use_end_index = false;
+        if let Some(most_recent_row) = most_recent_row {
             if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
-                contains_most_recent_row = true;
-                let batch = concat_batches(
-                    &record_batch.schema(),
-                    [record_batch, most_recent_row],
-                )?;
-                let values = self.evaluate_args(&batch)?;
-                let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
-                (values, order_bys)
-            } else {
-                let values = self.evaluate_args(record_batch)?;
-                let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-                (values, order_bys)
+                safe_to_use_end_index = true;
             }
-        } else {
-            let values = self.evaluate_args(record_batch)?;
-            let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-            (values, order_bys)
-        };
+        }
+        let values = self.evaluate_args(record_batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let end_point = if contains_most_recent_row {
-            length - 1
-        } else {
-            length
-        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         let is_causal = self.get_window_frame().is_causal();
-        while idx < end_point {
+        while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length
-                && !is_causal
-                && not_end
-                && !contains_most_recent_row
-            {
+            if cur_range.end == length && !is_causal && not_end {
                 break;
-            }
-            if contains_most_recent_row {
-                if cur_range.start == length {
-                    cur_range.start -= 1;
-                }
-                if cur_range.end == length {
-                    cur_range.end -= 1
-                }
             }
             let value = self.get_aggregate_result_inside_range(
                 last_range,
@@ -326,6 +296,11 @@ pub(crate) fn is_record_batch_ahead(
 ) -> Result<bool> {
     // print_batches(&[old_batch.clone()])?;
     // print_batches(&[current_batch.clone()])?;
+    if old_batch.num_rows() == 0 || current_batch.num_rows() == 0 {
+        // When either of the batches is empty, return false. In this case
+        // just old_batch will be used in calculations.
+        return Ok(false);
+    }
     let last_row = get_last_order_values(old_batch, sort_exprs)?;
     let current_row = get_last_order_values(current_batch, sort_exprs)?;
     let sort_options = sort_exprs
