@@ -2707,8 +2707,8 @@ pub enum ScalarFunction {
     Atan2 = 67,
     /// 68 was DateBin
     ArrowTypeof = 69,
-    CurrentDate = 70,
-    CurrentTime = 71,
+    /// 70 was CurrentDate
+    /// 71 was CurrentTime
     Uuid = 72,
     Cbrt = 73,
     Acosh = 74,
@@ -2838,8 +2838,6 @@ impl ScalarFunction {
             ScalarFunction::StructFun => "StructFun",
             ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::ArrowTypeof => "ArrowTypeof",
-            ScalarFunction::CurrentDate => "CurrentDate",
-            ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Acosh => "Acosh",
@@ -2955,8 +2953,6 @@ impl ScalarFunction {
             "StructFun" => Some(Self::StructFun),
             "Atan2" => Some(Self::Atan2),
             "ArrowTypeof" => Some(Self::ArrowTypeof),
-            "CurrentDate" => Some(Self::CurrentDate),
-            "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
             "Acosh" => Some(Self::Acosh),

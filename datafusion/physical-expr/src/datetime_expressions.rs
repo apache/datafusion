@@ -46,37 +46,6 @@ pub fn make_now(
     }
 }
 
-/// Create an implementation of `current_date()` that always returns the
-/// specified current date.
-///
-/// The semantics of `current_date()` require it to return the same value
-/// wherever it appears within a single statement. This value is
-/// chosen during planning time.
-pub fn make_current_date(
-    now_ts: DateTime<Utc>,
-) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
-    let days = Some(
-        now_ts.num_days_from_ce()
-            - NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
-                .num_days_from_ce(),
-    );
-    move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
-}
-
-/// Create an implementation of `current_time()` that always returns the
-/// specified current time.
-///
-/// The semantics of `current_time()` require it to return the same value
-/// wherever it appears within a single statement. This value is
-/// chosen during planning time.
-pub fn make_current_time(
-    now_ts: DateTime<Utc>,
-) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
-    let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
-    move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
-}
-
 /// Returns a string representation of a date, time, timestamp or duration based
 /// on a Chrono pattern.
 ///

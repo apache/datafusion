@@ -618,8 +618,8 @@ enum ScalarFunction {
   Atan2 = 67;
   // 68 was DateBin
   ArrowTypeof = 69;
-  CurrentDate = 70;
-  CurrentTime = 71;
+  // 70 was CurrentDate
+  // 71 was CurrentTime
   Uuid = 72;
   Cbrt = 73;
   Acosh = 74;

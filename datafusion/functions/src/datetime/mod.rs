@@ -22,6 +22,8 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 mod common;
+mod current_date;
+mod current_time;
 mod date_bin;
 mod date_part;
 mod date_trunc;
@@ -31,6 +33,8 @@ mod to_date;
 mod to_timestamp;
 
 // create UDFs
+make_udf_function!(current_date::CurrentDateFunc, CURRENT_DATE, current_date);
+make_udf_function!(current_time::CurrentTimeFunc, CURRENT_TIME, current_time);
 make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
 make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
@@ -69,6 +73,16 @@ make_udf_function!(
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
+    #[doc = "returns current UTC date as a Date32 value"]
+    pub fn current_date() -> Expr {
+        super::current_date().call(vec![])
+    }
+
+    #[doc = "returns current UTC time as a Time64 value"]
+    pub fn current_time() -> Expr {
+        super::current_time().call(vec![])
+    }
+
     #[doc = "coerces an arbitrary timestamp to the start of the nearest specified interval"]
     pub fn date_bin(stride: Expr, source: Expr, origin: Expr) -> Expr {
         super::date_bin().call(vec![stride, source, origin])
@@ -84,7 +98,7 @@ pub mod expr_fn {
         super::date_trunc().call(vec![part, date])
     }
 
-    #[doc = "converts an integer to RFC3339 timestamp format"]
+    #[doc = "converts an integer to RFC3339 timestamp format string"]
     pub fn from_unixtime(unixtime: Expr) -> Expr {
         super::from_unixtime().call(vec![unixtime])
     }
@@ -173,6 +187,8 @@ pub mod expr_fn {
 ///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        current_date(),
+        current_time(),
         date_bin(),
         date_part(),
         date_trunc(),

@@ -861,8 +861,6 @@ scalar_expr!(
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
-scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
-scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
@@ -1334,8 +1332,6 @@ mod test {
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
-
-        test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);

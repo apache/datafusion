@@ -33,6 +33,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use datafusion_functions::datetime;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -342,7 +343,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
-    let context_provider = MyContextProvider::default();
+    let now_udf = datetime::functions()
+        .iter()
+        .find(|f| f.name() == "now")
+        .unwrap()
+        .to_owned();
+    let context_provider = MyContextProvider::default().with_udf(now_udf);
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -362,6 +368,14 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 #[derive(Default)]
 struct MyContextProvider {
     options: ConfigOptions,
+    udfs: HashMap<String, Arc<ScalarUDF>>,
+}
+
+impl MyContextProvider {
+    fn with_udf(mut self, udf: Arc<ScalarUDF>) -> Self {
+        self.udfs.insert(udf.name().to_string(), udf);
+        self
+    }
 }
 
 impl ContextProvider for MyContextProvider {
@@ -399,8 +413,8 @@ impl ContextProvider for MyContextProvider {
         }
     }
 
-    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        None
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.udfs.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {

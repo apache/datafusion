@@ -18,39 +18,41 @@
 use std::any::Any;
 
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Timestamp;
-use arrow::datatypes::TimeUnit::Nanosecond;
+use arrow::datatypes::DataType::Date32;
+use chrono::{Datelike, NaiveDate};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub(super) struct NowFunc {
+pub(super) struct CurrentDateFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
-impl NowFunc {
+impl CurrentDateFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(0, vec![], Volatility::Stable),
+            aliases: vec![String::from("today")],
         }
     }
 }
 
-/// Create an implementation of `now()` that always returns the
-/// specified timestamp.
+/// Create an implementation of `current_date()` that always returns the
+/// specified current date.
 ///
-/// The semantics of `now()` require it to return the same value
+/// The semantics of `current_date()` require it to return the same value
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
-impl ScalarUDFImpl for NowFunc {
+impl ScalarUDFImpl for CurrentDateFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "now"
+        "current_date"
     }
 
     fn signature(&self) -> &Signature {
@@ -58,11 +60,17 @@ impl ScalarUDFImpl for NowFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+        Ok(Date32)
     }
 
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        internal_err!("invoke should not be called on a simplified now() function")
+        internal_err!(
+            "invoke should not be called on a simplified current_date() function"
+        )
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn simplify(
@@ -70,12 +78,15 @@ impl ScalarUDFImpl for NowFunc {
         _args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info
-            .execution_props()
-            .query_execution_start_time
-            .timestamp_nanos_opt();
+        let now_ts = info.execution_props().query_execution_start_time;
+        let days = Some(
+            now_ts.num_days_from_ce()
+                - NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .unwrap()
+                    .num_days_from_ce(),
+        );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+            ScalarValue::Date32(days),
         )))
     }
 }
