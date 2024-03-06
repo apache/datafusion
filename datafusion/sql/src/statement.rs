@@ -31,10 +31,10 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
-    TableReference, ToDFSchema,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, OwnedTableReference, Result, ScalarValue, SchemaError,
+    SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
@@ -43,12 +43,13 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
-    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
-    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
+    CreateMemoryTable, CreateView, DescribeTable, DmlStatement, DropCatalogSchema,
+    DropFunction, DropTable, DropView, EmptyRelation, Explain, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
+    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    WriteOp,
+    Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -626,8 +627,121 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
+            Statement::CreateFunction {
+                or_replace,
+                temporary,
+                name,
+                args,
+                return_type,
+                params,
+            } => {
+                let return_type = match return_type {
+                    Some(t) => Some(self.convert_data_type(&t)?),
+                    None => None,
+                };
+                let mut planner_context = PlannerContext::new();
+                let empty_schema = &DFSchema::empty();
 
-            _ => not_impl_err!("Unsupported SQL statement: {sql:?}"),
+                let args = match args {
+                    Some(function_args) => {
+                        let function_args = function_args
+                            .into_iter()
+                            .map(|arg| {
+                                let data_type = self.convert_data_type(&arg.data_type)?;
+
+                                let default_expr = match arg.default_expr {
+                                    Some(expr) => Some(self.sql_to_expr(
+                                        expr,
+                                        empty_schema,
+                                        &mut planner_context,
+                                    )?),
+                                    None => None,
+                                };
+                                Ok(OperateFunctionArg {
+                                    name: arg.name,
+                                    default_expr,
+                                    data_type,
+                                })
+                            })
+                            .collect::<Result<Vec<OperateFunctionArg>>>();
+                        Some(function_args?)
+                    }
+                    None => None,
+                };
+                // at the moment functions can't be qualified `schema.name`
+                let name = match &name.0[..] {
+                    [] => exec_err!("Function should have name")?,
+                    [n] => n.value.clone(),
+                    [..] => not_impl_err!("Qualified functions are not supported")?,
+                };
+                //
+                // convert resulting expression to data fusion expression
+                //
+                let arg_types = args.as_ref().map(|arg| {
+                    arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
+                });
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(arg_types.unwrap_or_default());
+
+                let result_expression = match params.return_ {
+                    Some(r) => Some(self.sql_to_expr(
+                        r,
+                        &DFSchema::empty(),
+                        &mut planner_context,
+                    )?),
+                    None => None,
+                };
+
+                let params = CreateFunctionBody {
+                    language: params.language,
+                    behavior: params.behavior.map(|b| match b {
+                        ast::FunctionBehavior::Immutable => Volatility::Immutable,
+                        ast::FunctionBehavior::Stable => Volatility::Stable,
+                        ast::FunctionBehavior::Volatile => Volatility::Volatile,
+                    }),
+                    as_: params.as_.map(|m| m.into()),
+                    return_: result_expression,
+                };
+
+                let statement = DdlStatement::CreateFunction(CreateFunction {
+                    or_replace,
+                    temporary,
+                    name,
+                    return_type,
+                    args,
+                    params,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                });
+
+                Ok(LogicalPlan::Ddl(statement))
+            }
+            Statement::DropFunction {
+                if_exists,
+                func_desc,
+                ..
+            } => {
+                // according to postgresql documentation it can be only one function
+                // specified in drop statement
+                if let Some(desc) = func_desc.first() {
+                    // at the moment functions can't be qualified `schema.name`
+                    let name = match &desc.name.0[..] {
+                        [] => exec_err!("Function should have name")?,
+                        [n] => n.value.clone(),
+                        [..] => not_impl_err!("Qualified functions are not supported")?,
+                    };
+                    let statement = DdlStatement::DropFunction(DropFunction {
+                        if_exists,
+                        name,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    });
+                    Ok(LogicalPlan::Ddl(statement))
+                } else {
+                    exec_err!("Function name not provided")
+                }
+            }
+            _ => {
+                not_impl_err!("Unsupported SQL statement: {sql:?}")
+            }
         }
     }
 

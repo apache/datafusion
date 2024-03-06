@@ -421,9 +421,9 @@ impl<'a> ColOpLit<'a> {
 mod test {
     use super::*;
     use crate::create_physical_expr;
-    use crate::execution_props::ExecutionProps;
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::ToDFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};
     use itertools::Itertools;

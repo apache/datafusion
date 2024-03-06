@@ -1341,10 +1341,10 @@ mod tests {
         datatypes::{DataType, TimeUnit},
     };
     use datafusion_common::{ScalarValue, ToDFSchema};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
     use std::ops::{Not, Rem};
 

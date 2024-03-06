@@ -57,11 +57,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
 
-        match null_treatment {
-            Some(null_treatment) if !is_function_window => return not_impl_err!("Null treatment in aggregate functions is not supported: {null_treatment}"),
-            _ => {}
-        }
-
         let name = if name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
@@ -199,7 +194,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(Box::new);
 
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, args, distinct, filter, order_by,
+                    fun,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
                 )));
             };
 

@@ -30,7 +30,6 @@
 //! an argument i32 is passed to a function that supports f64, the
 //! argument is automatically is coerced to f64.
 
-use crate::execution_props::ExecutionProps;
 use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions, math_expressions,
@@ -43,6 +42,7 @@ use arrow::{
 };
 use arrow_array::Array;
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
@@ -117,14 +117,6 @@ macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     };
 }
 
-#[cfg(feature = "regex_expressions")]
-macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        use crate::regex_expressions;
-        regex_expressions::$FUNC::<$T>
-    }};
-}
-
 #[cfg(not(feature = "regex_expressions"))]
 macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
@@ -158,7 +150,7 @@ macro_rules! invoke_if_unicode_expressions_feature_flag {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Hint {
+pub enum Hint {
     /// Indicates the argument needs to be padded if it is scalar
     Pad,
     /// Indicates the argument can be converted to an array of length 1
@@ -549,31 +541,6 @@ pub fn create_physical_fun(
                 _ => unreachable!(),
             },
         }),
-        BuiltinScalarFunction::RegexpReplace => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
-                        specialize_regexp_replace,
-                        i32,
-                        "regexp_replace"
-                    );
-                    let func = specializer_func(args)?;
-                    func(args)
-                }
-                DataType::LargeUtf8 => {
-                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
-                        specialize_regexp_replace,
-                        i64,
-                        "regexp_replace"
-                    );
-                    let func = specializer_func(args)?;
-                    func(args)
-                }
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function regexp_replace"
-                ),
-            })
-        }
         BuiltinScalarFunction::Repeat => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::repeat::<i32>)(args)
@@ -1673,131 +1640,6 @@ mod tests {
             i32,
             Int32,
             Int32Array
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("Thomas"), lit(".[mN]a."), lit("M"),],
-            Ok(Some("ThM")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("foobarbaz"), lit("b.."), lit("X"),],
-            Ok(Some("fooXbaz")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("foobarbaz"), lit("b.."), lit("X"), lit("g"),],
-            Ok(Some("fooXX")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("foobarbaz"), lit("b(..)"), lit("X\\1Y"), lit("g"),],
-            Ok(Some("fooXarYXazY")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[
-                lit(ScalarValue::Utf8(None)),
-                lit("b(..)"),
-                lit("X\\1Y"),
-                lit("g"),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[
-                lit("foobarbaz"),
-                lit(ScalarValue::Utf8(None)),
-                lit("X\\1Y"),
-                lit("g"),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[
-                lit("foobarbaz"),
-                lit("b(..)"),
-                lit(ScalarValue::Utf8(None)),
-                lit("g"),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[
-                lit("foobarbaz"),
-                lit("b(..)"),
-                lit("X\\1Y"),
-                lit(ScalarValue::Utf8(None)),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("ABCabcABC"), lit("(abc)"), lit("X"), lit("gi"),],
-            Ok(Some("XXX")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(feature = "regex_expressions")]
-        test_function!(
-            RegexpReplace,
-            &[lit("ABCabcABC"), lit("(abc)"), lit("X"), lit("i"),],
-            Ok(Some("XabcABC")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        #[cfg(not(feature = "regex_expressions"))]
-        test_function!(
-            RegexpReplace,
-            &[
-                lit("foobarbaz"),
-                lit("b.."),
-                lit("X"),
-            ],
-            internal_err!(
-                "function regexp_replace requires compilation with feature flag: regex_expressions."
-            ),
-            &str,
-            Utf8,
-            StringArray
         );
         test_function!(
             Repeat,
