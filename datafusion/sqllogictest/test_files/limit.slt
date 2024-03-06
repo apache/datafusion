@@ -361,7 +361,7 @@ EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---Projection:
+--Projection: 
 ----Limit: skip=6, fetch=3
 ------Filter: t1.a > Int32(3)
 --------TableScan: t1 projection=[a]
@@ -374,7 +374,7 @@ AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 ----------GlobalLimitExec: skip=6, fetch=3
 ------------CoalesceBatchesExec: target_batch_size=8192
 --------------FilterExec: a@0 > 3
-----------------MemoryExec: partitions=1, partition_sizes=[1]
+----------------MemoryExec: partitions=1
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
@@ -400,7 +400,7 @@ AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
 --CoalesceBatchesExec: target_batch_size=8192
 ----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 ------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
---------MemoryExec: partitions=4, partition_sizes=[1, 2, 1, 1]
+--------MemoryExec: partitions=4
 
 query I
 SELECT i FROM t1000 ORDER BY i DESC LIMIT 3;
