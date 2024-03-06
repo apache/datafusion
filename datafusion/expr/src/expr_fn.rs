@@ -150,6 +150,7 @@ pub fn min(expr: Expr) -> Expr {
         false,
         None,
         None,
+        None,
     ))
 }
 
@@ -159,6 +160,7 @@ pub fn max(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Max,
         vec![expr],
         false,
+        None,
         None,
         None,
     ))
@@ -172,6 +174,7 @@ pub fn sum(expr: Expr) -> Expr {
         false,
         None,
         None,
+        None,
     ))
 }
 
@@ -181,6 +184,7 @@ pub fn array_agg(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::ArrayAgg,
         vec![expr],
         false,
+        None,
         None,
         None,
     ))
@@ -194,6 +198,7 @@ pub fn avg(expr: Expr) -> Expr {
         false,
         None,
         None,
+        None,
     ))
 }
 
@@ -203,6 +208,7 @@ pub fn count(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Count,
         vec![expr],
         false,
+        None,
         None,
         None,
     ))
@@ -261,6 +267,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
         true,
         None,
         None,
+        None,
     ))
 }
 
@@ -313,6 +320,7 @@ pub fn approx_distinct(expr: Expr) -> Expr {
         false,
         None,
         None,
+        None,
     ))
 }
 
@@ -322,6 +330,7 @@ pub fn median(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
+        None,
         None,
         None,
     ))
@@ -335,6 +344,7 @@ pub fn approx_median(expr: Expr) -> Expr {
         false,
         None,
         None,
+        None,
     ))
 }
 
@@ -344,6 +354,7 @@ pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
         aggregate_function::AggregateFunction::ApproxPercentileCont,
         vec![expr, percentile],
         false,
+        None,
         None,
         None,
     ))
@@ -359,6 +370,7 @@ pub fn approx_percentile_cont_with_weight(
         aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
         vec![expr, weight_expr, percentile],
         false,
+        None,
         None,
         None,
     ))
@@ -429,6 +441,7 @@ pub fn stddev(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Stddev,
         vec![expr],
         false,
+        None,
         None,
         None,
     ))
@@ -821,11 +834,6 @@ nary_scalar_expr!(
     Rpad,
     rpad,
     "fill up a string to the length by appending the characters"
-);
-nary_scalar_expr!(
-    RegexpReplace,
-    regexp_replace,
-    "replace strings that match a regular expression"
 );
 nary_scalar_expr!(
     Btrim,
@@ -1314,21 +1322,6 @@ mod test {
         test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement
-        );
-        test_nary_scalar_expr!(
-            RegexpReplace,
-            regexp_replace,
-            string,
-            pattern,
-            replacement,
-            flags
-        );
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);

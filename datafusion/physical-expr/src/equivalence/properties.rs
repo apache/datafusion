@@ -1293,7 +1293,6 @@ mod tests {
         create_random_schema, create_test_params, create_test_schema,
         generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
     };
-    use crate::execution_props::ExecutionProps;
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
@@ -1301,6 +1300,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
     use itertools::Itertools;

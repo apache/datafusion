@@ -754,7 +754,7 @@ pub async fn from_substrait_agg_func(
     } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
     {
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new(fun, args, distinct, filter, order_by),
+            expr::AggregateFunction::new(fun, args, distinct, filter, order_by, None),
         )))
     } else {
         not_impl_err!(
