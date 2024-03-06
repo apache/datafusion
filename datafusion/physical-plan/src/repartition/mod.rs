@@ -51,6 +51,7 @@ use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
+use datafusion_common::utils::EffectiveSize;
 
 mod distributor_channels;
 
@@ -715,7 +716,7 @@ impl RepartitionExec {
 
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
-                let size = batch.get_array_memory_size();
+                let size = batch.get_effective_memory_size();
 
                 let timer = metrics.send_time.timer();
                 // if there is still a receiver, send to it
@@ -838,7 +839,7 @@ impl Stream for RepartitionStream {
                     if let Ok(batch) = &v {
                         self.reservation
                             .lock()
-                            .shrink(batch.get_array_memory_size());
+                            .shrink(batch.get_effective_memory_size());
                     }
 
                     return Poll::Ready(Some(v));
@@ -901,7 +902,7 @@ impl Stream for PerPartitionStream {
                 if let Ok(batch) = &v {
                     self.reservation
                         .lock()
-                        .shrink(batch.get_array_memory_size());
+                        .shrink(batch.get_effective_memory_size());
                 }
                 Poll::Ready(Some(v))
             }

@@ -44,6 +44,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use datafusion_common::utils::EffectiveSize;
 
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -158,7 +159,7 @@ async fn load_left_input(
         .try_fold(
             (Vec::new(), 0usize, metrics, reservation),
             |mut acc, batch| async {
-                let batch_size = batch.get_array_memory_size();
+                let batch_size = batch.get_effective_memory_size();
                 // Reserve memory for incoming batch
                 acc.3.try_grow(batch_size)?;
                 // Update metrics

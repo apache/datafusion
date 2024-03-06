@@ -56,6 +56,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
+use datafusion_common::utils::EffectiveSize;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -571,10 +572,10 @@ impl BufferedBatch {
         // + worst case null_joined (as vector capacity * element size)
         // + Range size
         // + size of this estimation
-        let size_estimation = batch.get_array_memory_size()
+        let size_estimation = batch.get_effective_memory_size()
             + join_arrays
                 .iter()
-                .map(|arr| arr.get_array_memory_size())
+                .map(|arr| arr.get_effective_memory_size())
                 .sum::<usize>()
             + batch.num_rows().next_power_of_two() * mem::size_of::<usize>()
             + mem::size_of::<Range<usize>>()

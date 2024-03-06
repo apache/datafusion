@@ -52,6 +52,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use datafusion_common::utils::EffectiveSize;
 
 /// Data of the inner table side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -347,7 +348,7 @@ async fn load_specified_partition_of_input(
         .try_fold(
             (Vec::new(), 0usize, join_metrics, reservation),
             |mut acc, batch| async {
-                let batch_size = batch.get_array_memory_size();
+                let batch_size = batch.get_effective_memory_size();
                 // Reserve memory for incoming batch
                 acc.3.try_grow(batch_size)?;
                 // Update metrics

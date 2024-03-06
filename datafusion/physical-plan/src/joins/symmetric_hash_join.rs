@@ -62,7 +62,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::bisect;
+use datafusion_common::utils::{bisect, EffectiveSize};
 use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -974,7 +974,7 @@ impl OneSideHashJoiner {
         let mut size = 0;
         size += std::mem::size_of_val(self);
         size += std::mem::size_of_val(&self.build_side);
-        size += self.input_buffer.get_array_memory_size();
+        size += self.input_buffer.get_effective_memory_size();
         size += std::mem::size_of_val(&self.on);
         size += self.hashmap.size();
         size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();

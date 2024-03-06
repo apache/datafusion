@@ -43,6 +43,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion_common::{assert_contains, Result};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::utils::EffectiveSize;
 use datafusion_execution::TaskContext;
 use test_utils::AccessLogGenerator;
 
@@ -655,7 +656,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batches: Vec<_> = gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
-        println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());
+        println!("Dict batch[{i}] size is: {}", batch.get_effective_memory_size());
     });
 
     batches
@@ -663,7 +664,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(|b| b.get_array_memory_size()).sum()
+    batches.iter().map(|b| b.get_effective_memory_size()).sum()
 }
 
 struct DummyStreamPartition {

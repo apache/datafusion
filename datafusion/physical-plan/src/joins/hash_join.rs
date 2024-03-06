@@ -68,6 +68,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use datafusion_common::utils::EffectiveSize;
 
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
@@ -703,7 +704,7 @@ async fn collect_left_input(
     let initial = (Vec::new(), 0, metrics, reservation);
     let (batches, num_rows, metrics, mut reservation) = stream
         .try_fold(initial, |mut acc, batch| async {
-            let batch_size = batch.get_array_memory_size();
+            let batch_size = batch.get_effective_memory_size();
             // Reserve memory for incoming batch
             acc.3.try_grow(batch_size)?;
             // Update metrics

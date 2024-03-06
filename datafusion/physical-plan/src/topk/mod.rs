@@ -32,6 +32,7 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use hashbrown::HashMap;
+use datafusion_common::utils::EffectiveSize;
 
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -573,7 +574,7 @@ impl RecordBatchStore {
     pub fn insert(&mut self, entry: RecordBatchEntry) {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
-            self.batches_size += entry.batch.get_array_memory_size();
+            self.batches_size += entry.batch.get_effective_memory_size();
             self.batches.insert(entry.id, entry);
         }
     }
@@ -628,7 +629,7 @@ impl RecordBatchStore {
             let old_entry = self.batches.remove(&id).unwrap();
             self.batches_size = self
                 .batches_size
-                .checked_sub(old_entry.batch.get_array_memory_size())
+                .checked_sub(old_entry.batch.get_effective_memory_size())
                 .unwrap();
         }
     }

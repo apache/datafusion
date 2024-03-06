@@ -57,6 +57,7 @@ use datafusion_physical_expr::LexOrdering;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
+use datafusion_common::utils::EffectiveSize;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -282,7 +283,7 @@ impl ExternalSorter {
         }
         self.reserve_memory_for_merge()?;
 
-        let size = input.get_array_memory_size();
+        let size = input.get_effective_memory_size();
         if self.reservation.try_grow(size).is_err() {
             let before = self.reservation.size();
             self.in_mem_sort().await?;
@@ -415,7 +416,7 @@ impl ExternalSorter {
         let size: usize = self
             .in_mem_batches
             .iter()
-            .map(|x| x.get_array_memory_size())
+            .map(|x| x.get_effective_memory_size())
             .sum();
 
         // Reserve headroom for next sort/merge
@@ -500,7 +501,7 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            self.reservation.try_resize(batch.get_array_memory_size())?;
+            self.reservation.try_resize(batch.get_effective_memory_size())?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -509,7 +510,7 @@ impl ExternalSorter {
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                let reservation = self.reservation.split(batch.get_array_memory_size());
+                let reservation = self.reservation.split(batch.get_effective_memory_size());
                 let input = self.sort_batch_stream(batch, metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
@@ -536,7 +537,7 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
-        assert_eq!(batch.get_array_memory_size(), reservation.size());
+        assert_eq!(batch.get_effective_memory_size(), reservation.size());
         let schema = batch.schema();
 
         let fetch = self.fetch;

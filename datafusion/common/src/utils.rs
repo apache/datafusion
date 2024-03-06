@@ -679,6 +679,25 @@ pub fn find_indices<T: PartialEq, S: Borrow<T>>(
         .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
 }
 
+pub trait EffectiveSize {
+    fn get_effective_memory_size(&self) -> usize;
+}
+
+impl EffectiveSize for ArrayRef {
+    fn get_effective_memory_size(&self) -> usize {
+        self.to_data().get_slice_memory_size().unwrap_or(0)
+    }
+}
+
+impl EffectiveSize for RecordBatch {
+    fn get_effective_memory_size(&self) -> usize {
+        self.columns()
+            .iter()
+            .map(|x| x.get_effective_memory_size())
+            .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ScalarValue;
