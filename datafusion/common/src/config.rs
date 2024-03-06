@@ -101,6 +101,7 @@ use std::str::FromStr;
 ///
 /// NB: Misplaced commas may result in nonsensical errors
 ///
+#[macro_export]
 macro_rules! config_namespace {
     (
      $(#[doc = $struct_d:tt])*
@@ -128,9 +129,9 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => _internal_err!(
+                    _ => return Err(DataFusionError::Internal(format!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
-                    )
+                    )))
                 }
             }
 
@@ -885,7 +886,7 @@ impl Clone for ExtensionBox {
 
 /// A trait implemented by `config_namespace` and for field types that provides
 /// the ability to walk and mutate the configuration tree
-trait ConfigField {
+pub trait ConfigField {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
@@ -904,6 +905,7 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
+#[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
         impl ConfigField for $t {
@@ -973,7 +975,7 @@ impl ConfigField for CompressionTypeVariant {
 }
 
 /// An implementation trait used to recursively walk configuration
-trait Visit {
+pub trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
 
     fn none(&mut self, key: &str, description: &'static str);
@@ -1201,10 +1203,6 @@ impl TableOptions {
         e.0.set(key, value)
     }
 
-    /// Create new ConfigOptions struct, taking values from a string hash map.
-    ///
-    /// Only the built-in configurations will be extracted from the hash map
-    /// and other key value pairs will be ignored.
     pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         let mut ret = Self::default();
         for (k, v) in settings {
@@ -1214,10 +1212,6 @@ impl TableOptions {
         Ok(ret)
     }
 
-    /// Create new ConfigOptions struct, taking values from a string hash map.
-    ///
-    /// Only the built-in configurations will be extracted from the hash map
-    /// and other key value pairs will be ignored.
     pub fn alter_with_string_hash_map(
         &mut self,
         settings: &HashMap<String, String>,
@@ -1542,45 +1536,6 @@ impl Display for FormatOptions {
     }
 }
 
-impl FormatOptions {
-    /// Tries to extract ParquetWriterOptions from this FileTypeWriterOptions enum.
-    /// Returns an error if a different type from parquet is set.
-    #[cfg(feature = "parquet")]
-    pub fn try_into_parquet(&self) -> Result<&TableParquetOptions> {
-        match self {
-            FormatOptions::PARQUET(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(format!(
-                "Expected parquet options but found options for: {:?}",
-                self
-            ))),
-        }
-    }
-
-    /// Tries to extract CsvWriterOptions from this FileTypeWriterOptions enum.
-    /// Returns an error if a different type from csv is set.
-    pub fn try_into_csv(&self) -> Result<&CsvOptions> {
-        match self {
-            FormatOptions::CSV(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(format!(
-                "Expected csv options but found options for {:?}",
-                self
-            ))),
-        }
-    }
-
-    /// Tries to extract JsonWriterOptions from this FileTypeWriterOptions enum.
-    /// Returns an error if a different type from json is set.
-    pub fn try_into_json(&self) -> Result<&JsonOptions> {
-        match self {
-            FormatOptions::JSON(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(format!(
-                "Expected json options but found options for {:?}",
-                self,
-            ))),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[derive(Default, Debug, Clone)]
@@ -1690,7 +1645,6 @@ mod tests {
         let entries = table_config.entries();
         assert!(entries
             .iter()
-            .find(|item| item.key == "parquet.bloom_filter_enabled::col1")
-            .is_some())
+            .any(|item| item.key == "parquet.bloom_filter_enabled::col1"))
     }
 }

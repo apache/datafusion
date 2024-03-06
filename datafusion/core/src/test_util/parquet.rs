@@ -38,12 +38,12 @@ use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use datafusion_common::Statistics;
 
+use datafusion_common::config::TableOptions;
+use datafusion_optimizer::OptimizerConfig;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use datafusion_common::config::TableOptions;
-use datafusion_optimizer::OptimizerConfig;
 
 ///  a ParquetFile that has been created for testing.
 pub struct TestParquetFile {
@@ -166,7 +166,8 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
-        let parquet_options = TableOptions::default_from_session_config(ctx.state().options()).parquet;
+        let parquet_options =
+            TableOptions::default_from_session_config(ctx.state().options()).parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
@@ -182,7 +183,6 @@ impl TestParquetFile {
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-
             Ok(Arc::new(ParquetExec::new(
                 scan_config,
                 None,

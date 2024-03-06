@@ -89,17 +89,9 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
 /// The Apache Parquet `FileFormat` implementation
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParquetFormat {
     options: TableParquetOptions,
-}
-
-impl Default for ParquetFormat {
-    fn default() -> Self {
-        Self {
-            options: TableParquetOptions::default(),
-        }
-    }
 }
 
 impl ParquetFormat {
@@ -152,11 +144,13 @@ impl ParquetFormat {
         self.options.global.skip_metadata
     }
 
+    /// Set Parquet options for the ParquetFormat
     pub fn with_options(mut self, options: TableParquetOptions) -> Self {
         self.options = options;
         self
     }
 
+    /// Parquet options
     pub fn options(&self) -> &TableParquetOptions {
         &self.options
     }
@@ -629,6 +623,8 @@ impl ParquetSink {
 
         Ok(writer)
     }
+
+    /// Parquet options
     pub fn parquet_options(&self) -> &TableParquetOptions {
         &self.parquet_options
     }

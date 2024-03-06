@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::{FormatOptions, TableOptions, TableParquetOptions};
+use datafusion_common::config::{FormatOptions, TableParquetOptions};
 
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
@@ -57,8 +57,7 @@ impl DataFrame {
             ));
         }
 
-        let config_options = self.session_state.config_options();
-        let table_options = TableOptions::default_from_session_config(config_options);
+        let table_options = self.session_state.default_table_options();
 
         let props = writer_options.unwrap_or_else(|| table_options.parquet.clone());
 
@@ -79,11 +78,11 @@ mod tests {
     use std::sync::Arc;
 
     use object_store::local::LocalFileSystem;
-    
+
+    use datafusion_common::file_options::parquet_writer::parse_compression_string;
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
-    use datafusion_common::file_options::parquet_writer::parse_compression_string;
 
     use datafusion_expr::{col, lit};
 
@@ -125,7 +124,7 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]  // levels cannot be recovered from reader, only default levels are read.
+    #[ignore] // levels cannot be recovered from reader, only default levels are read.
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_util::test_table().await?;

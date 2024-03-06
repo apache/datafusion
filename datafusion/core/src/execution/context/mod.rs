@@ -105,6 +105,7 @@ use url::Url;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use datafusion_common::config::{ConfigExtension, TableOptions};
 use datafusion_optimizer::{
     analyzer::{Analyzer, AnalyzerRule},
     OptimizerConfig,
@@ -394,6 +395,11 @@ impl SessionContext {
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
         self.state.read().config.clone()
+    }
+
+    /// Return a copied version of config for this Session
+    pub fn copied_table_options(&self) -> TableOptions {
+        self.state.read().default_table_options().clone()
     }
 
     /// Creates a [`DataFrame`] from SQL query text.
@@ -874,7 +880,8 @@ impl SessionContext {
     ) -> Result<DataFrame> {
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
-        let listing_options = options.to_listing_options(&session_config);
+        let listing_options =
+            options.to_listing_options(&session_config, self.copied_table_options());
 
         let option_extension = listing_options.file_extension.clone();
 
@@ -1011,7 +1018,8 @@ impl SessionContext {
         table_path: &str,
         options: ArrowReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -1200,6 +1208,16 @@ impl SessionContext {
     pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
     }
+
+    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// referenced from SQL statements executed against this context.
+    pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
+        self.state
+            .write()
+            .table_option_namespace
+            .extensions
+            .insert(extension)
+    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1293,6 +1311,8 @@ pub struct SessionState {
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
+    ///
+    table_option_namespace: TableOptions,
     /// Execution properties
     execution_props: ExecutionProps,
     /// TableProviderFactories for different file formats.
@@ -1387,6 +1407,9 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
+            table_option_namespace: TableOptions::default_from_session_config(
+                config.options(),
+            ),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
@@ -1564,6 +1587,15 @@ impl SessionState {
         optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
         self.physical_optimizers.rules.push(optimizer_rule);
+        self
+    }
+
+    /// Adds a new [`ConfigExtension`] to TableOptions
+    pub fn add_table_options_extension<T: ConfigExtension>(
+        mut self,
+        extension: T,
+    ) -> Self {
+        self.table_option_namespace.extensions.insert(extension);
         self
     }
 
@@ -1879,6 +1911,11 @@ impl SessionState {
     /// return the configuration options
     pub fn config_options(&self) -> &ConfigOptions {
         self.config.options()
+    }
+
+    /// return the TableOptions options with its extensions
+    pub fn default_table_options(&self) -> &TableOptions {
+        &self.table_option_namespace
     }
 
     /// Get a new TaskContext to run in this session

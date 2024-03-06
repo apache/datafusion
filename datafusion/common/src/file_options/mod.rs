@@ -37,7 +37,7 @@ mod tests {
     };
 
     use crate::{
-        config::{ConfigOptions, TableOptions},
+        config::TableOptions,
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
         parsers::CompressionTypeVariant,
     };
@@ -77,8 +77,7 @@ mod tests {
         option_map.insert("parquet.bloom_filter_fpp".to_owned(), "0.123".to_owned());
         option_map.insert("parquet.bloom_filter_ndv".to_owned(), "123".to_owned());
 
-        let config = ConfigOptions::new();
-        let mut table_config = TableOptions::default_from_session_config(&config);
+        let mut table_config = TableOptions::new();
         table_config.alter_with_string_hash_map(&option_map)?;
 
         let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
@@ -181,8 +180,7 @@ mod tests {
             "456".to_owned(),
         );
 
-        let config = ConfigOptions::new();
-        let mut table_config = TableOptions::default_from_session_config(&config);
+        let mut table_config = TableOptions::new();
         table_config.alter_with_string_hash_map(&option_map)?;
 
         let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
@@ -284,8 +282,7 @@ mod tests {
         option_map.insert("csv.compression".to_owned(), "gzip".to_owned());
         option_map.insert("csv.delimiter".to_owned(), ";".to_owned());
 
-        let config = ConfigOptions::new();
-        let mut table_config = TableOptions::default_from_session_config(&config);
+        let mut table_config = TableOptions::new();
         table_config.alter_with_string_hash_map(&option_map)?;
 
         let csv_options = CsvWriterOptions::try_from(&table_config.csv)?;
@@ -306,8 +303,7 @@ mod tests {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("json.compression".to_owned(), "gzip".to_owned());
 
-        let config = ConfigOptions::new();
-        let mut table_config = TableOptions::default_from_session_config(&config);
+        let mut table_config = TableOptions::new();
         table_config.alter_with_string_hash_map(&option_map)?;
 
         let json_options = JsonWriterOptions::try_from(&table_config.json)?;

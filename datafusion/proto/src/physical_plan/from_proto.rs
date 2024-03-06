@@ -878,7 +878,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             has_header: proto_opts.has_header,
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
-            escape: proto_opts.escape.get(0).copied(),
+            escape: proto_opts.escape.first().copied(),
             compression: proto_opts.compression().into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
             date_format: (!proto_opts.date_format.is_empty())
@@ -919,10 +919,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
-            dictionary_enabled: match value.dictionary_enabled_opt {
-                Some(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)) => Some(v),
-                None => None,
-            },
+            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
             dictionary_page_size_limit: value.dictionary_page_size_limit as usize,
             statistics_enabled: value
@@ -931,18 +928,18 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
                 })
                 .unwrap_or(None),
-            max_statistics_size: value.clone()
-                .max_statistics_size_opt
+            max_statistics_size: value
+                .max_statistics_size_opt.as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
+                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(*v as usize),
                 })
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
             created_by: value.created_by.clone(),
-            column_index_truncate_length: value.clone()
-                .column_index_truncate_length_opt
+            column_index_truncate_length: value
+                .column_index_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(v as usize),
+                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(*v as usize),
                 })
                 .unwrap_or(None),
             data_page_row_count_limit: value.data_page_row_count_limit as usize,
@@ -980,10 +977,7 @@ impl TryFrom<&protobuf::ColumnOptions> for ColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
-            dictionary_enabled: match value.dictionary_enabled_opt {
-                Some(protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)) => Some(v),
-                None => None,
-            },
+            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             statistics_enabled: value
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
@@ -1051,8 +1045,7 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
     type Error = DataFusionError;
 
     fn try_from(proto_opts: &protobuf::JsonOptions) -> Result<Self, Self::Error> {
-        let compression: protobuf::CompressionTypeVariant =
-            proto_opts.compression().into();
+        let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
         Ok(JsonOptions {
             compression: compression.into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,

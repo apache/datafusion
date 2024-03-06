@@ -54,25 +54,19 @@ use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JsonFormat {
     options: JsonOptions,
 }
 
-impl Default for JsonFormat {
-    fn default() -> Self {
-        Self {
-            options: JsonOptions::default(),
-        }
-    }
-}
-
 impl JsonFormat {
+    /// Set the json options
     pub fn with_options(mut self, options: JsonOptions) -> Self {
         self.options = options;
         self
     }
 
+    /// Retrieve the json options
     pub fn options(&self) -> &JsonOptions {
         &self.options
     }
@@ -280,6 +274,7 @@ impl JsonSink {
         )
         .await
     }
+    /// Retrieve the writer options
     pub fn writer_options(&self) -> &JsonWriterOptions {
         &self.writer_options
     }

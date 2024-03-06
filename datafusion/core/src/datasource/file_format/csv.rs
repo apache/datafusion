@@ -53,17 +53,9 @@ use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CsvFormat {
     options: CsvOptions,
-}
-
-impl Default for CsvFormat {
-    fn default() -> Self {
-        Self {
-            options: CsvOptions::default(),
-        }
-    }
 }
 
 impl CsvFormat {
@@ -123,11 +115,13 @@ impl CsvFormat {
         steam.boxed()
     }
 
+    /// Set the csv options
     pub fn with_options(mut self, options: CsvOptions) -> Self {
         self.options = options;
         self
     }
 
+    /// Retrieve the csv options
     pub fn options(&self) -> &CsvOptions {
         &self.options
     }
@@ -500,6 +494,8 @@ impl CsvSink {
         )
         .await
     }
+
+    /// Retrieve the writer options
     pub fn writer_options(&self) -> &CsvWriterOptions {
         &self.writer_options
     }

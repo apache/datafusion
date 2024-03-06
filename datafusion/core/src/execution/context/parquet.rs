@@ -46,7 +46,8 @@ impl SessionContext {
         table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.state.read().config);
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,

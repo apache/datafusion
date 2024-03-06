@@ -34,13 +34,13 @@ use crate::{
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::dml::CopyTo;
-use datafusion::logical_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
+use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
+use crate::object_storage::register_options;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -258,42 +258,66 @@ async fn create_plan(
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
-    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-        create_external_table(ctx, cmd).await?;
+    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        register_object_store_and_config_extensions(ctx, &cmd.location, &cmd.options)
+            .await?;
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
-        register_object_store(ctx, copy_to).await?;
+        register_object_store_and_config_extensions(
+            ctx,
+            &copy_to.output_url,
+            &copy_to.source_option_tuples,
+        )
+        .await?;
     }
     Ok(plan)
 }
 
-async fn register_object_store(
+/// Asynchronously registers an object store and its configuration extensions in the session context.
+///
+/// This function dynamically registers a cloud object store based on the provided location and options.
+/// It first parses the location to determine the scheme and constructs the URL accordingly.
+/// Depending on the scheme, it registers relevant options. The function then alters the default table
+/// options with the provided custom options. Finally, it retrieves and registers the object store in the
+/// session context.
+///
+/// # Arguments
+/// * `ctx`: A reference to the `SessionContext` in which the object store is to be registered.
+/// * `location`: A string reference representing the location of the object store.
+/// * `options`: A reference to a hash map containing configuration options for the object store.
+///
+/// # Returns
+/// A `Result<()>` which is an Ok value indicating successful registration or an error upon failure.
+///
+/// # Errors
+/// This function can return an error if the location parsing fails, options alteration fails,
+/// or if the object store cannot be retrieved and registered successfully.
+pub(crate) async fn register_object_store_and_config_extensions(
     ctx: &SessionContext,
-    copy_to: &mut CopyTo,
-) -> Result<(), DataFusionError> {
-    let url = ListingTableUrl::parse(copy_to.output_url.as_str())?;
-    let store = get_object_store(
-        &ctx.state(),
-        &mut HashMap::new(),
-        url.scheme(),
-        url.as_ref(),
-    )
-    .await?;
-    ctx.runtime_env().register_object_store(url.as_ref(), store);
-    Ok(())
-}
-
-async fn create_external_table(
-    ctx: &SessionContext,
-    cmd: &mut CreateExternalTable,
+    location: &String,
+    options: &HashMap<String, String>,
 ) -> Result<()> {
-    let table_path = ListingTableUrl::parse(&cmd.location)?;
+    // Parse the location URL to extract the scheme and other components
+    let table_path = ListingTableUrl::parse(location)?;
+
+    // Extract the scheme (e.g., "s3", "gcs") from the parsed URL
     let scheme = table_path.scheme();
+
+    // Obtain a reference to the URL
     let url: &Url = table_path.as_ref();
 
-    // registering the cloud object store dynamically using cmd.options
-    let store = get_object_store(&ctx.state(), &mut cmd.options, scheme, url).await?;
+    // Register the options based on the scheme extracted from the location
+    register_options(ctx, scheme);
+
+    // Clone and modify the default table options based on the provided options
+    let mut table_options = ctx.state().default_table_options().clone();
+    table_options.alter_with_string_hash_map(options)?;
+
+    // Retrieve the appropriate object store based on the scheme, URL, and modified table options
+    let store = get_object_store(&ctx.state(), scheme, url, &table_options).await?;
+
+    // Register the retrieved object store in the session context's runtime environment
     ctx.runtime_env().register_object_store(url, store);
 
     Ok(())
@@ -301,19 +325,21 @@ async fn create_external_table(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
-
-    use datafusion::common::{plan_err, FileType, FileTypeWriterOptions};
-    use datafusion_common::file_options::StatementOptions;
+    use datafusion_common::config::FormatOptions;
+    use datafusion_common::plan_err;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(sql).await?;
+        let plan = ctx.state().create_logical_plan(sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            create_external_table(&ctx, cmd).await?;
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            register_object_store_and_config_extensions(
+                &ctx,
+                &cmd.location,
+                &cmd.options,
+            )
+            .await?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
@@ -360,7 +386,7 @@ mod tests {
                 let mut plan = create_plan(&mut ctx, statement).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
-                    assert_eq!(copy_to.file_format, FileType::PARQUET);
+                    assert!(matches!(copy_to.format_options, FormatOptions::PARQUET(_)));
                     ctx.runtime_env()
                         .object_store_registry
                         .get_store(&Url::parse(&copy_to.output_url).unwrap())?;
@@ -382,12 +408,12 @@ mod tests {
 
         // Missing region, use object_store defaults
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
-            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}') LOCATION '{location}'");
+            OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}') LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
-            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}', 'session_token' '{session_token}') LOCATION '{location}'");
+            OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.region' '{region}', 'aws.session_token' '{session_token}') LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         Ok(())
@@ -402,7 +428,7 @@ mod tests {
 
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
-            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'endpoint' '{endpoint}') LOCATION '{location}'");
+            OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         Ok(())
@@ -418,14 +444,14 @@ mod tests {
 
         // for service_account_path
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
-            OPTIONS('service_account_path' '{service_account_path}') LOCATION '{location}'");
+            OPTIONS('gcp.service_account_path' '{service_account_path}') LOCATION '{location}'");
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("os error 2"));
 
         // for service_account_key
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'");
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err()
@@ -434,7 +460,7 @@ mod tests {
 
         // for application_credentials_path
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
-            OPTIONS('application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
+            OPTIONS('gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();

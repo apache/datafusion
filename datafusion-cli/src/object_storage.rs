@@ -20,19 +20,25 @@ use aws_credential_types::provider::ProvideCredentials;
 use datafusion::common::exec_datafusion_err;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
+use datafusion::prelude::SessionContext;
+use datafusion_common::config::{
+    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
+};
+use datafusion_common::config_namespace;
 use object_store::aws::AwsCredential;
 use object_store::http::HttpBuilder;
 use object_store::ObjectStore;
 use object_store::{
     aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, CredentialProvider,
 };
-use std::collections::HashMap;
+use std::any::Any;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use url::Url;
 
 pub async fn get_s3_object_store_builder(
     url: &Url,
-    options: &mut HashMap<String, String>,
+    aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
@@ -40,15 +46,14 @@ pub async fn get_s3_object_store_builder(
     if let (Some(access_key_id), Some(secret_access_key)) = (
         // These options are datafusion-cli specific and must be removed before passing through to datafusion.
         // Otherwise, a Configuration error will be raised.
-        options.remove("access_key_id"),
-        options.remove("secret_access_key"),
+        &aws_options.access_key_id,
+        &aws_options.secret_access_key,
     ) {
-        println!("removing secret access key!");
         builder = builder
             .with_access_key_id(access_key_id)
             .with_secret_access_key(secret_access_key);
 
-        if let Some(session_token) = options.remove("session_token") {
+        if let Some(session_token) = &aws_options.session_token {
             builder = builder.with_token(session_token);
         }
     } else {
@@ -71,7 +76,7 @@ pub async fn get_s3_object_store_builder(
         builder = builder.with_credentials(credentials);
     }
 
-    if let Some(region) = options.remove("region") {
+    if let Some(region) = &aws_options.region {
         builder = builder.with_region(region);
     }
 
@@ -104,7 +109,7 @@ impl CredentialProvider for S3CredentialProvider {
 
 pub fn get_oss_object_store_builder(
     url: &Url,
-    cmd: &mut HashMap<String, String>,
+    aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env()
@@ -114,14 +119,14 @@ pub fn get_oss_object_store_builder(
         .with_region("do_not_care");
 
     if let (Some(access_key_id), Some(secret_access_key)) =
-        (cmd.remove("access_key_id"), cmd.remove("secret_access_key"))
+        (&aws_options.access_key_id, &aws_options.secret_access_key)
     {
         builder = builder
             .with_access_key_id(access_key_id)
             .with_secret_access_key(secret_access_key);
     }
 
-    if let Some(endpoint) = cmd.remove("endpoint") {
+    if let Some(endpoint) = &aws_options.oss.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
 
@@ -130,21 +135,20 @@ pub fn get_oss_object_store_builder(
 
 pub fn get_gcs_object_store_builder(
     url: &Url,
-    cmd: &mut HashMap<String, String>,
+    gs_options: &GcpOptions,
 ) -> Result<GoogleCloudStorageBuilder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
 
-    if let Some(service_account_path) = cmd.remove("service_account_path") {
+    if let Some(service_account_path) = &gs_options.service_account_path {
         builder = builder.with_service_account_path(service_account_path);
     }
 
-    if let Some(service_account_key) = cmd.remove("service_account_key") {
+    if let Some(service_account_key) = &gs_options.service_account_key {
         builder = builder.with_service_account_key(service_account_key);
     }
 
-    if let Some(application_credentials_path) = cmd.remove("application_credentials_path")
-    {
+    if let Some(application_credentials_path) = &gs_options.application_credentials_path {
         builder = builder.with_application_credentials(application_credentials_path);
     }
 
@@ -160,23 +164,255 @@ fn get_bucket_name(url: &Url) -> Result<&str> {
     })
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct AwsOptions {
+    /// access_key_id
+    pub access_key_id: Option<String>,
+    /// secret_access_key
+    pub secret_access_key: Option<String>,
+    /// session_token
+    pub session_token: Option<String>,
+    /// region
+    pub region: Option<String>,
+    /// Oss options
+    pub oss: OssOptions,
+}
+
+config_namespace! {
+    pub struct OssOptions {
+        pub endpoint: Option<String>, default = None
+    }
+}
+
+impl ExtensionOptions for AwsOptions {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let (_key, aws_key) = key.split_once('.').unwrap_or((key, ""));
+        let (key, rem) = aws_key.split_once('.').unwrap_or((aws_key, ""));
+        match key {
+            "access_key_id" => {
+                self.access_key_id.set(rem, value)?;
+            }
+            "secret_access_key" => {
+                self.secret_access_key.set(rem, value)?;
+            }
+            "session_token" => {
+                self.session_token.set(rem, value)?;
+            }
+            "region" => {
+                self.region.set(rem, value)?;
+            }
+            "oss" => {
+                self.oss.set(rem, value)?;
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Config value \"{}\" not found on AwsOptions",
+                    rem
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+        let mut v = Visitor(vec![]);
+        self.access_key_id.visit(&mut v, "access_key_id", "");
+        self.secret_access_key
+            .visit(&mut v, "secret_access_key", "");
+        self.session_token.visit(&mut v, "session_token", "");
+        self.region.visit(&mut v, "region", "");
+        self.oss.visit(&mut v, "oss", "");
+        v.0
+    }
+}
+
+impl ConfigExtension for AwsOptions {
+    const PREFIX: &'static str = "aws";
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GcpOptions {
+    /// service_account_path
+    pub service_account_path: Option<String>,
+    /// service_account_key
+    pub service_account_key: Option<String>,
+    /// session_token
+    pub application_credentials_path: Option<String>,
+}
+
+impl ExtensionOptions for GcpOptions {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let (_key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match rem {
+            "service_account_path" => {
+                self.service_account_path.set(rem, value)?;
+            }
+            "service_account_key" => {
+                self.service_account_key.set(rem, value)?;
+            }
+            "application_credentials_path" => {
+                self.application_credentials_path.set(rem, value)?;
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Config value \"{}\" not found on GcpOptions",
+                    rem
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+        let mut v = Visitor(vec![]);
+        self.service_account_path
+            .visit(&mut v, "service_account_path", "");
+        self.service_account_key
+            .visit(&mut v, "service_account_key", "");
+        self.application_credentials_path.visit(
+            &mut v,
+            "application_credentials_path",
+            "",
+        );
+        v.0
+    }
+}
+
+impl ConfigExtension for GcpOptions {
+    const PREFIX: &'static str = "gcp";
+}
+
+/// Registers storage options for different cloud storage schemes in a given session context.
+///
+/// This function is responsible for extending the session context with specific options
+/// based on the storage scheme being used. These options are essential for handling
+/// interactions with different cloud storage services such as Amazon S3, Alibaba Cloud OSS,
+/// Google Cloud Storage, etc.
+///
+/// # Arguments
+/// * `ctx` - A mutable reference to the session context where the table options
+///           are to be registered. The session context holds configuration and environment
+///           for the current session.
+/// * `scheme` - A string slice that represents the cloud storage scheme. This determines
+///              which set of options will be registered in the session context.
+///
+/// # Supported Schemes
+/// * `s3` or `oss` - Registers `AwsOptions` which are configurations specific to
+///                   Amazon S3 and Alibaba Cloud OSS.
+/// * `gs` or `gcs` - Registers `GcpOptions` which are configurations specific to
+///                   Google Cloud Storage.
+/// Note: If an unsupported scheme is provided, the function will not perform any action.
+///
+pub(crate) fn register_options(ctx: &SessionContext, scheme: &str) {
+    // Match the provided scheme against supported cloud storage schemes
+    match scheme {
+        // For Amazon S3 or Alibaba Cloud OSS
+        "s3" | "oss" => {
+            // Register AWS specific table options in the session context
+            ctx.register_table_options_extension(AwsOptions::default())
+        }
+        // For Google Cloud Storage
+        "gs" | "gcs" => {
+            // Register GCP specific table options in the session context
+            ctx.register_table_options_extension(GcpOptions::default())
+        }
+        // For unsupported schemes, do nothing
+        _ => {}
+    }
+}
+
 pub(crate) async fn get_object_store(
     state: &SessionState,
-    options: &mut HashMap<String, String>,
     scheme: &str,
     url: &Url,
+    table_options: &TableOptions,
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store = match scheme {
         "s3" => {
-            let builder = get_s3_object_store_builder(url, options).await?;
+            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let builder = get_s3_object_store_builder(url, aws_options).await?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "oss" => {
-            let builder = get_oss_object_store_builder(url, options)?;
+            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let builder = get_oss_object_store_builder(url, aws_options)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "gs" | "gcs" => {
-            let builder = get_gcs_object_store_builder(url, options)?;
+            let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
+            let builder = get_gcs_object_store_builder(url, gcp_options)?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "http" | "https" => Arc::new(
@@ -218,14 +454,19 @@ mod tests {
         let location = "s3://bucket/path/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}', 'session_token' {session_token}) LOCATION '{location}'");
+        let scheme = table_url.scheme();
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.region' '{region}', 'aws.session_token' {session_token}) LOCATION '{location}'");
 
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+            register_options(&ctx, scheme);
+            let mut table_options = ctx.state().default_table_options().clone();
+            table_options.alter_with_string_hash_map(&cmd.options)?;
+            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder =
-                get_s3_object_store_builder(table_url.as_ref(), &mut cmd.options).await?;
+                get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -251,14 +492,18 @@ mod tests {
         let location = "oss://bucket/path/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'endpoint' '{endpoint}') LOCATION '{location}'");
+        let scheme = table_url.scheme();
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
 
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            let builder =
-                get_oss_object_store_builder(table_url.as_ref(), &mut cmd.options)?;
+            register_options(&ctx, scheme);
+            let mut table_options = ctx.state().default_table_options().clone();
+            table_options.alter_with_string_hash_map(&cmd.options)?;
+            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -284,14 +529,18 @@ mod tests {
         let location = "gcs://bucket/path/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_path' '{service_account_path}', 'service_account_key' '{service_account_key}', 'application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
+        let scheme = table_url.scheme();
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_path' '{service_account_path}', 'gcp.service_account_key' '{service_account_key}', 'gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
 
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            let builder =
-                get_gcs_object_store_builder(table_url.as_ref(), &mut cmd.options)?;
+            register_options(&ctx, scheme);
+            let mut table_options = ctx.state().default_table_options().clone();
+            table_options.alter_with_string_hash_map(&cmd.options)?;
+            let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
+            let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (GoogleConfigKey::ServiceAccount, service_account_path),

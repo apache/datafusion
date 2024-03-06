@@ -227,10 +227,7 @@ mod tests {
         let name = OwnedTableReference::bare("foo".to_string());
 
         let mut options = HashMap::new();
-        options.insert(
-            "csv.schema_infer_max_rec".to_owned(),
-            "1000".to_owned(),
-        );
+        options.insert("csv.schema_infer_max_rec".to_owned(), "1000".to_owned());
         let cmd = CreateExternalTable {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),

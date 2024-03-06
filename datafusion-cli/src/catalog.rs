@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::object_storage::get_object_store;
+use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
 use async_trait::async_trait;
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
@@ -29,7 +29,6 @@ use datafusion::execution::context::SessionState;
 use dirs::home_dir;
 use parking_lot::RwLock;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use url::Url;
 
@@ -155,7 +154,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self
+        let mut state = self
             .state
             .upgrade()
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
@@ -163,6 +162,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             .clone();
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
+        let scheme = table_url.scheme();
         let url: &Url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
@@ -174,10 +174,22 @@ impl SchemaProvider for DynamicFileSchemaProvider {
             Err(_) => {
                 // Register the store for this URL. Here we don't have access
                 // to any command options so the only choice is to use an empty collection
-                let mut options = HashMap::new();
-                let store =
-                    get_object_store(&state, &mut options, table_url.scheme(), url)
-                        .await?;
+                match scheme {
+                    "s3" | "oss" => {
+                        state = state.add_table_options_extension(AwsOptions::default());
+                    }
+                    "gs" | "gcs" => {
+                        state = state.add_table_options_extension(GcpOptions::default())
+                    }
+                    _ => {}
+                };
+                let store = get_object_store(
+                    &state,
+                    table_url.scheme(),
+                    url,
+                    state.default_table_options(),
+                )
+                .await?;
                 state.runtime_env().register_object_store(url, store);
             }
         }

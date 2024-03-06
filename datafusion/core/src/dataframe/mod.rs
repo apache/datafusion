@@ -44,7 +44,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
-use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions, TableOptions};
+use datafusion_common::config::{CsvOptions, FormatOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
@@ -69,6 +69,7 @@ pub struct DataFrameWriteOptions {
 }
 
 impl DataFrameWriteOptions {
+    /// Create DataFrameWriteOptions
     pub fn new() -> Self {
         DataFrameWriteOptions {
             overwrite: false,
@@ -1160,9 +1161,7 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let config_options = self.session_state.config_options();
-        let table_options = TableOptions::default_from_session_config(config_options);
-
+        let table_options = self.session_state.default_table_options();
         let props = writer_options.unwrap_or_else(|| table_options.csv.clone());
 
         let plan = LogicalPlanBuilder::copy_to(
@@ -1211,8 +1210,7 @@ impl DataFrame {
             ));
         }
 
-        let config_options = self.session_state.config_options();
-        let table_options = TableOptions::default_from_session_config(config_options);
+        let table_options = self.session_state.default_table_options();
 
         let props = writer_options.unwrap_or_else(|| table_options.json.clone());
 

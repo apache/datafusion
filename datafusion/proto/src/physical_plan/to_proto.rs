@@ -947,19 +947,19 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.clone(),
-            compression_opt: value.compression.clone().map(|v| protobuf::parquet_options::CompressionOpt::Compression(v)),
-            dictionary_enabled_opt: value.dictionary_enabled.map(|v| protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)),
+            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
-            statistics_enabled_opt: value.statistics_enabled.clone().map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v)),
+            statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
-            encoding_opt: value.encoding.clone().map(|v| protobuf::parquet_options::EncodingOpt::Encoding(v)),
+            encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
             bloom_filter_enabled: value.bloom_filter_enabled,
-            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(|v| protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v)),
-            bloom_filter_ndv_opt: value.bloom_filter_ndv.map(|v| protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v)),
+            bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
+            bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
@@ -975,13 +975,14 @@ impl TryFrom<&ColumnOptions> for protobuf::ColumnOptions {
             compression_opt: value
                 .compression
                 .clone()
-                .map(|v| protobuf::column_options::CompressionOpt::Compression(v)),
-            dictionary_enabled_opt: value.dictionary_enabled.map(|v| {
-                protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)
-            }),
-            statistics_enabled_opt: value.statistics_enabled.clone().map(|v| {
-                protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled(v)
-            }),
+                .map(protobuf::column_options::CompressionOpt::Compression),
+            dictionary_enabled_opt: value
+                .dictionary_enabled
+                .map(protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled),
+            statistics_enabled_opt: value
+                .statistics_enabled
+                .clone()
+                .map(protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled),
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,
@@ -990,16 +991,16 @@ impl TryFrom<&ColumnOptions> for protobuf::ColumnOptions {
             encoding_opt: value
                 .encoding
                 .clone()
-                .map(|v| protobuf::column_options::EncodingOpt::Encoding(v)),
-            bloom_filter_enabled_opt: value.bloom_filter_enabled.clone().map(|v| {
-                protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)
-            }),
+                .map(protobuf::column_options::EncodingOpt::Encoding),
+            bloom_filter_enabled_opt: value
+                .bloom_filter_enabled
+                .map(protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled),
             bloom_filter_fpp_opt: value
                 .bloom_filter_fpp
-                .map(|v| protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp(v)),
+                .map(protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value
                 .bloom_filter_ndv
-                .map(|v| protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv(v)),
+                .map(protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv),
         })
     }
 }
