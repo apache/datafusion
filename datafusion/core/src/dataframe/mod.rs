@@ -69,7 +69,7 @@ pub struct DataFrameWriteOptions {
 }
 
 impl DataFrameWriteOptions {
-    /// Create DataFrameWriteOptions
+    /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
         DataFrameWriteOptions {
             overwrite: false,

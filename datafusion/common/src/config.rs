@@ -1521,6 +1521,7 @@ config_namespace! {
 pub enum FormatOptions {
     CSV(CsvOptions),
     JSON(JsonOptions),
+    #[cfg(feature = "parquet")]
     PARQUET(TableParquetOptions),
     AVRO,
     ARROW,
