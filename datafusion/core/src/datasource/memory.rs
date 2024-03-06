@@ -159,9 +159,7 @@ impl MemTable {
             }
         }
 
-        let show_sizes = state.config_options().explain.show_sizes;
-        let exec =
-            MemoryExec::try_new_with_show_sizes(&data, schema.clone(), None, show_sizes)?;
+        let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
