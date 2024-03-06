@@ -1031,6 +1031,16 @@ SELECT substring_index('arrow.apache.org', 'ac', 0)
 ----
 (empty)
 
+# Test substring_index with large occurrences
+query TT
+SELECT
+  -- i64::MIN
+  substring_index('arrow.apache.org', '.', -9223372036854775808) as c1,
+  -- i64::MAX
+  substring_index('arrow.apache.org', '.', 9223372036854775807) as c2;
+----
+arrow.apache.org arrow.apache.org
+
 # Test substring_index issue https://github.com/apache/arrow-datafusion/issues/9472
 query TTT
 SELECT
