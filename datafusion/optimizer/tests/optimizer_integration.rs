@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use chrono::DateTime;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -31,8 +32,6 @@ use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
-
-use chrono::{DateTime, NaiveDateTime, Utc};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -347,8 +346,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
-    let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
-    let now_time = DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc);
+    let now_time = DateTime::from_timestamp(1666615693, 0).unwrap();
     let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
