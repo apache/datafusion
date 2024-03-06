@@ -1145,9 +1145,7 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
-    use crate::{
-        execute_stream, get_plan_string, ExecutionPlan, ExecutionPlanProperties,
-    };
+    use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
     use arrow_array::builder::UInt64Builder;
     use arrow_array::RecordBatch;
@@ -1363,18 +1361,6 @@ mod tests {
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
         };
-
-        Ok(results)
-    }
-
-    /// Execute the [ExecutionPlan] and collect the results in memory
-    pub async fn collect_bonafide(
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<RecordBatch>> {
-        let stream = execute_stream(plan, context)?;
-        let mut results = vec![];
-        collect_stream(stream, &mut results).await?;
 
         Ok(results)
     }
