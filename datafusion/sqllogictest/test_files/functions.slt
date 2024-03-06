@@ -937,21 +937,21 @@ NULL
 # This query is compatible with MySQL(8.0.19 or later), convenient for comparing results
 query TIT
 SELECT str, n, substring_index(str, '.', n) AS c FROM
-	(VALUES
-		ROW('arrow.apache.org'),
-		ROW('.'),
-		ROW('...')
-	) AS strings(str),
   (VALUES
-		ROW(1),
-		ROW(2),
-		ROW(3),
-		ROW(100),
-	  ROW(-1),
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...')
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
     ROW(-2),
-		ROW(-3),
+    ROW(-3),
     ROW(-100)
-	) AS occurrences(n)
+  ) AS occurrences(n)
 ORDER BY str DESC, n;
 ----
 arrow.apache.org -100 arrow.apache.org
@@ -982,15 +982,15 @@ arrow.apache.org 100 arrow.apache.org
 # Test substring_index using 'ac' as delimiter
 query TIT
 SELECT str, n, substring_index(str, 'ac', n) AS c FROM
-	(VALUES
-		ROW('arrow.apache.org')
-	) AS strings(str),
   (VALUES
-		ROW(1),
-		ROW(2),
-	  ROW(-1),
+    ROW('arrow.apache.org')
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(-1),
     ROW(-2)
-	) AS occurrences(n)
+  ) AS occurrences(n)
 ORDER BY str DESC, n;
 ----
 arrow.apache.org -2 arrow.apache.org
@@ -1031,7 +1031,7 @@ SELECT
   substring_index(url, '.', 1) AS subdomain,
   substring_index(url, '.', -1) AS tld
 FROM
-  (values ROW('docs.apache.com'),
+  (VALUES ROW('docs.apache.com'),
           ROW('community.influxdata.com'),
           ROW('arrow.apache.org')
   ) data(url)
