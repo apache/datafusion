@@ -70,18 +70,18 @@ pub mod expr_fn {
     use datafusion_expr::Expr;
 
     #[doc = "coerces an arbitrary timestamp to the start of the nearest specified interval"]
-    pub fn date_bin(args: Vec<Expr>) -> Expr {
-        super::date_bin().call(args)
+    pub fn date_bin(stride: Expr, source: Expr, origin: Expr) -> Expr {
+        super::date_bin().call(vec![stride, source, origin])
     }
 
     #[doc = "extracts a subfield from the date"]
-    pub fn date_part(args: Vec<Expr>) -> Expr {
-        super::date_part().call(args)
+    pub fn date_part(part: Expr, date: Expr) -> Expr {
+        super::date_part().call(vec![part, date])
     }
 
     #[doc = "truncates the date to a specified level of precision"]
-    pub fn date_trunc(args: Vec<Expr>) -> Expr {
-        super::date_trunc().call(args)
+    pub fn date_trunc(part: Expr, date: Expr) -> Expr {
+        super::date_trunc().call(vec![part, date])
     }
 
     #[doc = "converts an integer to RFC3339 timestamp format"]
