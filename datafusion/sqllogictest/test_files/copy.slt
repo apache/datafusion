@@ -146,7 +146,7 @@ CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (compr
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
---MemoryExec: partitions=1, partition_sizes=[1]
+--MemoryExec: partitions=1
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension!

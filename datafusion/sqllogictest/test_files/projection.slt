@@ -181,7 +181,7 @@ query TT
 explain select b from memory_table;
 ----
 logical_plan TableScan: memory_table projection=[b]
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan MemoryExec: partitions=1
 
 query I
 select b from memory_table;

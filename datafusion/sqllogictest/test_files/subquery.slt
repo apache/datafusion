@@ -195,10 +195,10 @@ ProjectionExec: expr=[t1_id@2 as t1_id, SUM(t2.t2_int)@0 as t2_sum]
 ----------CoalesceBatchesExec: target_batch_size=2
 ------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 --------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]
-----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------------MemoryExec: partitions=4
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------MemoryExec: partitions=4
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -229,10 +229,10 @@ ProjectionExec: expr=[t1_id@2 as t1_id, SUM(t2.t2_int * Float64(1)) + Int64(1)@0
 ----------CoalesceBatchesExec: target_batch_size=2
 ------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 --------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int * Float64(1))]
-----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------------MemoryExec: partitions=4
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------MemoryExec: partitions=4
 
 query IR rowsort
 SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -260,7 +260,7 @@ ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
 ----HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@1)]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------MemoryExec: partitions=4
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t2_id@1], 4), input_partitions=4
 ----------ProjectionExec: expr=[SUM(t2.t2_int)@2 as SUM(t2.t2_int), t2_id@0 as t2_id]
@@ -268,7 +268,7 @@ ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
 --------------CoalesceBatchesExec: target_batch_size=2
 ----------------RepartitionExec: partitioning=Hash([t2_id@0, Utf8("a")@1], 4), input_partitions=4
 ------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id, a as Utf8("a")], aggr=[SUM(t2.t2_int)], ordering_mode=PartiallySorted([1])
---------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--------------------MemoryExec: partitions=4
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_id, 'a') as t2_sum from t1
@@ -302,10 +302,10 @@ ProjectionExec: expr=[t1_id@2 as t1_id, SUM(t2.t2_int)@0 as t2_sum]
 --------------CoalesceBatchesExec: target_batch_size=2
 ----------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 ------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]
---------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--------------------MemoryExec: partitions=4
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------MemoryExec: partitions=4
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1

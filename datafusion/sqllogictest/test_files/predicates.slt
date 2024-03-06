@@ -748,7 +748,7 @@ AggregateExec: mode=SinglePartitioned, gby=[p_partkey@2 as p_partkey], aggr=[SUM
 --------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
-------------MemoryExec: partitions=1, partition_sizes=[1]
+------------MemoryExec: partitions=1
 
 # Inlist simplification
 
@@ -765,7 +765,7 @@ query TT
 explain select x from t where x NOT IN (1,2,3,4) OR x NOT IN (5,6,7,8);
 ----
 logical_plan TableScan: t projection=[x]
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan MemoryExec: partitions=1
 
 query TT
 explain select x from t where x IN (1,2,3,4,5) AND x NOT IN (1,2,3,4);
@@ -776,7 +776,7 @@ Filter: t.x = Int32(5)
 physical_plan
 CoalesceBatchesExec: target_batch_size=8192
 --FilterExec: x@0 = 5
-----MemoryExec: partitions=1, partition_sizes=[1]
+----MemoryExec: partitions=1
 
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
