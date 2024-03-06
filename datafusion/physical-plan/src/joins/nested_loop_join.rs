@@ -51,8 +51,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
 use datafusion_common::utils::EffectiveSize;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the inner table side
 type JoinLeftData = (RecordBatch, MemoryReservation);

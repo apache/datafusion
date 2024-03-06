@@ -18,8 +18,8 @@
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
 use datafusion_common::utils::EffectiveSize;
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -69,7 +69,8 @@ impl BatchBuilder {
 
     /// Append a new batch in `stream_idx`
     pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<()> {
-        self.reservation.try_grow(batch.get_effective_memory_size())?;
+        self.reservation
+            .try_grow(batch.get_effective_memory_size())?;
         let batch_idx = self.batches.len();
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = BatchCursor {

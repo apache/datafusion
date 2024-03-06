@@ -46,12 +46,12 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 
+use datafusion_common::utils::EffectiveSize;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use datafusion_common::utils::EffectiveSize;
 
 mod distributor_channels;
 

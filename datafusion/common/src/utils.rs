@@ -703,7 +703,8 @@ mod tests {
     use crate::ScalarValue;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-    use arrow_array::Array;
+    use arrow_array::{Array, Int32Array, StringArray};
+    use arrow_schema::Schema;
     use std::ops::Range;
     use std::sync::Arc;
 
@@ -1059,6 +1060,36 @@ mod tests {
         assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
         assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
         assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_effective_size() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "abcDEF",
+                    "abc123",
+                    "CBAdef",
+                    "123AbcDef",
+                ])),
+                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            ],
+        )?;
+        let slice = batch.slice(0, 2);
+        assert!(batch.get_effective_memory_size() > 0);
+        assert!(batch.get_effective_memory_size() <= batch.get_array_memory_size());
+
+        assert!(slice.get_effective_memory_size() > 0);
+        assert!(slice.get_effective_memory_size() <= slice.get_array_memory_size());
+
         Ok(())
     }
 }

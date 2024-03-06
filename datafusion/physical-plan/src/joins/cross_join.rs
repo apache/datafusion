@@ -43,8 +43,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
 use datafusion_common::utils::EffectiveSize;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);

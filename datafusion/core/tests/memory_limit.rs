@@ -61,7 +61,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(200_000)
+        .with_memory_limit(100_000)
         .run()
         .await
 }
@@ -656,7 +656,10 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batches: Vec<_> = gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
-        println!("Dict batch[{i}] size is: {}", batch.get_effective_memory_size());
+        println!(
+            "Dict batch[{i}] size is: {}",
+            batch.get_effective_memory_size()
+        );
     });
 
     batches

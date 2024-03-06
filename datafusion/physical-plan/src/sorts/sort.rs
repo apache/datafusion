@@ -54,10 +54,10 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
+use datafusion_common::utils::EffectiveSize;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use tokio::sync::mpsc::Sender;
-use datafusion_common::utils::EffectiveSize;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -501,7 +501,8 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            self.reservation.try_resize(batch.get_effective_memory_size())?;
+            self.reservation
+                .try_resize(batch.get_effective_memory_size())?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -510,7 +511,8 @@ impl ExternalSorter {
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                let reservation = self.reservation.split(batch.get_effective_memory_size());
+                let reservation =
+                    self.reservation.split(batch.get_effective_memory_size());
                 let input = self.sort_batch_stream(batch, metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })

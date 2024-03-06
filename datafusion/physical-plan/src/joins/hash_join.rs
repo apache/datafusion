@@ -67,8 +67,8 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
 use datafusion_common::utils::EffectiveSize;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {

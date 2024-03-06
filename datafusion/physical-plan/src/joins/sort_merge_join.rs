@@ -55,8 +55,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
-use futures::{Stream, StreamExt};
 use datafusion_common::utils::EffectiveSize;
+use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
