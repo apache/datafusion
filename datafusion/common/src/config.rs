@@ -590,7 +590,7 @@ config_namespace! {
         pub show_statistics: bool, default = false
 
         /// When set to true, the explain statement will print the partition sizes
-        pub show_sizes: bool, default = false
+        pub show_sizes: bool, default = true
     }
 }
 

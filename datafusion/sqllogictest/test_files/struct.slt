@@ -67,7 +67,7 @@ Projection: struct(values.a, values.b, values.c)
 --TableScan: values projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
---MemoryExec: partitions=1
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table values;

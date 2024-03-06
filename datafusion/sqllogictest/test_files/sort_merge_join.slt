@@ -41,11 +41,11 @@ SortMergeJoin: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 
 --SortExec: expr=[a@0 ASC]
 ----CoalesceBatchesExec: target_batch_size=8192
 ------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
---------MemoryExec: partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
 --SortExec: expr=[a@0 ASC]
 ----CoalesceBatchesExec: target_batch_size=8192
 ------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
---------MemoryExec: partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
 
 # inner join with join filter
 query TITI rowsort

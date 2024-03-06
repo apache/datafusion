@@ -3914,7 +3914,7 @@ physical_plan
 ProjectionExec: expr=[sn@0 as sn, ts@1 as ts, currency@2 as currency, amount@3 as amount, SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum1]
 --BoundedWindowAggExec: wdw=[SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(table_with_pk.amount) ORDER BY [table_with_pk.sn ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----SortExec: expr=[sn@0 ASC NULLS LAST]
-------MemoryExec: partitions=1
+------MemoryExec: partitions=1, partition_sizes=[1]
 
 # test ROW_NUMBER window function returns correct data_type
 query T
@@ -4078,7 +4078,7 @@ ProjectionExec: expr=[COUNT(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] 
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
---------------MemoryExec: partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query I
 select ROW_NUMBER() over (partition by a) from (select * from a where a = 1);
@@ -4101,7 +4101,7 @@ ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRE
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
---------------MemoryExec: partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # LAG window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
 query TTTTTT

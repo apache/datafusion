@@ -681,7 +681,7 @@ Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 --TableScan: t1 projection=[id, name]
 physical_plan
 SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST]
---MemoryExec: partitions=1
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
 SELECT * FROM t1 ORDER BY id ASC, id, name, id DESC;
@@ -700,7 +700,7 @@ Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 --TableScan: t1 projection=[id, name]
 physical_plan
 SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST]
---MemoryExec: partitions=1
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Minimal reproduction of issue 5970
