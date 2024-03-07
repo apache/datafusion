@@ -471,7 +471,7 @@ fn get_random_function(
     (window_fn.clone(), args, fn_name.to_string())
 }
 
-fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
+fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
     struct Utils {
         val: i32,
         is_preceding: bool,
@@ -499,7 +499,8 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             (second_bound, first_bound)
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
-    let rand_num = rng.gen_range(0..3);
+
+    // let rand_num = rng.gen_range(0..3);
     // let units = if rand_num < 1 {
     //     WindowFrameUnits::Range
     // } else if rand_num < 2 {
@@ -571,13 +572,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
 }
 
 fn includes_preceding_following_with_arg(bound: &WindowFrameBound) -> bool {
-    if bound.is_unbounded() {
-        false
-    } else if bound == &WindowFrameBound::CurrentRow {
-        false
-    } else {
-        true
-    }
+    !bound.is_unbounded() && bound != &WindowFrameBound::CurrentRow
 }
 
 fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
@@ -741,7 +736,6 @@ async fn run_window_test(
             // for line in running_formatted_sorted{
             //     println!("{:?}", line);
             // }
-            panic!("exiting");
             unreachable!();
         }
         assert_eq!(
