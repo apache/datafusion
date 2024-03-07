@@ -271,15 +271,21 @@ pub trait AggregateWindowExpr: WindowExpr {
                 break;
             }
             // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length && !is_causal && not_end && !contains_most_recent_row {
+            if cur_range.end == length
+                && !is_causal
+                && not_end
+                && !contains_most_recent_row
+            {
                 break;
             }
             if contains_most_recent_row {
-                if cur_range.start == length{
-                    cur_range.start = cur_range.start -1;
+                if cur_range.start == length {
+                    // println!("decreasing start range");
+                    cur_range.start -= 1;
                 }
-                if cur_range.end == length{
-                    cur_range.end = cur_range.end -1;
+                if cur_range.end == length {
+                    // println!("decreasing end range");
+                    cur_range.end -= 1;
                 }
             }
             let value = self.get_aggregate_result_inside_range(

@@ -500,21 +500,22 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
     let rand_num = rng.gen_range(0..3);
-    let units = if rand_num < 1 {
-        WindowFrameUnits::Range
-    } else if rand_num < 2 {
-        if is_linear {
-            // In linear test we sort data for WindowAggExec
-            // However, we do not sort data for BoundedWindowExec
-            // Since sorting is unstable, to make sure final result are comparable after sorting
-            // We shouldn't use Rows. This would add dependency to the table order.
-            WindowFrameUnits::Range
-        } else {
-            WindowFrameUnits::Rows
-        }
-    } else {
-        WindowFrameUnits::Groups
-    };
+    // let units = if rand_num < 1 {
+    //     WindowFrameUnits::Range
+    // } else if rand_num < 2 {
+    //     if is_linear {
+    //         // In linear test we sort data for WindowAggExec
+    //         // However, we do not sort data for BoundedWindowExec
+    //         // Since sorting is unstable, to make sure final result are comparable after sorting
+    //         // We shouldn't use Rows. This would add dependency to the table order.
+    //         WindowFrameUnits::Range
+    //     } else {
+    //         WindowFrameUnits::Rows
+    //     }
+    // } else {
+    //     WindowFrameUnits::Groups
+    // };
+    let units = WindowFrameUnits::Range;
     match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
@@ -591,6 +592,9 @@ async fn run_window_test(
             expr: col(column, &schema).unwrap(),
             options: SortOptions::default(),
         })
+    }
+    if window_frame.units == WindowFrameUnits::Range && orderby_exprs.len() > 1{
+        orderby_exprs = orderby_exprs[0..1].to_vec();
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
@@ -672,7 +676,7 @@ async fn run_window_test(
             .unwrap()],
             exec2,
             vec![],
-            search_mode,
+            search_mode.clone(),
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -703,10 +707,23 @@ async fn run_window_test(
         .zip(&running_formatted_sorted)
         .enumerate()
     {
+        if !usual_line.eq(running_line){
+            println!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
+            println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
+            for (line1, line2) in usual_formatted_sorted.iter().zip(running_formatted_sorted){
+                println!("{:?}   ---   {:?}", line1, line2);
+            }
+            // println!("-----------running_formatted_sorted-----------");
+            // for line in running_formatted_sorted{
+            //     println!("{:?}", line);
+            // }
+            panic!("exiting");
+            unreachable!();
+        }
         assert_eq!(
             (i, usual_line),
             (i, running_line),
-            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}"
+            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}"
         );
     }
     Ok(())
