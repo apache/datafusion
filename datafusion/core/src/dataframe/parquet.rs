@@ -124,7 +124,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore] // levels cannot be recovered from reader, only default levels are read.
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_util::test_table().await?;
