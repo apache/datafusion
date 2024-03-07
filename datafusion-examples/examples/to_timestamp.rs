@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
         .collect()
         .await;
 
-    let expected = "Error parsing timestamp from '01-14-2023 01/01/30' using format '%d-%m-%Y %H:%M:%S': input contains invalid characters";
+    let expected = "Execution error: Error parsing timestamp from '01-14-2023 01/01/30' using format '%d-%m-%Y %H:%M:%S': input is out of range";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     // note that using arrays for the chrono formats is not supported
