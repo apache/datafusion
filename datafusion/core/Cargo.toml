@@ -60,7 +60,11 @@ force_hash_collisions = []
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
-regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
+regex_expressions = [
+    "datafusion-physical-expr/regex_expressions",
+    "datafusion-optimizer/regex_expressions",
+    "datafusion-functions/regex_expressions",
+]
 serde = ["arrow-schema/serde"]
 unicode_expressions = [
     "datafusion-physical-expr/unicode_expressions",
