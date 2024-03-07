@@ -1365,6 +1365,19 @@ mod tests {
         Ok(results)
     }
 
+    /// Execute the [ExecutionPlan] and collect the results in memory
+    pub async fn collect_bonafide(
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+    ) -> Result<Vec<RecordBatch>> {
+        let stream = execute_stream(plan, context)?;
+        let mut results = vec![];
+
+        collect_stream(stream, &mut results).await?;
+
+        Ok(results)
+    }
+
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("sn", DataType::UInt64, true),
@@ -1639,6 +1652,7 @@ mod tests {
 
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
+        // let batches = collect_bonafide(plan, task_ctx).await?;
 
         let expected = [
             "+----+----------+-------------+-----------------+-------+",

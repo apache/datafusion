@@ -237,8 +237,9 @@ pub trait AggregateWindowExpr: WindowExpr {
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
         let mut most_recent_row_obs = None;
-        if let Some(most_recent_row) = most_recent_row{
-            most_recent_row_obs = Some(get_orderby_values(self.order_by_columns(most_recent_row)?));
+        if let Some(most_recent_row) = most_recent_row {
+            most_recent_row_obs =
+                Some(get_orderby_values(self.order_by_columns(most_recent_row)?));
         }
         // let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
         //     if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
@@ -278,6 +279,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                     &order_bys,
                     most_recent_row_obs.as_deref(),
                     self.order_by(),
+                    idx,
                 )?
             {
                 break;
@@ -320,6 +322,7 @@ pub fn is_end_range_safe(
     most_recent_order_bys: Option<&[ArrayRef]>,
     // most_recent_row: Option<&RecordBatch>,
     sort_exprs: LexOrderingRef,
+    idx: usize,
 ) -> Result<bool> {
     Ok(match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => match &window_frame.end_bound {
@@ -339,26 +342,37 @@ pub fn is_end_range_safe(
                     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                     is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                     // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
+                    // false
                 } else {
                     true
                 }
-            },
+            }
             WindowFrameBound::CurrentRow => {
                 let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                 is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                 // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
             }
-            WindowFrameBound::Following(value) => {
-                let is_descending = sort_exprs
-                    .first()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Sort options unexpectedly absent in a window frame".to_string(),
-                        )
-                    })?.options
-                    .descending;
-                false
-            },
+            WindowFrameBound::Following(delta) => {
+                // println!("delta:{delta:?}");
+                let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                let mut most_recent_row_values =
+                    get_row_at_idx(most_recent_order_bys, 0)?;
+                assert_eq!(most_recent_row_values.len(), 1);
+                let most_recent_range_value = most_recent_row_values.swap_remove(0);
+                assert_eq!(sort_exprs.len(), 1);
+                let is_descending = sort_exprs[0].options.descending;
+                let mut current_row_values = get_row_at_idx(order_bys, idx)?;
+                assert_eq!(current_row_values.len(), 1);
+                let value = current_row_values.swap_remove(0);
+                let res = if is_descending {
+                    value.sub(delta)? > most_recent_range_value
+                } else {
+                    most_recent_range_value > value.add(delta)?
+                };
+                // println!("value:{value:?}, delta:{delta:?}, most_recent_range_value:{most_recent_range_value:?}, comparison:{res:?}");
+                res
+                // false
+            }
         },
         WindowFrameContext::Groups {
             window_frame,
@@ -406,9 +420,13 @@ pub fn is_end_range_safe(
 //     Ok(cmp.is_gt())
 // }
 
-fn is_row_ahead(old_cols: &[ArrayRef], current_cols: &[ArrayRef], sort_exprs: LexOrderingRef) -> Result<bool> {
-    assert!(old_cols.len()>0);
-    assert!(current_cols.len()>0);
+fn is_row_ahead(
+    old_cols: &[ArrayRef],
+    current_cols: &[ArrayRef],
+    sort_exprs: LexOrderingRef,
+) -> Result<bool> {
+    assert!(old_cols.len() > 0);
+    assert!(current_cols.len() > 0);
     if old_cols[0].is_empty() || current_cols[0].is_empty() {
         return Ok(false);
     }
