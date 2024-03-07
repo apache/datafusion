@@ -314,10 +314,10 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // - ignore nulls mode and current value is null and is within window bounds
         // .unwrap() is safe here as there is a none check in front
         #[allow(clippy::unnecessary_unwrap)]
-        if idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap())) {
-            Ok(self.default_value.clone())
-        } else {
+        if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
             ScalarValue::try_from_array(array, idx.unwrap())
+        } else {
+            Ok(self.default_value.clone())
         }
     }
 
