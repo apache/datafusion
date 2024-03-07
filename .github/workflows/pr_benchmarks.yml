@@ -1,12 +1,13 @@
 name: Benchmarks
 
 on:
-  pull_request:
+  issue_comment:
 
 jobs:
   benchmark:
     name: Run Benchmarks
     runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/benchmark')
     steps:
       - name: Dump GitHub context
         env:
@@ -15,6 +16,8 @@ jobs:
 
       - name: Checkout PR changes
         uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
 
       - name: Setup data and generate unique result names
         run: |
@@ -24,14 +27,11 @@ jobs:
           # Setup the TPC-H data set with a scale factor of 10
           ./bench.sh data tpch
           
-          # Generate a unique-ish identifier for the results using 
-          # branch name and commit sha
-          short_ref=$(echo "${{ github.head_ref }}" | cut -c1-20)
-          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "HEAD_REF_SHA=$short_ref-$short_sha" >> "$GITHUB_ENV" 
+          # Generate a unique-ish identifiers for the results
+          echo "HEAD_REF_SHA=pr-${{ github.event.issue.number }}" >> "$GITHUB_ENV" 
           
-          short_sha=$(echo "${{ github.event.pull_request.base.sha }}" | cut -c1-7)
-          echo "BASE_REF_SHA=${{ github.base_ref }}-$short_sha" >> "$GITHUB_ENV"
+          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "BASE_REF_SHA=main-$short_sha" >> "$GITHUB_ENV"
 
       - name: Benchmark PR changes
         env:
@@ -44,7 +44,7 @@ jobs:
       - name: Checkout base commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
           clean: false
 
       - name: Benchmark baseline and generate comparison message
@@ -58,14 +58,14 @@ jobs:
           # Temporary workaround, until `RESULTS_NAME` var lands into main
           mv -f results/HEAD results/${{ env.BASE_REF_SHA }}
           
-          echo ${{ github.event.pull_request.number }} > pr
+          echo ${{ github.event.issue.number }} > pr
           
           pip3 install rich
           cat > message.md <<EOF
           # Benchmark results
           
           <details>
-          <summary>Benchmarks comparing ${{ github.event.pull_request.base.sha }} and ${{ github.sha }}</summary>
+          <summary>Benchmarks comparing ${{ github.sha }} and PR ${{ github.event.issue.number }}</summary>
 
           \`\`\`
           $(./bench.sh compare ${{ env.BASE_REF_SHA }} ${{ env.HEAD_REF_SHA }})
@@ -87,37 +87,3 @@ jobs:
         with:
           name: pr
           path: benchmarks/pr
-
-  comment:
-    name: Post benchmarks comment
-    runs-on: ubuntu-latest
-    needs: [ benchmark ]
-    steps:
-      - name: Download comment message
-        uses: actions/download-artifact@v4
-        with:
-          name: message
-
-      - name: Download pr number
-        uses: actions/download-artifact@v4
-        with:
-          name: pr
-
-      - name: Print message and pr number
-        run: |
-          cat pr
-          echo "PR_NUMBER=$(cat pr)" >> "$GITHUB_ENV"
-          cat message.md
-
-      - name: Post a comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const content = fs.readFileSync('message.md', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: process.env.PR_NUMBER,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: content,
-            })
