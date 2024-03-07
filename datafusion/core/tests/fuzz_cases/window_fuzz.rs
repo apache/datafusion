@@ -570,6 +570,28 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     }
 }
 
+fn includes_preceding_following_with_arg(bound: &WindowFrameBound) -> bool {
+    if bound.is_unbounded() {
+        false
+    } else if bound == &WindowFrameBound::CurrentRow {
+        false
+    } else {
+        true
+    }
+}
+
+fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
+    match window_frame.units {
+        WindowFrameUnits::Rows => true,
+        WindowFrameUnits::Range => {
+            // Range can only accept multi order by clause when bounds are CURRENT ROW or UNBOUNDED PRECEDING/FOLLOWING
+            !includes_preceding_following_with_arg(&window_frame.start_bound)
+                && !includes_preceding_following_with_arg(&window_frame.end_bound)
+        }
+        WindowFrameUnits::Groups => true,
+    }
+}
+
 /// Perform batch and running window same input
 /// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
 async fn run_window_test(
@@ -593,7 +615,7 @@ async fn run_window_test(
             options: SortOptions::default(),
         })
     }
-    if window_frame.units == WindowFrameUnits::Range && orderby_exprs.len() > 1{
+    if !can_accept_multi_orderby(&window_frame) && orderby_exprs.len() > 1 {
         orderby_exprs = orderby_exprs[0..1].to_vec();
     }
     let mut partitionby_exprs = vec![];
@@ -707,10 +729,12 @@ async fn run_window_test(
         .zip(&running_formatted_sorted)
         .enumerate()
     {
-        if !usual_line.eq(running_line){
+        if !usual_line.eq(running_line) {
             println!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
             println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
-            for (line1, line2) in usual_formatted_sorted.iter().zip(running_formatted_sorted){
+            for (line1, line2) in
+                usual_formatted_sorted.iter().zip(running_formatted_sorted)
+            {
                 println!("{:?}   ---   {:?}", line1, line2);
             }
             // println!("-----------running_formatted_sorted-----------");
