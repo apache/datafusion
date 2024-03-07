@@ -2078,12 +2078,18 @@ mod tests {
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.and_utc().timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.and_utc().timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
@@ -2146,12 +2152,18 @@ mod tests {
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.and_utc().timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.and_utc().timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),

@@ -5826,7 +5826,8 @@ mod tests {
                             .unwrap()
                             .and_hms_opt(hour, minute, second)
                             .unwrap()
-                            .and_utc().timestamp(),
+                            .and_utc()
+                            .timestamp(),
                     ),
                     None,
                 ))
