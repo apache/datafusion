@@ -265,8 +265,12 @@ async fn simple_udaf_order() -> Result<()> {
             .map(|e| e.expr.data_type(schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let acc =
-            FirstValueAccumulator::try_new(data_type, &ordering_dtypes, ordering_req)?;
+        let acc = FirstValueAccumulator::try_new(
+            data_type,
+            &ordering_dtypes,
+            ordering_req,
+            false,
+        )?;
         Ok(Box::new(acc))
     }
 

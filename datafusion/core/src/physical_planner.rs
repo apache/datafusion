@@ -245,7 +245,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             distinct,
             args,
             filter,
-            order_by,
+            order_by: _,
             null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
