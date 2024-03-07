@@ -226,7 +226,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
 
-            let mut valid_indices =  Vec::new();
+            let mut valid_indices = Vec::new();
             if self.ignore_nulls {
                 valid_indices = arr.nulls().unwrap().valid_indices().collect::<Vec<_>>();
                 if valid_indices.is_empty() {
@@ -241,7 +241,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                         range.start
                     };
                     ScalarValue::try_from_array(arr, index)
-                },
+                }
                 NthValueKind::Last => {
                     let index = if self.ignore_nulls {
                         valid_indices[valid_indices.len() - 1]
@@ -249,7 +249,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                         range.end - 1
                     };
                     ScalarValue::try_from_array(arr, index)
-                },
+                }
                 NthValueKind::Nth(n) => {
                     match n.cmp(&0) {
                         Ordering::Greater => {
