@@ -138,6 +138,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 ) -> Result<i64, DataFusionError> {
     string_to_datetime_formatted(&Utc, s, format)?
         .naive_utc()
+        .and_utc()
         .timestamp_nanos_opt()
         .ok_or_else(|| {
             DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string())
