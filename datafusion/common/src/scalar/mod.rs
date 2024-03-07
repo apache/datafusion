@@ -5826,7 +5826,7 @@ mod tests {
                             .unwrap()
                             .and_hms_opt(hour, minute, second)
                             .unwrap()
-                            .timestamp(),
+                            .and_utc().timestamp(),
                     ),
                     None,
                 ))
@@ -5838,6 +5838,7 @@ mod tests {
                             .unwrap()
                             .and_hms_milli_opt(hour, minute, second, millisec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_millis(),
                     ),
                     None,
@@ -5850,6 +5851,7 @@ mod tests {
                             .unwrap()
                             .and_hms_micro_opt(hour, minute, second, microsec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_micros(),
                     ),
                     None,
@@ -5862,6 +5864,7 @@ mod tests {
                             .unwrap()
                             .and_hms_nano_opt(hour, minute, second, nanosec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_nanos_opt()
                             .unwrap(),
                     ),

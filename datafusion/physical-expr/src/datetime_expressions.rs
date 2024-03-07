@@ -42,7 +42,7 @@ use arrow_array::temporal_conversions::NANOSECONDS;
 use arrow_array::timezone::Tz;
 use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
 use arrow_array::StringArray;
-use chrono::prelude::*;
+use chrono::{prelude::*, TimeDelta};
 use chrono::{Duration, LocalResult, Months, NaiveDate};
 
 use datafusion_common::cast::{
@@ -451,7 +451,9 @@ where
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
-            .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
+            .map(|d| {
+                d - TimeDelta::try_seconds(60 * 60 * 24 * d.weekday() as i64).unwrap()
+            }),
         "month" => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
@@ -495,10 +497,10 @@ fn _date_trunc_coarse_with_tz(
                     // To account for this adjust the time by a few hours, convert to local time,
                     // and then adjust the time back.
                     truncated
-                        .sub(Duration::hours(3))
+                        .sub(TimeDelta::try_hours(3)?)
                         .and_local_timezone(value.timezone())
                         .single()
-                        .map(|v| v.add(Duration::hours(3)))
+                        .map(|v| v.add(TimeDelta::try_hours(3).unwrap()))
                 }
                 LocalResult::Single(datetime) => Some(datetime),
                 LocalResult::Ambiguous(datetime1, datetime2) => {
@@ -526,7 +528,7 @@ fn _date_trunc_coarse_without_tz(
     value: Option<NaiveDateTime>,
 ) -> Result<Option<i64>> {
     let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
-    Ok(value.and_then(|value| value.timestamp_nanos_opt()))
+    Ok(value.and_then(|value| value.and_utc().timestamp_nanos_opt()))
 }
 
 /// Tuncates the single `value`, expressed in nanoseconds since the
@@ -750,8 +752,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
 fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
-    let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
+    DateTime::from_timestamp(secs, nsec).unwrap()
 }
 
 /// DATE_BIN sql function
@@ -806,8 +807,9 @@ fn date_bin_impl(
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
-            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
-                .num_nanoseconds();
+            let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                + TimeDelta::try_milliseconds(ms as i64).unwrap())
+            .num_nanoseconds();
 
             match nanos {
                 Some(v) => Interval::Nanoseconds(v),
@@ -828,8 +830,9 @@ fn date_bin_impl(
                     Interval::Months(months as i64)
                 }
             } else {
-                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
-                    .num_nanoseconds();
+                let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                    + Duration::nanoseconds(nanos))
+                .num_nanoseconds();
                 match nanos {
                     Some(v) => Interval::Nanoseconds(v),
                     _ => return exec_err!("DATE_BIN stride argument is too large"),
@@ -1590,12 +1593,10 @@ mod tests {
 
     #[test]
     fn test_date_bin_single() {
-        use chrono::Duration;
-
         let cases = vec![
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15).unwrap(),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -1603,7 +1604,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15).unwrap(),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:02:30",
                 ),
@@ -1611,7 +1612,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15).unwrap(),
                     "2004-04-09T02:03:04.123456789Z",
                     "2005-01-01T00:02:30",
                 ),
@@ -1619,7 +1620,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::hours(1),
+                    TimeDelta::try_hours(1).unwrap(),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -1627,7 +1628,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::seconds(10),
+                    TimeDelta::try_seconds(10).unwrap(),
                     "2004-04-09T02:03:11.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -2047,7 +2048,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 "2020::01::02".to_string(),
             ),
@@ -2072,23 +2073,23 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(Some(date.and_utc().timestamp_millis()), None),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(Some(date.and_utc().timestamp_micros()), None),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
@@ -2115,7 +2116,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 StringArray::from(vec!["%Y::%m::%d".to_string()]),
                 "2020::01::02".to_string(),
             ),
@@ -2140,23 +2141,23 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(Some(date.and_utc().timestamp_millis()), None),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(Some(date.and_utc().timestamp_micros()), None),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
@@ -2186,8 +2187,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 StringArray::from(vec!["2020::01::02", "2026::07::08"]),
@@ -2202,8 +2203,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
                 StringArray::from(vec!["2020::01::02", "08::07::2026"]),
@@ -2235,8 +2236,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampSecondArray::from(vec![
-                    date.timestamp(),
-                    date2.timestamp(),
+                    date.and_utc().timestamp(),
+                    date2.and_utc().timestamp(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H", "%d::%m::%Y %S-%M-%H"]),
                 StringArray::from(vec![
@@ -2246,8 +2247,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMillisecondArray::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -2260,8 +2261,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMicrosecondArray::from(vec![
-                    date.timestamp_micros(),
-                    date2.timestamp_micros(),
+                    date.and_utc().timestamp_micros(),
+                    date2.and_utc().timestamp_micros(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -2274,8 +2275,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampNanosecondArray::from(vec![
-                    date.timestamp_nanos_opt().unwrap(),
-                    date2.timestamp_nanos_opt().unwrap(),
+                    date.and_utc().timestamp_nanos_opt().unwrap(),
+                    date2.and_utc().timestamp_nanos_opt().unwrap(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
