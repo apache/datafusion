@@ -225,17 +225,31 @@ impl PartitionEvaluator for NthValueEvaluator {
                 // We produce None if the window is empty.
                 return ScalarValue::try_from(arr.data_type());
             }
+
+            let mut valid_indices =  Vec::new();
+            if self.ignore_nulls {
+                valid_indices = arr.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+                if valid_indices.is_empty() {
+                    return ScalarValue::try_from(arr.data_type());
+                }
+            }
             match self.state.kind {
-                NthValueKind::First => ScalarValue::try_from_array_ignore_nulls_first(
-                    arr,
-                    range.start,
-                    self.ignore_nulls,
-                ),
-                NthValueKind::Last => ScalarValue::try_from_array_ignore_nulls_last(
-                    arr,
-                    range.end - 1,
-                    self.ignore_nulls,
-                ),
+                NthValueKind::First => {
+                    let index: usize = if self.ignore_nulls {
+                        valid_indices[0]
+                    } else {
+                        range.start
+                    };
+                    ScalarValue::try_from_array(arr, index)
+                },
+                NthValueKind::Last => {
+                    let index = if self.ignore_nulls {
+                        valid_indices[valid_indices.len() - 1]
+                    } else {
+                        range.end - 1
+                    };
+                    ScalarValue::try_from_array(arr, index)
+                },
                 NthValueKind::Nth(n) => {
                     match n.cmp(&0) {
                         Ordering::Greater => {
