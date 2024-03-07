@@ -1366,6 +1366,7 @@ mod tests {
     }
 
     /// Execute the [ExecutionPlan] and collect the results in memory
+    #[allow(dead_code)]
     pub async fn collect_bonafide(
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,

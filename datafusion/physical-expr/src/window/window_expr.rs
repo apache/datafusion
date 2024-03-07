@@ -24,7 +24,7 @@ use crate::{LexOrderingRef, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
@@ -267,7 +267,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         let is_causal = self.get_window_frame().is_causal();
         while idx < length {
             // Start search from the last_range. This squeezes searched range.
-            let mut cur_range =
+            let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // println!("idx:{idx}, length:{length}, last_range:{:?}, cur_range: {:?}, contains_most_recent_row:{contains_most_recent_row}", last_range, cur_range);
             // Exit if the range is non-causal and extends all the way:
@@ -315,12 +315,10 @@ macro_rules! most_recent_cols {
     };
 }
 
-pub fn is_end_range_safe(
+pub(crate) fn is_end_range_safe(
     window_frame_ctx: &WindowFrameContext,
-    // last_batch: &RecordBatch,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    // most_recent_row: Option<&RecordBatch>,
     sort_exprs: LexOrderingRef,
     idx: usize,
 ) -> Result<bool> {
@@ -334,7 +332,7 @@ pub fn is_end_range_safe(
         },
         WindowFrameContext::Range {
             window_frame,
-            state,
+            state: _state,
         } => match &window_frame.end_bound {
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
@@ -364,19 +362,19 @@ pub fn is_end_range_safe(
                 let mut current_row_values = get_row_at_idx(order_bys, idx)?;
                 assert_eq!(current_row_values.len(), 1);
                 let value = current_row_values.swap_remove(0);
-                let res = if is_descending {
+                if is_descending {
                     value.sub(delta)? > most_recent_range_value
                 } else {
                     most_recent_range_value > value.add(delta)?
-                };
+                }
                 // println!("value:{value:?}, delta:{delta:?}, most_recent_range_value:{most_recent_range_value:?}, comparison:{res:?}");
-                res
+                // res
                 // false
             }
         },
         WindowFrameContext::Groups {
-            window_frame,
-            state,
+            window_frame: _,
+            state: _,
         } => false,
     })
 }
@@ -425,8 +423,8 @@ fn is_row_ahead(
     current_cols: &[ArrayRef],
     sort_exprs: LexOrderingRef,
 ) -> Result<bool> {
-    assert!(old_cols.len() > 0);
-    assert!(current_cols.len() > 0);
+    assert!(!old_cols.is_empty());
+    assert!(!current_cols.is_empty());
     if old_cols[0].is_empty() || current_cols[0].is_empty() {
         return Ok(false);
     }
