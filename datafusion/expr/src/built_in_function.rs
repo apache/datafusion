@@ -361,7 +361,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySort => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
@@ -529,9 +528,6 @@ impl BuiltinScalarFunction {
                 Ok(expr_type)
             }
             BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => {
-                Ok(List(Arc::new(Field::new("item", UInt64, true))))
-            }
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
