@@ -603,10 +603,9 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => binary_string_array_op!(left, right, concat_elements),
-            AtArrow => {
-                array_has_all(&[left, right])
-            },
-            ArrowAt => array_has_all(&[right, left]),
+            AtArrow | ArrowAt => {
+                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            }
         }
     }
 }

@@ -118,8 +118,52 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                     args: vec![left, right],
                 })));
             }
+
+            if let Some(expr) = rewrite_array_has_all_operator_to_func(left, op, right) {
+                return Ok(Transformed::yes(expr));
+            }
         }
         Ok(Transformed::no(expr))
+    }
+}
+
+fn rewrite_array_has_all_operator_to_func(
+    left: &Expr,
+    op: Operator,
+    right: &Expr,
+) -> Option<Expr> {
+    if op != Operator::AtArrow && op != Operator::ArrowAt {
+        return None;
+    }
+
+    match (left, right) {
+        // array_has_all(array, array) -> array_has_all
+        (
+            Expr::ScalarFunction(ScalarFunction {
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                args: _left_args,
+            }),
+            Expr::ScalarFunction(ScalarFunction {
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                args: _right_args,
+            }),
+        ) => {
+            let fun = BuiltinScalarFunction::ArrayHasAll;
+
+            let args = if let Operator::ArrowAt = op {
+                vec![right.clone(), left.clone()]
+            } else {
+                vec![left.clone(), right.clone()]
+            };
+
+            Some(Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::BuiltIn(fun),
+                args,
+            }))
+        }
+        _ => None,
     }
 }
 
