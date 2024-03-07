@@ -61,6 +61,9 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_dims_udf(),
         udf::cardinality_udf(),
         udf::array_ndims_udf(),
+        array_has::array_has_udf(),
+        array_has::array_has_all_udf(),
+        array_has::array_has_any_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

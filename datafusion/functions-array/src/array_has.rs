@@ -21,7 +21,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, Result, DataFusionError};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -197,7 +197,7 @@ impl ScalarUDFImpl for ArrayHasAny {
         self
     }
     fn name(&self) -> &str {
-        "array_has_all"
+        "array_has_any"
     }
 
     fn signature(&self) -> &Signature {

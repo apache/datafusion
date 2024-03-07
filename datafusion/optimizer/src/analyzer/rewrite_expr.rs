@@ -29,9 +29,9 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    ScalarFunctionDefinition,
+    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionDefinition
 };
+use datafusion_functions_array::expr_fn::array_has_all;
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -150,18 +150,15 @@ fn rewrite_array_has_all_operator_to_func(
                 args: _right_args,
             }),
         ) => {
-            let fun = BuiltinScalarFunction::ArrayHasAll;
-
-            let args = if let Operator::ArrowAt = op {
-                vec![right.clone(), left.clone()]
+            let left = left.clone();
+            let right = right.clone();
+            
+            let expr = if let Operator::ArrowAt = op {
+                array_has_all(right, left)
             } else {
-                vec![left.clone(), right.clone()]
+                array_has_all(left, right)
             };
-
-            Some(Expr::ScalarFunction(ScalarFunction {
-                func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                args,
-            }))
+            Some(expr)
         }
         _ => None,
     }

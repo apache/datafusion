@@ -34,9 +34,10 @@ path = "src/lib.rs"
 
 [features]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
-default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
+default = ["unicode_expressions", "crypto_expressions", "regex_expressions", "array_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
+array_expressions = ["datafusion-functions-array"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -45,6 +46,7 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-functions-array = { workspace = true, optional = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { workspace = true }
 log = { workspace = true }
