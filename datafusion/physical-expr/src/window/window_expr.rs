@@ -235,6 +235,11 @@ pub trait AggregateWindowExpr: WindowExpr {
         // let mut contains_most_recent_row = false;
         let values = self.evaluate_args(record_batch)?;
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+
+        let mut most_recent_row_obs = None;
+        if let Some(most_recent_row) = most_recent_row{
+            most_recent_row_obs = Some(get_orderby_values(self.order_by_columns(most_recent_row)?));
+        }
         // let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
         //     if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
         //         contains_most_recent_row = true;
@@ -270,8 +275,8 @@ pub trait AggregateWindowExpr: WindowExpr {
                 && not_end
                 && !is_end_range_safe(
                     window_frame_ctx,
-                    record_batch,
-                    most_recent_row,
+                    &order_bys,
+                    most_recent_row_obs.as_deref(),
                     self.order_by(),
                 )?
             {
@@ -298,10 +303,10 @@ pub trait AggregateWindowExpr: WindowExpr {
     }
 }
 
-macro_rules! most_recent_row {
-    ($most_recent_row:expr) => {
-        if let Some(most_recent_row) = $most_recent_row {
-            most_recent_row
+macro_rules! most_recent_cols {
+    ($most_recent_cols:expr) => {
+        if let Some(most_recent_cols) = $most_recent_cols {
+            most_recent_cols
         } else {
             return Ok(false);
         }
@@ -310,8 +315,10 @@ macro_rules! most_recent_row {
 
 pub fn is_end_range_safe(
     window_frame_ctx: &WindowFrameContext,
-    last_batch: &RecordBatch,
-    most_recent_row: Option<&RecordBatch>,
+    // last_batch: &RecordBatch,
+    order_bys: &[ArrayRef],
+    most_recent_order_bys: Option<&[ArrayRef]>,
+    // most_recent_row: Option<&RecordBatch>,
     sort_exprs: LexOrderingRef,
 ) -> Result<bool> {
     Ok(match window_frame_ctx {
@@ -329,17 +336,29 @@ pub fn is_end_range_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    let most_recent_row = most_recent_row!(most_recent_row);
-                    is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
+                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                    // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
                 } else {
                     true
                 }
             },
             WindowFrameBound::CurrentRow => {
-                let most_recent_row = most_recent_row!(most_recent_row);
-                is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
+                let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
             }
-            WindowFrameBound::Following(value) => false,
+            WindowFrameBound::Following(value) => {
+                let is_descending = sort_exprs
+                    .first()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Sort options unexpectedly absent in a window frame".to_string(),
+                        )
+                    })?.options
+                    .descending;
+                false
+            },
         },
         WindowFrameContext::Groups {
             window_frame,
@@ -348,37 +367,53 @@ pub fn is_end_range_safe(
     })
 }
 
-fn get_last_order_values(
-    batch: &RecordBatch,
-    sort_exprs: LexOrderingRef,
-) -> Result<Vec<ScalarValue>> {
-    assert!(batch.num_rows() >= 1);
-    let last_row_idx = batch.num_rows() - 1;
-    let columns = sort_exprs
-        .iter()
-        .map(|expr| Ok(expr.evaluate_to_sort_column(batch)?.values))
-        .collect::<Result<Vec<_>>>()?;
-    get_row_at_idx(&columns, last_row_idx)
-}
+// fn get_last_order_values(
+//     batch: &RecordBatch,
+//     sort_exprs: LexOrderingRef,
+// ) -> Result<Vec<ScalarValue>> {
+//     assert!(batch.num_rows() >= 1);
+//     let last_row_idx = batch.num_rows() - 1;
+//     let columns = sort_exprs
+//         .iter()
+//         .map(|expr| Ok(expr.evaluate_to_sort_column(batch)?.values))
+//         .collect::<Result<Vec<_>>>()?;
+//     get_row_at_idx(&columns, last_row_idx)
+// }
+//
+// // TODO: Add unit test for this function
+// /// Checks whether current_batch is ahead of old_batch
+// /// in terms of sort_exprs.
+// pub(crate) fn is_record_batch_ahead(
+//     old_batch: &RecordBatch,
+//     current_batch: &RecordBatch,
+//     sort_exprs: LexOrderingRef,
+// ) -> Result<bool> {
+//     if old_batch.num_rows() == 0 || current_batch.num_rows() == 0 {
+//         return Ok(false);
+//     }
+//     // return Ok(false);
+//     // println!("OLD BATCH");
+//     // print_batches(&[old_batch.clone()])?;
+//     // println!("NEW BATCH");
+//     // print_batches(&[current_batch.clone()])?;
+//     let last_row = get_last_order_values(old_batch, sort_exprs)?;
+//     let current_row = get_last_order_values(current_batch, sort_exprs)?;
+//     let sort_options = sort_exprs
+//         .iter()
+//         .map(|sort_expr| sort_expr.options)
+//         .collect::<Vec<_>>();
+//     let cmp = compare_rows(&current_row, &last_row, &sort_options)?;
+//     Ok(cmp.is_gt())
+// }
 
-// TODO: Add unit test for this function
-/// Checks whether current_batch is ahead of old_batch
-/// in terms of sort_exprs.
-pub(crate) fn is_record_batch_ahead(
-    old_batch: &RecordBatch,
-    current_batch: &RecordBatch,
-    sort_exprs: LexOrderingRef,
-) -> Result<bool> {
-    if old_batch.num_rows() == 0 || current_batch.num_rows() == 0 {
+fn is_row_ahead(old_cols: &[ArrayRef], current_cols: &[ArrayRef], sort_exprs: LexOrderingRef) -> Result<bool> {
+    assert!(old_cols.len()>0);
+    assert!(current_cols.len()>0);
+    if old_cols[0].is_empty() || current_cols[0].is_empty() {
         return Ok(false);
     }
-    // return Ok(false);
-    // println!("OLD BATCH");
-    // print_batches(&[old_batch.clone()])?;
-    // println!("NEW BATCH");
-    // print_batches(&[current_batch.clone()])?;
-    let last_row = get_last_order_values(old_batch, sort_exprs)?;
-    let current_row = get_last_order_values(current_batch, sort_exprs)?;
+    let last_row = get_row_at_idx(old_cols, old_cols.len() - 1)?;
+    let current_row = get_row_at_idx(current_cols, current_cols.len() - 1)?;
     let sort_options = sort_exprs
         .iter()
         .map(|sort_expr| sort_expr.options)
