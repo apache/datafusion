@@ -32,7 +32,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext,
 };
-use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame};
+use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
 use indexmap::IndexMap;
 
@@ -232,61 +232,50 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let mut contains_most_recent_row = false;
-        let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
-            if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
-                contains_most_recent_row = true;
-                let batch = concat_batches(
-                    &record_batch.schema(),
-                    [record_batch, most_recent_row],
-                )?;
-                let values = self.evaluate_args(&batch)?;
-                let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
-                (values, order_bys)
-            } else {
-                let values = self.evaluate_args(record_batch)?;
-                let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-                (values, order_bys)
-            }
-        } else {
-            let values = self.evaluate_args(record_batch)?;
-            let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-            (values, order_bys)
-        };
+        // let mut contains_most_recent_row = false;
+        let values = self.evaluate_args(record_batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+        // let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
+        //     if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
+        //         contains_most_recent_row = true;
+        //         let batch = concat_batches(
+        //             &record_batch.schema(),
+        //             [record_batch, most_recent_row],
+        //         )?;
+        //         let values = self.evaluate_args(&batch)?;
+        //         let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
+        //         (values, order_bys)
+        //     } else {
+        //         let values = self.evaluate_args(record_batch)?;
+        //         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+        //         (values, order_bys)
+        //     }
+        // } else {
+        //     let values = self.evaluate_args(record_batch)?;
+        //     let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+        //     (values, order_bys)
+        // };
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let end_point = if contains_most_recent_row {
-            length - 1
-        } else {
-            length
-        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         let is_causal = self.get_window_frame().is_causal();
-        while idx < end_point {
+        while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let mut cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // println!("idx:{idx}, length:{length}, last_range:{:?}, cur_range: {:?}, contains_most_recent_row:{contains_most_recent_row}", last_range, cur_range);
-            if cur_range.end == length && contains_most_recent_row && not_end {
-                break;
-            }
             // Exit if the range is non-causal and extends all the way:
             if cur_range.end == length
                 && !is_causal
                 && not_end
-                && !contains_most_recent_row
+                && !is_end_range_safe(
+                    window_frame_ctx,
+                    record_batch,
+                    most_recent_row,
+                    self.order_by(),
+                )?
             {
                 break;
-            }
-            if contains_most_recent_row {
-                if cur_range.start == length {
-                    // println!("decreasing start range");
-                    cur_range.start -= 1;
-                }
-                if cur_range.end == length {
-                    // println!("decreasing end range");
-                    cur_range.end -= 1;
-                }
             }
             let value = self.get_aggregate_result_inside_range(
                 last_range,
@@ -307,6 +296,56 @@ pub trait AggregateWindowExpr: WindowExpr {
             ScalarValue::iter_to_array(row_wise_results)
         }
     }
+}
+
+macro_rules! most_recent_row {
+    ($most_recent_row:expr) => {
+        if let Some(most_recent_row) = $most_recent_row {
+            most_recent_row
+        } else {
+            return Ok(false);
+        }
+    };
+}
+
+pub fn is_end_range_safe(
+    window_frame_ctx: &WindowFrameContext,
+    last_batch: &RecordBatch,
+    most_recent_row: Option<&RecordBatch>,
+    sort_exprs: LexOrderingRef,
+) -> Result<bool> {
+    Ok(match window_frame_ctx {
+        WindowFrameContext::Rows(window_frame) => match &window_frame.end_bound {
+            WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => true,
+            WindowFrameBound::Following(value) => {
+                let zero = ScalarValue::new_zero(&value.data_type());
+                zero.map(|zero| value.eq(&zero)).unwrap_or(false)
+            }
+        },
+        WindowFrameContext::Range {
+            window_frame,
+            state,
+        } => match &window_frame.end_bound {
+            WindowFrameBound::Preceding(value) => {
+                let zero = ScalarValue::new_zero(&value.data_type())?;
+                if value.eq(&zero) {
+                    let most_recent_row = most_recent_row!(most_recent_row);
+                    is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
+                } else {
+                    true
+                }
+            },
+            WindowFrameBound::CurrentRow => {
+                let most_recent_row = most_recent_row!(most_recent_row);
+                is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
+            }
+            WindowFrameBound::Following(value) => false,
+        },
+        WindowFrameContext::Groups {
+            window_frame,
+            state,
+        } => false,
+    })
 }
 
 fn get_last_order_values(
