@@ -36,10 +36,10 @@ pub struct CopyTo {
     pub output_url: String,
     /// Determines which, if any, columns should be used for hive-style partitioned writes
     pub partition_by: Vec<String>,
-    /// Arbitrary options as tuples
+    /// File format options.
     pub format_options: FormatOptions,
-    ///
-    pub source_option_tuples: HashMap<String, String>,
+    /// SQL Options that can affect the formats
+    pub options: HashMap<String, String>,
 }
 
 // Implement PartialEq manually

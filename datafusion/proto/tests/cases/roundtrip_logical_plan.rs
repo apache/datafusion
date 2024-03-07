@@ -323,7 +323,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         format_options: FormatOptions::CSV(table_options.csv.clone()),
-        source_option_tuples: Default::default(),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -357,7 +357,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         output_url: "test.parquet".to_string(),
         format_options: FormatOptions::PARQUET(parquet_format.clone()),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        source_option_tuples: Default::default(),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -389,7 +389,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
         output_url: "test.arrow".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         format_options: FormatOptions::ARROW,
-        source_option_tuples: Default::default(),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -430,7 +430,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         format_options: FormatOptions::CSV(csv_format.clone()),
-        source_option_tuples: Default::default(),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;

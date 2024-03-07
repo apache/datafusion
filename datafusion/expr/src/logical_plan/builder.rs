@@ -264,14 +264,14 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         output_url: String,
         format_options: FormatOptions,
-        source_option_tuples: HashMap<String, String>,
+        options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             format_options,
-            source_option_tuples,
+            options,
             partition_by,
         })))
     }

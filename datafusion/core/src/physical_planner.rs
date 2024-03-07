@@ -76,7 +76,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -570,7 +570,7 @@ impl DefaultPhysicalPlanner {
                     output_url,
                     format_options,
                     partition_by,
-                    ..
+                    options: source_option_tuples
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -594,12 +594,27 @@ impl DefaultPhysicalPlanner {
                         table_partition_cols,
                         overwrite: false,
                     };
-
+                    let mut table_options = session_state.default_table_options().clone();
                     let sink_format: Arc<dyn FileFormat> = match format_options {
-                        FormatOptions::CSV(options) => Arc::new(CsvFormat::default().with_options(options.clone())),
-                        FormatOptions::JSON(options) => Arc::new(JsonFormat::default().with_options(options.clone())),
+                        FormatOptions::CSV(options) => {
+                            table_options.csv = options.clone();
+                            table_options.set_file_format(FileType::CSV);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(CsvFormat::default().with_options(table_options.csv))
+                        },
+                        FormatOptions::JSON(options) => {
+                            table_options.json = options.clone();
+                            table_options.set_file_format(FileType::JSON);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(JsonFormat::default().with_options(table_options.json))
+                        },
                         #[cfg(feature = "parquet")]
-                        FormatOptions::PARQUET(options) => Arc::new(ParquetFormat::default().with_options(options.clone())),
+                        FormatOptions::PARQUET(options) => {
+                            table_options.parquet = options.clone();
+                            table_options.set_file_format(FileType::PARQUET);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+                        },
                         FormatOptions::AVRO => Arc::new(AvroFormat {} ),
                         FormatOptions::ARROW => Arc::new(ArrowFormat {}),
                     };

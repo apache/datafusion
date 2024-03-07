@@ -267,7 +267,7 @@ async fn create_plan(
         register_object_store_and_config_extensions(
             ctx,
             &copy_to.output_url,
-            &copy_to.source_option_tuples,
+            &copy_to.options,
         )
         .await?;
     }
@@ -351,6 +351,30 @@ mod tests {
         Ok(())
     }
 
+    async fn copy_to_table_test(location: &str, sql: &str) -> Result<()> {
+        let ctx = SessionContext::new();
+        // AWS CONFIG register.
+
+        let plan = ctx.state().create_logical_plan(sql).await?;
+
+        if let LogicalPlan::Copy(cmd) = &plan {
+            register_object_store_and_config_extensions(
+                &ctx,
+                &cmd.output_url,
+                &cmd.options,
+            )
+            .await?;
+        } else {
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
+        }
+
+        // Ensure the URL is supported by the object store
+        ctx.runtime_env()
+            .object_store(ListingTableUrl::parse(location)?)?;
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn create_object_store_table_http() -> Result<()> {
         // Should be OK
@@ -395,6 +419,20 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn copy_to_object_store_table_s3() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let location = "s3://bucket/path/file.parquet";
+
+        // Missing region, use object_store defaults
+        let sql = format!("COPY (values (1,2)) TO '{location}'
+            (format parquet, 'aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}')");
+        copy_to_table_test(location, &sql).await?;
+
         Ok(())
     }
 

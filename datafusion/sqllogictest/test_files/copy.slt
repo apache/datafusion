@@ -162,11 +162,6 @@ physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
-# Error case
-query error DataFusion error: External error: could not find config namespace for key "per_thread_output"
-EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' (format parquet, per_thread_output true)
-
-
 # Copy more files to directory via query
 query IT
 COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' (format parquet);

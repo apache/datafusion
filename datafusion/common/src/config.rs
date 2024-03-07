@@ -1540,6 +1540,19 @@ impl Display for FormatOptions {
     }
 }
 
+impl From<FileType> for FormatOptions {
+    fn from(value: FileType) -> Self {
+        match value {
+            FileType::ARROW => FormatOptions::ARROW,
+            FileType::AVRO => FormatOptions::AVRO,
+            #[cfg(feature = "parquet")]
+            FileType::PARQUET => FormatOptions::PARQUET(TableParquetOptions::default()),
+            FileType::CSV => FormatOptions::CSV(CsvOptions::default()),
+            FileType::JSON => FormatOptions::JSON(JsonOptions::default()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[derive(Default, Debug, Clone)]

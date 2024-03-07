@@ -39,8 +39,6 @@ use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use datafusion_common::Statistics;
 
-use datafusion_common::config::TableOptions;
-use datafusion_optimizer::OptimizerConfig;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -167,8 +165,7 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
-        let parquet_options =
-            TableOptions::default_from_session_config(ctx.state().options()).parquet;
+        let parquet_options = ctx.state().default_table_options().parquet.clone();
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();

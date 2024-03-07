@@ -858,7 +858,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         output_url: copy.output_url.clone(),
                         partition_by: copy.partition_by.clone(),
                         format_options: convert_required!(copy.format_options)?,
-                        source_option_tuples: Default::default(),
+                        options: Default::default(),
                     },
                 ))
             }

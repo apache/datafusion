@@ -613,13 +613,13 @@ impl LogicalPlan {
                 input: _,
                 output_url,
                 format_options,
-                source_option_tuples,
+                options,
                 partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 format_options: format_options.clone(),
-                source_option_tuples: source_option_tuples.clone(),
+                options: options.clone(),
                 partition_by: partition_by.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
@@ -1544,10 +1544,9 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         format_options,
-                        source_option_tuples,
-                        ..
-                    }) => {
-                        let op_str = source_option_tuples
+                        options, ..
+                                      }) => {
+                        let op_str = options
                             .iter()
                             .map(|(k, v)| format!("{k} {v}"))
                             .collect::<Vec<String>>()
