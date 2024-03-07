@@ -451,7 +451,7 @@ impl ListingOptions {
 }
 
 /// Reads data from one or more files via an
-/// [`ObjectStore`](object_store::ObjectStore). For example, from
+/// [`ObjectStore`]. For example, from
 /// local files or objects from AWS S3. Implements [`TableProvider`],
 /// a DataFusion data source.
 ///
