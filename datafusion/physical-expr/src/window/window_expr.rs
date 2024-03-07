@@ -232,7 +232,6 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        // let mut contains_most_recent_row = false;
         let values = self.evaluate_args(record_batch)?;
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
@@ -241,26 +240,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             most_recent_row_obs =
                 Some(get_orderby_values(self.order_by_columns(most_recent_row)?));
         }
-        // let (values, order_bys) = if let Some(most_recent_row) = most_recent_row {
-        //     if is_record_batch_ahead(record_batch, most_recent_row, self.order_by())? {
-        //         contains_most_recent_row = true;
-        //         let batch = concat_batches(
-        //             &record_batch.schema(),
-        //             [record_batch, most_recent_row],
-        //         )?;
-        //         let values = self.evaluate_args(&batch)?;
-        //         let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
-        //         (values, order_bys)
-        //     } else {
-        //         let values = self.evaluate_args(record_batch)?;
-        //         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-        //         (values, order_bys)
-        //     }
-        // } else {
-        //     let values = self.evaluate_args(record_batch)?;
-        //     let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-        //     (values, order_bys)
-        // };
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
@@ -379,45 +358,7 @@ pub(crate) fn is_end_range_safe(
     })
 }
 
-// fn get_last_order_values(
-//     batch: &RecordBatch,
-//     sort_exprs: LexOrderingRef,
-// ) -> Result<Vec<ScalarValue>> {
-//     assert!(batch.num_rows() >= 1);
-//     let last_row_idx = batch.num_rows() - 1;
-//     let columns = sort_exprs
-//         .iter()
-//         .map(|expr| Ok(expr.evaluate_to_sort_column(batch)?.values))
-//         .collect::<Result<Vec<_>>>()?;
-//     get_row_at_idx(&columns, last_row_idx)
-// }
-//
-// // TODO: Add unit test for this function
-// /// Checks whether current_batch is ahead of old_batch
-// /// in terms of sort_exprs.
-// pub(crate) fn is_record_batch_ahead(
-//     old_batch: &RecordBatch,
-//     current_batch: &RecordBatch,
-//     sort_exprs: LexOrderingRef,
-// ) -> Result<bool> {
-//     if old_batch.num_rows() == 0 || current_batch.num_rows() == 0 {
-//         return Ok(false);
-//     }
-//     // return Ok(false);
-//     // println!("OLD BATCH");
-//     // print_batches(&[old_batch.clone()])?;
-//     // println!("NEW BATCH");
-//     // print_batches(&[current_batch.clone()])?;
-//     let last_row = get_last_order_values(old_batch, sort_exprs)?;
-//     let current_row = get_last_order_values(current_batch, sort_exprs)?;
-//     let sort_options = sort_exprs
-//         .iter()
-//         .map(|sort_expr| sort_expr.options)
-//         .collect::<Vec<_>>();
-//     let cmp = compare_rows(&current_row, &last_row, &sort_options)?;
-//     Ok(cmp.is_gt())
-// }
-
+// TODO: Add unit test for this function
 fn is_row_ahead(
     old_cols: &[ArrayRef],
     current_cols: &[ArrayRef],
