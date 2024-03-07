@@ -143,6 +143,11 @@ impl WindowUDF {
         self.inner.name()
     }
 
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+
     /// Returns this function's signature (what input types are accepted)
     ///
     /// See [`WindowUDFImpl::signature`] for more details.
@@ -245,6 +250,14 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 }
 
 /// Implementation of [`WindowUDFImpl`] that wraps the function style pointers

@@ -2126,10 +2126,16 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
+        udaf.aliases().iter().for_each(|alias| {
+            self.aggregate_functions.insert(alias.clone(), udaf.clone());
+        });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
 
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        udwf.aliases().iter().for_each(|alias| {
+            self.window_functions.insert(alias.clone(), udwf.clone());
+        });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
 
@@ -2144,11 +2150,23 @@ impl FunctionRegistry for SessionState {
     }
 
     fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.aggregate_functions.remove(name))
+        let udaf = self.aggregate_functions.remove(name);
+        if let Some(udaf) = &udaf {
+            for alias in udaf.aliases() {
+                self.aggregate_functions.remove(alias);
+            }
+        }
+        Ok(udaf)
     }
 
     fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
-        Ok(self.window_functions.remove(name))
+        let udwf = self.window_functions.remove(name);
+        if let Some(udwf) = &udwf {
+            for alias in udwf.aliases() {
+                self.window_functions.remove(alias);
+            }
+        }
+        Ok(udwf)
     }
 }
 

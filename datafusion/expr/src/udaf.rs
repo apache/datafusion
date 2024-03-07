@@ -139,6 +139,11 @@ impl AggregateUDF {
         self.inner.name()
     }
 
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+
     /// Returns this function's signature (what input types are accepted)
     ///
     /// See [`AggregateUDFImpl::signature`] for more details.
@@ -276,6 +281,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
     }
 }
 
