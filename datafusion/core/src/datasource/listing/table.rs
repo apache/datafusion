@@ -855,7 +855,7 @@ impl ListingTable {
                 }
             })
             .boxed()
-            .buffered(ctx.config_options().execution.meta_fetch_concurrency.into());
+            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) = get_statistics_with_limit(
             files,
@@ -893,7 +893,7 @@ impl ListingTable {
                     .format
                     .infer_stats(
                         ctx,
-                        &store,
+                        store,
                         self.file_schema.clone(),
                         &part_file.object_meta,
                     )
