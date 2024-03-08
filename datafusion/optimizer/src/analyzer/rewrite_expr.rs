@@ -130,7 +130,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
     }
 }
 
-// Note This rewrite is only done if the built in DataFusion `array_expressions` feature is enabled. 
+// Note This rewrite is only done if the built in DataFusion `array_expressions` feature is enabled.
 // Even if users  implement their own array functions, those functions are not equal to the DataFusion
 // udf based array functions, so this rewrite is not corrrect
 #[cfg(feature = "array_expressions")]
