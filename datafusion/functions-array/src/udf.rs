@@ -142,10 +142,10 @@ impl ScalarUDFImpl for Range {
         let args = ColumnarValue::values_to_arrays(args)?;
         match args[0].data_type() {
             arrow::datatypes::DataType::Int64 => {
-                crate::kernels::gen_range(&args, 0).map(ColumnarValue::Array)
+                crate::kernels::gen_range(&args, false).map(ColumnarValue::Array)
             }
             arrow::datatypes::DataType::Date32 => {
-                crate::kernels::gen_range_date(&args, 0).map(ColumnarValue::Array)
+                crate::kernels::gen_range_date(&args, false).map(ColumnarValue::Array)
             }
             _ => {
                 exec_err!("unsupported type for range")
@@ -212,10 +212,10 @@ impl ScalarUDFImpl for GenSeries {
         let args = ColumnarValue::values_to_arrays(args)?;
         match args[0].data_type() {
             arrow::datatypes::DataType::Int64 => {
-                crate::kernels::gen_range(&args, 1).map(ColumnarValue::Array)
+                crate::kernels::gen_range(&args, true).map(ColumnarValue::Array)
             }
             arrow::datatypes::DataType::Date32 => {
-                crate::kernels::gen_range_date(&args, 1).map(ColumnarValue::Array)
+                crate::kernels::gen_range_date(&args, true).map(ColumnarValue::Array)
             }
             _ => {
                 exec_err!("unsupported type for range")

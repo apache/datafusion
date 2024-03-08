@@ -1,5 +1,6 @@
 /*
 
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -684,6 +685,7 @@ enum ScalarFunction {
   /// 135 is RegexpLike
   ToChar = 136;
   /// 137 was ToDate
+  /// 138 was ToUnixtime
 }
 
 message ScalarFunctionNode {
