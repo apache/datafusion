@@ -2773,6 +2773,7 @@ pub enum ScalarFunction {
     /// / 135 is RegexpLike
     ///
     /// / 137 was ToDate
+    /// / 138 was ToUnixtime
     ToChar = 136,
 }
 impl ScalarFunction {
