@@ -195,10 +195,7 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type)
-        || (expr_type == DataType::Float64
-            && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
-    {
+    } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
