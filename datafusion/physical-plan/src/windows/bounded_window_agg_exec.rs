@@ -393,7 +393,6 @@ trait PartitionSearcher: Send {
                 partition_batch.set_most_recent_row(last_row.clone());
             }
         }
-
         self.mark_partition_end(partition_buffers);
 
         *input_buffer = if input_buffer.num_rows() == 0 {
@@ -1128,9 +1127,7 @@ fn get_aggregate_result_out_column(
 /// Constructs a batch from the last row of batch in the argument.
 pub(crate) fn get_last_row_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     if batch.num_rows() == 0 {
-        return exec_err!(
-            "Latest batch should have at least 1 row to generate watermark"
-        );
+        return exec_err!("Latest batch should have at least 1 row");
     }
     Ok(batch.slice(batch.num_rows() - 1, 1))
 }

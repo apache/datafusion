@@ -248,7 +248,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            // println!("idx:{idx}, length:{length}, last_range:{:?}, cur_range: {:?}, contains_most_recent_row:{contains_most_recent_row}", last_range, cur_range);
             // Exit if the range is non-causal and extends all the way:
             if cur_range.end == length
                 && !is_causal
@@ -297,26 +296,26 @@ macro_rules! most_recent_cols {
 fn is_end_range_safe_helper(
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_exprs: LexOrderingRef,
+    sort_options: &[SortOptions],
     idx: usize,
     delta: &ScalarValue,
 ) -> Result<bool> {
     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-    let mut most_recent_row_values = get_row_at_idx(most_recent_order_bys, 0)?;
+    let most_recent_row_values = get_row_at_idx(most_recent_order_bys, 0)?;
+    let current_row_values = get_row_at_idx(order_bys, idx)?;
+
+    assert_eq!(sort_options.len(), 1);
     assert_eq!(most_recent_row_values.len(), 1);
-    let most_recent_range_value = most_recent_row_values.swap_remove(0);
-    assert_eq!(sort_exprs.len(), 1);
-    let is_descending = sort_exprs[0].options.descending;
-    let mut current_row_values = get_row_at_idx(order_bys, idx)?;
     assert_eq!(current_row_values.len(), 1);
-    let value = current_row_values.swap_remove(0);
+    let is_descending = sort_options[0].descending;
     Ok(if is_descending {
-        value.sub(delta)? > most_recent_range_value
+        current_row_values[0].sub(delta)? > most_recent_row_values[0]
     } else {
-        most_recent_range_value > value.add(delta)?
+        most_recent_row_values[0] > current_row_values[0].add(delta)?
     })
 }
 
+/// Check whether end range calculate is safe (e.g. won't change with future data).
 pub(crate) fn is_end_range_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
@@ -324,6 +323,10 @@ pub(crate) fn is_end_range_safe(
     sort_exprs: LexOrderingRef,
     idx: usize,
 ) -> Result<bool> {
+    let sort_options = sort_exprs
+        .iter()
+        .map(|sort_expr| sort_expr.options)
+        .collect::<Vec<_>>();
     Ok(match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => match &window_frame.end_bound {
             WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => true,
@@ -339,21 +342,20 @@ pub(crate) fn is_end_range_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                    is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
+                    // In linear mode, it is only guaranteed that first entry of the ordering will progress.
+                    is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
                 } else {
                     true
                 }
             }
             WindowFrameBound::CurrentRow => {
-                let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                 // In linear mode, it is only guaranteed that first entry of the ordering will progress.
-                is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
+                is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
             }
             WindowFrameBound::Following(delta) => is_end_range_safe_helper(
                 order_bys,
                 most_recent_order_bys,
-                sort_exprs,
+                &sort_options[0..1],
                 idx,
                 delta,
             )?,
@@ -366,16 +368,18 @@ pub(crate) fn is_end_range_safe(
                 WindowFrameBound::Preceding(value) => {
                     let zero = ScalarValue::new_zero(&value.data_type())?;
                     if value.eq(&zero) {
-                        let most_recent_order_bys =
-                            most_recent_cols!(most_recent_order_bys);
-                        is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
+                        // In linear mode, it is only guaranteed that first entry of the ordering will progress.
+                        is_row_ahead(
+                            order_bys,
+                            most_recent_order_bys,
+                            &sort_options[0..1],
+                        )?
                     } else {
                         true
                     }
                 }
                 WindowFrameBound::CurrentRow => {
-                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                    is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
+                    is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
                 }
                 WindowFrameBound::Following(value) => {
                     let offset = if let ScalarValue::UInt64(Some(offset)) = value {
@@ -386,13 +390,11 @@ pub(crate) fn is_end_range_safe(
                     if state.group_end_indices.len() - state.current_group_idx
                         == offset + 1
                     {
-                        // println!("inside the end groups offset:{offset:?}, state.current_group_idx:{:?}, state.group_end_indices:{:?}", state.current_group_idx, state.group_end_indices);
-                        let most_recent_order_bys =
-                            most_recent_cols!(most_recent_order_bys);
-                        // println!("order_bys:{:?}", order_bys);
-                        // println!("most_recent_order_bys:{:?}", most_recent_order_bys);
-                        is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
-                        // true
+                        is_row_ahead(
+                            order_bys,
+                            most_recent_order_bys,
+                            &sort_options[0..1],
+                        )?
                     } else {
                         false
                     }
@@ -402,12 +404,14 @@ pub(crate) fn is_end_range_safe(
     })
 }
 
-// TODO: Add unit test for this function
+/// This util checks whether `current_cols` (if `None` returns `false`) is ahead of the `old_cols`, in terms of
+/// `sort_options`.
 fn is_row_ahead(
     old_cols: &[ArrayRef],
-    current_cols: &[ArrayRef],
-    sort_exprs: LexOrderingRef,
+    current_cols: Option<&[ArrayRef]>,
+    sort_options: &[SortOptions],
 ) -> Result<bool> {
+    let current_cols = most_recent_cols!(current_cols);
     assert!(!old_cols.is_empty());
     assert!(!current_cols.is_empty());
     if old_cols[0].is_empty() || current_cols[0].is_empty() {
@@ -415,13 +419,7 @@ fn is_row_ahead(
     }
     let last_row = get_row_at_idx(old_cols, old_cols[0].len() - 1)?;
     let current_row = get_row_at_idx(current_cols, current_cols[0].len() - 1)?;
-    let sort_options = sort_exprs
-        .iter()
-        .map(|sort_expr| sort_expr.options)
-        .collect::<Vec<_>>();
-    // println!("current_row: {:?}", current_row);
-    // println!("last_row: {:?}", last_row);
-    let cmp = compare_rows(&current_row, &last_row, &sort_options)?;
+    let cmp = compare_rows(&current_row, &last_row, sort_options)?;
     Ok(cmp.is_gt())
 }
 
@@ -493,3 +491,40 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
+
+#[cfg(test)]
+mod tests {
+    use crate::window::window_expr::is_row_ahead;
+    use arrow_array::{ArrayRef, Float64Array};
+    use arrow_schema::SortOptions;
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_is_row_ahead() -> Result<()> {
+        let old_values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
+
+        let new_values1: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![11.0]))];
+        let new_values2: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![10.0]))];
+
+        assert!(is_row_ahead(
+            &old_values,
+            Some(&new_values1),
+            &[SortOptions {
+                descending: false,
+                nulls_first: false
+            }]
+        )?);
+        assert!(!is_row_ahead(
+            &old_values,
+            Some(&new_values2),
+            &[SortOptions {
+                descending: false,
+                nulls_first: false
+            }]
+        )?);
+
+        Ok(())
+    }
+}

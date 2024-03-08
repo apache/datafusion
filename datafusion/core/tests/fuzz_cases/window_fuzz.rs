@@ -118,14 +118,14 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         (vec!["c", "b", "a"], vec!["a", "b", "c"], Sorted),
     ];
     let n = 300;
-    let n_distincts = vec![5];
+    let n_distincts = vec![10, 20];
     for n_distinct in n_distincts {
         let mut handles = Vec::new();
         for i in 0..n {
             let idx = i % test_cases.len();
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
             let job = SpawnedTask::spawn(run_window_test(
-                make_staggered_batches::<true>(50, n_distinct, i as u64),
+                make_staggered_batches::<true>(1000, n_distinct, i as u64),
                 i as u64,
                 pb_cols,
                 ob_cols,
@@ -499,7 +499,6 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             (second_bound, first_bound)
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
-
     let rand_num = rng.gen_range(0..3);
     let units = if rand_num < 1 {
         WindowFrameUnits::Range
@@ -597,6 +596,9 @@ fn includes_preceding_following_with_arg(bound: &WindowFrameBound) -> bool {
     !bound.is_unbounded() && bound != &WindowFrameBound::CurrentRow
 }
 
+/// This util determines whether window_frame given can be executed with multiple order by expressions
+/// As an example, Range queries with offset (such as `RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`) cannot have more
+/// order by clauses in the form `\[ORDER BY a ASC, b ASC, ...]`
 fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
     match window_frame.units {
         WindowFrameUnits::Rows => true,
@@ -747,24 +749,15 @@ async fn run_window_test(
         .enumerate()
     {
         if !usual_line.eq(running_line) {
-            println!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
+            println!("Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
             println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {
                 println!("{:?}   ---   {:?}", line1, line2);
             }
-            // println!("-----------running_formatted_sorted-----------");
-            // for line in running_formatted_sorted{
-            //     println!("{:?}", line);
-            // }
             unreachable!();
         }
-        assert_eq!(
-            (i, usual_line),
-            (i, running_line),
-            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}"
-        );
     }
     Ok(())
 }

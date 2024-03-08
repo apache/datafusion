@@ -252,7 +252,7 @@ pub struct PartitionBatchState {
     pub record_batch: RecordBatch,
     /// The record batch that keeps the most recent row at the input
     /// Please note that, this batch doesn't necessarily have same partitioning with `record_batch`.
-    /// Keeping track of this batch enables us to prune `record_batch` when partition is sparse.
+    /// Keeping track of this batch enables us to prune `record_batch` when cardinality of partition is sparse.
     pub most_recent_row: Option<RecordBatch>,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
