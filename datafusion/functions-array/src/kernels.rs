@@ -325,7 +325,8 @@ fn gen_range_iter(
             func_name
         );
     }
-    // Below, we use usize to represent steps, but int64 values like i64::MIN can't fit in.
+    // Below, we utilize `usize` to represent steps.
+    // But on 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
     let step_abs = usize::try_from(step.unsigned_abs())
         .map_err(|_| not_impl_datafusion_err!("step {} can't fit into usize", step))?;
 
