@@ -30,6 +30,7 @@ use super::{
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
+    common::can_project,
     execution_mode_from_children, handle_state,
     hash_utils::create_hashes,
     joins::utils::{
@@ -285,7 +286,7 @@ pub struct HashJoinExec {
     pub join_type: JoinType,
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
-    schema: SchemaRef,
+    join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
@@ -294,7 +295,7 @@ pub struct HashJoinExec {
     pub mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// The indices of the columns in the output schema
+    /// The projection indices of the columns in the output schema of join
     pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
@@ -331,20 +332,20 @@ impl HashJoinExec {
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
-        let (schema, column_indices) =
+        let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let schema = Arc::new(schema);
+        let join_schema = Arc::new(join_schema);
 
         //  check if the projection is valid
-        datafusion_common::utils::can_project(&schema, projection.as_ref())?;
+        can_project(&join_schema, projection.as_ref())?;
 
         let cache = Self::compute_properties(
             &left,
             &right,
-            schema.clone(),
+            join_schema.clone(),
             *join_type,
             &on,
             partition_mode,
@@ -357,7 +358,7 @@ impl HashJoinExec {
             on,
             filter,
             join_type: *join_type,
-            schema,
+            join_schema,
             left_fut: Default::default(),
             random_state,
             mode: partition_mode,
@@ -429,7 +430,7 @@ impl HashJoinExec {
     /// Return new instance of [HashJoinExec] with the given projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  check if the projection is valid
-        datafusion_common::utils::can_project(&self.schema, projection.as_ref())?;
+        can_project(&self.schema(), projection.as_ref())?;
         let projection = match projection {
             Some(projection) => match &self.projection {
                 Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
@@ -565,7 +566,7 @@ impl DisplayAs for HashJoinExec {
                             .iter()
                             .map(|index| format!(
                                 "{}@{}",
-                                self.schema.fields().get(*index).unwrap().name(),
+                                self.join_schema.fields().get(*index).unwrap().name(),
                                 index
                             ))
                             .collect::<Vec<_>>()
@@ -590,7 +591,7 @@ impl DisplayAs for HashJoinExec {
     }
 }
 
-pub fn project_index_to_exprs(
+fn project_index_to_exprs(
     projection_index: &[usize],
     schema: &SchemaRef,
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
@@ -785,7 +786,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.clone(),
             self.on.clone(),
             &self.join_type,
-            &self.schema,
+            &self.join_schema,
         )?;
         // Project statistics if there is a projection
         if let Some(projection) = &self.projection {

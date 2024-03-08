@@ -49,8 +49,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    Partitioning, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -532,7 +532,7 @@ fn try_pushdown_through_union(
 }
 
 /// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
-/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unecessary output creation.
+/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
 fn try_embed_to_hash_join(
     projection: &ProjectionExec,
     hash_join: &HashJoinExec,
@@ -543,6 +543,14 @@ fn try_embed_to_hash_join(
     if projection_index.is_empty() {
         return Ok(None);
     };
+
+    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
+    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of hash_join schema fields.
+    if projection_index.len() == projection_index.last().unwrap() + 1
+        && projection_index.len() == hash_join.schema().fields().len()
+    {
+        return Ok(None);
+    }
 
     let new_hash_join =
         Arc::new(hash_join.with_projection(Some(projection_index.to_vec()))?);
@@ -582,35 +590,16 @@ fn try_embed_to_hash_join(
 
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
-    // ColumnVisitor will traverse the expr tree and collect all column indices.
-    // Since there are some expressions like `a + 1` in projection exprs, so we need to traverse the expr tree.
-    struct ColumnVisitor {
-        // TODO: should we use structure that preserves insertion order here, like indexmap?
-        pub column_indices: std::collections::BTreeSet<usize>,
-    }
-    impl TreeNodeVisitor for ColumnVisitor {
-        type N = Arc<dyn PhysicalExpr>;
-
-        fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
-            if let Some(column) = node.as_any().downcast_ref::<Column>() {
-                self.column_indices.insert(column.index());
-            }
-            Ok(VisitRecursion::Continue)
-        }
-
-        fn post_visit(&mut self, _node: &Self::N) -> Result<VisitRecursion> {
-            Ok(VisitRecursion::Continue)
-        }
-    }
-
-    let mut visitor = ColumnVisitor {
-        column_indices: Default::default(),
-    };
-    // Collect all column indices from the given projection expressions.
-    exprs.iter().for_each(|(expr, _)| {
-        let _ = expr.visit(&mut visitor);
-    });
-    visitor.column_indices.into_iter().collect::<Vec<_>>()
+    // Collect indices and remove duplicates.
+    let mut indexs = exprs
+        .iter()
+        .flat_map(|(expr, _)| collect_columns(expr))
+        .map(|x| x.index())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    indexs.sort();
+    indexs
 }
 
 /// Tries to push `projection` down through `hash_join`. If possible, performs the

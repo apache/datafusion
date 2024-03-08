@@ -135,6 +135,7 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
+/// This function swaps the given join's projection.
 fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
@@ -143,6 +144,8 @@ fn swap_join_projection(
     projection.map(|p| {
         p.iter()
             .map(|i| {
+                // If the index is less than the left schema length, it is from the left schema, so we add the right schema length to it.
+                // Otherwise, it is from the right schema, so we subtract the left schema length from it.
                 if *i < left_schema_len {
                     *i + right_schema_len
                 } else {
