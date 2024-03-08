@@ -4263,13 +4263,18 @@ NULL def NULL def
 
 # LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
 # To trigger WindowAggExec, we added a sum window function with all of the ranges.
-statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+query TTTTI
 select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
        lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
        lead(a, 2, null) respect nulls over (order by id desc) as x4,
        lead(a, 2, 'def') respect nulls over (order by id desc) as x5,
        sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
 from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b 10
+NULL def NULL NULL 10
+NULL def NULL def 10
+x x NULL def 10
 
 statement ok
 set datafusion.execution.batch_size = 1000;
