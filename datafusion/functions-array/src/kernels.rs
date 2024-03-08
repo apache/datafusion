@@ -295,7 +295,24 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
         let stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
-        values.extend(gen_range_iter(start, stop, step, include_upper)?);
+        if step == 0 {
+            return exec_err!(
+                "step can't be 0 for function {}(start [, stop, step])",
+                if include_upper {
+                    "generate_series"
+                } else {
+                    "range"
+                }
+            );
+        }
+        // Below, we utilize `usize` to represent steps.
+        // But on 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
+        let step_abs = usize::try_from(step.unsigned_abs()).map_err(|_| {
+            not_impl_datafusion_err!("step {} can't fit into usize", step)
+        })?;
+        values.extend(
+            gen_range_iter(start, stop, step < 0, include_upper).step_by(step_abs),
+        );
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
@@ -307,53 +324,32 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
     Ok(arr)
 }
 
-/// Returns an iterator of i64 values from start to stop with a given step.
+/// Returns an iterator of i64 values from start to stop
 fn gen_range_iter(
     start: i64,
     stop: i64,
-    step: i64,
+    decreasing: bool,
     include_upper: bool,
-) -> Result<Box<dyn Iterator<Item = i64>>> {
-    if step == 0 {
-        let func_name = if include_upper {
-            "generate_series"
-        } else {
-            "range"
-        };
-        return exec_err!(
-            "step can't be 0 for function {}(start [, stop, step])",
-            func_name
-        );
+) -> Box<dyn Iterator<Item = i64>> {
+    match (decreasing, include_upper) {
+        // Decreasing range, stop is inclusive
+        (true, true) => Box::new((stop..=start).rev()),
+        // Decreasing range, stop is exclusive
+        (true, false) => {
+            if stop == i64::MAX {
+                // If stop is i64::MAX and exclusive, the range will be empty.
+                Box::new(std::iter::empty())
+            } else {
+                // Increase the stop value by one to exclude it.
+                // Since stop is not i64::MAX, `stop + 1` will not overflow.
+                Box::new((stop + 1..=start).rev())
+            }
+        }
+        // Increasing range, stop is inclusive
+        (false, true) => Box::new(start..=stop),
+        // Increasing range, stop is exclusive
+        (false, false) => Box::new(start..stop),
     }
-    // Below, we utilize `usize` to represent steps.
-    // But on 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
-    let step_abs = usize::try_from(step.unsigned_abs())
-        .map_err(|_| not_impl_datafusion_err!("step {} can't fit into usize", step))?;
-
-    let iter = if step < 0 {
-        // Decreasing range
-        if include_upper {
-            Box::new((stop..=start).rev().step_by(step_abs)) as _
-        } else {
-            // Increase the stop value by one to exclude it.
-            // Converting to i128 is to avoid overflow when stop is i64::MAX.
-            // Since `step_by` won't really generate values beyond i64, it's safe to map them back.
-            Box::new(
-                (stop as i128 + 1..=start as i128)
-                    .rev()
-                    .step_by(step_abs)
-                    .map(|x| x as i64),
-            ) as _
-        }
-    } else {
-        // Increasing range
-        if include_upper {
-            Box::new((start..=stop).step_by(step_abs)) as _
-        } else {
-            Box::new((start..stop).step_by(step_abs)) as _
-        }
-    };
-    Ok(iter)
 }
 
 /// Returns the length of each array dimension
