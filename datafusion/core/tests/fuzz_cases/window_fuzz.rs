@@ -469,7 +469,11 @@ fn get_random_function(
     }
 
     // (window_fn.clone(), args, fn_name.to_string())
-    (WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count), vec![col("a", schema).unwrap()], "count".to_string())
+    (
+        WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
+        vec![col("a", schema).unwrap()],
+        "count".to_string(),
+    )
 }
 
 fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
@@ -520,7 +524,7 @@ fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
 
     let units = WindowFrameUnits::Groups;
     // let units = WindowFrameUnits::Range;
-    match units {
+    let mut window_frame = match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
             let start_bound = if start_bound.is_preceding {
@@ -571,7 +575,29 @@ fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
             // should work only with WindowAggExec
             window_frame
         }
+    };
+    window_frame.start_bound =
+        convert_bound_to_current_row_if_applicable(rng, &window_frame.start_bound);
+    window_frame.end_bound =
+        convert_bound_to_current_row_if_applicable(rng, &window_frame.end_bound);
+    window_frame
+}
+
+fn convert_bound_to_current_row_if_applicable(
+    rng: &mut StdRng,
+    bound: &WindowFrameBound,
+) -> WindowFrameBound {
+    if *bound == WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0)))
+        || *bound == WindowFrameBound::Preceding(ScalarValue::Int32(Some(0)))
+        || *bound == WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
+        || *bound == WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
+    {
+        // With 50% convert preceding(0) to current row
+        if rng.gen_range(0..2) == 0 {
+            return WindowFrameBound::CurrentRow;
+        }
     }
+    bound.clone()
 }
 
 fn includes_preceding_following_with_arg(bound: &WindowFrameBound) -> bool {

@@ -361,25 +361,24 @@ pub(crate) fn is_end_range_safe(
             window_frame,
             state,
         } => {
-            match &window_frame.end_bound{
+            match &window_frame.end_bound {
                 WindowFrameBound::Preceding(value) => {
                     let zero = ScalarValue::new_zero(&value.data_type())?;
-                    if value.eq(&zero){
-                        let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                    if value.eq(&zero) {
+                        let most_recent_order_bys =
+                            most_recent_cols!(most_recent_order_bys);
                         is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                     } else {
                         true
                     }
-                },
+                }
                 WindowFrameBound::CurrentRow => {
                     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                     is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
-                },
-                WindowFrameBound::Following(value) => {
-                    false
                 }
+                WindowFrameBound::Following(value) => false,
             }
-        },
+        }
     })
 }
 
