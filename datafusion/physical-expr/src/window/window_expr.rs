@@ -294,10 +294,15 @@ macro_rules! most_recent_cols {
     };
 }
 
-fn is_end_range_safe_helper(order_bys: &[ArrayRef], most_recent_order_bys: Option<&[ArrayRef]>,sort_exprs: LexOrderingRef, idx: usize, delta: &ScalarValue) -> Result<bool> {
+fn is_end_range_safe_helper(
+    order_bys: &[ArrayRef],
+    most_recent_order_bys: Option<&[ArrayRef]>,
+    sort_exprs: LexOrderingRef,
+    idx: usize,
+    delta: &ScalarValue,
+) -> Result<bool> {
     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-    let mut most_recent_row_values =
-        get_row_at_idx(most_recent_order_bys, 0)?;
+    let mut most_recent_row_values = get_row_at_idx(most_recent_order_bys, 0)?;
     assert_eq!(most_recent_row_values.len(), 1);
     let most_recent_range_value = most_recent_row_values.swap_remove(0);
     assert_eq!(sort_exprs.len(), 1);
@@ -334,7 +339,13 @@ pub(crate) fn is_end_range_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    is_end_range_safe_helper(order_bys, most_recent_order_bys, sort_exprs, idx, &zero)?
+                    is_end_range_safe_helper(
+                        order_bys,
+                        most_recent_order_bys,
+                        sort_exprs,
+                        idx,
+                        &zero,
+                    )?
                 } else {
                     true
                 }
@@ -344,9 +355,13 @@ pub(crate) fn is_end_range_safe(
                 is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                 // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
             }
-            WindowFrameBound::Following(delta) => {
-                is_end_range_safe_helper(order_bys, most_recent_order_bys, sort_exprs, idx, delta)?
-            }
+            WindowFrameBound::Following(delta) => is_end_range_safe_helper(
+                order_bys,
+                most_recent_order_bys,
+                sort_exprs,
+                idx,
+                delta,
+            )?,
         },
         WindowFrameContext::Groups {
             window_frame: _,
