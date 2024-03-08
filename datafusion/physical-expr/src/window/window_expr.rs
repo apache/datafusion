@@ -372,7 +372,8 @@ pub(crate) fn is_end_range_safe(
                     }
                 },
                 WindowFrameBound::CurrentRow => {
-                    false
+                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                 },
                 WindowFrameBound::Following(value) => {
                     false
