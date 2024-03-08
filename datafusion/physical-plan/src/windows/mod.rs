@@ -74,6 +74,7 @@ pub fn create_window_expr(
                 &[],
                 input_schema,
                 name,
+                ignore_nulls,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,
@@ -155,6 +156,17 @@ fn get_scalar_value_from_args(
     })
 }
 
+fn get_casted_value(
+    default_value: Option<ScalarValue>,
+    dtype: &DataType,
+) -> Result<ScalarValue> {
+    match default_value {
+        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
+        // If None or Null datatype
+        _ => ScalarValue::try_from(dtype),
+    }
+}
+
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -203,7 +215,8 @@ fn create_built_in_window_expr(
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(args, 2)?;
+            let default_value =
+                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
             Arc::new(lag(
                 name,
                 data_type.clone(),
@@ -218,7 +231,8 @@ fn create_built_in_window_expr(
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(args, 2)?;
+            let default_value =
+                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
             Arc::new(lead(
                 name,
                 data_type.clone(),

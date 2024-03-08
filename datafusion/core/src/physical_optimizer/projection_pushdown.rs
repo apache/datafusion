@@ -44,7 +44,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties}
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections)
+        plan.transform_down(&remove_unnecessary_projections).data()
     }
 
     fn name(&self) -> &str {
@@ -100,7 +100,7 @@ pub fn remove_unnecessary_projections(
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
-            return Ok(Transformed::Yes(projection.input().clone()));
+            return Ok(Transformed::yes(projection.input().clone()));
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
@@ -113,8 +113,10 @@ pub fn remove_unnecessary_projections(
             return if let Some(new_plan) = maybe_unified {
                 // To unify 3 or more sequential projections:
                 remove_unnecessary_projections(new_plan)
+                    .data()
+                    .map(Transformed::yes)
             } else {
-                Ok(Transformed::No(plan))
+                Ok(Transformed::no(plan))
             };
         } else if let Some(output_req) = input.downcast_ref::<OutputRequirementExec>() {
             try_swapping_with_output_req(projection, output_req)?
@@ -153,10 +155,10 @@ pub fn remove_unnecessary_projections(
             None
         }
     } else {
-        return Ok(Transformed::No(plan));
+        return Ok(Transformed::no(plan));
     };
 
-    Ok(maybe_modified.map_or(Transformed::No(plan), Transformed::Yes))
+    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
 }
 
 /// Tries to embed `projection` to its input (`csv`). If possible, returns
@@ -276,7 +278,7 @@ fn try_unifying_projections(
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     *column_ref_map.entry(column.clone()).or_default() += 1;
                 }
-                VisitRecursion::Continue
+                TreeNodeRecursion::Continue
             })
         })
         .unwrap();
@@ -988,16 +990,16 @@ fn update_expr(
         .clone()
         .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
-                return Ok(Transformed::No(expr));
+                return Ok(Transformed::no(expr));
             }
 
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
-                return Ok(Transformed::No(expr));
+                return Ok(Transformed::no(expr));
             };
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
+                Ok(Transformed::yes(projected_exprs[column.index()].0.clone()))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
@@ -1018,11 +1020,12 @@ fn update_expr(
                         )
                     })
                     .map_or_else(
-                        || Ok(Transformed::No(expr)),
-                        |c| Ok(Transformed::Yes(c)),
+                        || Ok(Transformed::no(expr)),
+                        |c| Ok(Transformed::yes(c)),
                     )
             }
-        });
+        })
+        .data();
 
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
@@ -1139,7 +1142,7 @@ fn new_columns_for_join_on(
                             })
                             .map(|(index, (_, alias))| Column::new(alias, index));
                         if let Some(new_column) = new_column {
-                            Ok(Transformed::Yes(Arc::new(new_column)))
+                            Ok(Transformed::yes(Arc::new(new_column)))
                         } else {
                             // If the column is not found in the projection expressions,
                             // it means that the column is not projected. In this case,
@@ -1150,9 +1153,10 @@ fn new_columns_for_join_on(
                             )))
                         }
                     } else {
-                        Ok(Transformed::No(expr))
+                        Ok(Transformed::no(expr))
                     }
                 })
+                .data()
                 .ok()
         })
         .collect::<Vec<_>>();

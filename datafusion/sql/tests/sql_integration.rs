@@ -24,8 +24,7 @@ use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::{
-    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
-    TableReference,
+    config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
@@ -1288,16 +1287,6 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
     );
 }
 
-#[test]
-fn select_simple_aggregate_respect_nulls() {
-    let sql = "SELECT MIN(age) RESPECT NULLS FROM person";
-    let err = logical_plan(sql).expect_err("query should have failed");
-
-    assert_contains!(
-        err.strip_backtrace(),
-        "This feature is not implemented: Null treatment in aggregate functions is not supported: RESPECT NULLS"
-    );
-}
 #[test]
 fn select_from_typed_string_values() {
     quick_test(
@@ -2881,11 +2870,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.udfs.get(name).map(Arc::clone)
+        self.udfs.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).map(Arc::clone)
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -4421,6 +4410,31 @@ fn test_field_not_found_window_function() {
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
     let expected = "Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\n    TableScan: orders";
     quick_test(qualified_sql, expected);
+}
+
+#[test]
+fn test_parse_escaped_string_literal_value() {
+    let sql = r"SELECT length('\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let expected =
+        "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\000') AS len";
+    assert_eq!(
+        logical_plan(sql).unwrap_err().strip_backtrace(),
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+    )
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {

@@ -483,7 +483,7 @@ statement error Did you mean 'arrow_typeof'?
 SELECT arrowtypeof(v1) from test;
 
 # Scalar function
-statement error Did you mean 'to_timestamp_seconds'?
+statement error Invalid function 'to_timestamps_second'
 SELECT to_TIMESTAMPS_second(v2) from test;
 
 # Aggregate function

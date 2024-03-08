@@ -39,7 +39,10 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::udf::array_dims;
+    pub use super::udf::array_ndims;
     pub use super::udf::array_to_string;
+    pub use super::udf::cardinality;
     pub use super::udf::gen_series;
     pub use super::udf::range;
 }
@@ -50,6 +53,9 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_to_string_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
+        udf::array_dims_udf(),
+        udf::cardinality_udf(),
+        udf::array_ndims_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

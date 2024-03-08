@@ -40,15 +40,15 @@ use arrow_schema::Schema;
 use datafusion_common::{
     alias::AliasGenerator,
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_execution::registry::SerializerRegistry;
+pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
-pub use datafusion_physical_expr::execution_props::ExecutionProps;
-use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::string::String;
@@ -73,9 +73,10 @@ use crate::datasource::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropCatalogSchema, DropTable, DropView, Explain, LogicalPlan,
-    LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+    CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable, DropView,
+    Explain, LogicalPlan, LogicalPlanBuilder, SetVariable, TableSource, TableType,
+    UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
 use datafusion_sql::{
@@ -489,6 +490,8 @@ impl SessionContext {
                 DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
                 DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
                 DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
+                DdlStatement::CreateFunction(cmd) => self.create_function(cmd).await,
+                DdlStatement::DropFunction(cmd) => self.drop_function(cmd).await,
             },
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
@@ -792,6 +795,55 @@ impl SessionContext {
         }
 
         Ok(false)
+    }
+
+    async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
+        let function = {
+            let state = self.state.read().clone();
+            let function_factory = &state.function_factory;
+
+            match function_factory {
+                Some(f) => f.create(state.config(), stmt).await?,
+                _ => Err(DataFusionError::Configuration(
+                    "Function factory has not been configured".into(),
+                ))?,
+            }
+        };
+
+        match function {
+            RegisterFunction::Scalar(f) => {
+                self.state.write().register_udf(f)?;
+            }
+            RegisterFunction::Aggregate(f) => {
+                self.state.write().register_udaf(f)?;
+            }
+            RegisterFunction::Window(f) => {
+                self.state.write().register_udwf(f)?;
+            }
+            RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
+        };
+
+        self.return_empty_dataframe()
+    }
+
+    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
+        // we don't know function type at this point
+        // decision has been made to drop all functions
+        let mut dropped = false;
+        dropped |= self.state.write().deregister_udf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
+        dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
+
+        // DROP FUNCTION IF EXISTS drops the specified function only if that
+        // function exists and in this way, it avoids error. While the DROP FUNCTION
+        // statement also performs the same function, it throws an
+        // error if the function does not exist.
+
+        if !stmt.if_exists && !dropped {
+            exec_err!("Function does not exist")
+        } else {
+            self.return_empty_dataframe()
+        }
     }
 
     /// Registers a variable provider within this context.
@@ -1261,7 +1313,30 @@ impl QueryPlanner for DefaultQueryPlanner {
             .await
     }
 }
+/// A pluggable interface to handle `CREATE FUNCTION` statements
+/// and interact with [SessionState] to registers new udf, udaf or udwf.
 
+#[async_trait]
+pub trait FunctionFactory: Sync + Send {
+    /// Handles creation of user defined function specified in [CreateFunction] statement
+    async fn create(
+        &self,
+        state: &SessionConfig,
+        statement: CreateFunction,
+    ) -> Result<RegisterFunction>;
+}
+
+/// Type of function to create
+pub enum RegisterFunction {
+    /// Scalar user defined function
+    Scalar(Arc<ScalarUDF>),
+    /// Aggregate user defined function
+    Aggregate(Arc<AggregateUDF>),
+    /// Window user defined function
+    Window(Arc<WindowUDF>),
+    /// Table user defined function
+    Table(String, Arc<dyn TableFunctionImpl>),
+}
 /// Execution context for registering data sources and executing queries.
 /// See [`SessionContext`] for a higher level API.
 ///
@@ -1306,6 +1381,12 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
+
+    /// [FunctionFactory] to support pluggable user defined function handler.
+    ///
+    /// It will be invoked on `CREATE FUNCTION` statements.
+    /// thus, changing dialect o PostgreSql is required
+    function_factory: Option<Arc<dyn FunctionFactory>>,
 }
 
 impl Debug for SessionState {
@@ -1392,6 +1473,7 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
+            function_factory: None,
         };
 
         // register built in functions
@@ -1565,6 +1647,15 @@ impl SessionState {
         optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
         self.physical_optimizers.rules.push(optimizer_rule);
+        self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        mut self,
+        function_factory: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.function_factory = Some(function_factory);
         self
     }
 
@@ -2189,9 +2280,9 @@ impl<'a> BadPlanVisitor<'a> {
 }
 
 impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
-    type N = LogicalPlan;
+    type Node = LogicalPlan;
 
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
         match node {
             LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
@@ -2205,7 +2296,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            _ => Ok(VisitRecursion::Continue),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
     }
 }
@@ -2222,6 +2313,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
     use async_trait::async_trait;
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
     use std::env;
     use std::path::PathBuf;
@@ -2321,7 +2413,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::disallowed_methods)]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
@@ -2332,7 +2423,7 @@ mod tests {
         let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
             .map(|ctx| {
-                tokio::spawn(async move {
+                SpawnedTask::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
                     ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
                         .await
@@ -2341,7 +2432,7 @@ mod tests {
             .collect();
 
         for handle in threads {
-            handle.await.unwrap().unwrap();
+            handle.join().await.unwrap().unwrap();
         }
         Ok(())
     }

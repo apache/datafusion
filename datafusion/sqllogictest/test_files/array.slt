@@ -861,11 +861,32 @@ select make_array(1, 2, 3)[1:2], make_array(1.0, 2.0, 3.0)[2:3], make_array('h',
 ----
 [1, 2] [2.0, 3.0] [e, l, l]
 
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1:2],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[2:3],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[2:4]
+;
+----
+[1, 2] [2, 3] [e, l, l]
+
 # multiple index with columns #2 (zero index)
 query ???
 select make_array(1, 2, 3)[0:0], make_array(1.0, 2.0, 3.0)[0:2], make_array('h', 'e', 'l', 'l', 'o')[0:6];
 ----
 [] [1.0, 2.0] [h, e, l, l, o]
+
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[0:0],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[0:2],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[0:6]
+;
+----
+[] [1, 2] [h, e, l, l, o]
+
+query I
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
+----
+1
 
 # TODO: support multiple negative index
 # multiple index with columns #3 (negative index)
@@ -5533,26 +5554,74 @@ from arrays_range;
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
 
-query ??????
+query ??????????
 select range(5),
        range(2, 5),
        range(2, 10, 3),
        range(1, 5, -1),
        range(1, -5, 1),
-       range(1, -5, -1)
+       range(1, -5, -1),
+       range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH),
+       range(DATE '1993-02-01', DATE '1993-01-01', INTERVAL '-1' DAY),
+       range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '1' YEAR),
+       range(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
 ;
 ----
-[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4]
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [] [] [1, 0, -1, -2, -3, -4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02] [1989-04-01, 1990-04-01, 1991-04-01] []
 
-query ?????
+## should throw error
+query error
+select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
+
+query error
+select range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+
+query error
+select range(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
+
+query ?
+select range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
+----
+[]
+
+query ?
+select range(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
+----
+[]
+
+query ????????
 select generate_series(5),
        generate_series(2, 5),
        generate_series(2, 10, 3),
        generate_series(1, 5, 1),
-       generate_series(5, 1, -1)      
+       generate_series(5, 1, -1),
+       generate_series(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH),
+       generate_series(DATE '1993-02-01', DATE '1993-01-01', INTERVAL '-1' DAY),
+       generate_series(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '1' YEAR)
 ;
 ----
-[0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1]
+[0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01, 1993-03-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02, 1993-01-01] [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
+
+## should throw error
+query error
+select generate_series(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
+
+query error
+select generate_series(DATE '1992-09-01', DATE '1993-03-01', NULL);
+
+query error
+select generate_series(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
+
+
+query ?
+select generate_series(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
+----
+[]
+
+query ?
+select generate_series(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
+----
+[]
 
 ## array_except
 
@@ -6192,12 +6261,19 @@ select * from test_create_array_table;
 query T
 select arrow_typeof(a) from test_create_array_table;
 ----
-List(Field { name: "field", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query T
 select arrow_typeof(c) from test_create_array_table;
 ----
-List(Field { name: "field", data_type: List(Field { name: "field", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# Test casting to array types
+# issue: https://github.com/apache/arrow-datafusion/issues/9440
+query ??T
+select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
+----
+[1, 2, 3] [[1]] List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 
 ### Delete tables
