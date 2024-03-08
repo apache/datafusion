@@ -38,26 +38,27 @@ pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
-pub(crate) fn validate_data_types(
-    args: &[ColumnarValue],
-    name: &str,
-) -> Option<Result<ColumnarValue>> {
+/// Checks that all the arguments from the second are of type [Utf8] or [LargeUtf8]
+///
+/// [Utf8]: DataType::Utf8
+/// [LargeUtf8]: DataType::LargeUtf8
+pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<()> {
     for (idx, a) in args.iter().skip(1).enumerate() {
         match a.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 // all good
             }
             _ => {
-                return Some(exec_err!(
+                return exec_err!(
                     "{name} function unsupported data type at index {}: {}",
                     idx + 1,
                     a.data_type()
-                ));
+                );
             }
         }
     }
 
-    None
+    Ok(())
 }
 
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
@@ -137,6 +138,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 ) -> Result<i64, DataFusionError> {
     string_to_datetime_formatted(&Utc, s, format)?
         .naive_utc()
+        .and_utc()
         .timestamp_nanos_opt()
         .ok_or_else(|| {
             DataFusionError::Execution(ERR_NANOSECONDS_NOT_SUPPORTED.to_string())
