@@ -31,7 +31,7 @@ use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_large_list_array,
     as_list_array, as_string_array,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_datafusion_err, DataFusionError, Result};
 use std::any::type_name;
 use std::sync::Arc;
 macro_rules! downcast_arg {
@@ -306,15 +306,9 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
             );
         }
         // Below, we utilize `usize` to represent steps.
-        #[cfg(target_pointer_width = "64")]
-        let step_abs = step.unsigned_abs() as usize;
         // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
-        #[cfg(not(target_pointer_width = "64"))]
         let step_abs = usize::try_from(step.unsigned_abs()).map_err(|_| {
-            datafusion_common::not_impl_datafusion_err!(
-                "step {} can't fit into usize",
-                step
-            )
+            not_impl_datafusion_err!("step {} can't fit into usize", step)
         })?;
         values.extend(
             gen_range_iter(start, stop, step < 0, include_upper).step_by(step_abs),
