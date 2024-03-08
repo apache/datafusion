@@ -4176,20 +4176,6 @@ NULL def NULL def
 NULL def x x
 x x NULL NULL
 
-# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset trigger evaluate_all
-query TTTTI
-select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
-       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
-       lag(a, 2, null) respect nulls over (order by id desc) as x4,
-       lag(a, 2, 'def') respect nulls over (order by id desc) as x5,
-       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
-from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
-----
-NULL def NULL def 10
-NULL def NULL def 10
-NULL def x x 10
-x x NULL NULL 10
-
 # LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
 # To trigger WindowAggExec, we added a sum window function with all of the ranges.
 query TTTTI
