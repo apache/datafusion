@@ -61,8 +61,8 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-half = { workspace = true }
 datafusion-functions-array = { workspace = true }
+half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 hex = { version = "0.4", optional = true }
 indexmap = { workspace = true }

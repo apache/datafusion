@@ -41,11 +41,11 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::udf::array_dims;
-    pub use super::udf::array_ndims;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::udf::array_dims;
+    pub use super::udf::array_ndims;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
     pub use super::udf::gen_series;

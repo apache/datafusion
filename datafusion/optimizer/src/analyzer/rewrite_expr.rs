@@ -29,9 +29,9 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionDefinition
+    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
+    ScalarFunctionDefinition,
 };
-use datafusion_functions_array::expr_fn::array_has_all;
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -119,6 +119,9 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                 })));
             }
 
+            // TODO: change OperatorToFunction to OperatoToArrayFunction and configure it with array_expressions feature
+            // after other array functions are udf-based
+            #[cfg(feature = "array_expressions")]
             if let Some(expr) = rewrite_array_has_all_operator_to_func(left, op, right) {
                 return Ok(Transformed::yes(expr));
             }
@@ -127,17 +130,21 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
     }
 }
 
+#[cfg(feature = "array_expressions")]
 fn rewrite_array_has_all_operator_to_func(
     left: &Expr,
     op: Operator,
     right: &Expr,
 ) -> Option<Expr> {
+    use super::array_has_all;
+
     if op != Operator::AtArrow && op != Operator::ArrowAt {
         return None;
     }
 
     match (left, right) {
-        // array_has_all(array, array) -> array_has_all
+        // array1 @> array2 -> array_has_all(array1, array2)
+        // array1 <@ array2 -> array_has_all(array2, array1)
         (
             Expr::ScalarFunction(ScalarFunction {
                 func_def:
@@ -152,7 +159,7 @@ fn rewrite_array_has_all_operator_to_func(
         ) => {
             let left = left.clone();
             let right = right.clone();
-            
+
             let expr = if let Operator::ArrowAt = op {
                 array_has_all(right, left)
             } else {

@@ -21,7 +21,6 @@ use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::datum::{apply, apply_cmp};
-use crate::expressions::Literal;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
@@ -43,7 +42,6 @@ use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
-use datafusion_functions_array::expr_fn::array_has_all;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,

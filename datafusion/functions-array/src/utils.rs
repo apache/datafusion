@@ -18,7 +18,7 @@
 //! array function utils
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-use datafusion_common::{plan_err, Result, DataFusionError};
+use datafusion_common::{plan_err, Result};
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();

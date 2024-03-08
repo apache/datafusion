@@ -1268,6 +1268,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "itertools",
  "log",
  "paste",
 ]
@@ -1306,6 +1307,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-array",
  "half",
  "hashbrown 0.14.3",
  "hex",
