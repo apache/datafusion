@@ -4269,3 +4269,12 @@ LIMIT 5;
 3 53
 24 31
 14 94
+
+query T rowsort
+select lag(a) over () as x1
+        from
+        (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null);
+----
+NULL
+NULL
+b
