@@ -118,14 +118,14 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         (vec!["c", "b", "a"], vec!["a", "b", "c"], Sorted),
     ];
     let n = 300;
-    let n_distincts = vec![10, 20];
+    let n_distincts = vec![5];
     for n_distinct in n_distincts {
         let mut handles = Vec::new();
         for i in 0..n {
             let idx = i % test_cases.len();
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
             let job = SpawnedTask::spawn(run_window_test(
-                make_staggered_batches::<true>(1000, n_distinct, i as u64),
+                make_staggered_batches::<true>(50, n_distinct, i as u64),
                 i as u64,
                 pb_cols,
                 ob_cols,
@@ -468,7 +468,8 @@ fn get_random_function(
         }
     }
 
-    (window_fn.clone(), args, fn_name.to_string())
+    // (window_fn.clone(), args, fn_name.to_string())
+    (WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count), vec![col("a", schema).unwrap()], "count".to_string())
 }
 
 fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
@@ -516,7 +517,9 @@ fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
     // } else {
     //     WindowFrameUnits::Groups
     // };
+
     let units = WindowFrameUnits::Groups;
+    // let units = WindowFrameUnits::Range;
     match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {

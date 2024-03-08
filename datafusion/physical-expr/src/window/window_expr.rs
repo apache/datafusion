@@ -339,19 +339,13 @@ pub(crate) fn is_end_range_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    is_end_range_safe_helper(
-                        order_bys,
-                        most_recent_order_bys,
-                        sort_exprs,
-                        idx,
-                        &zero,
-                    )?
+                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                 } else {
                     true
                 }
             }
             WindowFrameBound::CurrentRow => {
-                // TODO: Verify whether this works as expected
                 let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                 is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
             }
@@ -365,13 +359,14 @@ pub(crate) fn is_end_range_safe(
         },
         WindowFrameContext::Groups {
             window_frame,
-            state: _,
+            state,
         } => {
             match &window_frame.end_bound{
                 WindowFrameBound::Preceding(value) => {
                     let zero = ScalarValue::new_zero(&value.data_type())?;
                     if value.eq(&zero){
-                        false
+                        let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                        is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
                     } else {
                         true
                     }
@@ -398,8 +393,8 @@ fn is_row_ahead(
     if old_cols[0].is_empty() || current_cols[0].is_empty() {
         return Ok(false);
     }
-    let last_row = get_row_at_idx(old_cols, old_cols.len() - 1)?;
-    let current_row = get_row_at_idx(current_cols, current_cols.len() - 1)?;
+    let last_row = get_row_at_idx(old_cols, old_cols[0].len() - 1)?;
+    let current_row = get_row_at_idx(current_cols, current_cols[0].len() - 1)?;
     let sort_options = sort_exprs
         .iter()
         .map(|sort_expr| sort_expr.options)
