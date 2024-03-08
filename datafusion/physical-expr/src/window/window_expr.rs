@@ -340,14 +340,14 @@ pub(crate) fn is_end_range_safe(
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
                     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                    is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
                 } else {
                     true
                 }
             }
             WindowFrameBound::CurrentRow => {
                 let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
             }
             WindowFrameBound::Following(delta) => is_end_range_safe_helper(
                 order_bys,
@@ -367,16 +367,32 @@ pub(crate) fn is_end_range_safe(
                     if value.eq(&zero) {
                         let most_recent_order_bys =
                             most_recent_cols!(most_recent_order_bys);
-                        is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                        is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
                     } else {
                         true
                     }
                 }
                 WindowFrameBound::CurrentRow => {
                     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
+                    is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
                 }
-                WindowFrameBound::Following(value) => false,
+                WindowFrameBound::Following(value) => {
+                    let offset = if let ScalarValue::UInt64(Some(offset)) = value{
+                        *offset as usize
+                    } else {
+                        return Ok(false);
+                    };
+                    if state.group_end_indices.len() - state.current_group_idx == offset + 1 {
+                        // println!("inside the end groups offset:{offset:?}, state.current_group_idx:{:?}, state.group_end_indices:{:?}", state.current_group_idx, state.group_end_indices);
+                        let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                        // println!("order_bys:{:?}", order_bys);
+                        // println!("most_recent_order_bys:{:?}", most_recent_order_bys);
+                        is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
+                        // true
+                    } else {
+                        false
+                    }
+                },
             }
         }
     })
