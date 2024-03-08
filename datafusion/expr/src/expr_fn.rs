@@ -586,14 +586,6 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-// array functions
-scalar_expr!(
-    ArrayAppend,
-    array_append,
-    array element,
-    "appends an element to the end of an array."
-);
-
 scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
 
 scalar_expr!(
@@ -610,7 +602,6 @@ scalar_expr!(
     "returns the array without the first element."
 );
 
-nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
     array_has,
@@ -678,12 +669,6 @@ scalar_expr!(
     "searches for an element in the array, returns all occurrences."
 );
 scalar_expr!(
-    ArrayPrepend,
-    array_prepend,
-    array element,
-    "prepends an element to the beginning of an array."
-);
-scalar_expr!(
     ArrayRepeat,
     array_repeat,
     element count,
@@ -746,11 +731,6 @@ scalar_expr!(
     "returns an array with the specified size filled with the given value."
 );
 
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an Arrow array using the specified input expressions."
-);
 scalar_expr!(
     ArrayIntersect,
     array_intersect,
@@ -1350,14 +1330,12 @@ mod test {
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
-        test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
@@ -1365,7 +1343,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
