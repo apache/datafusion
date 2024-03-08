@@ -27,7 +27,7 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::utils::compare_rows;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext,
@@ -320,10 +320,18 @@ pub(crate) fn is_end_bound_safe(
     sort_exprs: LexOrderingRef,
     idx: usize,
 ) -> Result<bool> {
-    let sort_options = sort_exprs
-        .iter()
-        .map(|sort_expr| sort_expr.options)
-        .collect::<Vec<_>>();
+    let (sort_options, orderby_col, most_recent_ob_col) = if sort_exprs.is_empty() {
+        // If no information regarding ordering is present we cannot determine safe range.
+        return Ok(false);
+    } else {
+        // In linear mode, it is only guaranteed that first entry of the ordering will progress (across different partitions).
+        // Hence, we should decide whether data is progressed or not using the first entry.
+        (
+            &sort_exprs[0].options,
+            &order_bys[0],
+            most_recent_order_bys.map(|items| &items[0]),
+        )
+    };
     Ok(match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => match &window_frame.end_bound {
             WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => true,
@@ -339,20 +347,18 @@ pub(crate) fn is_end_bound_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    // In linear mode, it is only guaranteed that first entry of the ordering will progress.
-                    is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
+                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
                 } else {
                     true
                 }
             }
             WindowFrameBound::CurrentRow => {
-                // In linear mode, it is only guaranteed that first entry of the ordering will progress.
-                is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
             }
             WindowFrameBound::Following(delta) => is_end_range_safe(
                 &order_bys[0],
                 most_recent_order_bys.map(|items| &items[0]),
-                &sort_options[0],
+                sort_options,
                 idx,
                 delta,
             )?,
@@ -360,63 +366,48 @@ pub(crate) fn is_end_bound_safe(
         WindowFrameContext::Groups {
             window_frame,
             state,
-        } => {
-            match &window_frame.end_bound {
-                WindowFrameBound::Preceding(value) => {
-                    let zero = ScalarValue::new_zero(&value.data_type())?;
-                    if value.eq(&zero) {
-                        // In linear mode, it is only guaranteed that first entry of the ordering will progress.
-                        is_row_ahead(
-                            order_bys,
-                            most_recent_order_bys,
-                            &sort_options[0..1],
-                        )?
-                    } else {
-                        true
-                    }
-                }
-                WindowFrameBound::CurrentRow => {
-                    is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
-                }
-                WindowFrameBound::Following(value) => {
-                    let offset = if let ScalarValue::UInt64(Some(offset)) = value {
-                        *offset as usize
-                    } else {
-                        return Ok(false);
-                    };
-                    if state.group_end_indices.len() - state.current_group_idx
-                        == offset + 1
-                    {
-                        is_row_ahead(
-                            order_bys,
-                            most_recent_order_bys,
-                            &sort_options[0..1],
-                        )?
-                    } else {
-                        false
-                    }
+        } => match &window_frame.end_bound {
+            WindowFrameBound::Preceding(value) => {
+                let zero = ScalarValue::new_zero(&value.data_type())?;
+                if value.eq(&zero) {
+                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+                } else {
+                    true
                 }
             }
-        }
+            WindowFrameBound::CurrentRow => {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+            }
+            WindowFrameBound::Following(value) => {
+                let offset = if let ScalarValue::UInt64(Some(offset)) = value {
+                    *offset as usize
+                } else {
+                    return Ok(false);
+                };
+                if state.group_end_indices.len() - state.current_group_idx == offset + 1 {
+                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+                } else {
+                    false
+                }
+            }
+        },
     })
 }
 
 /// This util checks whether `current_cols` (if `None` returns `false`) is ahead of the `old_cols`, in terms of
 /// `sort_options`.
 fn is_row_ahead(
-    old_cols: &[ArrayRef],
-    current_cols: Option<&[ArrayRef]>,
-    sort_options: &[SortOptions],
+    old_col: &ArrayRef,
+    current_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
 ) -> Result<bool> {
-    let current_cols = most_recent_cols!(current_cols);
-    assert!(!old_cols.is_empty());
-    assert!(!current_cols.is_empty());
-    if old_cols[0].is_empty() || current_cols[0].is_empty() {
+    let current_col = most_recent_cols!(current_col);
+    if old_col.is_empty() || current_col.is_empty() {
         return Ok(false);
     }
-    let last_row = get_row_at_idx(old_cols, old_cols[0].len() - 1)?;
-    let current_row = get_row_at_idx(current_cols, current_cols[0].len() - 1)?;
-    let cmp = compare_rows(&current_row, &last_row, sort_options)?;
+    let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
+    let current_value = ScalarValue::try_from_array(current_col, 0)?;
+    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
     Ok(cmp.is_gt())
 }
 
@@ -499,27 +490,27 @@ mod tests {
 
     #[test]
     fn test_is_row_ahead() -> Result<()> {
-        let old_values: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
+        let old_values: ArrayRef =
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]));
 
-        let new_values1: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![11.0]))];
-        let new_values2: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![10.0]))];
+        let new_values1: ArrayRef = Arc::new(Float64Array::from(vec![11.0]));
+        let new_values2: ArrayRef = Arc::new(Float64Array::from(vec![10.0]));
 
         assert!(is_row_ahead(
             &old_values,
             Some(&new_values1),
-            &[SortOptions {
+            &SortOptions {
                 descending: false,
                 nulls_first: false
-            }]
+            }
         )?);
         assert!(!is_row_ahead(
             &old_values,
             Some(&new_values2),
-            &[SortOptions {
+            &SortOptions {
                 descending: false,
                 nulls_first: false
-            }]
+            }
         )?);
 
         Ok(())
