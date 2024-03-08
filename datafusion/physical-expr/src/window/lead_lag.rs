@@ -20,7 +20,6 @@
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
-use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
@@ -159,6 +158,7 @@ fn evaluate_all_with_ignore_null(
     let valid_indices: Vec<usize> = (0..array.len())
         .filter(|&index| array.is_valid(index))
         .collect();
+
     let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
         .map(|id| {
             let direction = is_lag ^ (offset > 0);
@@ -176,17 +176,11 @@ fn evaluate_all_with_ignore_null(
                     }
                 }),
                 Err(pos) => if direction {
-                    if pos < valid_indices.len() {
-                        pos.checked_add(offset as usize)
-                    } else {
-                        None
-                    }
+                    pos.checked_add(offset as usize)
+                } else if pos > 0 {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
                 } else {
-                    if pos > 0 {
-                        pos.checked_sub(offset.unsigned_abs() as usize)
-                    } else {
-                        None
-                    }
+                    None
                 }
                 .and_then(|new_pos| {
                     if new_pos < valid_indices.len() {
@@ -196,6 +190,7 @@ fn evaluate_all_with_ignore_null(
                     }
                 }),
             };
+
             match result_index {
                 Some(index) => ScalarValue::try_from_array(array, index),
                 None => Ok(default_value.clone()),
@@ -204,7 +199,7 @@ fn evaluate_all_with_ignore_null(
         .collect();
 
     let new_array = new_array_results?;
-    ScalarValue::iter_to_array(new_array.into_iter())
+    ScalarValue::iter_to_array(new_array)
 }
 // TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
 fn shift_with_default_value(
