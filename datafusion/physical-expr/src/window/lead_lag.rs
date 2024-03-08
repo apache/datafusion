@@ -159,7 +159,6 @@ fn evaluate_all_with_ignore_null(
     let valid_indices: Vec<usize> = (0..array.len())
         .filter(|&index| array.is_valid(index))
         .collect();
-
     let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
         .map(|id| {
             let direction = is_lag ^ (offset > 0);
@@ -205,7 +204,7 @@ fn evaluate_all_with_ignore_null(
         .collect();
 
     let new_array = new_array_results?;
-    Ok(ScalarValue::iter_to_array(new_array.into_iter())?)
+    ScalarValue::iter_to_array(new_array.into_iter())
 }
 // TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
 fn shift_with_default_value(
