@@ -252,7 +252,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             if cur_range.end == length
                 && !is_causal
                 && not_end
-                && !is_end_range_safe(
+                && !is_end_bound_safe(
                     window_frame_ctx,
                     &order_bys,
                     most_recent_row_obs.as_deref(),
@@ -293,30 +293,27 @@ macro_rules! most_recent_cols {
     };
 }
 
-fn is_end_range_safe_helper(
-    order_bys: &[ArrayRef],
-    most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_options: &[SortOptions],
+fn is_end_range_safe(
+    order_bys: &ArrayRef,
+    most_recent_order_bys: Option<&ArrayRef>,
+    sort_options: &SortOptions,
     idx: usize,
     delta: &ScalarValue,
 ) -> Result<bool> {
     let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-    let most_recent_row_values = get_row_at_idx(most_recent_order_bys, 0)?;
-    let current_row_values = get_row_at_idx(order_bys, idx)?;
+    let most_recent_row_value = ScalarValue::try_from_array(most_recent_order_bys, 0)?;
+    let current_row_value = ScalarValue::try_from_array(order_bys, idx)?;
 
-    assert_eq!(sort_options.len(), 1);
-    assert_eq!(most_recent_row_values.len(), 1);
-    assert_eq!(current_row_values.len(), 1);
-    let is_descending = sort_options[0].descending;
+    let is_descending = sort_options.descending;
     Ok(if is_descending {
-        current_row_values[0].sub(delta)? > most_recent_row_values[0]
+        current_row_value.sub(delta)? > most_recent_row_value
     } else {
-        most_recent_row_values[0] > current_row_values[0].add(delta)?
+        most_recent_row_value > current_row_value.add(delta)?
     })
 }
 
 /// Check whether end range calculate is safe (e.g. won't change with future data).
-pub(crate) fn is_end_range_safe(
+pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
@@ -352,10 +349,10 @@ pub(crate) fn is_end_range_safe(
                 // In linear mode, it is only guaranteed that first entry of the ordering will progress.
                 is_row_ahead(order_bys, most_recent_order_bys, &sort_options[0..1])?
             }
-            WindowFrameBound::Following(delta) => is_end_range_safe_helper(
-                order_bys,
-                most_recent_order_bys,
-                &sort_options[0..1],
+            WindowFrameBound::Following(delta) => is_end_range_safe(
+                &order_bys[0],
+                most_recent_order_bys.map(|items| &items[0]),
+                &sort_options[0],
                 idx,
                 delta,
             )?,
