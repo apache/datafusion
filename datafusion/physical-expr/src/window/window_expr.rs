@@ -351,9 +351,9 @@ pub(crate) fn is_end_range_safe(
                 }
             }
             WindowFrameBound::CurrentRow => {
+                // TODO: Verify whether this works as expected
                 let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
                 is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
-                // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
             }
             WindowFrameBound::Following(delta) => is_end_range_safe_helper(
                 order_bys,
@@ -364,9 +364,26 @@ pub(crate) fn is_end_range_safe(
             )?,
         },
         WindowFrameContext::Groups {
-            window_frame: _,
+            window_frame,
             state: _,
-        } => false,
+        } => {
+            match &window_frame.end_bound{
+                WindowFrameBound::Preceding(value) => {
+                    let zero = ScalarValue::new_zero(&value.data_type())?;
+                    if value.eq(&zero){
+                        false
+                    } else {
+                        true
+                    }
+                },
+                WindowFrameBound::CurrentRow => {
+                    false
+                },
+                WindowFrameBound::Following(value) => {
+                    false
+                }
+            }
+        },
     })
 }
 

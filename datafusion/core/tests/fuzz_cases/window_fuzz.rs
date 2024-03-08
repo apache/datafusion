@@ -469,11 +469,6 @@ fn get_random_function(
     }
 
     (window_fn.clone(), args, fn_name.to_string())
-    // (
-    //     WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
-    //     vec![col("a", schema).unwrap()],
-    //     "count".to_string(),
-    // )
 }
 
 fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
@@ -521,7 +516,7 @@ fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
     // } else {
     //     WindowFrameUnits::Groups
     // };
-    let units = WindowFrameUnits::Range;
+    let units = WindowFrameUnits::Groups;
     match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
