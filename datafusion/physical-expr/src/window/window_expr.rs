@@ -347,6 +347,7 @@ pub(crate) fn is_end_range_safe(
             }
             WindowFrameBound::CurrentRow => {
                 let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                // In linear mode, it is only guaranteed that first entry of the ordering will progress.
                 is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
             }
             WindowFrameBound::Following(delta) => is_end_range_safe_helper(
@@ -377,14 +378,17 @@ pub(crate) fn is_end_range_safe(
                     is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
                 }
                 WindowFrameBound::Following(value) => {
-                    let offset = if let ScalarValue::UInt64(Some(offset)) = value{
+                    let offset = if let ScalarValue::UInt64(Some(offset)) = value {
                         *offset as usize
                     } else {
                         return Ok(false);
                     };
-                    if state.group_end_indices.len() - state.current_group_idx == offset + 1 {
+                    if state.group_end_indices.len() - state.current_group_idx
+                        == offset + 1
+                    {
                         // println!("inside the end groups offset:{offset:?}, state.current_group_idx:{:?}, state.group_end_indices:{:?}", state.current_group_idx, state.group_end_indices);
-                        let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+                        let most_recent_order_bys =
+                            most_recent_cols!(most_recent_order_bys);
                         // println!("order_bys:{:?}", order_bys);
                         // println!("most_recent_order_bys:{:?}", most_recent_order_bys);
                         is_row_ahead(order_bys, most_recent_order_bys, &sort_exprs[0..1])?
@@ -392,7 +396,7 @@ pub(crate) fn is_end_range_safe(
                     } else {
                         false
                     }
-                },
+                }
             }
         }
     })

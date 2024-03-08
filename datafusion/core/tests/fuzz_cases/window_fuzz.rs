@@ -468,15 +468,10 @@ fn get_random_function(
         }
     }
 
-    // (window_fn.clone(), args, fn_name.to_string())
-    (
-        WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count),
-        vec![col("a", schema).unwrap()],
-        "count".to_string(),
-    )
+    (window_fn.clone(), args, fn_name.to_string())
 }
 
-fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
+fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     struct Utils {
         val: i32,
         is_preceding: bool,
@@ -505,25 +500,23 @@ fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
 
-    // let rand_num = rng.gen_range(0..3);
-    // let units = if rand_num < 1 {
-    //     WindowFrameUnits::Range
-    // } else if rand_num < 2 {
-    //     if is_linear {
-    //         // In linear test we sort data for WindowAggExec
-    //         // However, we do not sort data for BoundedWindowExec
-    //         // Since sorting is unstable, to make sure final result are comparable after sorting
-    //         // We shouldn't use Rows. This would add dependency to the table order.
-    //         WindowFrameUnits::Range
-    //     } else {
-    //         WindowFrameUnits::Rows
-    //     }
-    // } else {
-    //     WindowFrameUnits::Groups
-    // };
+    let rand_num = rng.gen_range(0..3);
+    let units = if rand_num < 1 {
+        WindowFrameUnits::Range
+    } else if rand_num < 2 {
+        if is_linear {
+            // In linear test we sort data for WindowAggExec
+            // However, we do not sort data for BoundedWindowExec
+            // Since sorting is unstable, to make sure final result are comparable after sorting
+            // We shouldn't use Rows. This would add dependency to the table order.
+            WindowFrameUnits::Range
+        } else {
+            WindowFrameUnits::Rows
+        }
+    } else {
+        WindowFrameUnits::Groups
+    };
 
-    let units = WindowFrameUnits::Groups;
-    // let units = WindowFrameUnits::Range;
     let mut window_frame = match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
