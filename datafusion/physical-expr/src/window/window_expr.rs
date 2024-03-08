@@ -283,6 +283,8 @@ pub trait AggregateWindowExpr: WindowExpr {
     }
 }
 
+// Gets value inside the Option<T> if present. Otherwise returns
+// Ok(false).
 macro_rules! most_recent_cols {
     ($most_recent_cols:expr) => {
         if let Some(most_recent_cols) = $most_recent_cols {
@@ -293,6 +295,8 @@ macro_rules! most_recent_cols {
     };
 }
 
+// Determine whether end_range calculated may change with future data or not
+// according to global latest value information across partitions in the `most_recent_order_bys`.
 fn is_end_range_safe(
     order_bys: &ArrayRef,
     most_recent_order_bys: Option<&ArrayRef>,

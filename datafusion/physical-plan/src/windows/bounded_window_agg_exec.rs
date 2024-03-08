@@ -349,6 +349,7 @@ trait PartitionSearcher: Send {
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Option<Vec<ArrayRef>>>;
 
+    /// Determine whether `[InputOrderMode]` is `[InputOrderMode::Linear]` or not.
     fn is_mode_linear(&self) -> bool {
         false
     }
@@ -388,6 +389,14 @@ trait PartitionSearcher: Send {
         }
 
         if self.is_mode_linear() {
+            // In Linear mode, it is guaranteed that first order by column is ordered across partitions.
+            // Please note that, it is only guaranteed that first order by column is ordered. As a counter example
+            // Consider the case, `PARTITION BY b, ORDER BY a, c`, when input is ordered by `[a,b,c]`. In this case,
+            // `BoundedWindowAggExec` mode will be `Linear`. However, we cannot guarantee that, last row of the input data
+            // will be most ahead data in terms of ordering requirement `[a, c]` (It is the most ahead data in terms of `[a, b, c]`).
+            // Hence, only column `a` should be used as a guarantee of the most ahead data across partitions.
+            // For other modes (`Sorted`, `PartiallySorted`), we do not need to keep track of most recent row guarantee across partitions.
+            //  The reason is that, since leading ordering separates partitions, guarantee by the most recent row, already prune the previous partitions completely.
             let last_row = get_last_row_batch(&record_batch)?;
             for (_partition_row, partition_batch) in partition_buffers.iter_mut() {
                 partition_batch.set_most_recent_row(last_row.clone());
