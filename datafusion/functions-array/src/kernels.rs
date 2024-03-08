@@ -19,20 +19,19 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array,
-    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-    OffsetSizeTrait, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeListArray,
+    LargeStringArray, ListArray, ListBuilder, OffsetSizeTrait, StringArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array, StringBuilder
 };
-use arrow::array::{LargeListArray, ListArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::Field;
 use arrow::datatypes::UInt64Type;
 use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
 use datafusion_common::cast::{
-    as_date32_array, as_generic_list_array, as_int64_array, as_interval_mdn_array,
+    as_date32_array, as_generic_string_array, as_generic_list_array, as_int64_array, as_interval_mdn_array,
     as_large_list_array, as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
+use datafusion_common::{DataFusionError, exec_err, not_impl_datafusion_err, Result};
 use std::any::type_name;
 use std::sync::Arc;
 
@@ -259,6 +258,98 @@ pub(super) fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(string_arr))
+}
+
+/// Splits string at occurrences of delimiter and returns an array of parts
+/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
+pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return exec_err!("string_to_array expects two or three arguments");
+    }
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+
+    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
+        string_array.len(),
+        string_array.get_buffer_memory_size(),
+    ));
+
+    match args.len() {
+        2 => {
+            string_array.iter().zip(delimiter_array.iter()).for_each(
+                |(string, delimiter)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            list_builder.values().append_value(string);
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                list_builder.values().append_value(s);
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                list_builder.values().append_value(c);
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                },
+            );
+        }
+
+        3 => {
+            let null_value_array = as_generic_string_array::<T>(&args[2])?;
+            string_array
+                .iter()
+                .zip(delimiter_array.iter())
+                .zip(null_value_array.iter())
+                .for_each(|((string, delimiter), null_value)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            if Some(string) == null_value {
+                                list_builder.values().append_null();
+                            } else {
+                                list_builder.values().append_value(string);
+                            }
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                if Some(s) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(s);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                if Some(c.as_str()) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(c);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                });
+        }
+        _ => {
+            return exec_err!(
+                "Expect string_to_array function to take two or three parameters"
+            )
+        }
+    }
+
+    let list_array = list_builder.finish();
+    Ok(Arc::new(list_array) as ArrayRef)
 }
 
 /// Generates an array of integers from start to stop with a given step.

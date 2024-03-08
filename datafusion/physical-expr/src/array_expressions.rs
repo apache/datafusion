@@ -30,8 +30,7 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
-    as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
-    as_list_array, as_string_array,
+    as_generic_list_array, as_int64_array, as_large_list_array, as_list_array, as_string_array,
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
@@ -1585,95 +1584,6 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array2 = &args[1];
 
     general_set_op(array1, array2, SetOp::Intersect)
-}
-
-/// Splits string at occurrences of delimiter and returns an array of parts
-/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
-pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
-
-    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
-        string_array.len(),
-        string_array.get_buffer_memory_size(),
-    ));
-
-    match args.len() {
-        2 => {
-            string_array.iter().zip(delimiter_array.iter()).for_each(
-                |(string, delimiter)| {
-                    match (string, delimiter) {
-                        (Some(string), Some("")) => {
-                            list_builder.values().append_value(string);
-                            list_builder.append(true);
-                        }
-                        (Some(string), Some(delimiter)) => {
-                            string.split(delimiter).for_each(|s| {
-                                list_builder.values().append_value(s);
-                            });
-                            list_builder.append(true);
-                        }
-                        (Some(string), None) => {
-                            string.chars().map(|c| c.to_string()).for_each(|c| {
-                                list_builder.values().append_value(c);
-                            });
-                            list_builder.append(true);
-                        }
-                        _ => list_builder.append(false), // null value
-                    }
-                },
-            );
-        }
-
-        3 => {
-            let null_value_array = as_generic_string_array::<T>(&args[2])?;
-            string_array
-                .iter()
-                .zip(delimiter_array.iter())
-                .zip(null_value_array.iter())
-                .for_each(|((string, delimiter), null_value)| {
-                    match (string, delimiter) {
-                        (Some(string), Some("")) => {
-                            if Some(string) == null_value {
-                                list_builder.values().append_null();
-                            } else {
-                                list_builder.values().append_value(string);
-                            }
-                            list_builder.append(true);
-                        }
-                        (Some(string), Some(delimiter)) => {
-                            string.split(delimiter).for_each(|s| {
-                                if Some(s) == null_value {
-                                    list_builder.values().append_null();
-                                } else {
-                                    list_builder.values().append_value(s);
-                                }
-                            });
-                            list_builder.append(true);
-                        }
-                        (Some(string), None) => {
-                            string.chars().map(|c| c.to_string()).for_each(|c| {
-                                if Some(c.as_str()) == null_value {
-                                    list_builder.values().append_null();
-                                } else {
-                                    list_builder.values().append_value(c);
-                                }
-                            });
-                            list_builder.append(true);
-                        }
-                        _ => list_builder.append(false), // null value
-                    }
-                });
-        }
-        _ => {
-            return exec_err!(
-                "Expect string_to_array function to take two or three parameters"
-            )
-        }
-    }
-
-    let list_array = list_builder.finish();
-    Ok(Arc::new(list_array) as ArrayRef)
 }
 
 pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(

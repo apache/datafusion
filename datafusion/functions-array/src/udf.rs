@@ -29,6 +29,7 @@ use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
+use arrow::array::{NullArray, StringArray};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(ArrayToString,
@@ -82,6 +83,81 @@ impl ScalarUDFImpl for ArrayToString {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::array_to_string(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(StringToArray,
+    string_to_array,
+    string delimiter null_string, // arg name
+    "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`", // doc
+    string_to_array_udf // internal function name
+);
+#[derive(Debug)]
+pub(super) struct StringToArray {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl StringToArray {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![
+                String::from("string_to_array"),
+                String::from("string_to_list"),
+            ],
+        }
+    }
+}
+
+impl ScalarUDFImpl for StringToArray {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "string_to_array"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            Utf8 | LargeUtf8 => List(Arc::new(Field::new(
+                    "item",
+                    arg_types[0].clone(),
+                    true,
+                ))),
+            _ => {
+                return plan_err!("The string_to_array function can only accept Utf8 or LargeUtf8.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        let mut args = ColumnarValue::values_to_arrays(args)?;
+        // Case: delimiter is NULL, needs to be handled as well.
+        if args[1].as_any().is::<NullArray>() {
+            args[1] = Arc::new(StringArray::new_null(args[1].len()));
+        };
+
+        match args[0].data_type() {
+            arrow::datatypes::DataType::Utf8 => {
+                crate::kernels::string_to_array::<i32>(&args).map(ColumnarValue::Array)
+            }
+            arrow::datatypes::DataType::LargeUtf8 => {
+                crate::kernels::string_to_array::<i64>(&args).map(ColumnarValue::Array)
+            }
+            other => {
+                exec_err!("unsupported type for string_to_array function as {other}")
+            }
+        }
     }
 
     fn aliases(&self) -> &[String] {

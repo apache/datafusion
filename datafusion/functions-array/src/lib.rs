@@ -55,6 +55,7 @@ pub mod expr_fn {
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
     pub use super::udf::array_to_string;
+    pub use super::udf::string_to_array;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
@@ -65,6 +66,7 @@ pub mod expr_fn {
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = vec![
         udf::array_to_string_udf(),
+        udf::string_to_array_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
         udf::array_dims_udf(),
