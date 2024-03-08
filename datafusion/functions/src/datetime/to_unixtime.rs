@@ -62,9 +62,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_unixtime") {
-                return value;
-            }
+            validate_data_types(args, "to_unixtime")?;
         }
 
         match args[0].data_type() {
