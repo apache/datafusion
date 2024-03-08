@@ -22,7 +22,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::{Array, Scalar};
+use arrow_array::Array;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
@@ -149,23 +149,6 @@ impl WindowShiftEvaluator {
     }
 }
 
-fn create_empty_array(
-    value: Option<&ScalarValue>,
-    data_type: &DataType,
-    size: usize,
-) -> Result<ArrayRef> {
-    use arrow::array::new_null_array;
-    let array = value
-        .as_ref()
-        .map(|scalar| scalar.to_array_of_size(size))
-        .transpose()?
-        .unwrap_or_else(|| new_null_array(data_type, size));
-    if array.data_type() != data_type {
-        cast(&array, data_type).map_err(|e| arrow_datafusion_err!(e))
-    } else {
-        Ok(array)
-    }
-}
 // implement ignore null for evaluate_all
 fn evaluate_all_with_ignore_null(
     array: &ArrayRef,
@@ -180,45 +163,40 @@ fn evaluate_all_with_ignore_null(
     let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
         .map(|id| {
             let direction = is_lag ^ (offset > 0);
-            let result_index: Option<usize>;
-            match valid_indices.binary_search(&id) {
-                Ok(pos) => {
-                    result_index = if direction {
+            let result_index = match valid_indices.binary_search(&id) {
+                Ok(pos) => if direction {
+                    pos.checked_add(offset as usize)
+                } else {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
+                }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+                Err(pos) => if direction {
+                    if pos < valid_indices.len() {
                         pos.checked_add(offset as usize)
                     } else {
-                        pos.checked_sub(offset.abs() as usize)
+                        None
                     }
-                    .and_then(|new_pos| {
-                        if new_pos < valid_indices.len() {
-                            Some(valid_indices[new_pos])
-                        } else {
-                            None
-                        }
-                    });
-                }
-                Err(pos) => {
-                    result_index = if direction {
-                        if pos < valid_indices.len() {
-                            pos.checked_add(offset as usize)
-                        } else {
-                            None
-                        }
+                } else {
+                    if pos > 0 {
+                        pos.checked_sub(offset.unsigned_abs() as usize)
                     } else {
-                        if pos > 0 {
-                            pos.checked_sub(offset.abs() as usize)
-                        } else {
-                            None
-                        }
+                        None
                     }
-                    .and_then(|new_pos| {
-                        if new_pos < valid_indices.len() {
-                            Some(valid_indices[new_pos])
-                        } else {
-                            None
-                        }
-                    });
                 }
-            }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+            };
             match result_index {
                 Some(index) => ScalarValue::try_from_array(array, index),
                 None => Ok(default_value.clone()),
