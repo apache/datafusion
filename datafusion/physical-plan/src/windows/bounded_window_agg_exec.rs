@@ -374,14 +374,16 @@ trait PartitionSearcher: Send {
         partition_buffers: &mut PartitionBatches,
     ) -> Result<()> {
         if record_batch.num_rows() > 0 {
-            // println!("record_batch.schema: {:?}, ", record_batch.schema());
             let partition_batches =
                 self.evaluate_partition_batches(&record_batch, window_expr)?;
             for (partition_row, partition_batch) in partition_batches {
-                // println!("partition_batch.schema: {:?}", partition_batch.schema());
                 let partition_batch_state = partition_buffers
                     .entry(partition_row)
                     .or_insert_with(|| PartitionBatchState {
+                        // Use input_schema, for the buffer schema.
+                        // record_batch.schema may not have necessary schema, in terms of
+                        // nullability constraints of the output.
+                        // See issue: https://github.com/apache/arrow-datafusion/issues/9320
                         record_batch: RecordBatch::new_empty(self.input_schema().clone()),
                         is_end: false,
                         n_out_row: 0,
