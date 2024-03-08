@@ -28,7 +28,7 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
-use super::binary::comparison_coercion;
+use super::binary::{comparison_binary_numeric_coercion, comparison_coercion};
 
 /// Performs type coercion for function arguments.
 ///
@@ -187,6 +187,10 @@ fn get_valid_types(
             let new_type = current_types.iter().skip(1).try_fold(
                 current_types.first().unwrap().clone(),
                 |acc, x| {
+                    // The coerced types found by `comparison_coercion` are not guaranteed to be
+                    // coercible for the arguments. `comparison_coercion` returns more loose
+                    // types that can be coerced to both `acc` and `x` for comparison purpose.
+                    // See `maybe_data_types` for the actual coercion.
                     let coerced_type = comparison_coercion(&acc, x);
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
@@ -276,9 +280,9 @@ fn maybe_data_types(
         if current_type == valid_type {
             new_type.push(current_type.clone())
         } else {
-            // attempt to coerce
-            if let Some(valid_type) = coerced_from(valid_type, current_type) {
-                new_type.push(valid_type)
+            // attempt to coerce.
+            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
+                new_type.push(coerced_type)
             } else {
                 // not possible
                 return None;
@@ -427,8 +431,19 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
 
-        // cannot coerce
-        _ => None,
+        // More coerce rules.
+        // Note that not all rules in `comparison_coercion` can be reused here.
+        // For example, all numeric types can be coerced into Utf8 for comparison,
+        // but not for function arguments.
+        _ => comparison_binary_numeric_coercion(type_into, type_from).and_then(
+            |coerced_type| {
+                if *type_into == coerced_type {
+                    Some(coerced_type)
+                } else {
+                    None
+                }
+            },
+        ),
     }
 }
 
