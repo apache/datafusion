@@ -4270,6 +4270,7 @@ LIMIT 5;
 24 31
 14 94
 
+# Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
 query T rowsort
 select lag(a) over () as x1
         from
