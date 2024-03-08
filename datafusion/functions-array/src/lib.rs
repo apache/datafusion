@@ -35,6 +35,7 @@ mod make_array;
 mod rewrite;
 mod udf;
 mod utils;
+mod extract;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;

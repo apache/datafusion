@@ -599,12 +599,6 @@ scalar_expr!(
 );
 
 scalar_expr!(
-    ArrayElement,
-    array_element,
-    array element,
-    "extracts the element with the index n from the array."
-);
-scalar_expr!(
     ArrayExcept,
     array_except,
     first_array second_array,

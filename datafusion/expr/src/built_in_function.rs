@@ -107,8 +107,6 @@ pub enum BuiltinScalarFunction {
     ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
-    /// array_element
-    ArrayElement,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -288,7 +286,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
@@ -361,14 +358,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
-                List(field)
-                | LargeList(field)
-                | FixedSizeList(field, _) => Ok(field.data_type().clone()),
-                _ => plan_err!(
-                    "The {self} function can only accept List, LargeList or FixedSizeList as the first argument"
-                ),
-            },
             BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -565,9 +554,6 @@ impl BuiltinScalarFunction {
         match self {
             BuiltinScalarFunction::ArrayPopFront => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::array(self.volatility()),
-            BuiltinScalarFunction::ArrayElement => {
-                Signature::array_and_index(self.volatility())
-            }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -894,12 +880,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // hashing functions
-            BuiltinScalarFunction::ArrayElement => &[
-                "array_element",
-                "array_extract",
-                "list_element",
-                "list_extract",
-            ],
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]

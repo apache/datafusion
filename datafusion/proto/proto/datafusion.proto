@@ -640,7 +640,7 @@ enum ScalarFunction {
   ArrayReplace = 96;
   // 97 was ArrayToString
   // 98 was Cardinality
-  ArrayElement = 99;
+  // 99 was ArrayElement
   ArraySlice = 100;
   Cot = 103;
   // 104 was ArrayHas
