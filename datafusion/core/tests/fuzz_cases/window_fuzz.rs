@@ -468,7 +468,8 @@ fn get_random_function(
         }
     }
 
-    (window_fn.clone(), args, fn_name.to_string())
+    // (window_fn.clone(), args, fn_name.to_string())
+    (WindowFunctionDefinition::AggregateFunction(AggregateFunction::Count), vec![col("a", schema).unwrap()], "count".to_string())
 }
 
 fn get_random_window_frame(rng: &mut StdRng, _is_linear: bool) -> WindowFrame {

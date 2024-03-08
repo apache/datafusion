@@ -294,6 +294,24 @@ macro_rules! most_recent_cols {
     };
 }
 
+fn is_end_range_safe_helper(order_bys: &[ArrayRef], most_recent_order_bys: Option<&[ArrayRef]>,sort_exprs: LexOrderingRef, idx: usize, delta: &ScalarValue) -> Result<bool> {
+    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
+    let mut most_recent_row_values =
+        get_row_at_idx(most_recent_order_bys, 0)?;
+    assert_eq!(most_recent_row_values.len(), 1);
+    let most_recent_range_value = most_recent_row_values.swap_remove(0);
+    assert_eq!(sort_exprs.len(), 1);
+    let is_descending = sort_exprs[0].options.descending;
+    let mut current_row_values = get_row_at_idx(order_bys, idx)?;
+    assert_eq!(current_row_values.len(), 1);
+    let value = current_row_values.swap_remove(0);
+    Ok(if is_descending {
+        value.sub(delta)? > most_recent_range_value
+    } else {
+        most_recent_range_value > value.add(delta)?
+    })
+}
+
 pub(crate) fn is_end_range_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
@@ -316,10 +334,7 @@ pub(crate) fn is_end_range_safe(
             WindowFrameBound::Preceding(value) => {
                 let zero = ScalarValue::new_zero(&value.data_type())?;
                 if value.eq(&zero) {
-                    let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                    is_row_ahead(order_bys, most_recent_order_bys, sort_exprs)?
-                    // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
-                    // false
+                    is_end_range_safe_helper(order_bys, most_recent_order_bys, sort_exprs, idx, &zero)?
                 } else {
                     true
                 }
@@ -330,25 +345,7 @@ pub(crate) fn is_end_range_safe(
                 // is_record_batch_ahead(last_batch, most_recent_row, sort_exprs)?
             }
             WindowFrameBound::Following(delta) => {
-                // println!("delta:{delta:?}");
-                let most_recent_order_bys = most_recent_cols!(most_recent_order_bys);
-                let mut most_recent_row_values =
-                    get_row_at_idx(most_recent_order_bys, 0)?;
-                assert_eq!(most_recent_row_values.len(), 1);
-                let most_recent_range_value = most_recent_row_values.swap_remove(0);
-                assert_eq!(sort_exprs.len(), 1);
-                let is_descending = sort_exprs[0].options.descending;
-                let mut current_row_values = get_row_at_idx(order_bys, idx)?;
-                assert_eq!(current_row_values.len(), 1);
-                let value = current_row_values.swap_remove(0);
-                if is_descending {
-                    value.sub(delta)? > most_recent_range_value
-                } else {
-                    most_recent_range_value > value.add(delta)?
-                }
-                // println!("value:{value:?}, delta:{delta:?}, most_recent_range_value:{most_recent_range_value:?}, comparison:{res:?}");
-                // res
-                // false
+                is_end_range_safe_helper(order_bys, most_recent_order_bys, sort_exprs, idx, delta)?
             }
         },
         WindowFrameContext::Groups {
@@ -375,6 +372,8 @@ fn is_row_ahead(
         .iter()
         .map(|sort_expr| sort_expr.options)
         .collect::<Vec<_>>();
+    // println!("current_row: {:?}", current_row);
+    // println!("last_row: {:?}", last_row);
     let cmp = compare_rows(&current_row, &last_row, &sort_options)?;
     Ok(cmp.is_gt())
 }
