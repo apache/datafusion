@@ -651,9 +651,9 @@ enum ScalarFunction {
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
-  ArrayHas = 104;
-  ArrayHasAny = 105;
-  ArrayHasAll = 106;
+  // 104 was ArrayHas
+  // 105 was ArrayHasAny
+  // 106 was ArrayHasAll
   ArrayRemoveN = 107;
   ArrayReplaceN = 108;
   ArrayRemoveAll = 109;
