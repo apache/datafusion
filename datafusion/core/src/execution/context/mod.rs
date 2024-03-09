@@ -349,6 +349,15 @@ impl SessionContext {
         self.session_start_time
     }
 
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        mut self,
+        function_factory: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.state.write().set_function_factory(function_factory);
+        self
+    }
+
     /// Registers the [`RecordBatch`] as the specified table name
     pub fn register_batch(
         &self,
@@ -1657,6 +1666,11 @@ impl SessionState {
     ) -> Self {
         self.function_factory = Some(function_factory);
         self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
+        self.function_factory = Some(function_factory);
     }
 
     /// Replace the extension [`SerializerRegistry`]
