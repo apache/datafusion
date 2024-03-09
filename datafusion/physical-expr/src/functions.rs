@@ -311,18 +311,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_concat)(args)
         }),
-        BuiltinScalarFunction::ArrayEmpty => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_empty)(args)
-        }),
-        BuiltinScalarFunction::ArrayHasAll => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_has_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayHasAny => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_has_any)(args)
-        }),
-        BuiltinScalarFunction::ArrayHas => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_has)(args)
-        }),
         BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_distinct)(args)
         }),
@@ -331,9 +319,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_except)(args)
-        }),
-        BuiltinScalarFunction::ArrayLength => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_length)(args)
         }),
         BuiltinScalarFunction::Flatten => {
             Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
@@ -868,7 +853,7 @@ mod tests {
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-            Int32Array, Int64Array, StringArray, UInt64Array,
+            Int32Array, StringArray, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
@@ -2284,155 +2269,6 @@ mod tests {
             bool,
             Boolean,
             BooleanArray
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("abc"), lit("c"),],
-            Ok(Some(3)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("abc"), lit("d")],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("abc"), lit("")],
-            Ok(Some(1)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("Helloworld"), lit("world")],
-            Ok(Some(6)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("Helloworld"), lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit(ScalarValue::Utf8(None)), lit("Hello")],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[
-                lit(ScalarValue::LargeUtf8(Some("Helloworld".to_string()))),
-                lit(ScalarValue::LargeUtf8(Some("world".to_string())))
-            ],
-            Ok(Some(6)),
-            i64,
-            Int64,
-            Int64Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[
-                lit(ScalarValue::LargeUtf8(None)),
-                lit(ScalarValue::LargeUtf8(Some("world".to_string())))
-            ],
-            Ok(None),
-            i64,
-            Int64,
-            Int64Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[
-                lit(ScalarValue::LargeUtf8(Some("Helloworld".to_string()))),
-                lit(ScalarValue::LargeUtf8(None))
-            ],
-            Ok(None),
-            i64,
-            Int64,
-            Int64Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("josé"), lit("é"),],
-            Ok(Some(4)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("joséésoj"), lit("so"),],
-            Ok(Some(6)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("joséésoj"), lit("abc"),],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit(ScalarValue::Utf8(None)), lit("abc"),],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            Strpos,
-            &[lit("joséésoj"), lit(ScalarValue::Utf8(None)),],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(not(feature = "unicode_expressions"))]
-        test_function!(
-            Strpos,
-            &[
-                lit("joséésoj"),
-                lit(ScalarValue::Utf8(None)),
-            ],
-            internal_err!(
-                "function strpos requires compilation with feature flag: unicode_expressions."
-            ),
-            i32,
-            Int32,
-            Int32Array
         );
         #[cfg(feature = "unicode_expressions")]
         test_function!(

@@ -167,9 +167,11 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         window_shift_expr.get_shift_offset(),
                     )))),
                 );
-                if let Some(default_value) = window_shift_expr.get_default_value() {
-                    args.insert(2, Arc::new(Literal::new(default_value)));
-                }
+                args.insert(
+                    2,
+                    Arc::new(Literal::new(window_shift_expr.get_default_value())),
+                );
+
                 if window_shift_expr.get_shift_offset() >= 0 {
                     protobuf::BuiltInWindowFunction::Lag
                 } else {
