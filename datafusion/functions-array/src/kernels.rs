@@ -37,9 +37,7 @@ use datafusion_common::cast::{
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
     exec_err, not_impl_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use std::any::type_name;
 use std::sync::Arc;
 macro_rules! downcast_arg {
@@ -901,36 +899,6 @@ fn align_array_dimensions<O: OffsetSizeTrait>(
         .collect();
 
     aligned_args
-}
-
-pub(crate) fn make_scalar_function_with_hints<F>(inner: F) -> ScalarFunctionImplementation
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
-{
-    Arc::new(move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let args = ColumnarValue::values_to_arrays(args)?;
-
-        let result = (inner)(&args);
-
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
-        }
-    })
 }
 
 #[cfg(test)]

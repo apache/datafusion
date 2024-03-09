@@ -26,13 +26,13 @@ use datafusion_common::utils::list_ndims;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::type_coercion::binary::get_wider_type;
 use datafusion_expr::Expr;
-use datafusion_expr::TypeSignature::{Any as expr_Any, Exact, VariadicEqual};
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::kernels::make_scalar_function_with_hints;
+use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(ArrayToString,
@@ -111,10 +111,10 @@ impl Range {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Exact(vec![Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
+                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -181,10 +181,10 @@ impl GenSeries {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Exact(vec![Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
+                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -444,7 +444,7 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        make_scalar_function_with_hints(crate::kernels::array_append)(args)
+        make_scalar_function(crate::kernels::array_append)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -455,9 +455,9 @@ impl ScalarUDFImpl for ArrayAppend {
 make_udf_function!(
     ArrayPrepend,
     array_prepend,
-    element array,                                                // arg name
-    "Prepends an element to the beginning of an array.", // doc
-    array_prepend_udf                                    // internal function name
+    element array,
+    "Prepends an element to the beginning of an array.",
+    array_prepend_udf
 );
 
 #[derive(Debug)]
@@ -498,7 +498,7 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        make_scalar_function_with_hints(crate::kernels::array_prepend)(args)
+        make_scalar_function(crate::kernels::array_prepend)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -509,8 +509,8 @@ impl ScalarUDFImpl for ArrayPrepend {
 make_udf_function!(
     ArrayConcat,
     array_concat,
-    "Concatenates arrays.", // doc
-    array_concat_udf        // internal function name
+    "Concatenates arrays.",
+    array_concat_udf
 );
 
 #[derive(Debug)]
@@ -576,7 +576,7 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        make_scalar_function_with_hints(crate::kernels::array_concat)(args)
+        make_scalar_function(crate::kernels::array_concat)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -587,8 +587,8 @@ impl ScalarUDFImpl for ArrayConcat {
 make_udf_function!(
     MakeArray,
     make_array,
-    "Returns an Arrow array using the specified input expressions.", // doc
-    make_array_udf // internal function name
+    "Returns an Arrow array using the specified input expressions.",
+    make_array_udf
 );
 
 #[derive(Debug)]
@@ -601,7 +601,7 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![VariadicEqual, expr_Any(0)],
+                vec![TypeSignature::VariadicEqual, TypeSignature::Any(0)],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("make_array"), String::from("make_list")],
@@ -646,7 +646,7 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        make_scalar_function_with_hints(crate::kernels::make_array)(args)
+        make_scalar_function(crate::kernels::make_array)(args)
     }
 
     fn aliases(&self) -> &[String] {
