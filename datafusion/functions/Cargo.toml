@@ -39,7 +39,8 @@ default = ["core_expressions", "datetime_expressions", "encoding_expressions", "
 encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
-regex_expressions = []
+# enable regular expressions
+regex_expressions = ["regex"]
 
 [lib]
 name = "datafusion_functions"
@@ -59,7 +60,8 @@ datafusion-physical-expr = { workspace = true, default-features = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
-regex = { version = "1.8" }
+regex = { version = "1.8", optional = true }
+
 [dev-dependencies]
 criterion = "0.5"
 rand = { workspace = true }

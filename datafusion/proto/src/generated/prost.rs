@@ -2727,7 +2727,7 @@ pub enum ScalarFunction {
     ArrayConcat = 87,
     /// 88 was ArrayDims
     ArrayRepeat = 89,
-    ArrayLength = 90,
+    /// 90 was ArrayLength
     /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
@@ -2739,9 +2739,9 @@ pub enum ScalarFunction {
     ArrayElement = 99,
     ArraySlice = 100,
     Cot = 103,
-    ArrayHas = 104,
-    ArrayHasAny = 105,
-    ArrayHasAll = 106,
+    /// 104 was ArrayHas
+    /// 105 was ArrayHasAny
+    /// 106 was ArrayHasAll
     ArrayRemoveN = 107,
     ArrayReplaceN = 108,
     ArrayRemoveAll = 109,
@@ -2750,7 +2750,7 @@ pub enum ScalarFunction {
     Flatten = 112,
     /// 113 was IsNan
     Iszero = 114,
-    ArrayEmpty = 115,
+    /// 115 was ArrayEmpty
     ArrayPopBack = 116,
     StringToArray = 117,
     /// 118 was ToTimestampNanos
@@ -2773,6 +2773,7 @@ pub enum ScalarFunction {
     /// / 135 is RegexpLike
     ///
     /// / 137 was ToDate
+    /// / 138 was ToUnixtime
     ToChar = 136,
 }
 impl ScalarFunction {
@@ -2862,7 +2863,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
-            ScalarFunction::ArrayLength => "ArrayLength",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
@@ -2871,9 +2871,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayHas => "ArrayHas",
-            ScalarFunction::ArrayHasAny => "ArrayHasAny",
-            ScalarFunction::ArrayHasAll => "ArrayHasAll",
             ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
@@ -2881,7 +2878,6 @@ impl ScalarFunction {
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
@@ -2984,7 +2980,6 @@ impl ScalarFunction {
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
-            "ArrayLength" => Some(Self::ArrayLength),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),
@@ -2993,9 +2988,6 @@ impl ScalarFunction {
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
-            "ArrayHas" => Some(Self::ArrayHas),
-            "ArrayHasAny" => Some(Self::ArrayHasAny),
-            "ArrayHasAll" => Some(Self::ArrayHasAll),
             "ArrayRemoveN" => Some(Self::ArrayRemoveN),
             "ArrayReplaceN" => Some(Self::ArrayReplaceN),
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
@@ -3003,7 +2995,6 @@ impl ScalarFunction {
             "Nanvl" => Some(Self::Nanvl),
             "Flatten" => Some(Self::Flatten),
             "Iszero" => Some(Self::Iszero),
-            "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
             "ArrayIntersect" => Some(Self::ArrayIntersect),

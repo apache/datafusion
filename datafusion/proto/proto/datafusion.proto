@@ -1,5 +1,6 @@
 /*
 
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -638,7 +639,7 @@ enum ScalarFunction {
   ArrayConcat = 87;
   // 88 was ArrayDims
   ArrayRepeat = 89;
-  ArrayLength = 90;
+  // 90 was ArrayLength
   // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
@@ -650,9 +651,9 @@ enum ScalarFunction {
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
-  ArrayHas = 104;
-  ArrayHasAny = 105;
-  ArrayHasAll = 106;
+  // 104 was ArrayHas
+  // 105 was ArrayHasAny
+  // 106 was ArrayHasAll
   ArrayRemoveN = 107;
   ArrayReplaceN = 108;
   ArrayRemoveAll = 109;
@@ -661,7 +662,7 @@ enum ScalarFunction {
   Flatten = 112;
   // 113 was IsNan
   Iszero = 114;
-  ArrayEmpty = 115;
+  // 115 was ArrayEmpty
   ArrayPopBack = 116;
   StringToArray = 117;
   // 118 was ToTimestampNanos
@@ -684,6 +685,7 @@ enum ScalarFunction {
   /// 135 is RegexpLike
   ToChar = 136;
   /// 137 was ToDate
+  /// 138 was ToUnixtime
 }
 
 message ScalarFunctionNode {

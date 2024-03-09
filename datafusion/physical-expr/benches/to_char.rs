@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Date32Array, StringArray};
 use chrono::prelude::*;
-use chrono::Duration;
+use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
@@ -39,7 +39,7 @@ fn random_date_in_range(
 ) -> NaiveDate {
     let days_in_range = (end_date - start_date).num_days();
     let random_days: i64 = rng.gen_range(0..days_in_range);
-    start_date + Duration::days(random_days)
+    start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
 fn data(rng: &mut ThreadRng) -> Date32Array {
@@ -113,6 +113,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .unwrap()
             .with_nanosecond(56789)
             .unwrap()
+            .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
         let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
