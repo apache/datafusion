@@ -56,8 +56,8 @@ use datafusion_expr::{
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
     date_part, date_trunc, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, iszero, lcm,
-    left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, flatten, floor, gcd, initcap, iszero, lcm, left, levenshtein,
+    ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
@@ -548,7 +548,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
-            ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
@@ -1773,9 +1772,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::FromUnixtime => {
-                    Ok(from_unixtime(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

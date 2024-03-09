@@ -1144,28 +1144,6 @@ where
     Ok(b)
 }
 
-/// from_unixtime() SQL function implementation
-pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 1 {
-        return exec_err!(
-            "from_unixtime function requires 1 argument, got {}",
-            args.len()
-        );
-    }
-
-    match args[0].data_type() {
-        DataType::Int64 => {
-            args[0].cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)
-        }
-        other => {
-            exec_err!(
-                "Unsupported data type {:?} for function from_unixtime",
-                other
-            )
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

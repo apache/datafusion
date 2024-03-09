@@ -846,12 +846,6 @@ scalar_expr!(
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
-scalar_expr!(
-    FromUnixtime,
-    from_unixtime,
-    unixtime,
-    "returns the unix time in format"
-);
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
@@ -1330,7 +1324,6 @@ mod test {
         test_scalar_expr!(DatePart, date_part, part, date);
         test_scalar_expr!(DateTrunc, date_trunc, part, date);
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
-        test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);

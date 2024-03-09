@@ -22,12 +22,18 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 mod common;
+mod from_unixtime;
 mod to_date;
 mod to_timestamp;
 mod to_unixtime;
 
 // create UDFs
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
+make_udf_function!(
+    from_unixtime::FromUnixtimeFunc,
+    FROM_UNIXTIME,
+    from_unixtime
+);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, TO_UNIXTIME, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
@@ -107,6 +113,10 @@ pub mod expr_fn {
         super::to_date().call(args)
     }
 
+    pub fn from_unixtime(args: Vec<Expr>) -> Expr {
+        super::from_unixtime().call(args)
+    }
+
     #[doc = "converts a string and optional formats to a Unixtime"]
     pub fn to_unixtime(args: Vec<Expr>) -> Expr {
         super::to_unixtime().call(args)
@@ -142,6 +152,7 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         to_date(),
+        from_unixtime(),
         to_unixtime(),
         to_timestamp(),
         to_timestamp_seconds(),
