@@ -35,10 +35,7 @@ export_functions!(
         num,
         "returns true if a given number is +NaN or -NaN otherwise returns false"
     ),
-    (
-        abs, 
-        num, 
-        "returns the absolute value of a given number"),
+    (abs, num, "returns the absolute value of a given number"),
     (
         acos,
         num,
