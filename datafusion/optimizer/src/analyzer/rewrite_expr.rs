@@ -152,16 +152,14 @@ fn rewrite_array_has_all_operator_to_func(
         // array1 <@ array2 -> array_has_all(array2, array1)
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) => {
+        ) if left_fun.name() == "make_array" && right_fun.name() == "make_array" => {
             let left = left.clone();
             let right = right.clone();
 
