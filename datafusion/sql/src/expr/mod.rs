@@ -36,12 +36,15 @@ use datafusion_common::{
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::ScalarUDF;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
+use datafusion_functions::datetime::date_part::DatePartFunc;
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
+use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn sql_expr_to_logical_expr(
@@ -169,8 +172,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::DatePart,
+                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    Arc::new(ScalarUDF::from(DatePartFunc::new())),
                     vec![
                         Expr::Literal(ScalarValue::from(format!("{field}"))),
                         self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,

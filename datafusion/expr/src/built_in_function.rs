@@ -182,10 +182,6 @@ pub enum BuiltinScalarFunction {
     Concat,
     /// concat_ws
     ConcatWithSeparator,
-    /// date_part
-    DatePart,
-    /// date_trunc
-    DateTrunc,
     /// date_bin
     DateBin,
     /// ends_with
@@ -385,8 +381,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Chr => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
-            BuiltinScalarFunction::DatePart => Volatility::Immutable,
-            BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
             BuiltinScalarFunction::DateBin => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
@@ -609,8 +603,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
-            BuiltinScalarFunction::DatePart => Ok(Float64),
-            BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
+            BuiltinScalarFunction::DateBin  => {
                 match &input_expr_types[1] {
                     Timestamp(Nanosecond, None) | Utf8 | Null => {
                         Ok(Timestamp(Nanosecond, None))
@@ -965,31 +958,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::DateTrunc => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::DateBin => {
                 let base_sig = |array_type: TimeUnit| {
                     vec![
@@ -1040,33 +1008,6 @@ impl BuiltinScalarFunction {
 
                 Signature::one_of(full_sig, self.volatility())
             }
-            BuiltinScalarFunction::DatePart => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8, Date32]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::SplitPart => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Int64]),
@@ -1258,10 +1199,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Pi
         ) {
             Some(vec![Some(true)])
-        } else if matches!(
-            &self,
-            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
-        ) {
+        } else if matches!(&self, BuiltinScalarFunction::DateBin) {
             Some(vec![None, Some(true)])
         } else if *self == BuiltinScalarFunction::Log {
             Some(vec![Some(true), Some(false)])
@@ -1356,8 +1294,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::CurrentTime => &["current_time"],
             BuiltinScalarFunction::MakeDate => &["make_date"],
             BuiltinScalarFunction::DateBin => &["date_bin"],
-            BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
-            BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 

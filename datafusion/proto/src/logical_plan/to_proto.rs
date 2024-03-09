@@ -1481,8 +1481,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
             BuiltinScalarFunction::MakeArray => Self::Array,
-            BuiltinScalarFunction::DatePart => Self::DatePart,
-            BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
             BuiltinScalarFunction::DateBin => Self::DateBin,
             BuiltinScalarFunction::MD5 => Self::Md5,
             BuiltinScalarFunction::SHA224 => Self::Sha224,

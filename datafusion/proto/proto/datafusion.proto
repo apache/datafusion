@@ -577,8 +577,8 @@ enum ScalarFunction {
   Chr = 25;
   Concat = 26;
   ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
+  // DatePart = 28;
+  // DateTrunc = 29;
   InitCap = 30;
   Left = 31;
   Lpad = 32;

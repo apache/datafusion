@@ -825,8 +825,6 @@ nary_scalar_expr!(
 );
 
 // date functions
-scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
-scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
 scalar_expr!(
     ToChar,
@@ -1315,8 +1313,6 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(DatePart, date_part, part, date);
-        test_scalar_expr!(DateTrunc, date_trunc, part, date);
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 

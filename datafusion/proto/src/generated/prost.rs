@@ -2665,8 +2665,8 @@ pub enum ScalarFunction {
     Chr = 25,
     Concat = 26,
     ConcatWithSeparator = 27,
-    DatePart = 28,
-    DateTrunc = 29,
+    /// DatePart = 28;
+    /// DateTrunc = 29;
     InitCap = 30,
     Left = 31,
     Lpad = 32,
@@ -2808,8 +2808,6 @@ impl ScalarFunction {
             ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
-            ScalarFunction::DatePart => "DatePart",
-            ScalarFunction::DateTrunc => "DateTrunc",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
@@ -2925,8 +2923,6 @@ impl ScalarFunction {
             "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
-            "DatePart" => Some(Self::DatePart),
-            "DateTrunc" => Some(Self::DateTrunc),
             "InitCap" => Some(Self::InitCap),
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
