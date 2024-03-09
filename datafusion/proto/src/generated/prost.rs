@@ -2727,7 +2727,7 @@ pub enum ScalarFunction {
     ArrayConcat = 87,
     /// 88 was ArrayDims
     ArrayRepeat = 89,
-    ArrayLength = 90,
+    /// 90 was ArrayLength
     /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
@@ -2750,7 +2750,7 @@ pub enum ScalarFunction {
     Flatten = 112,
     /// 113 was IsNan
     Iszero = 114,
-    ArrayEmpty = 115,
+    /// 115 was ArrayEmpty
     ArrayPopBack = 116,
     StringToArray = 117,
     /// 118 was ToTimestampNanos
@@ -2863,7 +2863,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
-            ScalarFunction::ArrayLength => "ArrayLength",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayPrepend => "ArrayPrepend",
@@ -2879,7 +2878,6 @@ impl ScalarFunction {
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
@@ -2982,7 +2980,6 @@ impl ScalarFunction {
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
-            "ArrayLength" => Some(Self::ArrayLength),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayPrepend" => Some(Self::ArrayPrepend),
@@ -2998,7 +2995,6 @@ impl ScalarFunction {
             "Nanvl" => Some(Self::Nanvl),
             "Flatten" => Some(Self::Flatten),
             "Iszero" => Some(Self::Iszero),
-            "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
             "ArrayIntersect" => Some(Self::ArrayIntersect),

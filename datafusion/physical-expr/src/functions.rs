@@ -311,9 +311,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_concat)(args)
         }),
-        BuiltinScalarFunction::ArrayEmpty => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_empty)(args)
-        }),
         BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_distinct)(args)
         }),
@@ -322,9 +319,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_except)(args)
-        }),
-        BuiltinScalarFunction::ArrayLength => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_length)(args)
         }),
         BuiltinScalarFunction::Flatten => {
             Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
