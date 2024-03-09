@@ -351,7 +351,7 @@ impl SessionContext {
 
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn with_function_factory(
-        mut self,
+        self,
         function_factory: Arc<dyn FunctionFactory>,
     ) -> Self {
         self.state.write().set_function_factory(function_factory);

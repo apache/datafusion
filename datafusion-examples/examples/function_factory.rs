@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, RecordBatch};
 use datafusion::error::Result;
 use datafusion::execution::config::SessionConfig;
-use datafusion::execution::context::{
-    FunctionFactory, RegisterFunction, SessionContext, SessionState,
-};
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionContext};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::ExprSimplifyResult;
@@ -30,27 +26,27 @@ use datafusion_expr::{CreateFunction, Expr, ScalarUDF, ScalarUDFImpl, Signature}
 use std::result::Result as RResult;
 use std::sync::Arc;
 
-/// This example shows how to utilize [FunctionFactory] to register
-/// `CREATE FUNCTION` handler. Apart from [FunctionFactory] this
-/// example covers [ScalarUDFImpl::simplify()] usage and synergy
-/// between those two functionality.
+/// This example shows how to utilize [FunctionFactory] to implement simple
+/// SQL-macro like functions using a `CREATE FUNCTION` statement. The same
+/// functionality can support functions defined in any language or library.
 ///
-/// This example is rather simple, there are many edge cases to be covered
+/// Apart from [FunctionFactory], this example covers
+/// [ScalarUDFImpl::simplify()] which is often used at the same time, to replace
+/// a function call with another expression at rutime.
 ///
-
+/// This example is rather simple and does not cover all cases required for a
+/// real implementation.
 #[tokio::main]
 async fn main() -> Result<()> {
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config)?;
+    // First we must configure the SessionContext with our function factory
+    let ctx = SessionContext::new()
+        // register custom function factory
+        .with_function_factory(Arc::new(CustomFunctionFactory::default()));
 
-    let session_config = SessionConfig::new();
-    let state =
-        SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-            // register custom function factory
-            .with_function_factory(Arc::new(CustomFunctionFactory::default()));
+    // With the function factory, we can now call `CREATE FUNCTION` SQL functions
 
-    let ctx = SessionContext::new_with_state(state);
-
+    // Let us register a function called f which takes a single argument and
+    // returns that value plus one
     let sql = r#"
     CREATE FUNCTION f1(BIGINT)
         RETURNS BIGINT
@@ -59,6 +55,9 @@ async fn main() -> Result<()> {
 
     ctx.sql(sql).await?.show().await?;
 
+    // Now, let us register a function called f2  which takes two arguments and
+    // returns the first argument added to the result of calling f1 on that
+    // argument
     let sql = r#"
     CREATE FUNCTION f2(BIGINT, BIGINT)
         RETURNS BIGINT
@@ -67,42 +66,29 @@ async fn main() -> Result<()> {
 
     ctx.sql(sql).await?.show().await?;
 
-    let sql = r#"
-    SELECT f1(1)
-    "#;
-
-    ctx.sql(sql).await?.show().await?;
-
+    // Invoke f2, and we expect to see 1 + (1 + 2) = 4
+    // Note this function works on columns as well as constants.
     let sql = r#"
     SELECT f2(1, 2)
     "#;
-
     ctx.sql(sql).await?.show().await?;
 
-    let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
-    let b: ArrayRef = Arc::new(Int64Array::from(vec![10, 20, 30, 40]));
-    let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
-
-    ctx.register_batch("t", batch)?;
-
-    let sql = r#"
-    SELECT f2(a, b) from t
-    "#;
-
-    ctx.sql(sql).await?.show().await?;
-
+    // Now we clean up the session by dropping the functions
     ctx.sql("DROP FUNCTION f1").await?.show().await?;
-
     ctx.sql("DROP FUNCTION f2").await?.show().await?;
 
     Ok(())
 }
 
+/// This is our FunctionFactory that is responsible for converting `CREATE
+/// FUNCTION` statements into function instances
 #[derive(Debug, Default)]
 struct CustomFunctionFactory {}
 
 #[async_trait::async_trait]
 impl FunctionFactory for CustomFunctionFactory {
+    /// This function takes the parsed `CREATE FUNCTION` statement and returns
+    /// the function instance.
     async fn create(
         &self,
         _state: &SessionConfig,
@@ -113,13 +99,11 @@ impl FunctionFactory for CustomFunctionFactory {
         Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
     }
 }
-// a wrapper type to be used to register
-// custom function to datafusion context
-//
-// it also defines custom [ScalarUDFImpl::simplify()]
-// to replace ScalarUDF expression with one instance contains.
+
+/// this function represents the newly created execution engine.
 #[derive(Debug)]
 struct ScalarFunctionWrapper {
+    /// The text of the function body, `$1 + f1($2)` in our example
     name: String,
     expr: Expr,
     signature: Signature,
@@ -150,9 +134,13 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self,
         _args: &[datafusion_expr::ColumnarValue],
     ) -> Result<datafusion_expr::ColumnarValue> {
+        /// Since this function is always simplified to another expression, it
+        /// should never actually be invoked
         internal_err!("This function should not get invoked!")
     }
 
+    /// The simplify function is called to simply a call such as `f2(2)`. This
+    /// function parses the string and returns the resulting expression
     fn simplify(
         &self,
         args: Vec<Expr>,
@@ -173,7 +161,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 }
 
 impl ScalarFunctionWrapper {
-    // replaces placeholders with actual arguments
+    // replaces placeholders such as $1 with actual arguments (args[0]
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
         let result = expr.clone().transform(&|e| {
             let r = match e {
@@ -197,8 +185,7 @@ impl ScalarFunctionWrapper {
 
         Ok(result.data)
     }
-    // Finds placeholder identifier.
-    // placeholders are in `$X` format where X >= 1
+    // Finds placeholder identifier such as `$X` format where X >= 1
     fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
@@ -213,6 +200,8 @@ impl ScalarFunctionWrapper {
     }
 }
 
+/// This impl block creates a scalar function from
+/// a parsed `CREATE FUNCTION` statement (`CreateFunction`)
 impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
     type Error = DataFusionError;
 
