@@ -829,34 +829,6 @@ fn order_nulls_first(modifier: &str) -> Result<bool> {
     }
 }
 
-/// Array_empty SQL function
-pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_empty expects one argument");
-    }
-
-    if as_null_array(&args[0]).is_ok() {
-        // Make sure to return Boolean type.
-        return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
-    }
-    let array_type = args[0].data_type();
-
-    match array_type {
-        DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
-        DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
-    }
-}
-
-fn array_empty_dispatch<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let array = as_generic_list_array::<O>(array)?;
-    let builder = array
-        .iter()
-        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
-        .collect::<BooleanArray>();
-    Ok(Arc::new(builder))
-}
-
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
