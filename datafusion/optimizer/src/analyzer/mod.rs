@@ -38,6 +38,9 @@ use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
 use std::sync::Arc;
 
+#[cfg(feature = "array_expressions")]
+use datafusion_functions_array::expr_fn::array_has_all;
+
 use self::rewrite_expr::OperatorToFunction;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
