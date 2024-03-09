@@ -666,9 +666,9 @@ SELECT trim(TRAILING ' ' FROM ' tom ')
  tom
 
 query T
-SELECT trim('tommy', 'my')
+SELECT trim('test.com', '.com')
 ----
-tom
+test
 
 statement error
 SELECT trim(BOTH 'tom' FROM 'tommy', 'my')
