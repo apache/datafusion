@@ -559,9 +559,9 @@ scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
 scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Log2, log2, num, "base 2 logarithm");
-scalar_expr!(Log10, log10, num, "base 10 logarithm");
-scalar_expr!(Ln, ln, num, "natural logarithm");
+scalar_expr!(Log2, log2, num, "base 2 logarithm of number");
+scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
+scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(
