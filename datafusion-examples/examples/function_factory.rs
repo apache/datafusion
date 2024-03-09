@@ -134,8 +134,8 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self,
         _args: &[datafusion_expr::ColumnarValue],
     ) -> Result<datafusion_expr::ColumnarValue> {
-        /// Since this function is always simplified to another expression, it
-        /// should never actually be invoked
+        // Since this function is always simplified to another expression, it
+        // should never actually be invoked
         internal_err!("This function should not get invoked!")
     }
 
