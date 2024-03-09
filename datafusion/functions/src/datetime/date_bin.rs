@@ -29,7 +29,7 @@ use arrow_array::types::{
     TimestampSecondType,
 };
 use arrow_array::{ArrayRef, PrimitiveArray};
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, not_impl_err, plan_err, Result, ScalarValue};
@@ -226,8 +226,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
 fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
-    let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
+    DateTime::from_timestamp(secs, nsec).unwrap()
 }
 
 // Supported intervals:
@@ -244,8 +243,9 @@ fn date_bin_impl(
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
-            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
-                .num_nanoseconds();
+            let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                + TimeDelta::try_milliseconds(ms as i64).unwrap())
+            .num_nanoseconds();
 
             match nanos {
                 Some(v) => Interval::Nanoseconds(v),
@@ -266,8 +266,9 @@ fn date_bin_impl(
                     Interval::Months(months as i64)
                 }
             } else {
-                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
-                    .num_nanoseconds();
+                let nanos = (TimeDelta::try_days(days as i64).unwrap()
+                    + Duration::nanoseconds(nanos))
+                .num_nanoseconds();
                 match nanos {
                     Some(v) => Interval::Nanoseconds(v),
                     _ => return exec_err!("DATE_BIN stride argument is too large"),
@@ -423,6 +424,7 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use arrow_array::types::TimestampNanosecondType;
     use arrow_array::{IntervalDayTimeArray, TimestampNanosecondArray};
+    use chrono::TimeDelta;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -705,12 +707,10 @@ mod tests {
 
     #[test]
     fn test_date_bin_single() {
-        use chrono::Duration;
-
         let cases = vec![
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -718,7 +718,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:02:30",
                 ),
@@ -726,7 +726,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::minutes(15),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2005-01-01T00:02:30",
                 ),
@@ -734,7 +734,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::hours(1),
+                    TimeDelta::try_hours(1),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -742,7 +742,7 @@ mod tests {
             ),
             (
                 (
-                    Duration::seconds(10),
+                    TimeDelta::try_seconds(10),
                     "2004-04-09T02:03:11.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -753,6 +753,7 @@ mod tests {
         cases
             .iter()
             .for_each(|((stride, source, origin), expected)| {
+                let stride = stride.unwrap();
                 let stride1 = stride.num_nanoseconds().unwrap();
                 let source1 = string_to_timestamp_nanos(source).unwrap();
                 let origin1 = string_to_timestamp_nanos(origin).unwrap();

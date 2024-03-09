@@ -26,9 +26,7 @@ use std::sync::{Arc, OnceLock};
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
-use crate::{
-    conditional_expressions, FuncMonotonicity, Signature, TypeSignature, Volatility,
-};
+use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
@@ -120,12 +118,6 @@ pub enum BuiltinScalarFunction {
     ArraySort,
     /// array_concat
     ArrayConcat,
-    /// array_has
-    ArrayHas,
-    /// array_has_all
-    ArrayHasAll,
-    /// array_has_any
-    ArrayHasAny,
     /// array_pop_front
     ArrayPopFront,
     /// array_pop_back
@@ -134,10 +126,6 @@ pub enum BuiltinScalarFunction {
     ArrayDistinct,
     /// array_element
     ArrayElement,
-    /// array_empty
-    ArrayEmpty,
-    /// array_length
-    ArrayLength,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -362,14 +350,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArraySort => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
@@ -529,10 +512,6 @@ impl BuiltinScalarFunction {
 
                 Ok(expr_type)
             }
-            BuiltinScalarFunction::ArrayHasAll
-            | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas
-            | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
@@ -542,7 +521,6 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept List, LargeList or FixedSizeList as the first argument"
                 ),
             },
-            BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -814,21 +792,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayEmpty => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayElement => {
                 Signature::array_and_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::array(self.volatility()),
-            BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
-                Signature::any(2, self.volatility())
-            }
-            BuiltinScalarFunction::ArrayHas => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayLength => {
-                Signature::variadic_any(self.volatility())
-            }
             BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -868,10 +836,9 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
             }
-            BuiltinScalarFunction::Coalesce => Signature::variadic(
-                conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::Coalesce => {
+                Signature::variadic_equal(self.volatility())
+            }
             BuiltinScalarFunction::SHA224
             | BuiltinScalarFunction::SHA256
             | BuiltinScalarFunction::SHA384
@@ -1276,7 +1243,6 @@ impl BuiltinScalarFunction {
                 &["array_concat", "array_cat", "list_concat", "list_cat"]
             }
             BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
-            BuiltinScalarFunction::ArrayEmpty => &["empty"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
                 "array_extract",
@@ -1285,12 +1251,6 @@ impl BuiltinScalarFunction {
             ],
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
             BuiltinScalarFunction::Flatten => &["flatten"],
-            BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
-            BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
-            BuiltinScalarFunction::ArrayHas => {
-                &["array_has", "list_has", "array_contains", "list_contains"]
-            }
-            BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]
             }
@@ -1433,5 +1393,14 @@ mod tests {
             let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
             assert_eq!(func_from_str, *func_original);
         }
+    }
+
+    #[test]
+    fn test_coalesce_return_types() {
+        let coalesce = BuiltinScalarFunction::Coalesce;
+        let return_type = coalesce
+            .return_type(&[DataType::Date32, DataType::Date32])
+            .unwrap();
+        assert_eq!(return_type, DataType::Date32);
     }
 }

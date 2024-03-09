@@ -49,6 +49,8 @@ pub struct MemoryExec {
     // Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
     cache: PlanProperties,
+    /// if partition sizes should be displayed
+    show_sizes: bool,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -85,11 +87,15 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
-                write!(
-                    f,
-                    "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
-                    partition_sizes.len(),
-                )
+                if self.show_sizes {
+                    write!(
+                        f,
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        partition_sizes.len(),
+                    )
+                } else {
+                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                }
             }
         }
     }
@@ -161,7 +167,14 @@ impl MemoryExec {
             projection,
             sort_information: vec![],
             cache,
+            show_sizes: true,
         })
+    }
+
+    /// set `show_sizes` to determine whether to display partition sizes
+    pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
+        self.show_sizes = show_sizes;
+        self
     }
 
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {

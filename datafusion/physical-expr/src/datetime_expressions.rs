@@ -29,9 +29,7 @@ use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Date32Type, Int32Type};
 use arrow_array::StringArray;
-use chrono::prelude::*;
-use chrono::NaiveDate;
-
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
@@ -434,6 +432,7 @@ mod tests {
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         UInt32Array,
     };
+    use chrono::{NaiveDateTime, Timelike};
 
     use datafusion_common::ScalarValue;
 
@@ -567,7 +566,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 "2020::01::02".to_string(),
             ),
@@ -592,23 +591,29 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
@@ -635,7 +640,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 StringArray::from(vec!["%Y::%m::%d".to_string()]),
                 "2020::01::02".to_string(),
             ),
@@ -660,23 +665,29 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
@@ -706,8 +717,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 StringArray::from(vec!["2020::01::02", "2026::07::08"]),
@@ -722,8 +733,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
                 StringArray::from(vec!["2020::01::02", "08::07::2026"]),
@@ -755,8 +766,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampSecondArray::from(vec![
-                    date.timestamp(),
-                    date2.timestamp(),
+                    date.and_utc().timestamp(),
+                    date2.and_utc().timestamp(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H", "%d::%m::%Y %S-%M-%H"]),
                 StringArray::from(vec![
@@ -766,8 +777,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMillisecondArray::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -780,8 +791,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMicrosecondArray::from(vec![
-                    date.timestamp_micros(),
-                    date2.timestamp_micros(),
+                    date.and_utc().timestamp_micros(),
+                    date2.and_utc().timestamp_micros(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -794,8 +805,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampNanosecondArray::from(vec![
-                    date.timestamp_nanos_opt().unwrap(),
-                    date2.timestamp_nanos_opt().unwrap(),
+                    date.and_utc().timestamp_nanos_opt().unwrap(),
+                    date2.and_utc().timestamp_nanos_opt().unwrap(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",

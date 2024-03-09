@@ -27,12 +27,14 @@ mod date_part;
 mod date_trunc;
 mod to_date;
 mod to_timestamp;
+mod to_unixtime;
 
 // create UDFs
 make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
 make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
+make_udf_function!(to_unixtime::ToUnixtimeFunc, TO_UNIXTIME, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
 make_udf_function!(
     to_timestamp::ToTimestampSecondsFunc,
@@ -89,7 +91,7 @@ pub mod expr_fn {
     /// #  use datafusion_expr::col;
     /// #  use datafusion::prelude::*;
     /// #  use datafusion_functions::expr_fn::to_date;
-    ///     
+    ///
     ///     // define a schema.
     ///     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
     ///
@@ -126,6 +128,11 @@ pub mod expr_fn {
         super::to_date().call(args)
     }
 
+    #[doc = "converts a string and optional formats to a Unixtime"]
+    pub fn to_unixtime(args: Vec<Expr>) -> Expr {
+        super::to_unixtime().call(args)
+    }
+
     #[doc = "converts a string and optional formats to a `Timestamp(Nanoseconds, None)`"]
     pub fn to_timestamp(args: Vec<Expr>) -> Expr {
         super::to_timestamp().call(args)
@@ -159,6 +166,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_part(),
         date_trunc(),
         to_date(),
+        to_unixtime(),
         to_timestamp(),
         to_timestamp_seconds(),
         to_timestamp_millis(),

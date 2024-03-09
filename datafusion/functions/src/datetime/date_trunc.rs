@@ -33,7 +33,7 @@ use arrow_array::types::{
 };
 use arrow_array::{Array, PrimitiveArray};
 use chrono::{
-    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, Timelike,
+    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
 
 use datafusion_common::cast::as_primitive_array;
@@ -229,7 +229,9 @@ where
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
-            .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
+            .map(|d| {
+                d - TimeDelta::try_seconds(60 * 60 * 24 * d.weekday() as i64).unwrap()
+            }),
         "month" => value
             .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
@@ -280,10 +282,10 @@ fn _date_trunc_coarse_with_tz(
                     // To account for this adjust the time by a few hours, convert to local time,
                     // and then adjust the time back.
                     truncated
-                        .sub(Duration::hours(3))
+                        .sub(TimeDelta::try_hours(3).unwrap())
                         .and_local_timezone(value.timezone())
                         .single()
-                        .map(|v| v.add(Duration::hours(3)))
+                        .map(|v| v.add(TimeDelta::try_hours(3).unwrap()))
                 }
                 LocalResult::Single(datetime) => Some(datetime),
                 LocalResult::Ambiguous(datetime1, datetime2) => {
@@ -311,7 +313,7 @@ fn _date_trunc_coarse_without_tz(
     value: Option<NaiveDateTime>,
 ) -> Result<Option<i64>> {
     let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
-    Ok(value.and_then(|value| value.timestamp_nanos_opt()))
+    Ok(value.and_then(|value| value.and_utc().timestamp_nanos_opt()))
 }
 
 /// Truncates the single `value`, expressed in nanoseconds since the
