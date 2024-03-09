@@ -588,6 +588,17 @@ async fn roundtrip_expr_api() -> Result<()> {
         cardinality(array(vec![lit(1), lit(2), lit(3)])),
         range(lit(1), lit(10), lit(2)),
         gen_series(lit(1), lit(10), lit(2)),
+        array_has(array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+        array_has_all(
+            array(vec![lit(1), lit(2), lit(3)]),
+            array(vec![lit(1), lit(2)]),
+        ),
+        array_has_any(
+            array(vec![lit(1), lit(2), lit(3)]),
+            array(vec![lit(1), lit(4)]),
+        ),
+        array_empty(array(vec![lit(1), lit(2), lit(3)])),
+        array_length(array(vec![lit(1), lit(2), lit(3)])),
     ];
 
     // ensure expressions created with the expr api can be round tripped

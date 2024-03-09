@@ -17,7 +17,6 @@
 
 //! Array expressions
 
-use std::any::type_name;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -32,7 +31,7 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_large_list_array,
-    as_list_array, as_null_array, as_string_array,
+    as_list_array, as_string_array,
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
@@ -40,17 +39,6 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use itertools::Itertools;
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
-}
 
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///
@@ -151,46 +139,6 @@ fn compare_element_to_list(
     };
 
     Ok(res)
-}
-
-/// Returns the length of a concrete array dimension
-fn compute_array_length(
-    arr: Option<ArrayRef>,
-    dimension: Option<i64>,
-) -> Result<Option<u64>> {
-    let mut current_dimension: i64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    let dimension = match dimension {
-        Some(value) => {
-            if value < 1 {
-                return Ok(None);
-            }
-
-            value
-        }
-        None => return Ok(None),
-    };
-
-    loop {
-        if current_dimension == dimension {
-            return Ok(Some(value.len() as u64));
-        }
-
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                current_dimension += 1;
-            }
-            DataType::LargeList(..) => {
-                value = downcast_arg!(value, LargeListArray).value(0);
-                current_dimension += 1;
-            }
-            _ => return Ok(None),
-        }
-    }
 }
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
@@ -1130,34 +1078,6 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_empty SQL function
-pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_empty expects one argument");
-    }
-
-    if as_null_array(&args[0]).is_ok() {
-        // Make sure to return Boolean type.
-        return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
-    }
-    let array_type = args[0].data_type();
-
-    match array_type {
-        DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
-        DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
-    }
-}
-
-fn array_empty_dispatch<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let array = as_generic_list_array::<O>(array)?;
-    let builder = array
-        .iter()
-        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
-        .collect::<BooleanArray>();
-    Ok(Arc::new(builder))
-}
-
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
@@ -1985,37 +1905,6 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     // Ok(Arc::new(flattened_array) as ArrayRef)
-}
-
-/// Dispatch array length computation based on the offset type.
-fn array_length_dispatch<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_generic_list_array::<O>(&array[0])?;
-    let dimension = if array.len() == 2 {
-        as_int64_array(&array[1])?.clone()
-    } else {
-        Int64Array::from_value(1, list_array.len())
-    };
-
-    let result = list_array
-        .iter()
-        .zip(dimension.iter())
-        .map(|(arr, dim)| compute_array_length(arr, dim))
-        .collect::<Result<UInt64Array>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Array_length SQL function
-pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return exec_err!("array_length expects one or two arguments");
-    }
-
-    match &args[0].data_type() {
-        DataType::List(_) => array_length_dispatch::<i32>(args),
-        DataType::LargeList(_) => array_length_dispatch::<i64>(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
-    }
 }
 
 /// Splits string at occurrences of delimiter and returns an array of parts

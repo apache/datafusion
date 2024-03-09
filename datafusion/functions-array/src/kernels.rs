@@ -17,19 +17,19 @@
 
 //! implementation kernels for array functions
 
-use arrow::array::ListArray;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array,
     GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
     OffsetSizeTrait, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
+use arrow::array::{LargeListArray, ListArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::Field;
 use arrow::datatypes::UInt64Type;
 use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
 use datafusion_common::cast::{
-    as_date32_array, as_int64_array, as_interval_mdn_array, as_large_list_array,
-    as_list_array, as_string_array,
+    as_date32_array, as_generic_list_array, as_int64_array, as_interval_mdn_array,
+    as_large_list_array, as_list_array, as_null_array, as_string_array,
 };
 use datafusion_common::{exec_err, not_impl_datafusion_err, DataFusionError, Result};
 use std::any::type_name;
@@ -516,4 +516,103 @@ pub fn gen_range_date(
         None,
     )?);
     Ok(arr)
+}
+
+/// Array_empty SQL function
+pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_empty expects one argument");
+    }
+
+    if as_null_array(&args[0]).is_ok() {
+        // Make sure to return Boolean type.
+        return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
+    }
+    let array_type = args[0].data_type();
+
+    match array_type {
+        DataType::List(_) => general_array_empty::<i32>(&args[0]),
+        DataType::LargeList(_) => general_array_empty::<i64>(&args[0]),
+        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
+    }
+}
+
+fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
+    let array = as_generic_list_array::<O>(array)?;
+    let builder = array
+        .iter()
+        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .collect::<BooleanArray>();
+    Ok(Arc::new(builder))
+}
+
+/// Returns the length of a concrete array dimension
+fn compute_array_length(
+    arr: Option<ArrayRef>,
+    dimension: Option<i64>,
+) -> Result<Option<u64>> {
+    let mut current_dimension: i64 = 1;
+    let mut value = match arr {
+        Some(arr) => arr,
+        None => return Ok(None),
+    };
+    let dimension = match dimension {
+        Some(value) => {
+            if value < 1 {
+                return Ok(None);
+            }
+
+            value
+        }
+        None => return Ok(None),
+    };
+
+    loop {
+        if current_dimension == dimension {
+            return Ok(Some(value.len() as u64));
+        }
+
+        match value.data_type() {
+            DataType::List(..) => {
+                value = downcast_arg!(value, ListArray).value(0);
+                current_dimension += 1;
+            }
+            DataType::LargeList(..) => {
+                value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
+            }
+            _ => return Ok(None),
+        }
+    }
+}
+
+/// Dispatch array length computation based on the offset type.
+fn general_array_length<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&array[0])?;
+    let dimension = if array.len() == 2 {
+        as_int64_array(&array[1])?.clone()
+    } else {
+        Int64Array::from_value(1, list_array.len())
+    };
+
+    let result = list_array
+        .iter()
+        .zip(dimension.iter())
+        .map(|(arr, dim)| compute_array_length(arr, dim))
+        .collect::<Result<UInt64Array>>()?;
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Array_length SQL function
+pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 && args.len() != 2 {
+        return exec_err!("array_length expects one or two arguments");
+    }
+
+    match &args[0].data_type() {
+        DataType::List(_) => general_array_length::<i32>(args),
+        DataType::LargeList(_) => general_array_length::<i64>(args),
+        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
+    }
 }

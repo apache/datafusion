@@ -612,12 +612,6 @@ scalar_expr!(
 
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
-    ArrayEmpty,
-    array_empty,
-    array,
-    "returns true for an empty array or false for a non-empty array."
-);
-scalar_expr!(
     Flatten,
     flatten,
     array,
@@ -634,12 +628,6 @@ scalar_expr!(
     array_except,
     first_array second_array,
     "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
-    ArrayLength,
-    array_length,
-    array dimension,
-    "returns the length of the array dimension."
 );
 scalar_expr!(
     ArrayDistinct,
@@ -1336,7 +1324,6 @@ mod test {
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
