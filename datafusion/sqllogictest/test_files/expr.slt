@@ -483,7 +483,7 @@ NULL
 query T
 SELECT ltrim(' zzzytest ')
 ----
-zzzytest 
+zzzytest
 
 query T
 SELECT ltrim('zzzytest', 'xyz')
@@ -643,7 +643,7 @@ tom
 query T
 SELECT trim(LEADING ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' tom ')
@@ -658,7 +658,7 @@ tom
 query T
 SELECT trim(LEADING ' ' FROM ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' ' FROM ' tom ')
@@ -732,6 +732,14 @@ SELECT trim('tom ')
 tom
 
 query T
+SELECT trim('tommy', 'my')
+----
+tom
+
+query T
+SELECT trim(BOTH 'tom' FROM 'tommy', 'my')
+
+query T
 SELECT upper('')
 ----
 (empty)
@@ -756,7 +764,7 @@ NULL
 
 # test_random_expression
 query BB
-SELECT 
+SELECT
     random() BETWEEN 0.0 AND 1.0,
     random() = random()
 ----
@@ -1358,7 +1366,7 @@ SELECT encode('','base64');
 query ?
 SELECT decode('','base64');
 ----
-    
+
 
 query T
 SELECT encode('','hex');
@@ -1368,7 +1376,7 @@ SELECT encode('','hex');
 query ?
 SELECT decode('','hex');
 ----
-    
+
 
 query T
 SELECT md5('tom');
