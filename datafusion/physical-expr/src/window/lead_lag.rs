@@ -157,7 +157,7 @@ fn evaluate_all_with_ignore_null(
 ) -> Result<ArrayRef, DataFusionError> {
     let valid_indices: Vec<usize> =
         array.nulls().unwrap().valid_indices().collect::<Vec<_>>();
-    let direction = is_lag ^ (offset > 0);
+    let direction = !is_lag;
     let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
         .map(|id| {
             let result_index = match valid_indices.binary_search(&id) {

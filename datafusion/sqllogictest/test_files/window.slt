@@ -4260,7 +4260,8 @@ from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, nu
 NULL def b b 10
 NULL def NULL NULL 10
 NULL def NULL def 10
-x x NULL def 10
+NULL def NULL def 10
+
 
 statement ok
 set datafusion.execution.batch_size = 1000;
