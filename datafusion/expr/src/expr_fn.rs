@@ -603,28 +603,10 @@ scalar_expr!(
 );
 
 scalar_expr!(
-    ArrayHas,
-    array_has,
-    first_array second_array,
-    "returns true, if the element appears in the first array, otherwise false."
-);
-scalar_expr!(
     ArrayEmpty,
     array_empty,
     array,
     "returns true for an empty array or false for a non-empty array."
-);
-scalar_expr!(
-    ArrayHasAll,
-    array_has_all,
-    first_array second_array,
-    "returns true if each element of the second array appears in the first array; otherwise, it returns false."
-);
-scalar_expr!(
-    ArrayHasAny,
-    array_has_any,
-    first_array second_array,
-    "returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
     Flatten,

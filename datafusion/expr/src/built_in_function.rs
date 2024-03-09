@@ -112,12 +112,6 @@ pub enum BuiltinScalarFunction {
     // array functions
     /// array_sort
     ArraySort,
-    /// array_has
-    ArrayHas,
-    /// array_has_all
-    ArrayHasAll,
-    /// array_has_any
-    ArrayHasAny,
     /// array_pop_front
     ArrayPopFront,
     /// array_pop_back
@@ -355,9 +349,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArraySort => Volatility::Immutable,
             BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
@@ -472,10 +463,7 @@ impl BuiltinScalarFunction {
                 Ok(data_type)
             }
             BuiltinScalarFunction::ArraySort => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayHasAll
-            | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas
-            | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
+            BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
             BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
@@ -760,12 +748,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::array(self.volatility()),
-            BuiltinScalarFunction::ArrayHasAll | BuiltinScalarFunction::ArrayHasAny => {
-                Signature::any(2, self.volatility())
-            }
-            BuiltinScalarFunction::ArrayHas => {
-                Signature::array_and_element(self.volatility())
-            }
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1321,11 +1303,6 @@ impl BuiltinScalarFunction {
             ],
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
             BuiltinScalarFunction::Flatten => &["flatten"],
-            BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
-            BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
-            BuiltinScalarFunction::ArrayHas => {
-                &["array_has", "list_has", "array_contains", "list_contains"]
-            }
             BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]

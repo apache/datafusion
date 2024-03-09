@@ -2682,3 +2682,72 @@ SELECT to_char(null, '%d-%m-%Y');
 
 statement ok
 drop table formats;
+
+##########
+## to_unixtime tests
+##########
+
+query I
+select to_unixtime('2020-09-08T12:00:00+00:00');
+----
+1599566400
+
+query I
+select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
+----
+1673638290
+
+query I
+select to_unixtime('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+----
+1684295940
+
+query I
+select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'Date64'));
+----
+1599566400
+
+query I
+select to_unixtime(arrow_cast('2020-09-08', 'Date32'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_seconds('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_millis('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_micros('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_nanos('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'Int32'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'Int64'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200.414, 'Float64'));
+----
+1599523200

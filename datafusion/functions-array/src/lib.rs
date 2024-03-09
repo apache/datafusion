@@ -28,8 +28,10 @@
 #[macro_use]
 pub mod macros;
 
+mod array_has;
 mod kernels;
 mod udf;
+mod utils;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -39,6 +41,9 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::array_has::array_has;
+    pub use super::array_has::array_has_all;
+    pub use super::array_has::array_has_any;
     pub use super::udf::array_append;
     pub use super::udf::array_concat;
     pub use super::udf::array_dims;
@@ -64,6 +69,9 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_prepend_udf(),
         udf::array_concat_udf(),
         udf::make_array_udf(),
+        array_has::array_has_udf(),
+        array_has::array_has_all_udf(),
+        array_has::array_has_any_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

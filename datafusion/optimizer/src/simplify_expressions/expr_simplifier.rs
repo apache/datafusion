@@ -1308,12 +1308,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 args,
             }) => match udf.simplify(args, info)? {
                 ExprSimplifyResult::Original(args) => {
-                    Transformed::yes(Expr::ScalarFunction(ScalarFunction {
+                    Transformed::no(Expr::ScalarFunction(ScalarFunction {
                         func_def: ScalarFunctionDefinition::UDF(udf),
                         args,
                     }))
                 }
-                ExprSimplifyResult::Simplified(expr) => Transformed::no(expr),
+                ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
             },
 
             // log

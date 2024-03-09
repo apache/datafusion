@@ -36,7 +36,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
+    exec_err, not_impl_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use std::any::type_name;
@@ -280,7 +281,7 @@ pub(super) fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// gen_range(3) => [0, 1, 2]
 /// gen_range(1, 4) => [1, 2, 3]
 /// gen_range(1, 7, 2) => [1, 3, 5]
-pub fn gen_range(args: &[ArrayRef], include_upper: i64) -> Result<ArrayRef> {
+pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args.len() {
         1 => (None, as_int64_array(&args[0])?, None),
         2 => (
@@ -299,22 +300,27 @@ pub fn gen_range(args: &[ArrayRef], include_upper: i64) -> Result<ArrayRef> {
     let mut values = vec![];
     let mut offsets = vec![0];
     for (idx, stop) in stop_array.iter().enumerate() {
-        let mut stop = stop.unwrap_or(0);
+        let stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
         if step == 0 {
-            return exec_err!("step can't be 0 for function range(start [, stop, step]");
+            return exec_err!(
+                "step can't be 0 for function {}(start [, stop, step])",
+                if include_upper {
+                    "generate_series"
+                } else {
+                    "range"
+                }
+            );
         }
-        if step < 0 {
-            // Decreasing range
-            stop -= include_upper;
-            values.extend((stop + 1..start + 1).rev().step_by((-step) as usize));
-        } else {
-            // Increasing range
-            stop += include_upper;
-            values.extend((start..stop).step_by(step as usize));
-        }
-
+        // Below, we utilize `usize` to represent steps.
+        // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
+        let step_abs = usize::try_from(step.unsigned_abs()).map_err(|_| {
+            not_impl_datafusion_err!("step {} can't fit into usize", step)
+        })?;
+        values.extend(
+            gen_range_iter(start, stop, step < 0, include_upper).step_by(step_abs),
+        );
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
@@ -324,6 +330,35 @@ pub fn gen_range(args: &[ArrayRef], include_upper: i64) -> Result<ArrayRef> {
         None,
     )?);
     Ok(arr)
+}
+
+/// Returns an iterator of i64 values from start to stop
+fn gen_range_iter(
+    start: i64,
+    stop: i64,
+    decreasing: bool,
+    include_upper: bool,
+) -> Box<dyn Iterator<Item = i64>> {
+    match (decreasing, include_upper) {
+        // Decreasing range, stop is inclusive
+        (true, true) => Box::new((stop..=start).rev()),
+        // Decreasing range, stop is exclusive
+        (true, false) => {
+            if stop == i64::MAX {
+                // start is never greater than stop, and stop is exclusive,
+                // so the decreasing range must be empty.
+                Box::new(std::iter::empty())
+            } else {
+                // Increase the stop value by one to exclude it.
+                // Since stop is not i64::MAX, `stop + 1` will not overflow.
+                Box::new((stop + 1..=start).rev())
+            }
+        }
+        // Increasing range, stop is inclusive
+        (false, true) => Box::new(start..=stop),
+        // Increasing range, stop is exclusive
+        (false, false) => Box::new(start..stop),
+    }
 }
 
 /// Returns the length of each array dimension
@@ -449,7 +484,7 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 pub fn gen_range_date(
     args: &[ArrayRef],
-    include_upper: i32,
+    include_upper: bool,
 ) -> datafusion_common::Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!("arguments length does not match");
@@ -468,7 +503,7 @@ pub fn gen_range_date(
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
         let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
         let neg = months < 0 || days < 0;
-        if include_upper == 0 {
+        if !include_upper {
             stop = Date32Type::subtract_month_day_nano(stop, step);
         }
         let mut new_date = start;

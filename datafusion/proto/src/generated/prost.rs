@@ -2739,9 +2739,9 @@ pub enum ScalarFunction {
     ArrayElement = 99,
     ArraySlice = 100,
     Cot = 103,
-    ArrayHas = 104,
-    ArrayHasAny = 105,
-    ArrayHasAll = 106,
+    /// 104 was ArrayHas
+    /// 105 was ArrayHasAny
+    /// 106 was ArrayHasAll
     ArrayRemoveN = 107,
     ArrayReplaceN = 108,
     ArrayRemoveAll = 109,
@@ -2773,6 +2773,7 @@ pub enum ScalarFunction {
     /// / 135 is RegexpLike
     ///
     /// / 137 was ToDate
+    /// / 138 was ToUnixtime
     ToChar = 136,
 }
 impl ScalarFunction {
@@ -2867,9 +2868,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayElement => "ArrayElement",
             ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayHas => "ArrayHas",
-            ScalarFunction::ArrayHasAny => "ArrayHasAny",
-            ScalarFunction::ArrayHasAll => "ArrayHasAll",
             ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
@@ -2985,9 +2983,6 @@ impl ScalarFunction {
             "ArrayElement" => Some(Self::ArrayElement),
             "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
-            "ArrayHas" => Some(Self::ArrayHas),
-            "ArrayHasAny" => Some(Self::ArrayHasAny),
-            "ArrayHasAll" => Some(Self::ArrayHasAll),
             "ArrayRemoveN" => Some(Self::ArrayRemoveN),
             "ArrayReplaceN" => Some(Self::ArrayReplaceN),
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
