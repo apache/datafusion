@@ -158,8 +158,6 @@ impl ScalarUDF {
         schema: &dyn ExprSchema,
         arg_types: &[DataType],
     ) -> Result<DataType> {
-        // we always pre-compute the argument types before called, so arg_types can be ensured to be non-empty
-        assert!(!arg_types.is_empty());
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
@@ -311,7 +309,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         _schema: &dyn ExprSchema,
         arg_types: &[DataType],
     ) -> Result<DataType> {
-        assert!(!arg_types.is_empty());
         self.return_type(arg_types)
     }
 
