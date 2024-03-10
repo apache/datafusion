@@ -34,8 +34,12 @@ use crate::physical_optimizer::topk_aggregation::TopKAggregation;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
-/// computes the same results, but in a potentially more efficient
-/// way.
+/// computes the same results, but in a potentially more efficient way.
+///
+/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
+/// `PhysicalOptimizerRule`s.
+///
+/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_physical_optimizer_rule
 pub trait PhysicalOptimizerRule {
     /// Rewrite `plan` to an optimized form
     fn optimize(

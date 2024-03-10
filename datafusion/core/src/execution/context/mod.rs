@@ -1596,7 +1596,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the default query planner
+    /// override default query planner with `query_planner`
     pub fn with_query_planner(
         mut self,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -1605,7 +1605,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the analyzer rules
+    /// Override the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
@@ -1614,7 +1614,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the optimizer rules
+    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
     pub fn with_optimizer_rules(
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
@@ -1623,7 +1623,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the physical optimizer rules
+    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -1632,7 +1632,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`AnalyzerRule`]
+    /// Add `analyzer_rule` to the end of the list of
+    /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
@@ -1641,7 +1642,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`OptimizerRule`]
+    /// Add `optimizer_rule` to the end of the list of
+    /// [`OptimizerRule`]s used to rewrite queries.
     pub fn add_optimizer_rule(
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
@@ -1650,12 +1652,13 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`PhysicalOptimizerRule`]
+    /// Add `physical_optimizer_rule` to the end of the list of
+    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
         mut self,
-        optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
-        self.physical_optimizers.rules.push(optimizer_rule);
+        self.physical_optimizers.rules.push(physical_optimizer_rule);
         self
     }
 
