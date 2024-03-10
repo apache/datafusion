@@ -157,9 +157,10 @@ impl ScalarUDF {
         &self,
         args: &[Expr],
         schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
-        self.inner.return_type_from_exprs(args, schema)
+        self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
     /// Do the function rewrite
@@ -307,12 +308,17 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         &self,
         args: &[Expr],
         schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        self.return_type(&arg_types)
+        if arg_types.is_empty() {
+            let arg_types = args
+                .iter()
+                .map(|arg| arg.get_type(schema))
+                .collect::<Result<Vec<_>>>()?;
+            self.return_type(&arg_types)
+        } else {
+            self.return_type(arg_types)
+        }
     }
 
     /// Invoke the function on `args`, returning the appropriate result
