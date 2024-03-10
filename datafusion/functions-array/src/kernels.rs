@@ -31,9 +31,11 @@ use datafusion_common::cast::{
     as_date32_array, as_generic_list_array, as_int64_array, as_interval_mdn_array,
     as_large_list_array, as_list_array, as_null_array, as_string_array,
 };
-use datafusion_common::{exec_err, not_impl_datafusion_err, DataFusionError, Result};
+use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
 use std::any::type_name;
 use std::sync::Arc;
+
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {

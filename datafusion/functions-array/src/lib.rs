@@ -29,7 +29,9 @@
 pub mod macros;
 
 mod array_has;
+mod concat;
 mod kernels;
+mod make_array;
 mod udf;
 mod utils;
 
@@ -44,6 +46,10 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::concat::array_append;
+    pub use super::concat::array_concat;
+    pub use super::concat::array_prepend;
+    pub use super::make_array::make_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
@@ -64,6 +70,10 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_dims_udf(),
         udf::cardinality_udf(),
         udf::array_ndims_udf(),
+        concat::array_append_udf(),
+        concat::array_prepend_udf(),
+        concat::array_concat_udf(),
+        make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
