@@ -229,7 +229,8 @@ impl PartitionEvaluator for NthValueEvaluator {
             // Extract valid indices if ignoring nulls.
             let (slice, valid_indices) = if self.ignore_nulls {
                 let slice = arr.slice(range.start, n_range);
-                let valid_indices = slice.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+                let valid_indices =
+                    slice.nulls().unwrap().valid_indices().collect::<Vec<_>>();
                 if valid_indices.is_empty() {
                     return ScalarValue::try_from(arr.data_type());
                 }
@@ -249,7 +250,10 @@ impl PartitionEvaluator for NthValueEvaluator {
                 NthValueKind::Last => {
                     if let Some(slice) = &slice {
                         let valid_indices = valid_indices.unwrap();
-                        ScalarValue::try_from_array(slice, valid_indices[valid_indices.len() - 1])
+                        ScalarValue::try_from_array(
+                            slice,
+                            valid_indices[valid_indices.len() - 1],
+                        )
                     } else {
                         ScalarValue::try_from_array(arr, range.end - 1)
                     }
