@@ -55,8 +55,8 @@ use datafusion_expr::{
     bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
     concat_ws_expr, cos, cosh, cot, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, gcd, initcap, iszero, lcm, left, levenshtein,
-    ln, log, log10, log2,
+    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left,
+    levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, octet_length, overlay, pi, power, radians, random,
     repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384, sha512,
@@ -482,7 +482,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
             ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
-            ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
@@ -1756,9 +1755,6 @@ pub fn parse_expr(
                 }
                 ScalarFunction::ArrowTypeof => {
                     Ok(arrow_typeof(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Flatten => {
-                    Ok(flatten(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::StringToArray => Ok(string_to_array(
                     parse_expr(&args[0], registry, codec)?,

@@ -28,10 +28,12 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{
-    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    ScalarFunctionDefinition,
-};
+use datafusion_expr::BuiltinScalarFunction;
+use datafusion_expr::GetFieldAccess;
+use datafusion_expr::GetIndexedField;
+use datafusion_expr::Operator;
+use datafusion_expr::ScalarFunctionDefinition;
+use datafusion_expr::{BinaryExpr, Expr, LogicalPlan};
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -126,6 +128,39 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                 return Ok(Transformed::yes(expr));
             }
         }
+
+        if let Expr::GetIndexedField(GetIndexedField {
+            ref expr,
+            ref field,
+        }) = expr
+        {
+            match field {
+                GetFieldAccess::ListIndex { ref key } => {
+                    let expr = *expr.clone();
+                    let key = *key.clone();
+                    let args = vec![expr, key];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArrayElement, args),
+                    )));
+                }
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    let expr = *expr.clone();
+                    let start = *start.clone();
+                    let stop = *stop.clone();
+                    let stride = *stride.clone();
+                    let args = vec![expr, start, stop, stride];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArraySlice, args),
+                    )));
+                }
+                _ => {}
+            }
+        }
+
         Ok(Transformed::no(expr))
     }
 }

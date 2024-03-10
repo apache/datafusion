@@ -599,6 +599,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_empty(array(vec![lit(1), lit(2), lit(3)])),
         array_length(array(vec![lit(1), lit(2), lit(3)])),
+        flatten(array(vec![lit(1), lit(2), lit(3)])),
     ];
 
     // ensure expressions created with the expr api can be round tripped

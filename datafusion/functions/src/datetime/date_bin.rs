@@ -710,7 +710,7 @@ mod tests {
         let cases = vec![
             (
                 (
-                    TimeDelta::try_minutes(15).unwrap(),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -718,7 +718,7 @@ mod tests {
             ),
             (
                 (
-                    TimeDelta::try_minutes(15).unwrap(),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:02:30",
                 ),
@@ -726,7 +726,7 @@ mod tests {
             ),
             (
                 (
-                    TimeDelta::try_minutes(15).unwrap(),
+                    TimeDelta::try_minutes(15),
                     "2004-04-09T02:03:04.123456789Z",
                     "2005-01-01T00:02:30",
                 ),
@@ -734,7 +734,7 @@ mod tests {
             ),
             (
                 (
-                    TimeDelta::try_hours(1).unwrap(),
+                    TimeDelta::try_hours(1),
                     "2004-04-09T02:03:04.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -742,7 +742,7 @@ mod tests {
             ),
             (
                 (
-                    TimeDelta::try_seconds(10).unwrap(),
+                    TimeDelta::try_seconds(10),
                     "2004-04-09T02:03:11.123456789Z",
                     "2001-01-01T00:00:00",
                 ),
@@ -753,6 +753,7 @@ mod tests {
         cases
             .iter()
             .for_each(|((stride, source, origin), expected)| {
+                let stride = stride.unwrap();
                 let stride1 = stride.num_nanoseconds().unwrap();
                 let source1 = string_to_timestamp_nanos(source).unwrap();
                 let origin1 = string_to_timestamp_nanos(origin).unwrap();
