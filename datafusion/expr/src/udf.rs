@@ -18,7 +18,6 @@
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
-use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
@@ -159,6 +158,8 @@ impl ScalarUDF {
         schema: &dyn ExprSchema,
         arg_types: &[DataType],
     ) -> Result<DataType> {
+        // we always pre-compute the argument types before called, so arg_types can be ensured to be non-empty
+        assert!(!arg_types.is_empty());
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
@@ -306,19 +307,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_type_from_exprs(
         &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
         arg_types: &[DataType],
     ) -> Result<DataType> {
-        if arg_types.is_empty() {
-            let arg_types = args
-                .iter()
-                .map(|arg| arg.get_type(schema))
-                .collect::<Result<Vec<_>>>()?;
-            self.return_type(&arg_types)
-        } else {
-            self.return_type(arg_types)
-        }
+        assert!(!arg_types.is_empty());
+        self.return_type(arg_types)
     }
 
     /// Invoke the function on `args`, returning the appropriate result
