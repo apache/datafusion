@@ -320,9 +320,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_except)(args)
         }),
-        BuiltinScalarFunction::Flatten => {
-            Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
-        }
         BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_pop_front)(args)
         }),

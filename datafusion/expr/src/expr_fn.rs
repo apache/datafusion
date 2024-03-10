@@ -612,12 +612,6 @@ scalar_expr!(
 
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
-    Flatten,
-    flatten,
-    array,
-    "flattens an array of arrays into a single array."
-);
-scalar_expr!(
     ArrayElement,
     array_element,
     array element,
