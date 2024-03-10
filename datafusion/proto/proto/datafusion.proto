@@ -659,7 +659,7 @@ enum ScalarFunction {
   ArrayRemoveAll = 109;
   ArrayReplaceAll = 110;
   Nanvl = 111;
-  Flatten = 112;
+  // 112 was Flatten
   // 113 was IsNan
   Iszero = 114;
   // 115 was ArrayEmpty
