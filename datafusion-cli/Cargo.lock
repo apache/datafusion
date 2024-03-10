@@ -1363,6 +1363,7 @@ dependencies = [
  "datafusion-expr",
  "log",
  "sqlparser",
+ "strum 0.26.1",
 ]
 
 [[package]]

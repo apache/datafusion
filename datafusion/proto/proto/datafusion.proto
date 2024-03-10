@@ -577,8 +577,8 @@ enum ScalarFunction {
   Chr = 25;
   Concat = 26;
   ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
+  // 28 was DatePart
+  // 29 was DateTrunc
   InitCap = 30;
   Left = 31;
   Lpad = 32;
@@ -617,7 +617,7 @@ enum ScalarFunction {
   StructFun = 65;
   FromUnixtime = 66;
   Atan2 = 67;
-  DateBin = 68;
+  // 68 was DateBin
   // 69 was ArrowTypeof
   CurrentDate = 70;
   CurrentTime = 71;
@@ -1537,6 +1537,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {
@@ -1774,21 +1775,11 @@ message NamedStructFieldExpr {
   ScalarValue name = 1;
 }
 
-message ListIndexExpr {
-  PhysicalExprNode key = 1;
-}
-
-message ListRangeExpr {
-  PhysicalExprNode start = 1;
-  PhysicalExprNode stop = 2;
-  PhysicalExprNode stride = 3;
-}
-
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
   oneof field {
     NamedStructFieldExpr named_struct_field_expr = 2;
-    ListIndexExpr list_index_expr = 3;
-    ListRangeExpr list_range_expr = 4;
+    // 3 was list_index_expr
+    // 4 was list_range_expr
   }
 }

@@ -28,7 +28,7 @@ use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
@@ -180,12 +180,6 @@ pub enum BuiltinScalarFunction {
     Concat,
     /// concat_ws
     ConcatWithSeparator,
-    /// date_part
-    DatePart,
-    /// date_trunc
-    DateTrunc,
-    /// date_bin
-    DateBin,
     /// ends_with
     EndsWith,
     /// initcap
@@ -380,9 +374,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Chr => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
             BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
-            BuiltinScalarFunction::DatePart => Volatility::Immutable,
-            BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
-            BuiltinScalarFunction::DateBin => Volatility::Immutable,
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
@@ -589,27 +580,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
-            BuiltinScalarFunction::DatePart => Ok(Float64),
-            BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
-                match &input_expr_types[1] {
-                    Timestamp(Nanosecond, None) | Utf8 | Null => {
-                        Ok(Timestamp(Nanosecond, None))
-                    }
-                    Timestamp(Nanosecond, tz_opt) => {
-                        Ok(Timestamp(Nanosecond, tz_opt.clone()))
-                    }
-                    Timestamp(Microsecond, tz_opt) => {
-                        Ok(Timestamp(Microsecond, tz_opt.clone()))
-                    }
-                    Timestamp(Millisecond, tz_opt) => {
-                        Ok(Timestamp(Millisecond, tz_opt.clone()))
-                    }
-                    Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
-                    _ => plan_err!(
-                    "The {self} function can only accept timestamp as the second arg."
-                ),
-                }
-            }
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
@@ -779,7 +749,6 @@ impl BuiltinScalarFunction {
     /// Return the argument [`Signature`] supported by this function
     pub fn signature(&self) -> Signature {
         use DataType::*;
-        use IntervalUnit::*;
         use TimeUnit::*;
         use TypeSignature::*;
         // note: the physical expression must accept the type returned by this function or the execution panics.
@@ -939,108 +908,6 @@ impl BuiltinScalarFunction {
                     Exact(vec![LargeUtf8, Utf8]),
                     Exact(vec![Binary, Utf8]),
                     Exact(vec![LargeBinary, Utf8]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::DateTrunc => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::DateBin => {
-                let base_sig = |array_type: TimeUnit| {
-                    vec![
-                        Exact(vec![
-                            Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), None),
-                            Timestamp(Nanosecond, None),
-                        ]),
-                        Exact(vec![
-                            Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
-                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                        ]),
-                        Exact(vec![
-                            Interval(DayTime),
-                            Timestamp(array_type.clone(), None),
-                            Timestamp(Nanosecond, None),
-                        ]),
-                        Exact(vec![
-                            Interval(DayTime),
-                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
-                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                        ]),
-                        Exact(vec![
-                            Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), None),
-                        ]),
-                        Exact(vec![
-                            Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
-                        ]),
-                        Exact(vec![
-                            Interval(DayTime),
-                            Timestamp(array_type.clone(), None),
-                        ]),
-                        Exact(vec![
-                            Interval(DayTime),
-                            Timestamp(array_type, Some(TIMEZONE_WILDCARD.into())),
-                        ]),
-                    ]
-                };
-
-                let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
-                    .into_iter()
-                    .map(base_sig)
-                    .collect::<Vec<_>>()
-                    .concat();
-
-                Signature::one_of(full_sig, self.volatility())
-            }
-            BuiltinScalarFunction::DatePart => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8, Date32]),
                 ],
                 self.volatility(),
             ),
@@ -1234,11 +1101,6 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Pi
         ) {
             Some(vec![Some(true)])
-        } else if matches!(
-            &self,
-            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
-        ) {
-            Some(vec![None, Some(true)])
         } else if *self == BuiltinScalarFunction::Log {
             Some(vec![Some(true), Some(false)])
         } else {
@@ -1331,9 +1193,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
             BuiltinScalarFunction::CurrentTime => &["current_time"],
             BuiltinScalarFunction::MakeDate => &["make_date"],
-            BuiltinScalarFunction::DateBin => &["date_bin"],
-            BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
-            BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 

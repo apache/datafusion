@@ -1735,7 +1735,7 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Projection:
+------Projection: 
 --------Sort: aggregate_test_100.c1 ASC NULLS LAST
 ----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 ------------Projection: aggregate_test_100.c1

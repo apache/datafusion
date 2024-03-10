@@ -233,22 +233,16 @@ pub fn create_physical_expr(
                 GetFieldAccess::NamedStructField { name } => {
                     GetFieldAccessExpr::NamedStructField { name: name.clone() }
                 }
-                GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
-                    key: create_physical_expr(key, input_dfschema, execution_props)?,
-                },
+                GetFieldAccess::ListIndex { key: _ } => {
+                    unreachable!("ListIndex should be rewritten in OperatorToFunction")
+                }
                 GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => GetFieldAccessExpr::ListRange {
-                    start: create_physical_expr(start, input_dfschema, execution_props)?,
-                    stop: create_physical_expr(stop, input_dfschema, execution_props)?,
-                    stride: create_physical_expr(
-                        stride,
-                        input_dfschema,
-                        execution_props,
-                    )?,
-                },
+                    start: _,
+                    stop: _,
+                    stride: _,
+                } => {
+                    unreachable!("ListRange should be rewritten in OperatorToFunction")
+                }
             };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(expr, input_dfschema, execution_props)?,

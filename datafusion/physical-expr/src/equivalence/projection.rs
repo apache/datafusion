@@ -118,13 +118,13 @@ mod tests {
         output_schema,
     };
     use crate::equivalence::EquivalenceProperties;
-    use crate::expressions::{col, BinaryExpr, Literal};
+    use crate::expressions::{col, BinaryExpr};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::Result;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
@@ -146,14 +146,6 @@ mod tests {
         let col_d = &col("d", &schema)?;
         let col_e = &col("e", &schema)?;
         let col_ts = &col("ts", &schema)?;
-        let interval = Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(2))))
-            as Arc<dyn PhysicalExpr>;
-        let date_bin_func = &create_physical_expr(
-            &BuiltinScalarFunction::DateBin,
-            &[interval, col_ts.clone()],
-            &schema,
-            &ExecutionProps::default(),
-        )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             col_a.clone(),
             Operator::Plus,
@@ -225,12 +217,9 @@ mod tests {
                     (col_b, "b_new".to_string()),
                     (col_a, "a_new".to_string()),
                     (col_ts, "ts_new".to_string()),
-                    (date_bin_func, "date_bin_res".to_string()),
                 ],
                 // expected
                 vec![
-                    // [date_bin_res ASC]
-                    vec![("date_bin_res", option_asc)],
                     // [ts_new ASC]
                     vec![("ts_new", option_asc)],
                 ],
@@ -249,18 +238,13 @@ mod tests {
                     (col_b, "b_new".to_string()),
                     (col_a, "a_new".to_string()),
                     (col_ts, "ts_new".to_string()),
-                    (date_bin_func, "date_bin_res".to_string()),
                 ],
                 // expected
                 vec![
                     // [a_new ASC, ts_new ASC]
                     vec![("a_new", option_asc), ("ts_new", option_asc)],
-                    // [a_new ASC, date_bin_res ASC]
-                    vec![("a_new", option_asc), ("date_bin_res", option_asc)],
                     // [b_new ASC, ts_new ASC]
                     vec![("b_new", option_asc), ("ts_new", option_asc)],
-                    // [b_new ASC, date_bin_res ASC]
-                    vec![("b_new", option_asc), ("date_bin_res", option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------
@@ -661,14 +645,6 @@ mod tests {
             Operator::Plus,
             col_b.clone(),
         )) as Arc<dyn PhysicalExpr>;
-        let interval = Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(2))))
-            as Arc<dyn PhysicalExpr>;
-        let date_bin_ts = &create_physical_expr(
-            &BuiltinScalarFunction::DateBin,
-            &[interval, col_ts.clone()],
-            &schema,
-            &ExecutionProps::default(),
-        )?;
 
         let round_c = &create_physical_expr(
             &BuiltinScalarFunction::Round,
@@ -686,7 +662,6 @@ mod tests {
             (col_b, "b_new".to_string()),
             (col_a, "a_new".to_string()),
             (col_c, "c_new".to_string()),
-            (date_bin_ts, "date_bin_res".to_string()),
             (round_c, "round_c_res".to_string()),
         ];
         let proj_exprs = proj_exprs
@@ -699,7 +674,6 @@ mod tests {
         let col_a_new = &col("a_new", &output_schema)?;
         let col_b_new = &col("b_new", &output_schema)?;
         let col_c_new = &col("c_new", &output_schema)?;
-        let col_date_bin_res = &col("date_bin_res", &output_schema)?;
         let col_round_c_res = &col("round_c_res", &output_schema)?;
         let a_new_plus_b_new = Arc::new(BinaryExpr::new(
             col_a_new.clone(),
@@ -744,7 +718,7 @@ mod tests {
                 // expected
                 vec![
                     // [a_new ASC, date_bin_res ASC]
-                    vec![(col_a_new, option_asc), (col_date_bin_res, option_asc)],
+                    vec![(col_a_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 4 ------------
@@ -761,10 +735,7 @@ mod tests {
                 // expected
                 vec![
                     // [a_new ASC, date_bin_res ASC]
-                    // Please note that result is not [a_new ASC, date_bin_res ASC, b_new ASC]
-                    // because, datebin_res may not be 1-1 function. Hence without introducing ts
-                    // dependency we cannot guarantee any ordering after date_bin_res column.
-                    vec![(col_a_new, option_asc), (col_date_bin_res, option_asc)],
+                    vec![(col_a_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------
