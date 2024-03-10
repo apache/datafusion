@@ -1587,7 +1587,7 @@ impl SessionState {
         self
     }
 
-    /// use `query_planner` to plan queries, replacing the default
+    /// override default query planner with `query_planner`
     pub fn with_query_planner(
         mut self,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -1596,7 +1596,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the entire list of [`AnalyzerRule`]s used to optimize plans.
+    /// Override the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
