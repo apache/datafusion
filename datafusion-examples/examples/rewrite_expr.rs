@@ -30,7 +30,6 @@ use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn main() -> Result<()> {
