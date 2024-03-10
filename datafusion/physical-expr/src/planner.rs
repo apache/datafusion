@@ -255,6 +255,7 @@ pub fn create_physical_expr(
                 .iter()
                 .map(|e| create_physical_expr(e, input_dfschema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
+
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
                     functions::create_physical_expr(
@@ -264,15 +265,13 @@ pub fn create_physical_expr(
                         execution_props,
                     )
                 }
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let return_type = fun.return_type_from_exprs(args, input_dfschema)?;
-
-                    udf::create_physical_expr(
-                        fun.clone().as_ref(),
-                        &physical_args,
-                        return_type,
-                    )
-                }
+                ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
+                    fun.clone().as_ref(),
+                    &physical_args,
+                    input_schema,
+                    args,
+                    input_dfschema,
+                ),
                 ScalarFunctionDefinition::Name(_) => {
                     internal_err!("Function `Expr` with name should be resolved.")
                 }

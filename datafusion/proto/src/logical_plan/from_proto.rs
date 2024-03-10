@@ -47,13 +47,13 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array, array_append, array_concat, array_distinct, array_element,
-    array_except, array_intersect, array_pop_back, array_pop_front, array_position,
-    array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
-    array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
-    array_slice, array_sort, array_union, ascii, asinh, atan, atan2, atanh, bit_length,
-    btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos,
-    cosh, cot, current_date, current_time, degrees, digest, ends_with, exp,
+    acosh, array_distinct, array_element, array_except, array_intersect, array_pop_back,
+    array_pop_front, array_position, array_positions, array_remove, array_remove_all,
+    array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
+    array_resize, array_slice, array_sort, array_union, ascii, asinh, atan, atan2, atanh,
+    bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
+    concat_ws_expr, cos, cosh, cot, current_date, current_time, degrees, digest,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, from_unixtime, gcd, initcap, iszero, lcm, left,
     levenshtein, ln, log, log10, log2,
@@ -476,9 +476,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArraySort => Self::ArraySort,
-            ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
             ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
@@ -486,7 +484,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
-            ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayRepeat => Self::ArrayRepeat,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
@@ -499,7 +496,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::Md5 => Self::MD5,
             ScalarFunction::Sha224 => Self::SHA224,
             ScalarFunction::Sha256 => Self::SHA256,
@@ -1407,16 +1403,6 @@ pub fn parse_expr(
                 ScalarFunction::Acosh => {
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Array => Ok(array(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ArrayAppend => Ok(array_append(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::ArraySort => Ok(array_sort(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1428,16 +1414,6 @@ pub fn parse_expr(
                 ScalarFunction::ArrayPopBack => {
                     Ok(array_pop_back(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArrayPrepend => Ok(array_prepend(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayConcat => Ok(array_concat(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
                 ScalarFunction::ArrayExcept => Ok(array_except(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

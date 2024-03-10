@@ -2641,7 +2641,7 @@ pub enum ScalarFunction {
     Sqrt = 17,
     Tan = 18,
     Trunc = 19,
-    Array = 20,
+    /// 20 was Array
     /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
@@ -2707,15 +2707,15 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
-    ArrayAppend = 86,
-    ArrayConcat = 87,
+    /// 86 was ArrayAppend
+    /// 87 was ArrayConcat
     /// 88 was ArrayDims
     ArrayRepeat = 89,
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
-    ArrayPrepend = 94,
+    /// 94 was ArrayPrepend
     ArrayRemove = 95,
     ArrayReplace = 96,
     /// 97 was ArrayToString
@@ -2785,7 +2785,6 @@ impl ScalarFunction {
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::Array => "Array",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
@@ -2840,12 +2839,9 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayAppend => "ArrayAppend",
-            ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
-            ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::ArrayElement => "ArrayElement",
@@ -2897,7 +2893,6 @@ impl ScalarFunction {
             "Sqrt" => Some(Self::Sqrt),
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
-            "Array" => Some(Self::Array),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),
@@ -2952,12 +2947,9 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayAppend" => Some(Self::ArrayAppend),
-            "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
-            "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
             "ArrayElement" => Some(Self::ArrayElement),
