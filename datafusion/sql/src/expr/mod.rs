@@ -477,11 +477,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 trim_where,
                 trim_what,
+                trim_characters,
                 ..
             } => self.sql_trim_to_expr(
                 *expr,
                 trim_where,
                 trim_what,
+                trim_characters,
                 schema,
                 planner_context,
             ),
@@ -708,6 +710,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         expr: SQLExpr,
         trim_where: Option<TrimWhereField>,
         trim_what: Option<Box<SQLExpr>>,
+        trim_characters: Option<Vec<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -717,15 +720,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
             None => BuiltinScalarFunction::Trim,
         };
+
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
-        let args = match trim_what {
-            Some(to_trim) => {
+        let args = match (trim_what, trim_characters) {
+            (Some(to_trim), None) => {
                 let to_trim =
                     self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
-                vec![arg, to_trim]
+                Ok(vec![arg, to_trim])
             }
-            None => vec![arg],
-        };
+            (None, Some(trim_characters)) => {
+                if let Some(first) = trim_characters.first() {
+                    let to_trim = self.sql_expr_to_logical_expr(
+                        first.clone(),
+                        schema,
+                        planner_context,
+                    )?;
+                    Ok(vec![arg, to_trim])
+                } else {
+                    plan_err!("TRIM CHARACTERS cannot be empty")
+                }
+            }
+            (Some(_), Some(_)) => {
+                plan_err!("Both TRIM and TRIM CHARACTERS cannot be specified")
+            }
+            (None, None) => Ok(vec![arg]),
+        }?;
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
