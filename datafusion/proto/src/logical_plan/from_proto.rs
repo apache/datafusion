@@ -50,7 +50,7 @@ use datafusion_expr::{
     acosh, array_distinct, array_element, array_except, array_intersect, array_pop_back,
     array_pop_front, array_position, array_positions, array_remove, array_remove_all,
     array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
-    array_resize, array_slice, array_sort, array_union, ascii, asinh, atan, atan2, atanh,
+    array_resize, array_slice, array_union, ascii, asinh, atan, atan2, atanh,
     bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
     concat_ws_expr, cos, cosh, cot, current_date, current_time, degrees, digest,
     ends_with, exp,
@@ -475,7 +475,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
             ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
@@ -1400,11 +1399,6 @@ pub fn parse_expr(
                 ScalarFunction::Acosh => {
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArraySort => Ok(array_sort(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::ArrayPopFront => {
                     Ok(array_pop_front(parse_expr(&args[0], registry, codec)?))
                 }

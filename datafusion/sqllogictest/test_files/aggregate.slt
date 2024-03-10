@@ -182,7 +182,7 @@ CREATE TABLE array_agg_distinct_list_table AS VALUES
   ('b', [0,1])
 ;
 
-# Apply array_sort to have determinisitic result, higher dimension nested array also works but not for array sort,
+# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
 # so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
 query ??
 select array_sort(c1), array_sort(c2) from (
@@ -1359,7 +1359,7 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO: array_agg_distinct output is non-determinisitic -- rewrite with array_sort(list_sort)
+# TODO: array_agg_distinct output is non-deterministic -- rewrite with array_sort(list_sort)
 #       unnest is also not available, so manually unnesting via CROSS JOIN
 # additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
 #

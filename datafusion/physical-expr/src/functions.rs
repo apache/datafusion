@@ -302,9 +302,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArraySort => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_sort)(args)
-        }),
         BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_distinct)(args)
         }),
