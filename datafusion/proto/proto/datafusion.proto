@@ -1775,21 +1775,11 @@ message NamedStructFieldExpr {
   ScalarValue name = 1;
 }
 
-message ListIndexExpr {
-  PhysicalExprNode key = 1;
-}
-
-message ListRangeExpr {
-  PhysicalExprNode start = 1;
-  PhysicalExprNode stop = 2;
-  PhysicalExprNode stride = 3;
-}
-
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
   oneof field {
     NamedStructFieldExpr named_struct_field_expr = 2;
-    ListIndexExpr list_index_expr = 3;
-    ListRangeExpr list_range_expr = 4;
+    // 3 was list_index_expr
+    // 4 was list_range_expr
   }
 }
