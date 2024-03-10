@@ -479,7 +479,7 @@ CREATE TABLE test(
 (3, 30);
 
 # Scalar function
-statement error Did you mean 'arrow_typeof'?
+statement error Invalid function 'arrowtypeof'
 SELECT arrowtypeof(v1) from test;
 
 # Scalar function
