@@ -3112,7 +3112,8 @@ _Alias of [make_array](#make_array)._
 
 ### `string_to_array`
 
-Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL. `SELECT string_to_array('abc##def', '##')` or `SELECT string_to_array('abc def', ' ', 'def')`
+Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+`SELECT string_to_array('abc##def', '##')` or `SELECT string_to_array('abc def', ' ', 'def')`
 
 ```
 starts_with(str, delimiter[, null_str])
@@ -3123,7 +3124,6 @@ starts_with(str, delimiter[, null_str])
 - **str**: String expression to split.
 - **delimiter**: Delimiter string to split on.
 - **null_str**: Substring values to be replaced with `NULL`
-
 
 #### Aliases
 

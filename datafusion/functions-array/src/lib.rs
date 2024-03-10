@@ -55,11 +55,11 @@ pub mod expr_fn {
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
     pub use super::udf::array_to_string;
-    pub use super::udf::string_to_array;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
+    pub use super::udf::string_to_array;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]

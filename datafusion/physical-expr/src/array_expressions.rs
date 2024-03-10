@@ -30,7 +30,8 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 
 use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
-    as_generic_list_array, as_int64_array, as_large_list_array, as_list_array, as_string_array,
+    as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
+    as_string_array,
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{

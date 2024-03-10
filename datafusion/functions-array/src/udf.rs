@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array functions.
 
+use arrow::array::{NullArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
@@ -29,7 +30,6 @@ use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{NullArray, StringArray};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(ArrayToString,
@@ -129,13 +129,13 @@ impl ScalarUDFImpl for StringToArray {
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         use DataType::*;
         Ok(match arg_types[0] {
-            Utf8 | LargeUtf8 => List(Arc::new(Field::new(
-                    "item",
-                    arg_types[0].clone(),
-                    true,
-                ))),
+            Utf8 | LargeUtf8 => {
+                List(Arc::new(Field::new("item", arg_types[0].clone(), true)))
+            }
             _ => {
-                return plan_err!("The string_to_array function can only accept Utf8 or LargeUtf8.");
+                return plan_err!(
+                    "The string_to_array function can only accept Utf8 or LargeUtf8."
+                );
             }
         })
     }
