@@ -577,8 +577,8 @@ enum ScalarFunction {
   Chr = 25;
   Concat = 26;
   ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
+  // 28 was DatePart
+  // 29 was DateTrunc
   InitCap = 30;
   Left = 31;
   Lpad = 32;
@@ -617,7 +617,7 @@ enum ScalarFunction {
   StructFun = 65;
   FromUnixtime = 66;
   Atan2 = 67;
-  DateBin = 68;
+  // 68 was DateBin
   ArrowTypeof = 69;
   CurrentDate = 70;
   CurrentTime = 71;
