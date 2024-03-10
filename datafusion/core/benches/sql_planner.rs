@@ -166,6 +166,8 @@ fn create_context() -> SessionContext {
         .unwrap();
     ctx.register_table("t700", create_table_provider("c", 700))
         .unwrap();
+    ctx.register_table("t1000", create_table_provider("d", 1000))
+        .unwrap();
 
     let tpch_schemas = create_tpch_schemas();
     tpch_schemas.iter().for_each(|(name, schema)| {
@@ -192,6 +194,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     // https://github.com/apache/arrow-datafusion/issues/5157
     c.bench_function("physical_select_one_from_700", |b| {
         b.iter(|| physical_plan(&ctx, "SELECT c1 FROM t700"))
+    });
+
+    // Test simplest
+    c.bench_function("logical_select_all_from_1000", |b| {
+        b.iter(|| logical_plan(&ctx, "SELECT * FROM t1000"))
+    });
+
+    // Test simplest
+    c.bench_function("physical_select_all_from_1000", |b| {
+        b.iter(|| physical_plan(&ctx, "SELECT * FROM t1000"))
     });
 
     c.bench_function("logical_trivial_join_low_numbered_columns", |b| {
