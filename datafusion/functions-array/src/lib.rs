@@ -56,6 +56,7 @@ pub mod expr_fn {
     pub use super::udf::array_ndims;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
+    pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
 }
@@ -78,6 +79,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         array_has::array_has_any_udf(),
         udf::array_empty_udf(),
         udf::array_length_udf(),
+        udf::flatten_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

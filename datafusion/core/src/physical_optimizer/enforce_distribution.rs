@@ -281,6 +281,7 @@ fn adjust_input_keys_ordering(
         on,
         filter,
         join_type,
+        projection,
         mode,
         null_equals_null,
         ..
@@ -298,6 +299,8 @@ fn adjust_input_keys_ordering(
                         new_conditions.0,
                         filter.clone(),
                         join_type,
+                        // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
+                        projection.clone(),
                         PartitionMode::Partitioned,
                         *null_equals_null,
                     )
@@ -598,6 +601,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
         on,
         filter,
         join_type,
+        projection,
         mode,
         null_equals_null,
         ..
@@ -623,6 +627,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
                     new_join_on,
                     filter.clone(),
                     join_type,
+                    projection.clone(),
                     PartitionMode::Partitioned,
                     *null_equals_null,
                 )?));
@@ -1625,6 +1630,7 @@ pub(crate) mod tests {
                 join_on.clone(),
                 None,
                 join_type,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )

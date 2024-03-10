@@ -2165,6 +2165,8 @@ pub struct HashJoinExecNode {
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(uint32, repeated, tag = "9")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2527,26 +2529,10 @@ pub struct NamedStructFieldExpr {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListIndexExpr {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListRangeExpr {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "3")]
-    pub stride: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4")]
+    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2")]
     pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
 }
 /// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
@@ -2554,12 +2540,10 @@ pub mod physical_get_indexed_field_expr_node {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Field {
+        /// 3 was list_index_expr
+        /// 4 was list_range_expr
         #[prost(message, tag = "2")]
         NamedStructFieldExpr(super::NamedStructFieldExpr),
-        #[prost(message, tag = "3")]
-        ListIndexExpr(::prost::alloc::boxed::Box<super::ListIndexExpr>),
-        #[prost(message, tag = "4")]
-        ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -2665,8 +2649,8 @@ pub enum ScalarFunction {
     Chr = 25,
     Concat = 26,
     ConcatWithSeparator = 27,
-    DatePart = 28,
-    DateTrunc = 29,
+    /// 28 was DatePart
+    /// 29 was DateTrunc
     InitCap = 30,
     Left = 31,
     Lpad = 32,
@@ -2705,7 +2689,7 @@ pub enum ScalarFunction {
     StructFun = 65,
     FromUnixtime = 66,
     Atan2 = 67,
-    DateBin = 68,
+    /// 68 was DateBin
     ArrowTypeof = 69,
     CurrentDate = 70,
     CurrentTime = 71,
@@ -2747,7 +2731,7 @@ pub enum ScalarFunction {
     ArrayRemoveAll = 109,
     ArrayReplaceAll = 110,
     Nanvl = 111,
-    Flatten = 112,
+    /// 112 was Flatten
     /// 113 was IsNan
     Iszero = 114,
     /// 115 was ArrayEmpty
@@ -2807,8 +2791,6 @@ impl ScalarFunction {
             ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
-            ScalarFunction::DatePart => "DatePart",
-            ScalarFunction::DateTrunc => "DateTrunc",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
@@ -2841,7 +2823,6 @@ impl ScalarFunction {
             ScalarFunction::StructFun => "StructFun",
             ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::DateBin => "DateBin",
             ScalarFunction::ArrowTypeof => "ArrowTypeof",
             ScalarFunction::CurrentDate => "CurrentDate",
             ScalarFunction::CurrentTime => "CurrentTime",
@@ -2872,7 +2853,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
-            ScalarFunction::Flatten => "Flatten",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
@@ -2920,8 +2900,6 @@ impl ScalarFunction {
             "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
-            "DatePart" => Some(Self::DatePart),
-            "DateTrunc" => Some(Self::DateTrunc),
             "InitCap" => Some(Self::InitCap),
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
@@ -2954,7 +2932,6 @@ impl ScalarFunction {
             "StructFun" => Some(Self::StructFun),
             "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
-            "DateBin" => Some(Self::DateBin),
             "ArrowTypeof" => Some(Self::ArrowTypeof),
             "CurrentDate" => Some(Self::CurrentDate),
             "CurrentTime" => Some(Self::CurrentTime),
@@ -2985,7 +2962,6 @@ impl ScalarFunction {
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
-            "Flatten" => Some(Self::Flatten),
             "Iszero" => Some(Self::Iszero),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),

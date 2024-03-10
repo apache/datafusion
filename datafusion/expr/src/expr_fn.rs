@@ -572,9 +572,9 @@ scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
 scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Log2, log2, num, "base 2 logarithm");
-scalar_expr!(Log10, log10, num, "base 10 logarithm");
-scalar_expr!(Ln, ln, num, "natural logarithm");
+scalar_expr!(Log2, log2, num, "base 2 logarithm of number");
+scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
+scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(
@@ -602,12 +602,6 @@ scalar_expr!(
     "returns the array without the first element."
 );
 
-scalar_expr!(
-    Flatten,
-    flatten,
-    array,
-    "flattens an array of arrays into a single array."
-);
 scalar_expr!(
     ArrayElement,
     array_element,
@@ -805,9 +799,6 @@ nary_scalar_expr!(
 );
 
 // date functions
-scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
-scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
-scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
 scalar_expr!(
     ToChar,
     to_char,
@@ -1295,9 +1286,6 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(DatePart, date_part, part, date);
-        test_scalar_expr!(DateTrunc, date_trunc, part, date);
-        test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);

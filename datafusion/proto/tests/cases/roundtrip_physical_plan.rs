@@ -33,7 +33,6 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
@@ -217,6 +216,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 on.clone(),
                 None,
                 join_type,
+                None,
                 *partition_mode,
                 false,
             )?))?;
@@ -724,65 +724,6 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
         col_arg,
         GetFieldAccessExpr::NamedStructField {
             name: ScalarValue::from("name"),
-        },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_index() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("key", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_key = col("key", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListIndex { key: col_key },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_range() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("start", DataType::Int64, true),
-        Field::new("stop", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_start = col("start", &schema)?;
-    let col_stop = col("stop", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListRange {
-            start: col_start,
-            stop: col_stop,
-            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
-                as Arc<dyn PhysicalExpr>,
         },
     ));
 

@@ -36,6 +36,9 @@ use datafusion_expr::{
 use datafusion_expr::{Expr, LogicalPlan};
 #[cfg(feature = "array_expressions")]
 use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
+use datafusion_expr::BuiltinScalarFunction;
+use datafusion_expr::GetFieldAccess;
+use datafusion_expr::GetIndexedField;
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -128,6 +131,39 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                 return Ok(Transformed::yes(expr));
             }
         }
+
+        if let Expr::GetIndexedField(GetIndexedField {
+            ref expr,
+            ref field,
+        }) = expr
+        {
+            match field {
+                GetFieldAccess::ListIndex { ref key } => {
+                    let expr = *expr.clone();
+                    let key = *key.clone();
+                    let args = vec![expr, key];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArrayElement, args),
+                    )));
+                }
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    let expr = *expr.clone();
+                    let start = *start.clone();
+                    let stop = *stop.clone();
+                    let stride = *stride.clone();
+                    let args = vec![expr, start, stop, stride];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArraySlice, args),
+                    )));
+                }
+                _ => {}
+            }
+        }
+
         Ok(Transformed::no(expr))
     }
 }

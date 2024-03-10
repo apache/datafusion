@@ -314,9 +314,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_except)(args)
         }),
-        BuiltinScalarFunction::Flatten => {
-            Arc::new(|args| make_scalar_function_inner(array_expressions::flatten)(args))
-        }
         BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_pop_front)(args)
         }),
@@ -430,9 +427,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
             make_scalar_function_inner(string_expressions::concat_ws)(args)
         }),
-        BuiltinScalarFunction::DatePart => Arc::new(datetime_expressions::date_part),
-        BuiltinScalarFunction::DateTrunc => Arc::new(datetime_expressions::date_trunc),
-        BuiltinScalarFunction::DateBin => Arc::new(datetime_expressions::date_bin),
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(

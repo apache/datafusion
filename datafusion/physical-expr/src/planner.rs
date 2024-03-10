@@ -233,22 +233,16 @@ pub fn create_physical_expr(
                 GetFieldAccess::NamedStructField { name } => {
                     GetFieldAccessExpr::NamedStructField { name: name.clone() }
                 }
-                GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
-                    key: create_physical_expr(key, input_dfschema, execution_props)?,
-                },
+                GetFieldAccess::ListIndex { key: _ } => {
+                    unreachable!("ListIndex should be rewritten in OperatorToFunction")
+                }
                 GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
-                } => GetFieldAccessExpr::ListRange {
-                    start: create_physical_expr(start, input_dfschema, execution_props)?,
-                    stop: create_physical_expr(stop, input_dfschema, execution_props)?,
-                    stride: create_physical_expr(
-                        stride,
-                        input_dfschema,
-                        execution_props,
-                    )?,
-                },
+                    start: _,
+                    stop: _,
+                    stride: _,
+                } => {
+                    unreachable!("ListRange should be rewritten in OperatorToFunction")
+                }
             };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(expr, input_dfschema, execution_props)?,
@@ -261,6 +255,7 @@ pub fn create_physical_expr(
                 .iter()
                 .map(|e| create_physical_expr(e, input_dfschema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
+
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
                     functions::create_physical_expr(
@@ -270,15 +265,13 @@ pub fn create_physical_expr(
                         execution_props,
                     )
                 }
-                ScalarFunctionDefinition::UDF(fun) => {
-                    let return_type = fun.return_type_from_exprs(args, input_dfschema)?;
-
-                    udf::create_physical_expr(
-                        fun.clone().as_ref(),
-                        &physical_args,
-                        return_type,
-                    )
-                }
+                ScalarFunctionDefinition::UDF(fun) => udf::create_physical_expr(
+                    fun.clone().as_ref(),
+                    &physical_args,
+                    input_schema,
+                    args,
+                    input_dfschema,
+                ),
                 ScalarFunctionDefinition::Name(_) => {
                     internal_err!("Function `Expr` with name should be resolved.")
                 }
