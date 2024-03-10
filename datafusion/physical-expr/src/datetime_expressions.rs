@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::TimeUnit;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow::{
     array::{Array, ArrayRef, PrimitiveArray},

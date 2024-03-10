@@ -439,24 +439,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
             make_scalar_function_inner(string_expressions::concat_ws)(args)
         }),
-        BuiltinScalarFunction::Now => {
-            // bind value for now at plan time
-            Arc::new(datetime_expressions::make_now(
-                execution_props.query_execution_start_time,
-            ))
-        }
-        BuiltinScalarFunction::CurrentDate => {
-            // bind value for current_date at plan time
-            Arc::new(datetime_expressions::make_current_date(
-                execution_props.query_execution_start_time,
-            ))
-        }
-        BuiltinScalarFunction::CurrentTime => {
-            // bind value for current_time at plan time
-            Arc::new(datetime_expressions::make_current_time(
-                execution_props.query_execution_start_time,
-            ))
-        }
         BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
