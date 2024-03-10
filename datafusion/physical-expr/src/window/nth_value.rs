@@ -226,29 +226,33 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
 
-            let mut valid_indices = Vec::new();
-            if self.ignore_nulls {
-                valid_indices = arr.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+            // Extract valid indices if ignoring nulls.
+            let (slice, valid_indices) = if self.ignore_nulls {
+                let slice = arr.slice(range.start, n_range);
+                let valid_indices = slice.nulls().unwrap().valid_indices().collect::<Vec<_>>();
                 if valid_indices.is_empty() {
                     return ScalarValue::try_from(arr.data_type());
                 }
-            }
+                (Some(slice), Some(valid_indices))
+            } else {
+                (None, None)
+            };
             match self.state.kind {
                 NthValueKind::First => {
-                    let index: usize = if self.ignore_nulls {
-                        valid_indices[0]
+                    if let Some(slice) = &slice {
+                        let valid_indices = valid_indices.unwrap();
+                        ScalarValue::try_from_array(slice, valid_indices[0])
                     } else {
-                        range.start
-                    };
-                    ScalarValue::try_from_array(arr, index)
+                        ScalarValue::try_from_array(arr, range.start)
+                    }
                 }
                 NthValueKind::Last => {
-                    let index = if self.ignore_nulls {
-                        valid_indices[valid_indices.len() - 1]
+                    if let Some(slice) = &slice {
+                        let valid_indices = valid_indices.unwrap();
+                        ScalarValue::try_from_array(slice, valid_indices[valid_indices.len() - 1])
                     } else {
-                        range.end - 1
-                    };
-                    ScalarValue::try_from_array(arr, index)
+                        ScalarValue::try_from_array(arr, range.end - 1)
+                    }
                 }
                 NthValueKind::Nth(n) => {
                     match n.cmp(&0) {
