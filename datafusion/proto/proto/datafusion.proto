@@ -1537,6 +1537,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {

@@ -217,6 +217,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 on.clone(),
                 None,
                 join_type,
+                None,
                 *partition_mode,
                 false,
             )?))?;
