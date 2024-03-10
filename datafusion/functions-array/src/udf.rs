@@ -501,3 +501,71 @@ impl ScalarUDFImpl for ArrayLength {
         &self.aliases
     }
 }
+
+make_udf_function!(
+    Flatten,
+    flatten,
+    array,
+    "flattens an array of arrays into a single array.",
+    flatten_udf
+);
+
+#[derive(Debug)]
+pub(super) struct Flatten {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+impl Flatten {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("flatten")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for Flatten {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "flatten"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        fn get_base_type(data_type: &DataType) -> Result<DataType> {
+            match data_type {
+                List(field) | FixedSizeList(field, _)
+                    if matches!(field.data_type(), List(_) | FixedSizeList(_, _)) =>
+                {
+                    get_base_type(field.data_type())
+                }
+                LargeList(field) if matches!(field.data_type(), LargeList(_)) => {
+                    get_base_type(field.data_type())
+                }
+                Null | List(_) | LargeList(_) => Ok(data_type.to_owned()),
+                FixedSizeList(field, _) => Ok(List(field.clone())),
+                _ => exec_err!(
+                    "Not reachable, data_type should be List, LargeList or FixedSizeList"
+                ),
+            }
+        }
+
+        let data_type = get_base_type(&arg_types[0])?;
+        Ok(data_type)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::flatten(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}

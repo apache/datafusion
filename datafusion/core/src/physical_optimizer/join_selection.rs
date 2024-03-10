@@ -135,6 +135,27 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
+/// This function swaps the given join's projection.
+fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<usize>> {
+    projection.map(|p| {
+        p.iter()
+            .map(|i| {
+                // If the index is less than the left schema length, it is from the left schema, so we add the right schema length to it.
+                // Otherwise, it is from the right schema, so we subtract the left schema length from it.
+                if *i < left_schema_len {
+                    *i + right_schema_len
+                } else {
+                    *i - left_schema_len
+                }
+            })
+            .collect()
+    })
+}
+
 /// This function swaps the inputs of the given join operator.
 fn swap_hash_join(
     hash_join: &HashJoinExec,
@@ -152,6 +173,11 @@ fn swap_hash_join(
             .collect(),
         swap_join_filter(hash_join.filter()),
         &swap_join_type(*hash_join.join_type()),
+        swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            hash_join.projection.as_ref(),
+        ),
         partition_mode,
         hash_join.null_equals_null(),
     )?;
@@ -337,6 +363,7 @@ fn try_collect_left(
                     hash_join.on().to_vec(),
                     hash_join.filter().cloned(),
                     hash_join.join_type(),
+                    hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
                 )?)))
@@ -348,6 +375,7 @@ fn try_collect_left(
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
         )?))),
@@ -375,6 +403,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
         )?))
@@ -845,6 +874,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -901,6 +931,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -962,6 +993,7 @@ mod tests_statistical {
                     )],
                     None,
                     &join_type,
+                    None,
                     PartitionMode::Partitioned,
                     false,
                 )
@@ -1032,6 +1064,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Inner,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1050,6 +1083,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Left,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1090,6 +1124,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -1293,6 +1328,7 @@ mod tests_statistical {
                 on,
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::Auto,
                 false,
             )
@@ -1747,6 +1783,7 @@ mod hash_join_tests {
             )],
             None,
             &t.initial_join_type,
+            None,
             t.initial_mode,
             false,
         )?);

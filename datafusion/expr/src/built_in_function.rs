@@ -29,7 +29,7 @@ use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -160,8 +160,6 @@ pub enum BuiltinScalarFunction {
     ArrayResize,
     /// construct an array from columns
     MakeArray,
-    /// Flatten
-    Flatten,
 
     // struct functions
     /// struct
@@ -366,7 +364,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReverse => Volatility::Immutable,
-            BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
@@ -466,20 +463,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::Flatten => {
-                fn get_base_type(data_type: &DataType) -> Result<DataType> {
-                    match data_type {
-                        DataType::List(field) | DataType::FixedSizeList(field, _) if matches!(field.data_type(), DataType::List(_)|DataType::FixedSizeList(_,_ )) => get_base_type(field.data_type()),
-                        DataType::LargeList(field) if matches!(field.data_type(), DataType::LargeList(_)) => get_base_type(field.data_type()),
-                        DataType::Null | DataType::List(_) | DataType::LargeList(_) => Ok(data_type.to_owned()),
-                        DataType::FixedSizeList(field,_ ) => Ok(DataType::List(field.clone())),
-                        _ => exec_err!("Not reachable, data_type should be List, LargeList or FixedSizeList"),
-                    }
-                }
-
-                let data_type = get_base_type(&input_expr_types[0])?;
-                Ok(data_type)
-            }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySort => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
@@ -796,7 +779,6 @@ impl BuiltinScalarFunction {
                 Signature::array_and_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::Flatten => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -1250,7 +1232,6 @@ impl BuiltinScalarFunction {
                 "list_extract",
             ],
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-            BuiltinScalarFunction::Flatten => &["flatten"],
             BuiltinScalarFunction::ArrayPopFront => {
                 &["array_pop_front", "list_pop_front"]
             }

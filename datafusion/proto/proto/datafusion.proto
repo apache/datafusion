@@ -659,7 +659,7 @@ enum ScalarFunction {
   ArrayRemoveAll = 109;
   ArrayReplaceAll = 110;
   Nanvl = 111;
-  Flatten = 112;
+  // 112 was Flatten
   // 113 was IsNan
   Iszero = 114;
   // 115 was ArrayEmpty
@@ -1537,6 +1537,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {

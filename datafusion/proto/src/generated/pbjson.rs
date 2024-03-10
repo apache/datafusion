@@ -9373,6 +9373,9 @@ impl serde::Serialize for HashJoinExecNode {
         if self.filter.is_some() {
             len += 1;
         }
+        if !self.projection.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -9399,6 +9402,9 @@ impl serde::Serialize for HashJoinExecNode {
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
         }
+        if !self.projection.is_empty() {
+            struct_ser.serialize_field("projection", &self.projection)?;
+        }
         struct_ser.end()
     }
 }
@@ -9419,6 +9425,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "null_equals_null",
             "nullEqualsNull",
             "filter",
+            "projection",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9430,6 +9437,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             PartitionMode,
             NullEqualsNull,
             Filter,
+            Projection,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9458,6 +9466,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "partitionMode" | "partition_mode" => Ok(GeneratedField::PartitionMode),
                             "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
                             "filter" => Ok(GeneratedField::Filter),
+                            "projection" => Ok(GeneratedField::Projection),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9484,6 +9493,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut partition_mode__ = None;
                 let mut null_equals_null__ = None;
                 let mut filter__ = None;
+                let mut projection__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -9528,6 +9538,15 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             }
                             filter__ = map_.next_value()?;
                         }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -9538,6 +9557,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     partition_mode: partition_mode__.unwrap_or_default(),
                     null_equals_null: null_equals_null__.unwrap_or_default(),
                     filter: filter__,
+                    projection: projection__.unwrap_or_default(),
                 })
             }
         }
@@ -22411,7 +22431,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayRemoveAll => "ArrayRemoveAll",
             Self::ArrayReplaceAll => "ArrayReplaceAll",
             Self::Nanvl => "Nanvl",
-            Self::Flatten => "Flatten",
             Self::Iszero => "Iszero",
             Self::ArrayPopBack => "ArrayPopBack",
             Self::StringToArray => "StringToArray",
@@ -22531,7 +22550,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayRemoveAll",
             "ArrayReplaceAll",
             "Nanvl",
-            "Flatten",
             "Iszero",
             "ArrayPopBack",
             "StringToArray",
@@ -22680,7 +22698,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayRemoveAll" => Ok(ScalarFunction::ArrayRemoveAll),
                     "ArrayReplaceAll" => Ok(ScalarFunction::ArrayReplaceAll),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
-                    "Flatten" => Ok(ScalarFunction::Flatten),
                     "Iszero" => Ok(ScalarFunction::Iszero),
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
                     "StringToArray" => Ok(ScalarFunction::StringToArray),
