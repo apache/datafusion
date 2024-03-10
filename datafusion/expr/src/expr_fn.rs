@@ -852,7 +852,6 @@ scalar_expr!(
     "returns true if a given number is +0.0 or -0.0 otherwise returns false"
 );
 
-scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
 scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
 scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
@@ -1336,7 +1335,6 @@ mod test {
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
         test_nary_scalar_expr!(MakeArray, array, input);
 
-        test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);

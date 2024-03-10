@@ -256,8 +256,6 @@ pub enum BuiltinScalarFunction {
     Upper,
     /// uuid
     Uuid,
-    /// arrow_typeof
-    ArrowTypeof,
     /// overlay
     OverLay,
     /// levenshtein
@@ -421,7 +419,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
-            BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
@@ -757,8 +754,6 @@ impl BuiltinScalarFunction {
             },
 
             BuiltinScalarFunction::Iszero => Ok(Boolean),
-
-            BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
             BuiltinScalarFunction::OverLay => {
                 utf8_to_str_type(&input_expr_types[0], "overlay")
@@ -1169,7 +1164,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::OverLay => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Int64, Int64]),
@@ -1368,9 +1362,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => &["sha256"],
             BuiltinScalarFunction::SHA384 => &["sha384"],
             BuiltinScalarFunction::SHA512 => &["sha512"],
-
-            // other functions
-            BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
 
             // array functions
             BuiltinScalarFunction::ArrayAppend => &[

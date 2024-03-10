@@ -618,7 +618,7 @@ enum ScalarFunction {
   FromUnixtime = 66;
   Atan2 = 67;
   DateBin = 68;
-  ArrowTypeof = 69;
+  // 69 was ArrowTypeof
   CurrentDate = 70;
   CurrentTime = 71;
   Uuid = 72;

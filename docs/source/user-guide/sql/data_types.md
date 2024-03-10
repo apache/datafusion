@@ -31,7 +31,7 @@ the `arrow_typeof` function. For example:
 ```sql
 select arrow_typeof(interval '1 month');
 +-------------------------------------+
-| arrowtypeof(IntervalYearMonth("1")) |
+| arrow_typeof(IntervalYearMonth("1")) |
 +-------------------------------------+
 | Interval(YearMonth)                 |
 +-------------------------------------+
