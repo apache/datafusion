@@ -2898,11 +2898,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn udfs_names(&self) -> Vec<String> {
-        self.udfs.keys().map(|str| str.clone()).collect()
+        self.udfs.keys().cloned().collect()
     }
 
     fn udafs_names(&self) -> Vec<String> {
-        self.udafs.keys().map(|str| str.clone()).collect()
+        self.udafs.keys().cloned().collect()
     }
 
     fn udwfs_names(&self) -> Vec<String> {

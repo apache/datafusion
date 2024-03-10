@@ -2086,27 +2086,15 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     }
 
     fn udfs_names(&self) -> Vec<String> {
-        self.state
-            .scalar_functions()
-            .keys()
-            .map(|str| str.clone())
-            .collect()
+        self.state.scalar_functions().keys().cloned().collect()
     }
 
     fn udafs_names(&self) -> Vec<String> {
-        self.state
-            .aggregate_functions()
-            .keys()
-            .map(|str| str.clone())
-            .collect()
+        self.state.aggregate_functions().keys().cloned().collect()
     }
 
     fn udwfs_names(&self) -> Vec<String> {
-        self.state
-            .window_functions()
-            .keys()
-            .map(|str| str.clone())
-            .collect()
+        self.state.window_functions().keys().cloned().collect()
     }
 }
 
