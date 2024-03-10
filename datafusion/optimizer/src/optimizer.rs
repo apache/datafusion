@@ -57,7 +57,16 @@ use log::{debug, warn};
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
 /// way. If there are no suitable transformations for the input plan,
-/// the optimizer can simply return it as is.
+/// the optimizer should simply return it unmodified.
+///
+/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`]
+///
+/// Use [`SessionState::add_optimizer_rule`] to register additional
+/// `OptimizerRule`s.
+///
+/// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
+/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
+
 pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan cannot be
     /// optimized by this rule.
