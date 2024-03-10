@@ -27,15 +27,14 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 #[cfg(feature = "array_expressions")]
 use datafusion_common::{utils::list_ndims, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::GetFieldAccess;
 use datafusion_expr::GetIndexedField;
 #[cfg(feature = "array_expressions")]
-use datafusion_expr::{
-    expr::ScalarFunction, BinaryExpr, Operator, ScalarFunctionDefinition,
-};
+use datafusion_expr::{BinaryExpr, Operator, ScalarFunctionDefinition};
 use datafusion_expr::{Expr, LogicalPlan};
 #[cfg(feature = "array_expressions")]
 use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
