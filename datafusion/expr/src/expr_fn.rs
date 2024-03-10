@@ -538,7 +538,6 @@ scalar_expr!(Sqrt, sqrt, num, "square root of a number");
 scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
-scalar_expr!(Tan, tan, num, "tangent");
 scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
@@ -1239,7 +1238,6 @@ mod test {
         test_unary_scalar_expr!(Cbrt, cbrt);
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
-        test_unary_scalar_expr!(Tan, tan);
         test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);

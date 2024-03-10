@@ -2639,7 +2639,7 @@ pub enum ScalarFunction {
     Signum = 15,
     Sin = 16,
     Sqrt = 17,
-    Tan = 18,
+    /// Tan = 18;
     Trunc = 19,
     Array = 20,
     /// RegexpMatch = 21;
@@ -2783,7 +2783,6 @@ impl ScalarFunction {
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
-            ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
             ScalarFunction::BitLength => "BitLength",
@@ -2896,7 +2895,6 @@ impl ScalarFunction {
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
-            "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
             "BitLength" => Some(Self::BitLength),

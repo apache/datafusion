@@ -159,7 +159,6 @@ math_unary_function!("sqrt", sqrt);
 math_unary_function!("cbrt", cbrt);
 math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
-math_unary_function!("tan", tan);
 math_unary_function!("sinh", sinh);
 math_unary_function!("cosh", cosh);
 math_unary_function!("tanh", tanh);
