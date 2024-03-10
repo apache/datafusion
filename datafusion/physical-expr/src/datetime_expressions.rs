@@ -34,7 +34,6 @@ use chrono::NaiveDate;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-
 /// Returns a string representation of a date, time, timestamp or duration based
 /// on a Chrono pattern.
 ///
