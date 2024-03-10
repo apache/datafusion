@@ -616,3 +616,72 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
         array_type => exec_err!("array_length does not support type '{array_type:?}'"),
     }
 }
+
+// Create new offsets that are euqiavlent to `flatten` the array.
+fn get_offsets_for_flatten<O: OffsetSizeTrait>(
+    offsets: OffsetBuffer<O>,
+    indexes: OffsetBuffer<O>,
+) -> OffsetBuffer<O> {
+    let buffer = offsets.into_inner();
+    let offsets: Vec<O> = indexes
+        .iter()
+        .map(|i| buffer[i.to_usize().unwrap()])
+        .collect();
+    OffsetBuffer::new(offsets.into())
+}
+
+fn flatten_internal<O: OffsetSizeTrait>(
+    list_arr: GenericListArray<O>,
+    indexes: Option<OffsetBuffer<O>>,
+) -> Result<GenericListArray<O>> {
+    let (field, offsets, values, _) = list_arr.clone().into_parts();
+    let data_type = field.data_type();
+
+    match data_type {
+        // Recursively get the base offsets for flattened array
+        DataType::List(_) | DataType::LargeList(_) => {
+            let sub_list = as_generic_list_array::<O>(&values)?;
+            if let Some(indexes) = indexes {
+                let offsets = get_offsets_for_flatten(offsets, indexes);
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
+            } else {
+                flatten_internal::<O>(sub_list.clone(), Some(offsets))
+            }
+        }
+        // Reach the base level, create a new list array
+        _ => {
+            if let Some(indexes) = indexes {
+                let offsets = get_offsets_for_flatten(offsets, indexes);
+                let list_arr = GenericListArray::<O>::new(field, offsets, values, None);
+                Ok(list_arr)
+            } else {
+                Ok(list_arr.clone())
+            }
+        }
+    }
+}
+
+/// Flatten SQL function
+pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("flatten expects one argument");
+    }
+
+    let array_type = args[0].data_type();
+    match array_type {
+        DataType::List(_) => {
+            let list_arr = as_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i32>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::LargeList(_) => {
+            let list_arr = as_large_list_array(&args[0])?;
+            let flattened_array = flatten_internal::<i64>(list_arr.clone(), None)?;
+            Ok(Arc::new(flattened_array) as ArrayRef)
+        }
+        DataType::Null => Ok(args[0].clone()),
+        _ => {
+            exec_err!("flatten does not support type '{array_type:?}'")
+        }
+    }
+}
