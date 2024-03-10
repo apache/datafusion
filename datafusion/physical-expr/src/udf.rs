@@ -17,9 +17,10 @@
 
 //! UDF support
 use crate::{PhysicalExpr, ScalarFunctionExpr};
-use arrow_schema::DataType;
-use datafusion_common::Result;
+use arrow_schema::Schema;
+use datafusion_common::{DFSchema, Result};
 pub use datafusion_expr::ScalarUDF;
+use datafusion_expr::{type_coercion::functions::data_types, Expr};
 use std::sync::Arc;
 
 /// Create a physical expression of the UDF.
@@ -28,8 +29,22 @@ use std::sync::Arc;
 pub fn create_physical_expr(
     fun: &ScalarUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    return_type: DataType,
+    input_schema: &Schema,
+    args: &[Expr],
+    input_dfschema: &DFSchema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    let input_expr_types = input_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, fun.signature())?;
+
+    // Since we have arg_types, we dont need args and schema.
+    let return_type =
+        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
+
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
         fun.fun(),
@@ -42,8 +57,8 @@ pub fn create_physical_expr(
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::DataType;
-    use datafusion_common::Result;
+    use arrow_schema::{DataType, Schema};
+    use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
         ColumnarValue, FuncMonotonicity, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
@@ -97,7 +112,9 @@ mod tests {
         // create and register the udf
         let udf = ScalarUDF::from(TestScalarUDF::new());
 
-        let p_expr = create_physical_expr(&udf, &[], DataType::Float64)?;
+        let e = crate::expressions::lit(1.1);
+        let p_expr =
+            create_physical_expr(&udf, &[e], &Schema::empty(), &[], &DFSchema::empty())?;
 
         assert_eq!(
             p_expr

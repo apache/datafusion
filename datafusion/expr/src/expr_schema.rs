@@ -153,7 +153,7 @@ impl ExprSchemable for Expr {
 
                         // perform additional function arguments validation (due to limited
                         // expressiveness of `TypeSignature`), then infer return type
-                        Ok(fun.return_type_from_exprs(args, schema)?)
+                        Ok(fun.return_type_from_exprs(args, schema, &arg_data_types)?)
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")
