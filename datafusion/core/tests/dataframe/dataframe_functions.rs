@@ -651,26 +651,6 @@ async fn test_fn_split_part() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fn_starts_with() -> Result<()> {
-    let expr = starts_with(col("a"), lit("abc"));
-
-    let expected = [
-        "+---------------------------------+",
-        "| starts_with(test.a,Utf8(\"abc\")) |",
-        "+---------------------------------+",
-        "| true                            |",
-        "| true                            |",
-        "| false                           |",
-        "| false                           |",
-        "+---------------------------------+",
-    ];
-
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_fn_ends_with() -> Result<()> {
     let expr = ends_with(col("a"), lit("DEF"));
 
@@ -750,25 +730,6 @@ async fn test_cast() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fn_to_hex() -> Result<()> {
-    let expr = to_hex(col("b"));
-
-    let expected = [
-        "+----------------+",
-        "| to_hex(test.b) |",
-        "+----------------+",
-        "| 1              |",
-        "| a              |",
-        "| a              |",
-        "| 64             |",
-        "+----------------+",
-    ];
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_translate() -> Result<()> {
     let expr = translate(col("a"), lit("bc"), lit("xx"));
@@ -782,25 +743,6 @@ async fn test_fn_translate() -> Result<()> {
         "| CBAdef                                  |",
         "| 123AxxDef                               |",
         "+-----------------------------------------+",
-    ];
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_fn_upper() -> Result<()> {
-    let expr = upper(col("a"));
-
-    let expected = [
-        "+---------------+",
-        "| upper(test.a) |",
-        "+---------------+",
-        "| ABCDEF        |",
-        "| ABC123        |",
-        "| CBADEF        |",
-        "| 123ABCDEF     |",
-        "+---------------+",
     ];
     assert_fn_batches!(expr, expected);
 

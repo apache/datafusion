@@ -575,12 +575,6 @@ scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
 scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
-scalar_expr!(
-    ToHex,
-    to_hex,
-    num,
-    "returns the hexdecimal representation of an integer"
-);
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
@@ -630,19 +624,11 @@ scalar_expr!(
     "removes all characters, spaces by default, from the end of a string"
 );
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
-scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
-scalar_expr!(
-    Trim,
-    trim,
-    string,
-    "removes all characters, space by default from the string"
-);
-scalar_expr!(Upper, upper, string, "converts the string to upper case");
 //use vec as parameter
 nary_scalar_expr!(
     Lpad,
@@ -1117,15 +1103,11 @@ mod test {
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
         test_scalar_expr!(Rtrim, rtrim, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
-        test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
         test_scalar_expr!(Substr, substring, string, position, count);
-        test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
-        test_scalar_expr!(Trim, trim, string);
-        test_scalar_expr!(Upper, upper, string);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);

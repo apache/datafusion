@@ -84,6 +84,10 @@ use log::debug;
 #[macro_use]
 pub mod macros;
 
+#[cfg(feature = "string_expressions")]
+pub mod string;
+make_stub_package!(string, "string_expressions");
+
 /// Core datafusion expressions
 /// Enabled via feature flag `core_expressions`
 #[cfg(feature = "core_expressions")]
@@ -144,7 +148,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .chain(encoding::functions())
         .chain(math::functions())
         .chain(regex::functions())
-        .chain(crypto::functions());
+        .chain(crypto::functions())
+        .chain(string::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
