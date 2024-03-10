@@ -37,7 +37,7 @@ use crate::{error::Result, physical_plan::ExecutionPlan};
 /// computes the same results, but in a potentially more efficient way.
 ///
 /// Use [`SessionState::add_physical_optimizer_rule`] to register additional
-/// `PhysicalOptimizerRule`s..
+/// `PhysicalOptimizerRule`s.
 ///
 /// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_physical_optimizer_rule
 pub trait PhysicalOptimizerRule {
