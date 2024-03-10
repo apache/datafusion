@@ -652,6 +652,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self,
         arg_exprs: &[Expr],
         schema: &dyn ExprSchema,
+        _arg_data_types: &[DataType],
     ) -> Result<DataType> {
         if arg_exprs.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
