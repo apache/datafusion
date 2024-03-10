@@ -161,7 +161,6 @@ math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
 math_unary_function!("sinh", sinh);
 math_unary_function!("cosh", cosh);
-math_unary_function!("tanh", tanh);
 math_unary_function!("asin", asin);
 math_unary_function!("acos", acos);
 math_unary_function!("atan", atan);

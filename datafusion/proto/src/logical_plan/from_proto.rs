@@ -62,8 +62,8 @@ use datafusion_expr::{
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
     sha512, signum, sin, sinh, split_part, sqrt, starts_with, string_to_array, strpos,
-    struct_fun, substr, substr_index, substring, tanh, to_hex, translate, trim, trunc,
-    upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    struct_fun, substr, substr_index, substring, to_hex, translate, trim, trunc, upper,
+    uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
     BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
     GroupingSet,
     GroupingSet::GroupingSets,
@@ -452,7 +452,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
-            ScalarFunction::Tanh => Self::Tanh,
             ScalarFunction::Asinh => Self::Asinh,
             ScalarFunction::Acosh => Self::Acosh,
             ScalarFunction::Atanh => Self::Atanh,
@@ -1521,7 +1520,6 @@ pub fn parse_expr(
                 ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Tanh => Ok(tanh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Atanh => {
                     Ok(atanh(parse_expr(&args[0], registry, codec)?))
                 }
