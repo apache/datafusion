@@ -76,4 +76,34 @@ macro_rules! make_udf_function {
             }
         }
     };
+    ($UDF:ty, $EXPR_FN:ident, $DOC:expr , $SCALAR_UDF_FN:ident) => {
+        paste::paste! {
+            // "fluent expr_fn" style function
+            #[doc = $DOC]
+            pub fn $EXPR_FN(arg: Vec<Expr>) -> Expr {
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    $SCALAR_UDF_FN(),
+                    arg,
+                ))
+            }
+
+            /// Singleton instance of [`$UDF`], ensures the UDF is only created once
+            /// named STATIC_$(UDF). For example `STATIC_ArrayToString`
+            #[allow(non_upper_case_globals)]
+            static [< STATIC_ $UDF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
+                std::sync::OnceLock::new();
+            /// ScalarFunction that returns a [`ScalarUDF`] for [`$UDF`]
+            ///
+            /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
+            pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+                [< STATIC_ $UDF >]
+                    .get_or_init(|| {
+                        std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                            <$UDF>::new(),
+                        ))
+                    })
+                    .clone()
+            }
+        }
+    };
 }

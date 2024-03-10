@@ -153,14 +153,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 if scalar_fun
                     .signature()
                     .type_signature
-                    .supports_zero_argument()
-                    && scalar_fun != BuiltinScalarFunction::MakeArray =>
+                    .supports_zero_argument() =>
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             // If the function supports zero argument, we pass in a null array indicating the batch size.
             // This is for user-defined functions.
-            (true, Err(_)) if self.supports_zero_argument => {
+            (true, Err(_))
+                if self.supports_zero_argument && self.name != "make_array" =>
+            {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self

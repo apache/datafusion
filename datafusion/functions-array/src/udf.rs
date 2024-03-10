@@ -25,7 +25,7 @@ use datafusion_common::plan_err;
 use datafusion_common::Result;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -107,10 +107,10 @@ impl Range {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Exact(vec![Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
+                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -177,10 +177,10 @@ impl GenSeries {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Int64]),
-                    Exact(vec![Int64, Int64]),
-                    Exact(vec![Int64, Int64, Int64]),
-                    Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
+                    TypeSignature::Exact(vec![Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
+                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
                 ],
                 Volatility::Immutable,
             ),
