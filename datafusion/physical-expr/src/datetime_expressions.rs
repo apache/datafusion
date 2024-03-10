@@ -34,17 +34,6 @@ use chrono::NaiveDate;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-pub fn make_now(
-    now_ts: DateTime<Utc>,
-) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
-    let now_ts = now_ts.timestamp_nanos_opt();
-    move |_arg| {
-        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-            now_ts,
-            Some("+00:00".into()),
-        )))
-    }
-}
 
 /// Returns a string representation of a date, time, timestamp or duration based
 /// on a Chrono pattern.
