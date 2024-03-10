@@ -86,9 +86,9 @@ pub trait ContextProvider {
     /// Get configuration options
     fn options(&self) -> &ConfigOptions;
 
-    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>>;
-    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>>;
-    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>>;
+    fn udfs_names(&self) -> Vec<String>;
+    fn udafs_names(&self) -> Vec<String>;
+    fn udwfs_names(&self) -> Vec<String>;
 }
 
 /// SQL parser options

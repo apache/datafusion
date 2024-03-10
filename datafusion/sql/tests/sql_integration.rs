@@ -2897,16 +2897,16 @@ impl ContextProvider for MockContextProvider {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
 
-    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
-        self.udfs.clone()
+    fn udfs_names(&self) -> Vec<String> {
+        self.udfs.keys().map(|str| str.clone()).collect()
     }
 
-    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
-        self.udafs.clone()
+    fn udafs_names(&self) -> Vec<String> {
+        self.udafs.keys().map(|str| str.clone()).collect()
     }
 
-    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
-        HashMap::new()
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 

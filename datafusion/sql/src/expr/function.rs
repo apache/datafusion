@@ -44,18 +44,22 @@ pub fn suggest_valid_function(
 ) -> String {
     let valid_funcs = if is_window_func {
         // All aggregate functions and builtin window functions
-        AggregateFunction::iter()
-            .map(|func| func.to_string())
-            .chain(BuiltInWindowFunction::iter().map(|func| func.to_string()))
-            .collect()
+        let mut funcs = Vec::new();
+
+        funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
+        funcs.extend(ctx.udafs_names());
+        funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
+        funcs.extend(ctx.udwfs_names());
+
+        funcs
     } else {
         // All scalar functions and aggregate functions
         let mut funcs = Vec::new();
 
         funcs.extend(BuiltinScalarFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udfs().into_keys());
+        funcs.extend(ctx.udfs_names());
         funcs.extend(AggregateFunction::iter().map(|func| func.to_string()));
-        funcs.extend(ctx.udafs().into_keys());
+        funcs.extend(ctx.udafs_names());
 
         funcs
     };

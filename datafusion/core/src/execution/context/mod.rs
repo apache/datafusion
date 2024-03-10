@@ -2085,16 +2085,28 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.config_options()
     }
 
-    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
-        self.state.scalar_functions.clone()
+    fn udfs_names(&self) -> Vec<String> {
+        self.state
+            .scalar_functions()
+            .keys()
+            .map(|str| str.clone())
+            .collect()
     }
 
-    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
-        self.state.aggregate_functions().clone()
+    fn udafs_names(&self) -> Vec<String> {
+        self.state
+            .aggregate_functions()
+            .keys()
+            .map(|str| str.clone())
+            .collect()
     }
 
-    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
-        self.state.window_functions().clone()
+    fn udwfs_names(&self) -> Vec<String> {
+        self.state
+            .window_functions()
+            .keys()
+            .map(|str| str.clone())
+            .collect()
     }
 }
 

@@ -228,16 +228,16 @@ impl ContextProvider for MyContextProvider {
         &self.options
     }
 
-    fn udfs(&self) -> HashMap<String, Arc<ScalarUDF>> {
-        HashMap::new()
+    fn udfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 
-    fn udafs(&self) -> HashMap<String, Arc<AggregateUDF>> {
-        HashMap::new()
+    fn udafs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 
-    fn udwfs(&self) -> HashMap<String, Arc<WindowUDF>> {
-        HashMap::new()
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
