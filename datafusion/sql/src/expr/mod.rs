@@ -983,6 +983,18 @@ mod tests {
         fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
             None
         }
+
+        fn udfs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udafs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udwfs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
     }
 
     fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
