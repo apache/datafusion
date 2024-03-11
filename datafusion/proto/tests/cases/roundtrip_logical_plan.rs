@@ -586,6 +586,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_dims(make_array(vec![lit(1), lit(2), lit(3)])),
         array_ndims(make_array(vec![lit(1), lit(2), lit(3)])),
         cardinality(make_array(vec![lit(1), lit(2), lit(3)])),
+        string_to_array(lit("abc#def#ghl"), lit("#"), lit(",")),
         range(lit(1), lit(10), lit(2)),
         gen_series(lit(1), lit(10), lit(2)),
         array_append(make_array(vec![lit(1), lit(2), lit(3)]), lit(4)),

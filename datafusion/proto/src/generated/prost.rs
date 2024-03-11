@@ -2736,7 +2736,7 @@ pub enum ScalarFunction {
     Iszero = 114,
     /// 115 was ArrayEmpty
     ArrayPopBack = 116,
-    StringToArray = 117,
+    /// 117 was StringToArray
     /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
@@ -2855,7 +2855,6 @@ impl ScalarFunction {
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
-            ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
@@ -2964,7 +2963,6 @@ impl ScalarFunction {
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
-            "StringToArray" => Some(Self::StringToArray),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),

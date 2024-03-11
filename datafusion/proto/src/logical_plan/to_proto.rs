@@ -1502,7 +1502,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Right => Self::Right,
             BuiltinScalarFunction::Rpad => Self::Rpad,
             BuiltinScalarFunction::SplitPart => Self::SplitPart,
-            BuiltinScalarFunction::StringToArray => Self::StringToArray,
             BuiltinScalarFunction::StartsWith => Self::StartsWith,
             BuiltinScalarFunction::Strpos => Self::Strpos,
             BuiltinScalarFunction::Substr => Self::Substr,
