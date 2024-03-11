@@ -17,7 +17,6 @@
 
 pub mod count_wildcard_rule;
 pub mod inline_table_scan;
-pub mod rewrite_expr;
 pub mod subquery;
 pub mod type_coercion;
 
@@ -31,17 +30,14 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::analyzer::{AnalyzerRule, AnalyzerRuleRef};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
+use std::collections::LinkedList;
 use std::sync::Arc;
-
-#[cfg(feature = "array_expressions")]
-use datafusion_functions_array::expr_fn::array_has_all;
-
-use self::rewrite_expr::OperatorToFunction;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
@@ -58,18 +54,18 @@ use self::rewrite_expr::OperatorToFunction;
 /// `AnalyzerRule`s.
 ///
 /// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_analyzer_rule
-pub trait AnalyzerRule {
-    /// Rewrite `plan`
-    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
+// pub trait AnalyzerRule {
+//     /// Rewrite `plan`
+//     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
 
-    /// A human readable name for this analyzer rule
-    fn name(&self) -> &str;
-}
+//     /// A human readable name for this analyzer rule
+//     fn name(&self) -> &str;
+// }
 /// A rule-based Analyzer.
 #[derive(Clone)]
 pub struct Analyzer {
     /// All rules to apply
-    pub rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    pub rules: LinkedList<AnalyzerRuleRef>,
 }
 
 impl Default for Analyzer {
@@ -81,11 +77,9 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+        let rules: Vec<AnalyzerRuleRef> = vec![
             Arc::new(InlineTableScan::new()),
-            // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
-            // and TypeCoercion may cast the argument types from Scalar to List.
-            Arc::new(OperatorToFunction::new()),
+            // Arc::new(OperatorToFunction::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];
@@ -93,8 +87,10 @@ impl Analyzer {
     }
 
     /// Create a new analyzer with the given rules
-    pub fn with_rules(rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>) -> Self {
-        Self { rules }
+    pub fn with_rules(rules: Vec<AnalyzerRuleRef>) -> Self {
+        Self {
+            rules: LinkedList::from_iter(rules),
+        }
     }
 
     /// Analyze the logical plan by applying analyzer rules, and
@@ -113,9 +109,9 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {
-            new_plan = rule.analyze(new_plan, config).map_err(|e| {
-                DataFusionError::Context(rule.name().to_string(), Box::new(e))
-            })?;
+            new_plan = rule
+                .analyze(new_plan, config)
+                .map_err(|e| DataFusionError::Context(rule.name().into(), Box::new(e)))?;
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }

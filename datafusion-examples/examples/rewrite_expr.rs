@@ -19,10 +19,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_expr::analyzer::AnalyzerRule;
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
-use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
+use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};

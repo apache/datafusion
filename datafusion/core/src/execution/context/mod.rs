@@ -97,6 +97,105 @@ mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
 
+// <<<<<<< HEAD
+// =======
+// use crate::{
+//     catalog::{CatalogProviderList, MemoryCatalogProviderList},
+//     datasource::{
+//         cte_worktable::CteWorkTable,
+//         function::{TableFunction, TableFunctionImpl},
+//         listing::{ListingOptions, ListingTable},
+//         provider::TableProviderFactory,
+//     },
+//     datasource::{MemTable, ViewTable},
+//     logical_expr::{PlanType, ToStringifiedPlan},
+//     optimizer::optimizer::Optimizer,
+//     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
+// };
+// use arrow_schema::Schema;
+// use datafusion_common::{
+//     alias::AliasGenerator,
+//     exec_err, not_impl_err, plan_datafusion_err, plan_err,
+//     tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+// };
+// use datafusion_execution::registry::SerializerRegistry;
+// pub use datafusion_expr::execution_props::ExecutionProps;
+// use datafusion_expr::{analyzer::AnalyzerRuleRef, var_provider::is_system_variables};
+// use datafusion_expr::{
+//     logical_plan::{DdlStatement, Statement},
+//     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+// };
+// use parking_lot::RwLock;
+// use std::collections::hash_map::Entry;
+// use std::string::String;
+// use std::sync::Arc;
+// use std::{
+//     collections::{HashMap, HashSet},
+//     fmt::Debug,
+// };
+// use std::{ops::ControlFlow, sync::Weak};
+
+// use arrow::datatypes::{DataType, SchemaRef};
+// use arrow::record_batch::RecordBatch;
+
+// use crate::catalog::{
+//     schema::{MemorySchemaProvider, SchemaProvider},
+//     {CatalogProvider, MemoryCatalogProvider},
+// };
+// use crate::dataframe::DataFrame;
+// use crate::datasource::{
+//     listing::{ListingTableConfig, ListingTableUrl},
+//     provider_as_source, TableProvider,
+// };
+// use crate::error::{DataFusionError, Result};
+// use crate::logical_expr::{
+//     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+//     CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable, DropView,
+//     Explain, LogicalPlan, LogicalPlanBuilder, SetVariable, TableSource, TableType,
+//     UNNAMED_TABLE,
+// };
+// use crate::optimizer::OptimizerRule;
+// use datafusion_sql::{
+//     parser::{CopyToSource, CopyToStatement},
+//     planner::ParserOptions,
+//     ResolvedTableReference, TableReference,
+// };
+// use sqlparser::dialect::dialect_from_str;
+
+// use crate::config::ConfigOptions;
+// use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+// use crate::physical_plan::udaf::AggregateUDF;
+// use crate::physical_plan::udf::ScalarUDF;
+// use crate::physical_plan::ExecutionPlan;
+// use crate::physical_planner::DefaultPhysicalPlanner;
+// use crate::physical_planner::PhysicalPlanner;
+// use crate::variable::{VarProvider, VarType};
+// use async_trait::async_trait;
+// use chrono::{DateTime, Utc};
+// use datafusion_common::{OwnedTableReference, SchemaReference};
+// use datafusion_sql::{
+//     parser::DFParser,
+//     planner::{ContextProvider, SqlToRel},
+// };
+// use url::Url;
+
+// use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
+// use crate::catalog::listing_schema::ListingSchemaProvider;
+// use crate::datasource::object_store::ObjectStoreUrl;
+// use datafusion_optimizer::{analyzer::Analyzer, OptimizerConfig};
+// use datafusion_sql::planner::object_name_to_table_reference;
+// use uuid::Uuid;
+
+// // backwards compatibility
+// use crate::datasource::provider::DefaultTableFactory;
+// use crate::execution::options::ArrowReadOptions;
+// pub use datafusion_execution::config::SessionConfig;
+// pub use datafusion_execution::TaskContext;
+
+// use super::options::ReadOptions;
+
+// >>>>>>> 830928b6e (able to register analyzer rule)
+
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
 /// to take either a single file or multiple files.
@@ -1603,11 +1702,8 @@ impl SessionState {
         self
     }
 
-    /// Override the [`AnalyzerRule`]s optimizer plan rules.
-    pub fn with_analyzer_rules(
-        mut self,
-        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
-    ) -> Self {
+    /// Override the `AnalyzerRule`s optimizer plan rules.
+    pub fn with_analyzer_rules(mut self, rules: Vec<AnalyzerRuleRef>) -> Self {
         self.analyzer = Analyzer::with_rules(rules);
         self
     }
@@ -1627,16 +1723,6 @@ impl SessionState {
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
         self.physical_optimizers = PhysicalOptimizer::with_rules(physical_optimizers);
-        self
-    }
-
-    /// Add `analyzer_rule` to the end of the list of
-    /// [`AnalyzerRule`]s used to rewrite queries.
-    pub fn add_analyzer_rule(
-        mut self,
-        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    ) -> Self {
-        self.analyzer.rules.push(analyzer_rule);
         self
     }
 
@@ -2156,6 +2242,19 @@ impl FunctionRegistry for SessionState {
         })
     }
 
+    /// Add `analyzer_rule` to the `index` of the list of
+    /// `AnalyzerRule`s used to rewrite queries.
+    fn register_analyzer_rule(
+        &mut self,
+        analyzer_rule: AnalyzerRuleRef,
+        index: usize,
+    ) -> Result<()> {
+        let mut split = self.analyzer.rules.split_off(index);
+        self.analyzer.rules.push_back(analyzer_rule);
+        self.analyzer.rules.append(&mut split);
+        Ok(())
+    }
+
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         udf.aliases().iter().for_each(|alias| {
             self.scalar_functions.insert(alias.clone(), udf.clone());
@@ -2208,6 +2307,21 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udwf)
+    }
+
+    fn deregister_analyzer_rule(&mut self, index: usize) -> Result<()> {
+        if index > self.analyzer.rules.len() {
+            return exec_err!(
+                "index out of range, index: {index}, length: {:?}",
+                self.analyzer.rules.len()
+            );
+        }
+
+        let mut split = self.analyzer.rules.split_off(index);
+        // split off should includes the element at index
+        split.pop_front().unwrap();
+        self.analyzer.rules.append(&mut split);
+        Ok(())
     }
 }
 

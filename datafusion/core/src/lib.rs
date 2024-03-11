@@ -158,7 +158,7 @@
 //! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
-//! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
+//! [`AnalyzerRule`]:  datafusion_expr::analyzer::AnalyzerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
 //!
 //! # Architecture

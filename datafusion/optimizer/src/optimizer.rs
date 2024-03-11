@@ -64,7 +64,7 @@ use log::{debug, warn};
 /// Use [`SessionState::add_optimizer_rule`] to register additional
 /// `OptimizerRule`s.
 ///
-/// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
+/// [`AnalyzerRule`]: datafusion_expr::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
 
 pub trait OptimizerRule {

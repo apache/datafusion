@@ -19,11 +19,10 @@
 //! such as DataFrames and Views and inlines the LogicalPlan.
 use std::sync::Arc;
 
-use crate::analyzer::AnalyzerRule;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_expr::analyzer::AnalyzerRule;
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{
     logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,

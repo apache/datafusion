@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::{Analyzer, AnalyzerRule};
+use crate::analyzer::Analyzer;
 use crate::optimizer::{assert_schema_is_the_same, Optimizer};
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{assert_contains, Result};
+use datafusion_expr::analyzer::AnalyzerRule;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 

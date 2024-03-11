@@ -39,6 +39,7 @@ mod udf;
 mod udwf;
 
 pub mod aggregate_function;
+pub mod analyzer;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;

@@ -17,27 +17,26 @@
 
 //! Analyzer rule for to replace operators with function calls (e.g `||` to array_concat`)
 
-#[cfg(feature = "array_expressions")]
 use std::sync::Arc;
-
-use super::AnalyzerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-#[cfg(feature = "array_expressions")]
+
 use datafusion_common::{utils::list_ndims, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::analyzer::AnalyzerRule;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::GetFieldAccess;
 use datafusion_expr::GetIndexedField;
-#[cfg(feature = "array_expressions")]
+
 use datafusion_expr::{BinaryExpr, Operator, ScalarFunctionDefinition};
 use datafusion_expr::{Expr, LogicalPlan};
-#[cfg(feature = "array_expressions")]
-use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
+
+use crate::array_has::array_has_all;
+use crate::concat::{array_append, array_concat, array_prepend};
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -77,7 +76,6 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
     }
 
     let mut expr_rewrite = OperatorToFunctionRewriter {
-        #[cfg(feature = "array_expressions")]
         schema: Arc::new(schema),
     };
 
@@ -95,7 +93,6 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
 }
 
 pub(crate) struct OperatorToFunctionRewriter {
-    #[cfg(feature = "array_expressions")]
     pub(crate) schema: DFSchemaRef,
 }
 
@@ -103,7 +100,6 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        #[cfg(feature = "array_expressions")]
         if let Expr::BinaryExpr(BinaryExpr {
             ref left,
             op,
@@ -125,7 +121,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
 
             // TODO: change OperatorToFunction to OperatoToArrayFunction and configure it with array_expressions feature
             // after other array functions are udf-based
-            #[cfg(feature = "array_expressions")]
+
             if let Some(expr) = rewrite_array_has_all_operator_to_func(left, op, right) {
                 return Ok(Transformed::yes(expr));
             }
@@ -170,14 +166,12 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
 // Note This rewrite is only done if the built in DataFusion `array_expressions` feature is enabled.
 // Even if users  implement their own array functions, those functions are not equal to the DataFusion
 // udf based array functions, so this rewrite is not corrrect
-#[cfg(feature = "array_expressions")]
+
 fn rewrite_array_has_all_operator_to_func(
     left: &Expr,
     op: Operator,
     right: &Expr,
 ) -> Option<Expr> {
-    use super::array_has_all;
-
     if op != Operator::AtArrow && op != Operator::ArrowAt {
         return None;
     }
@@ -198,6 +192,7 @@ fn rewrite_array_has_all_operator_to_func(
             let left = left.clone();
             let right = right.clone();
 
+            // TODO: run kernel function directly?
             let expr = if let Operator::ArrowAt = op {
                 array_has_all(right, left)
             } else {
@@ -220,7 +215,7 @@ fn rewrite_array_has_all_operator_to_func(
 /// 4) (arry concat, array append, array prepend) || array -> array concat
 ///
 /// 5) (arry concat, array append, array prepend) || scalar -> array append
-#[cfg(feature = "array_expressions")]
+
 fn rewrite_array_concat_operator_to_func(
     left: &Expr,
     op: Operator,
@@ -306,7 +301,7 @@ fn rewrite_array_concat_operator_to_func(
 /// 1) (arry concat, array append, array prepend) || column -> (array append, array concat)
 ///
 /// 2) column1 || column2 -> (array prepend, array append, array concat)
-#[cfg(feature = "array_expressions")]
+
 fn rewrite_array_concat_operator_to_func_for_column(
     left: &Expr,
     op: Operator,

@@ -17,13 +17,12 @@
 
 use std::sync::Arc;
 
-use crate::analyzer::AnalyzerRule;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
 };
 use datafusion_common::Result;
+use datafusion_expr::analyzer::AnalyzerRule;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionDefinition, InSubquery};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;

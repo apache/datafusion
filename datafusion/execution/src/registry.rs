@@ -18,6 +18,7 @@
 //! FunctionRegistry trait
 
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
+use datafusion_expr::analyzer::AnalyzerRuleRef;
 use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -67,6 +68,14 @@ pub trait FunctionRegistry {
         not_impl_err!("Registering WindowUDF")
     }
 
+    fn register_analyzer_rule(
+        &mut self,
+        _rule: AnalyzerRuleRef,
+        _index: usize,
+    ) -> Result<()> {
+        not_impl_err!("Registering AnalyzerRule")
+    }
+
     /// Deregisters a [`ScalarUDF`], returning the implementation that was
     /// deregistered.
     ///
@@ -92,6 +101,10 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udwf(&mut self, _name: &str) -> Result<Option<Arc<WindowUDF>>> {
         not_impl_err!("Deregistering WindowUDF")
+    }
+
+    fn deregister_analyzer_rule(&mut self, _index: usize) -> Result<()> {
+        not_impl_err!("DeRegistering AnalyzerRule")
     }
 }
 
