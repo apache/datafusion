@@ -17,7 +17,7 @@
 
 /// Dialect is used to capture dialect specific syntax.
 /// Note: this trait will eventually be replaced by the Dialect in the SQLparser package
-/// 
+///
 /// See <https://github.com/sqlparser-rs/sqlparser-rs/pull/1170>
 pub trait Dialect {
     fn identifier_quote_style(&self) -> Option<char>;
