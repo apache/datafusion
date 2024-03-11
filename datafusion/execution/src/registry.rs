@@ -68,7 +68,7 @@ pub trait FunctionRegistry {
         not_impl_err!("Registering WindowUDF")
     }
 
-    /// Registers a new [`AnalyzerRule`] at the given index.
+    /// Registers a new `AnalyzerRule` at the given index.
     /// Returns an error if the index is out of bounds.
     fn register_analyzer_rule(
         &mut self,
@@ -105,7 +105,7 @@ pub trait FunctionRegistry {
         not_impl_err!("Deregistering WindowUDF")
     }
 
-    /// Deregsiters an [`AnalyzerRule`] at the given index.
+    /// Deregsiters an `AnalyzerRule` at the given index.
     /// Returns an error if the index is out of bounds.
     fn deregister_analyzer_rule(&mut self, _index: usize) -> Result<()> {
         not_impl_err!("DeRegistering AnalyzerRule")
