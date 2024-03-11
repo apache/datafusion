@@ -28,14 +28,13 @@ jobs:
           ./bench.sh data tpch
           
           # Generate a unique-ish identifiers for the results
-          echo "HEAD_REF_SHA=pr-${{ github.event.issue.number }}" >> "$GITHUB_ENV" 
-          
-          short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "BASE_REF_SHA=main-$short_sha" >> "$GITHUB_ENV"
+          echo "HEAD_LONG_SHA=$(git log -1 --format='%H')" >> "$GITHUB_ENV" 
+          echo "HEAD_SHORT_SHA=$(git log -1 --format='%h' --abbrev=7)" >> "$GITHUB_ENV" 
+          echo "BASE_SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_ENV"
 
       - name: Benchmark PR changes
         env:
-          RESULTS_NAME: ${{ env.HEAD_REF_SHA }}
+          RESULTS_NAME: ${{ env.HEAD_SHORT_SHA }}
         run: |
           cd benchmarks
 
@@ -49,14 +48,11 @@ jobs:
 
       - name: Benchmark baseline and generate comparison message
         env:
-          RESULTS_NAME: ${{ env.BASE_REF_SHA }}
+          RESULTS_NAME: ${{ env.BASE_SHORT_SHA }}
         run: |
           cd benchmarks
 
           ./bench.sh run tpch
-          
-          # Temporary workaround, until `RESULTS_NAME` var lands into main
-          mv -f results/HEAD results/${{ env.BASE_REF_SHA }}
           
           echo ${{ github.event.issue.number }} > pr
           
@@ -65,10 +61,10 @@ jobs:
           # Benchmark results
           
           <details>
-          <summary>Benchmarks comparing ${{ github.sha }} and PR ${{ github.event.issue.number }}</summary>
+          <summary>Benchmarks comparing ${{ github.sha }} (main) and ${{ env.HEAD_LONG_SHA }} (PR)</summary>
 
           \`\`\`
-          $(./bench.sh compare ${{ env.BASE_REF_SHA }} ${{ env.HEAD_REF_SHA }})
+          $(./bench.sh compare ${{ env.BASE_SHORT_SHA }} ${{ env.HEAD_SHORT_SHA }})
           \`\`\`
 
           </details>
