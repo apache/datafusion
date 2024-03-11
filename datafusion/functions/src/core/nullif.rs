@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoding expressions
-
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
