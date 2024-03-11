@@ -60,7 +60,7 @@ use datafusion_expr::{
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
-    sha512, signum, sin, sinh, split_part, sqrt, starts_with, strpos, struct_fun, substr,
+    sha512, signum, sin, sinh, split_part, sqrt, starts_with, strpos, substr,
     substr_index, substring, tan, tanh, to_hex, translate, trim, trunc, upper, uuid,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -534,7 +534,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
@@ -1755,9 +1754,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::StructFun => {
-                    Ok(struct_fun(parse_expr(&args[0], registry, codec)?))
-                }
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
