@@ -20,9 +20,9 @@ mod expr;
 pub use expr::expr_to_sql;
 
 use self::dialect::{DefaultDialect, Dialect};
-mod dialect;
+pub mod dialect;
 
-struct Unparser<'a> {
+pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
 }
 
