@@ -1353,8 +1353,6 @@ message PhysicalExprNode {
     PhysicalScalarUdfNode scalar_udf = 16;
 
     PhysicalLikeExprNode like_expr = 18;
-
-    PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
 }
 
@@ -1769,17 +1767,4 @@ message ColumnStats {
   Precision max_value = 2;
   Precision null_count = 3;
   Precision distinct_count = 4;
-}
-
-message NamedStructFieldExpr {
-  ScalarValue name = 1;
-}
-
-message PhysicalGetIndexedFieldExprNode {
-  PhysicalExprNode arg = 1;
-  oneof field {
-    NamedStructFieldExpr named_struct_field_expr = 2;
-    // 3 was list_index_expr
-    // 4 was list_range_expr
-  }
 }

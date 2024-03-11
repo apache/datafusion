@@ -30,11 +30,11 @@ use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::GetFieldAccess;
 use datafusion_expr::GetIndexedField;
 #[cfg(feature = "array_expressions")]
 use datafusion_expr::{BinaryExpr, Operator, ScalarFunctionDefinition};
+use datafusion_expr::{BuiltinScalarFunction, ScalarUDF};
 use datafusion_expr::{Expr, LogicalPlan};
 #[cfg(feature = "array_expressions")]
 use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
@@ -137,6 +137,19 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
         }) = expr
         {
             match field {
+                GetFieldAccess::NamedStructField { name, .. } => {
+                    let expr = *expr.clone();
+                    let name = name.clone();
+                    let args = vec![expr, Expr::Literal(name)];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new_udf(
+                            Arc::new(ScalarUDF::new_from_impl(
+                                datafusion_functions::core::r#struct::StructFunc::new(),
+                            )),
+                            args,
+                        ),
+                    )));
+                }
                 GetFieldAccess::ListIndex { ref key } => {
                     let expr = *expr.clone();
                     let key = *key.clone();
@@ -159,7 +172,6 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                         ScalarFunction::new(BuiltinScalarFunction::ArraySlice, args),
                     )));
                 }
-                _ => {}
             }
         }
 

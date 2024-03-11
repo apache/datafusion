@@ -1813,7 +1813,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1861,10 +1861,6 @@ pub mod physical_expr_node {
         ScalarUdf(super::PhysicalScalarUdfNode),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
-        #[prost(message, tag = "19")]
-        GetIndexedFieldExpr(
-            ::prost::alloc::boxed::Box<super::PhysicalGetIndexedFieldExprNode>,
-        ),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2520,31 +2516,6 @@ pub struct ColumnStats {
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]
     pub distinct_count: ::core::option::Option<Precision>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct NamedStructFieldExpr {
-    #[prost(message, optional, tag = "1")]
-    pub name: ::core::option::Option<ScalarValue>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalGetIndexedFieldExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2")]
-    pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
-}
-/// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
-pub mod physical_get_indexed_field_expr_node {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Field {
-        /// 3 was list_index_expr
-        /// 4 was list_range_expr
-        #[prost(message, tag = "2")]
-        NamedStructFieldExpr(super::NamedStructFieldExpr),
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

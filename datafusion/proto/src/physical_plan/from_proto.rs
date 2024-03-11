@@ -37,7 +37,6 @@ use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
@@ -384,27 +383,6 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
-            let field = match &get_indexed_field_expr.field {
-                Some(protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(named_struct_field_expr)) => GetFieldAccessExpr::NamedStructField{
-                    name: convert_required!(named_struct_field_expr.name)?,
-                },
-                None =>
-                    return Err(proto_error(
-                    "Field must not be None",
-                )),
-            };
-
-            Arc::new(GetIndexedFieldExpr::new(
-                parse_required_physical_expr(
-                    get_indexed_field_expr.arg.as_deref(),
-                    registry,
-                    "arg",
-                    input_schema,
-                )?,
-                field,
-            ))
-        }
     };
 
     Ok(pexpr)
