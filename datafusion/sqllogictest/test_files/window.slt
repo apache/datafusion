@@ -1735,7 +1735,7 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Projection:
+------Projection: 
 --------Sort: aggregate_test_100.c1 ASC NULLS LAST
 ----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 ------------Projection: aggregate_test_100.c1
@@ -4133,18 +4133,35 @@ x x x x x x
 x x x NULL NULL NULL
 b b b b b b
 
-# LAG window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset
-query TTTT
+# LAG window function IGNORE/RESPECT NULLS support with descending order and default offset 1 trigger evaluate_all
+query TTTTTTI
+select lag(a) ignore nulls over (order by id desc) as x,
+       lag(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a) respect nulls over (order by id desc) as x3,
+       lag(a, 1, null) respect nulls over (order by id desc) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def 10
+x x x x x x 10
+x x x NULL NULL NULL 10
+b b b b b b 10
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset trigger evaluate_all
+query TTTTI
 select lag(a, 2, null) ignore nulls over (order by id) as x1,
        lag(a, 2, 'def') ignore nulls over (order by id) as x2,
        lag(a, 2, null) respect nulls over (order by id) as x4,
-       lag(a, 2, 'def') respect nulls over (order by id) as x5
+       lag(a, 2, 'def') respect nulls over (order by id) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
 from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
 ----
-NULL def NULL def
-NULL def NULL def
-NULL def NULL NULL
-NULL def b b
+NULL def b b 10
+NULL def NULL NULL 10
+NULL def NULL def 10
+NULL def NULL def 10
 
 # LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
 query TTTT
@@ -4161,13 +4178,18 @@ x x NULL NULL
 
 # LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
 # To trigger WindowAggExec, we added a sum window function with all of the ranges.
-statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+query TTTTI
 select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
        lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
        lag(a, 2, null) respect nulls over (order by id desc) as x4,
        lag(a, 2, 'def') respect nulls over (order by id desc) as x5,
        sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
 from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def 10
+NULL def NULL def 10
+NULL def x x 10
+x x NULL NULL 10
 
 # LEAD window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
 query TTTTTT
@@ -4227,13 +4249,19 @@ NULL def NULL def
 
 # LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
 # To trigger WindowAggExec, we added a sum window function with all of the ranges.
-statement error Execution error: IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec
+query TTTTI
 select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
        lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
        lead(a, 2, null) respect nulls over (order by id desc) as x4,
        lead(a, 2, 'def') respect nulls over (order by id desc) as x5,
        sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
 from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b 10
+NULL def NULL NULL 10
+NULL def NULL def 10
+NULL def NULL def 10
+
 
 statement ok
 set datafusion.execution.batch_size = 1000;
@@ -4269,3 +4297,13 @@ LIMIT 5;
 3 53
 24 31
 14 94
+
+# Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
+query T rowsort
+select lag(a) over () as x1
+        from
+        (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null);
+----
+NULL
+NULL
+b

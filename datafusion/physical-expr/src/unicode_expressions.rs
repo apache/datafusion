@@ -481,40 +481,28 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(count_array.iter())
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
-                let mut res = String::new();
-                match n {
-                    0 => {
-                        "".to_string();
-                    }
-                    _other => {
-                        if n > 0 {
-                            let idx = string
-                                .split(delimiter)
-                                .take(n as usize)
-                                .fold(0, |len, x| len + x.len() + delimiter.len())
-                                - delimiter.len();
-                            res.push_str(if idx >= string.len() {
-                                string
-                            } else {
-                                &string[..idx]
-                            });
-                        } else {
-                            let idx = (string.split(delimiter).take((-n) as usize).fold(
-                                string.len() as isize,
-                                |len, x| {
-                                    len - x.len() as isize - delimiter.len() as isize
-                                },
-                            ) + delimiter.len() as isize)
-                                as usize;
-                            res.push_str(if idx >= string.len() {
-                                string
-                            } else {
-                                &string[idx..]
-                            });
-                        }
-                    }
+                // In MySQL, these cases will return an empty string.
+                if n == 0 || string.is_empty() || delimiter.is_empty() {
+                    return Some(String::new());
                 }
-                Some(res)
+
+                let splitted: Box<dyn Iterator<Item = _>> = if n > 0 {
+                    Box::new(string.split(delimiter))
+                } else {
+                    Box::new(string.rsplit(delimiter))
+                };
+                let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+                // The length of the substring covered by substr_index.
+                let length = splitted
+                    .take(occurrences) // at least 1 element, since n != 0
+                    .map(|s| s.len() + delimiter.len())
+                    .sum::<usize>()
+                    - delimiter.len();
+                if n > 0 {
+                    Some(string[..length].to_owned())
+                } else {
+                    Some(string[string.len() - length..].to_owned())
+                }
             }
             _ => None,
         })

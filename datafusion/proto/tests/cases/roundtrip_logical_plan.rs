@@ -582,12 +582,32 @@ async fn roundtrip_expr_api() -> Result<()> {
     let expr_list = vec![
         encode(col("a").cast_to(&DataType::Utf8, &schema)?, lit("hex")),
         decode(lit("1234"), lit("hex")),
-        array_to_string(array(vec![lit(1), lit(2), lit(3)]), lit(",")),
-        array_dims(array(vec![lit(1), lit(2), lit(3)])),
-        array_ndims(array(vec![lit(1), lit(2), lit(3)])),
-        cardinality(array(vec![lit(1), lit(2), lit(3)])),
+        array_to_string(make_array(vec![lit(1), lit(2), lit(3)]), lit(",")),
+        array_dims(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_ndims(make_array(vec![lit(1), lit(2), lit(3)])),
+        cardinality(make_array(vec![lit(1), lit(2), lit(3)])),
+        string_to_array(lit("abc#def#ghl"), lit("#"), lit(",")),
         range(lit(1), lit(10), lit(2)),
         gen_series(lit(1), lit(10), lit(2)),
+        array_append(make_array(vec![lit(1), lit(2), lit(3)]), lit(4)),
+        array_prepend(lit(1), make_array(vec![lit(2), lit(3), lit(4)])),
+        array_concat(vec![
+            make_array(vec![lit(1), lit(2)]),
+            make_array(vec![lit(3), lit(4)]),
+        ]),
+        make_array(vec![lit(1), lit(2), lit(3)]),
+        array_has(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+        array_has_all(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(2)]),
+        ),
+        array_has_any(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_empty(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_length(make_array(vec![lit(1), lit(2), lit(3)])),
+        flatten(make_array(vec![lit(1), lit(2), lit(3)])),
     ];
 
     // ensure expressions created with the expr api can be round tripped

@@ -38,18 +38,26 @@ use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
 use std::sync::Arc;
 
+#[cfg(feature = "array_expressions")]
+use datafusion_functions_array::expr_fn::array_has_all;
+
 use self::rewrite_expr::OperatorToFunction;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
 ///
-/// For example, it may resolve [`Expr`]s into more specific forms such
-/// as a subquery reference, to do type coercion to ensure the types
+/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
+/// which must preserve the semantics of the `LogicalPlan`, while computing
+/// results in a more optimal way.
+///
+/// For example, an `AnalyzerRule` may resolve [`Expr`]s into more specific
+/// forms such as a subquery reference, or do type coercion to ensure the types
 /// of operands are correct.
 ///
-/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
-/// which should preserve the semantics of the LogicalPlan but compute
-/// it the same result in some more optimal way.
+/// Use [`SessionState::add_analyzer_rule`] to register additional
+/// `AnalyzerRule`s.
+///
+/// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_analyzer_rule
 pub trait AnalyzerRule {
     /// Rewrite `plan`
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;

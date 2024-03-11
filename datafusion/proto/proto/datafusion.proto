@@ -1,5 +1,6 @@
 /*
 
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -568,7 +569,7 @@ enum ScalarFunction {
   Sqrt = 17;
   Tan = 18;
   Trunc = 19;
-  Array = 20;
+  // 20 was Array
   // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
@@ -576,8 +577,8 @@ enum ScalarFunction {
   Chr = 25;
   Concat = 26;
   ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
+  // 28 was DatePart
+  // 29 was DateTrunc
   InitCap = 30;
   Left = 31;
   Lpad = 32;
@@ -616,7 +617,7 @@ enum ScalarFunction {
   StructFun = 65;
   FromUnixtime = 66;
   Atan2 = 67;
-  DateBin = 68;
+  // 68 was DateBin
   ArrowTypeof = 69;
   CurrentDate = 70;
   CurrentTime = 71;
@@ -634,15 +635,15 @@ enum ScalarFunction {
   Factorial = 83;
   Lcm = 84;
   Gcd = 85;
-  ArrayAppend = 86;
-  ArrayConcat = 87;
+  // 86 was ArrayAppend
+  // 87 was ArrayConcat
   // 88 was ArrayDims
   ArrayRepeat = 89;
-  ArrayLength = 90;
+  // 90 was ArrayLength
   // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
-  ArrayPrepend = 94;
+  // 94 was ArrayPrepend
   ArrayRemove = 95;
   ArrayReplace = 96;
   // 97 was ArrayToString
@@ -650,20 +651,20 @@ enum ScalarFunction {
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
-  ArrayHas = 104;
-  ArrayHasAny = 105;
-  ArrayHasAll = 106;
+  // 104 was ArrayHas
+  // 105 was ArrayHasAny
+  // 106 was ArrayHasAll
   ArrayRemoveN = 107;
   ArrayReplaceN = 108;
   ArrayRemoveAll = 109;
   ArrayReplaceAll = 110;
   Nanvl = 111;
-  Flatten = 112;
+  // 112 was Flatten
   // 113 was IsNan
   Iszero = 114;
-  ArrayEmpty = 115;
+  // 115 was ArrayEmpty
   ArrayPopBack = 116;
-  StringToArray = 117;
+  // 117 was StringToArray
   // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
@@ -684,6 +685,7 @@ enum ScalarFunction {
   /// 135 is RegexpLike
   ToChar = 136;
   /// 137 was ToDate
+  /// 138 was ToUnixtime
 }
 
 message ScalarFunctionNode {
@@ -1535,6 +1537,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {
@@ -1772,21 +1775,11 @@ message NamedStructFieldExpr {
   ScalarValue name = 1;
 }
 
-message ListIndexExpr {
-  PhysicalExprNode key = 1;
-}
-
-message ListRangeExpr {
-  PhysicalExprNode start = 1;
-  PhysicalExprNode stop = 2;
-  PhysicalExprNode stride = 3;
-}
-
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
   oneof field {
     NamedStructFieldExpr named_struct_field_expr = 2;
-    ListIndexExpr list_index_expr = 3;
-    ListRangeExpr list_range_expr = 4;
+    // 3 was list_index_expr
+    // 4 was list_range_expr
   }
 }

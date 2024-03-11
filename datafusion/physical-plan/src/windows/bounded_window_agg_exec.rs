@@ -163,6 +163,7 @@ impl BoundedWindowAggExec {
     fn get_search_algo(&self) -> Result<Box<dyn PartitionSearcher>> {
         let partition_by_sort_keys = self.partition_by_sort_keys()?;
         let ordered_partition_by_indices = self.ordered_partition_by_indices.clone();
+        let input_schema = self.input().schema();
         Ok(match &self.input_order_mode {
             InputOrderMode::Sorted => {
                 // In Sorted mode, all partition by columns should be ordered.
@@ -174,11 +175,12 @@ impl BoundedWindowAggExec {
                 Box::new(SortedSearch {
                     partition_by_sort_keys,
                     ordered_partition_by_indices,
+                    input_schema,
                 })
             }
-            InputOrderMode::Linear | InputOrderMode::PartiallySorted(_) => {
-                Box::new(LinearSearch::new(ordered_partition_by_indices))
-            }
+            InputOrderMode::Linear | InputOrderMode::PartiallySorted(_) => Box::new(
+                LinearSearch::new(ordered_partition_by_indices, input_schema),
+            ),
         })
     }
 
@@ -384,7 +386,11 @@ trait PartitionSearcher: Send {
         for (partition_row, partition_batch) in partition_batches {
             let partition_batch_state = partition_buffers
                 .entry(partition_row)
-                .or_insert_with(|| PartitionBatchState::new(partition_batch.schema()));
+                // Use input_schema, for the buffer schema.
+                // record_batch.schema may not have necessary schema, in terms of
+                // nullability constraints of the output.
+                // See issue: https://github.com/apache/arrow-datafusion/issues/9320
+                .or_insert_with(|| PartitionBatchState::new(self.input_schema().clone()));
             partition_batch_state.extend(&partition_batch)?;
         }
 
@@ -407,11 +413,13 @@ trait PartitionSearcher: Send {
         *input_buffer = if input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            concat_batches(&input_buffer.schema(), [input_buffer, &record_batch])?
+            concat_batches(self.input_schema(), [input_buffer, &record_batch])?
         };
 
         Ok(())
     }
+
+    fn input_schema(&self) -> &SchemaRef;
 }
 
 /// This object encapsulates the algorithm state for a simple linear scan
@@ -437,6 +445,7 @@ pub struct LinearSearch {
     /// The third entry stores how many new outputs are calculated for the
     /// corresponding partition.
     row_map_out: RawTable<(u64, usize, usize)>,
+    input_schema: SchemaRef,
 }
 
 impl PartitionSearcher for LinearSearch {
@@ -579,17 +588,22 @@ impl PartitionSearcher for LinearSearch {
     fn is_mode_linear(&self) -> bool {
         self.ordered_partition_by_indices.is_empty()
     }
+
+    fn input_schema(&self) -> &SchemaRef {
+        &self.input_schema
+    }
 }
 
 impl LinearSearch {
     /// Initialize a new [`LinearSearch`] partition searcher.
-    fn new(ordered_partition_by_indices: Vec<usize>) -> Self {
+    fn new(ordered_partition_by_indices: Vec<usize>, input_schema: SchemaRef) -> Self {
         LinearSearch {
             input_buffer_hashes: VecDeque::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
             row_map_batch: RawTable::with_capacity(256),
             row_map_out: RawTable::with_capacity(256),
+            input_schema,
         }
     }
 
@@ -711,6 +725,7 @@ pub struct SortedSearch {
     /// is ordered by a, b and the window expression contains a PARTITION BY b, a
     /// clause, this attribute stores [1, 0].
     ordered_partition_by_indices: Vec<usize>,
+    input_schema: SchemaRef,
 }
 
 impl PartitionSearcher for SortedSearch {
@@ -775,6 +790,10 @@ impl PartitionSearcher for SortedSearch {
         {
             partition_batch_state.is_end |= idx < n_partitions - 1;
         }
+    }
+
+    fn input_schema(&self) -> &SchemaRef {
+        &self.input_schema
     }
 }
 

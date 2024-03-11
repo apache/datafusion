@@ -572,9 +572,9 @@ scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
 scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Log2, log2, num, "base 2 logarithm");
-scalar_expr!(Log10, log10, num, "base 10 logarithm");
-scalar_expr!(Ln, ln, num, "natural logarithm");
+scalar_expr!(Log2, log2, num, "base 2 logarithm of number");
+scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
+scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(
@@ -585,14 +585,6 @@ scalar_expr!(
 );
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
-
-// array functions
-scalar_expr!(
-    ArrayAppend,
-    array_append,
-    array element,
-    "appends an element to the end of an array."
-);
 
 scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
 
@@ -610,37 +602,6 @@ scalar_expr!(
     "returns the array without the first element."
 );
 
-nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
-scalar_expr!(
-    ArrayHas,
-    array_has,
-    first_array second_array,
-    "returns true, if the element appears in the first array, otherwise false."
-);
-scalar_expr!(
-    ArrayEmpty,
-    array_empty,
-    array,
-    "returns true for an empty array or false for a non-empty array."
-);
-scalar_expr!(
-    ArrayHasAll,
-    array_has_all,
-    first_array second_array,
-    "returns true if each element of the second array appears in the first array; otherwise, it returns false."
-);
-scalar_expr!(
-    ArrayHasAny,
-    array_has_any,
-    first_array second_array,
-    "returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
-);
-scalar_expr!(
-    Flatten,
-    flatten,
-    array,
-    "flattens an array of arrays into a single array."
-);
 scalar_expr!(
     ArrayElement,
     array_element,
@@ -652,12 +613,6 @@ scalar_expr!(
     array_except,
     first_array second_array,
     "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
-    ArrayLength,
-    array_length,
-    array dimension,
-    "returns the length of the array dimension."
 );
 scalar_expr!(
     ArrayDistinct,
@@ -676,12 +631,6 @@ scalar_expr!(
     array_positions,
     array element,
     "searches for an element in the array, returns all occurrences."
-);
-scalar_expr!(
-    ArrayPrepend,
-    array_prepend,
-    array element,
-    "prepends an element to the beginning of an array."
 );
 scalar_expr!(
     ArrayRepeat,
@@ -746,11 +695,6 @@ scalar_expr!(
     "returns an array with the specified size filled with the given value."
 );
 
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an Arrow array using the specified input expressions."
-);
 scalar_expr!(
     ArrayIntersect,
     array_intersect,
@@ -810,7 +754,6 @@ scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
-scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
@@ -855,9 +798,6 @@ nary_scalar_expr!(
 );
 
 // date functions
-scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
-scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
-scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
 scalar_expr!(
     ToChar,
     to_char,
@@ -1334,7 +1274,6 @@ mod test {
         test_scalar_expr!(SHA384, sha384, string);
         test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
-        test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
@@ -1345,19 +1284,13 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(DatePart, date_part, part, date);
-        test_scalar_expr!(DateTrunc, date_trunc, part, date);
-        test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
-        test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
@@ -1365,7 +1298,6 @@ mod test {
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-        test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);

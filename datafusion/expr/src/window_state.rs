@@ -272,7 +272,8 @@ impl PartitionBatchState {
     }
 
     pub fn extend(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.record_batch = concat_batches(&batch.schema(), [&self.record_batch, batch])?;
+        self.record_batch =
+            concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
         Ok(())
     }
 
