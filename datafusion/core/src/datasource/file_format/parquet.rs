@@ -19,7 +19,7 @@
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::stats::Precision;
+use datafusion_common::{internal_datafusion_err, stats::Precision};
 use datafusion_physical_plan::metrics::MetricsSet;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
@@ -739,12 +739,7 @@ impl DataSink for ParquetSink {
                     let mut written_files = self.written.lock();
                     written_files
                         .try_insert(path.clone(), file_metadata)
-                        .map_err(|e| {
-                            DataFusionError::Internal(format!(
-                                "duplicate entry detected for partitioned file {}: {}",
-                                &path, e
-                            ))
-                        })?;
+                        .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
                     drop(written_files);
                 }
                 Err(e) => {
