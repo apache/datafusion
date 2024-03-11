@@ -1259,7 +1259,8 @@ mod test {
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a - Int32(10) > Int32(1) + test.atest.aInt32(1) AS Int32(1) + test.a\n    Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
+        \n  Filter: Int32(1) + test.atest.aInt32(1) - Int32(10) > Int32(1) + test.atest.aInt32(1)\
+        \n    Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
