@@ -210,8 +210,6 @@ pub enum BuiltinScalarFunction {
     SHA512,
     /// split_part
     SplitPart,
-    /// string_to_array
-    StringToArray,
     /// starts_with
     StartsWith,
     /// strpos
@@ -381,7 +379,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA512 => Volatility::Immutable,
             BuiltinScalarFunction::Digest => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
-            BuiltinScalarFunction::StringToArray => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
@@ -553,11 +550,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
             }
-            BuiltinScalarFunction::StringToArray => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[0].clone(),
-                true,
-            )))),
             BuiltinScalarFunction::StartsWith => Ok(Boolean),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
@@ -828,13 +820,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::StringToArray => Signature::one_of(
-                vec![
-                    TypeSignature::Uniform(2, vec![Utf8, LargeUtf8]),
-                    TypeSignature::Uniform(3, vec![Utf8, LargeUtf8]),
-                ],
-                self.volatility(),
-            ),
 
             BuiltinScalarFunction::EndsWith
             | BuiltinScalarFunction::Strpos
@@ -1081,9 +1066,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => &["rpad"],
             BuiltinScalarFunction::Rtrim => &["rtrim"],
             BuiltinScalarFunction::SplitPart => &["split_part"],
-            BuiltinScalarFunction::StringToArray => {
-                &["string_to_array", "string_to_list"]
-            }
             BuiltinScalarFunction::StartsWith => &["starts_with"],
             BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],

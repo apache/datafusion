@@ -59,12 +59,14 @@ pub mod expr_fn {
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
+    pub use super::udf::string_to_array;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = vec![
         udf::array_to_string_udf(),
+        udf::string_to_array_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
         udf::array_dims_udf(),
