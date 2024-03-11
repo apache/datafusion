@@ -38,7 +38,9 @@ use datafusion_common::cast::{
     as_interval_mdn_array, as_large_list_array, as_list_array, as_null_array,
     as_string_array,
 };
-use datafusion_common::{exec_err, internal_err, not_impl_datafusion_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_datafusion_err, DataFusionError, Result,
+};
 use itertools::Itertools;
 use std::any::type_name;
 use std::sync::Arc;
