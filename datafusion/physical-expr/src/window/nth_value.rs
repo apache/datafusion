@@ -199,7 +199,8 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         };
-        if is_prunable {
+        // Do not memoize results when nulls are ignored.
+        if is_prunable && !self.ignore_nulls {
             if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
