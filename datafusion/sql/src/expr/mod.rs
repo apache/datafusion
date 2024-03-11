@@ -583,8 +583,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(value, input_schema, planner_context)
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Struct,
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            StructFunc::new(),
             args,
         )))
     }
