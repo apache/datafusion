@@ -6745,7 +6745,8 @@ string operators.</p></li>
 </section>
 <section id="string-to-array">
 <h3><code class="docutils literal notranslate"><span class="pre">string_to_array</span></code><a class="headerlink" href="#string-to-array" title="Link to this heading">¶</a></h3>
-<p>Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional <code class="docutils literal notranslate"><span class="pre">null_str</span></code> argument are replaced with NULL.</p>
+<p>Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional <code class="docutils literal notranslate"><span class="pre">null_str</span></code> argument are replaced with NULL.
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">string_to_array('abc##def',</span> <span class="pre">'##')</span></code> or <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">string_to_array('abc</span> <span class="pre">def',</span> <span class="pre">'</span> <span class="pre">',</span> <span class="pre">'def')</span></code></p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">starts_with</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">[,</span> <span class="n">null_str</span><span class="p">])</span>
 </pre></div>
 </div>

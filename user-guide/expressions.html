@@ -1018,7 +1018,10 @@ but these operators always return a <code class="docutils literal notranslate"><
 <tr class="row-even"><td><p>range(start [, stop, step])</p></td>
 <td><p>Returns an Arrow array between start and stop with step. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(2,</span> <span class="pre">10,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">5,</span> <span class="pre">8]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>trim_array(array, n)</p></td>
+<tr class="row-odd"><td><p>string_to_array(array, delimiter, null_string)</p></td>
+<td><p>Splits a <code class="docutils literal notranslate"><span class="pre">string</span></code> based on a <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and returns an array of parts. Any parts matching the optional <code class="docutils literal notranslate"><span class="pre">null_string</span></code> will be replaced with <code class="docutils literal notranslate"><span class="pre">NULL</span></code>. <code class="docutils literal notranslate"><span class="pre">string_to_array('abc#def#ghi',</span> <span class="pre">'#',</span> <span class="pre">'</span> <span class="pre">')</span> <span class="pre">-&gt;</span> <span class="pre">['abc',</span> <span class="pre">'def',</span> <span class="pre">'ghi']</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>trim_array(array, n)</p></td>
 <td><p>Deprecated</p></td>
 </tr>
 </tbody>
