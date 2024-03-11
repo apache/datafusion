@@ -2752,13 +2752,13 @@ pub enum ScalarFunction {
     ArrayResize = 130,
     EndsWith = 131,
     /// / 132 was InStr
-    MakeDate = 133,
-    ArrayReverse = 134,
-    /// / 135 is RegexpLike
+    /// / 133 was MakeDate
     ///
+    /// / 135 is RegexpLike
+    /// / 136 was ToChar
     /// / 137 was ToDate
     /// / 138 was ToUnixtime
-    ToChar = 136,
+    ArrayReverse = 134,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2868,9 +2868,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::MakeDate => "MakeDate",
             ScalarFunction::ArrayReverse => "ArrayReverse",
-            ScalarFunction::ToChar => "ToChar",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2977,9 +2975,7 @@ impl ScalarFunction {
             "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
-            "MakeDate" => Some(Self::MakeDate),
             "ArrayReverse" => Some(Self::ArrayReverse),
-            "ToChar" => Some(Self::ToChar),
             _ => None,
         }
     }

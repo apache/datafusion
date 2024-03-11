@@ -22198,9 +22198,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayDistinct => "ArrayDistinct",
             Self::ArrayResize => "ArrayResize",
             Self::EndsWith => "EndsWith",
-            Self::MakeDate => "MakeDate",
             Self::ArrayReverse => "ArrayReverse",
-            Self::ToChar => "ToChar",
         };
         serializer.serialize_str(variant)
     }
@@ -22313,9 +22311,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayDistinct",
             "ArrayResize",
             "EndsWith",
-            "MakeDate",
             "ArrayReverse",
-            "ToChar",
         ];
 
         struct GeneratedVisitor;
@@ -22457,9 +22453,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayDistinct" => Ok(ScalarFunction::ArrayDistinct),
                     "ArrayResize" => Ok(ScalarFunction::ArrayResize),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
-                    "MakeDate" => Ok(ScalarFunction::MakeDate),
                     "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
-                    "ToChar" => Ok(ScalarFunction::ToChar),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

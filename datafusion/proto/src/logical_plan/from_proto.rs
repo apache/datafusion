@@ -526,11 +526,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
-            ScalarFunction::ToChar => Self::ToChar,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
             ScalarFunction::CurrentTime => Self::CurrentTime,
-            ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
@@ -1680,26 +1678,6 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::ToHex => {
                     Ok(to_hex(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::MakeDate => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::MakeDate,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToChar => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToChar,
-                        args,
-                    )))
                 }
                 ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
