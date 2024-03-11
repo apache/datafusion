@@ -870,22 +870,3 @@ async fn test_fn_array_to_string() -> Result<()> {
 
     Ok(())
 }
-
-#[tokio::test]
-async fn test_fn_string_to_array() -> Result<()> {
-    let expr = string_to_array(lit("abc##def##ghi"), lit("##"), lit("!"));
-
-    let expected = [
-        "+-------------------------------------------------------------+",
-        "| string_to_array(Utf8(\"abc##def##ghi\"),Utf8(\"##\"),Utf8(\"!\")) |",
-        "+-------------------------------------------------------------+",
-        "| [abc, def, ghi]                                             |",
-        "| [abc, def, ghi]                                             |",
-        "| [abc, def, ghi]                                             |",
-        "| [abc, def, ghi]                                             |",
-        "+-------------------------------------------------------------+",
-    ];
-    assert_fn_batches!(expr, expected);
-
-    Ok(())
-}

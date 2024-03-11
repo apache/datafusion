@@ -2736,7 +2736,7 @@ pub enum ScalarFunction {
     Iszero = 114,
     /// 115 was ArrayEmpty
     ArrayPopBack = 116,
-    // 117 was StringToArray
+    /// 117 was StringToArray
     /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
