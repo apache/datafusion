@@ -60,7 +60,7 @@ use datafusion_expr::{
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
     random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
-    sha512, signum, sin, sinh, split_part, sqrt, starts_with, string_to_array, strpos,
+    sha512, signum, sin, sinh, split_part, sqrt, starts_with, strpos,
     substr, substr_index, substring, tan, tanh, to_hex, translate, trim, trunc, upper,
     uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
     BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
@@ -521,7 +521,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Right => Self::Right,
             ScalarFunction::Rpad => Self::Rpad,
             ScalarFunction::SplitPart => Self::SplitPart,
-            ScalarFunction::StringToArray => Self::StringToArray,
             ScalarFunction::StartsWith => Self::StartsWith,
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
@@ -1741,11 +1740,6 @@ pub fn parse_expr(
                 ScalarFunction::ArrowTypeof => {
                     Ok(arrow_typeof(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::StringToArray => Ok(string_to_array(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::OverLay => Ok(overlay(
                     args.to_owned()
                         .iter()
