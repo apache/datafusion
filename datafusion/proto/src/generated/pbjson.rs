@@ -22191,7 +22191,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Levenshtein => "Levenshtein",
             Self::SubstrIndex => "SubstrIndex",
             Self::FindInSet => "FindInSet",
-            Self::ArrayDistinct => "ArrayDistinct",
             Self::ArrayResize => "ArrayResize",
             Self::EndsWith => "EndsWith",
             Self::MakeDate => "MakeDate",
@@ -22302,7 +22301,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Levenshtein",
             "SubstrIndex",
             "FindInSet",
-            "ArrayDistinct",
             "ArrayResize",
             "EndsWith",
             "MakeDate",
@@ -22442,7 +22440,11 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
                     "FindInSet" => Ok(ScalarFunction::FindInSet),
+<<<<<<< HEAD
                     "ArrayDistinct" => Ok(ScalarFunction::ArrayDistinct),
+=======
+                    "ArraySort" => Ok(ScalarFunction::ArraySort),
+>>>>>>> 27084580b (Issue-9545 - Port ArrayDistinct to function-arrays subcrate)
                     "ArrayResize" => Ok(ScalarFunction::ArrayResize),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     "MakeDate" => Ok(ScalarFunction::MakeDate),
