@@ -4299,11 +4299,11 @@ LIMIT 5;
 14 94
 
 # Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
-query T rowsort
-select lag(a) over () as x1
+query T
+select lag(a) over (order by a ASC NULLS FIRST) as x1
         from
         (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null);
 ----
 NULL
 NULL
-b
+NULL
