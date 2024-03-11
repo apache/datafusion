@@ -826,13 +826,6 @@ scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein
 scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
 scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
 
-scalar_expr!(
-    Struct,
-    struct_fun,
-    val,
-    "returns a vector of fields from the struct"
-);
-
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
     CaseBuilder::new(Some(Box::new(expr)), vec![], vec![], None)
