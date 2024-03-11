@@ -2690,7 +2690,7 @@ pub enum ScalarFunction {
     FromUnixtime = 66,
     Atan2 = 67,
     /// 68 was DateBin
-    ArrowTypeof = 69,
+    /// 69 was ArrowTypeof
     CurrentDate = 70,
     CurrentTime = 71,
     Uuid = 72,
@@ -2822,7 +2822,6 @@ impl ScalarFunction {
             ScalarFunction::Power => "Power",
             ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::ArrowTypeof => "ArrowTypeof",
             ScalarFunction::CurrentDate => "CurrentDate",
             ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
@@ -2929,7 +2928,6 @@ impl ScalarFunction {
             "Power" => Some(Self::Power),
             "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
-            "ArrowTypeof" => Some(Self::ArrowTypeof),
             "CurrentDate" => Some(Self::CurrentDate),
             "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
