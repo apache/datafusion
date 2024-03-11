@@ -125,7 +125,7 @@ async fn test_deregister_udwf() -> Result<()> {
 #[tokio::test]
 async fn test_udwf_with_alias() {
     let test_state = TestState::new();
-    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    let TestContext { ctx, .. } = TestContext::new(test_state);
 
     let expected = vec![
         "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
