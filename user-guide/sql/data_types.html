@@ -443,11 +443,11 @@ This mapping occurs when defining the schema in a <code class="docutils literal 
 <p>You can see the corresponding Arrow type for any SQL expression using
 the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code> function. For example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="nb">interval</span><span class="w"> </span><span class="s1">&#39;1 month&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">arrowtypeof</span><span class="p">(</span><span class="n">IntervalYearMonth</span><span class="p">(</span><span class="ss">&quot;1&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="nb">Interval</span><span class="p">(</span><span class="n">YearMonth</span><span class="p">)</span><span class="w">                 </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">IntervalMonthDayNano</span><span class="p">(</span><span class="ss">&quot;79228162514264337593543950336&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="nb">Interval</span><span class="p">(</span><span class="n">MonthDayNano</span><span class="p">)</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>You can cast a SQL expression to a specific Arrow type using the <code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code> function
