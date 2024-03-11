@@ -543,7 +543,7 @@ pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
     /// File metadata from successfully produced parquet files.
-    written: Arc<parking_lot::Mutex<Vec<FileMetaData>>>,
+    written: Arc<parking_lot::Mutex<HashMap<Path, FileMetaData>>>,
 }
 
 impl Debug for ParquetSink {
@@ -578,8 +578,9 @@ impl ParquetSink {
         &self.config
     }
 
-    /// Retrieve the file metadata from the last write.
-    pub fn written(&self) -> Vec<FileMetaData> {
+    /// Retrieve the file metadata for the written files, keyed to the path
+    /// which may be partitioned (in the case of hive style partitioning).
+    pub fn written(&self) -> HashMap<Path, FileMetaData> {
         self.written.lock().clone()
     }
 
@@ -681,7 +682,7 @@ impl DataSink for ParquetSink {
         );
 
         let mut file_write_tasks: JoinSet<
-            std::result::Result<FileMetaData, DataFusionError>,
+            std::result::Result<(Path, FileMetaData), DataFusionError>,
         > = JoinSet::new();
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
@@ -697,7 +698,11 @@ impl DataSink for ParquetSink {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;
                     }
-                    writer.close().await.map_err(DataFusionError::ParquetError)
+                    let file_metadata = writer
+                        .close()
+                        .await
+                        .map_err(DataFusionError::ParquetError)?;
+                    Ok((path, file_metadata))
                 });
             } else {
                 let writer = create_writer(
@@ -712,14 +717,15 @@ impl DataSink for ParquetSink {
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
                 file_write_tasks.spawn(async move {
-                    output_single_parquet_file_parallelized(
+                    let file_metadata = output_single_parquet_file_parallelized(
                         writer,
                         rx,
                         schema,
                         &props,
                         parallel_options_clone,
                     )
-                    .await
+                    .await?;
+                    Ok((path, file_metadata))
                 });
             }
         }
@@ -728,10 +734,17 @@ impl DataSink for ParquetSink {
         while let Some(result) = file_write_tasks.join_next().await {
             match result {
                 Ok(r) => {
-                    let r = r?;
-                    row_count += r.num_rows;
+                    let (path, file_metadata) = r?;
+                    row_count += file_metadata.num_rows;
                     let mut written_files = self.written.lock();
-                    written_files.push(r);
+                    written_files
+                        .try_insert(path.clone(), file_metadata)
+                        .map_err(|e| {
+                            DataFusionError::Internal(format!(
+                                "duplicate entry detected for partitioned file {}: {}",
+                                &path, e
+                            ))
+                        })?;
                     drop(written_files);
                 }
                 Err(e) => {
