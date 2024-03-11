@@ -2249,6 +2249,12 @@ impl FunctionRegistry for SessionState {
         analyzer_rule: AnalyzerRuleRef,
         index: usize,
     ) -> Result<()> {
+        if index > self.analyzer.rules.len() {
+            return exec_err!(
+                "index out of range, index: {index}, length: {:?}",
+                self.analyzer.rules.len()
+            );
+        }
         let mut split = self.analyzer.rules.split_off(index);
         self.analyzer.rules.push_back(analyzer_rule);
         self.analyzer.rules.append(&mut split);

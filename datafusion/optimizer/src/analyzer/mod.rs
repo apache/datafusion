@@ -39,28 +39,6 @@ use log::debug;
 use std::collections::LinkedList;
 use std::sync::Arc;
 
-/// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
-/// the plan valid prior to the rest of the DataFusion optimization process.
-///
-/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
-/// which must preserve the semantics of the `LogicalPlan`, while computing
-/// results in a more optimal way.
-///
-/// For example, an `AnalyzerRule` may resolve [`Expr`]s into more specific
-/// forms such as a subquery reference, or do type coercion to ensure the types
-/// of operands are correct.
-///
-/// Use [`SessionState::add_analyzer_rule`] to register additional
-/// `AnalyzerRule`s.
-///
-/// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_analyzer_rule
-// pub trait AnalyzerRule {
-//     /// Rewrite `plan`
-//     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
-
-//     /// A human readable name for this analyzer rule
-//     fn name(&self) -> &str;
-// }
 /// A rule-based Analyzer.
 #[derive(Clone)]
 pub struct Analyzer {
@@ -79,7 +57,7 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<AnalyzerRuleRef> = vec![
             Arc::new(InlineTableScan::new()),
-            // Arc::new(OperatorToFunction::new()),
+            // Arc::new(OperatorToFunction::new()), register with `register_analyzer_rule`
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];
