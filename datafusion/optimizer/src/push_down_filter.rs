@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, JoinConstraint,
-    Result,
+    Result, DataFusionError
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -859,6 +859,15 @@ impl OptimizerRule for PushDownFilter {
                 let results = scan
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
+                if filter_predicates.len() != results.len() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        results.len(),
+                        filter_predicates.len(),
+
+                    )));
+                }
+
                 let zip = filter_predicates.iter().zip(results);
 
                 let new_scan_filters = zip
