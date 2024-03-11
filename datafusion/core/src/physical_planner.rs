@@ -225,7 +225,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     stride: _,
                 } => {
                     unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
+                        "ListRange should have been rewritten in OperatorToFunction"
                     )
                 }
             };
