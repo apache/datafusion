@@ -15,8 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::compute::CastOptions;
 use arrow::util::display::{DurationFormat, FormatOptions};
 
 /// The default [`FormatOptions`] to use within DataFusion
 pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> =
     FormatOptions::new().with_duration_format(DurationFormat::Pretty);
+
+/// The default [`CastOptions`] to use within DataFusion
+pub const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: false,
+    format_options: DEFAULT_FORMAT_OPTIONS,
+};

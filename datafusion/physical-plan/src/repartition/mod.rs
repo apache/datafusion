@@ -24,34 +24,34 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
+use super::common::SharedMemoryReservation;
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::{
+    DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
+};
+use crate::common::transpose;
+use crate::hash_utils::create_hashes;
+use crate::metrics::BaselineMetrics;
+use crate::repartition::distributor_channels::{
+    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+};
+use crate::sorts::streaming_merge;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
+
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
-use crate::common::transpose;
-use crate::hash_utils::create_hashes;
-use crate::metrics::BaselineMetrics;
-use crate::repartition::distributor_channels::{channels, partition_aware_channels};
-use crate::sorts::streaming_merge;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-
-use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
-use super::expressions::PhysicalSortExpr;
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
-
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 mod distributor_channels;
 
@@ -74,7 +74,7 @@ struct RepartitionExecState {
     >,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<AbortOnDropMany<()>>,
+    abort_helper: Arc<Vec<SpawnedTask<()>>>,
 }
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
@@ -295,19 +295,17 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-
     /// Partitioning scheme to use
     partitioning: Partitioning,
-
     /// Inner state that is initialized when the first output stream is created.
     state: Arc<Mutex<RepartitionExecState>>,
-
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 #[derive(Debug, Clone)]
@@ -413,9 +411,8 @@ impl ExecutionPlan for RepartitionExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -434,45 +431,12 @@ impl ExecutionPlan for RepartitionExec {
         Ok(Arc::new(repartition))
     }
 
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
-    }
-
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.partitioning.clone()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.maintains_input_order()[0] {
-            self.input().output_ordering()
-        } else {
-            None
-        }
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
-        if self.preserve_order {
-            vec![true]
-        } else {
-            // We preserve ordering when input partitioning is 1
-            vec![self.input().output_partitioning().partition_count() <= 1]
-        }
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut result = self.input.equivalence_properties();
-        // If the ordering is lost, reset the ordering equivalence class.
-        if !self.maintains_input_order()[0] {
-            result.clear_orderings();
-        }
-        result
+        Self::maintains_input_order_helper(self.input(), self.preserve_order)
     }
 
     fn execute(
@@ -522,7 +486,7 @@ impl ExecutionPlan for RepartitionExec {
             }
 
             // launch one async task per *input* partition
-            let mut join_handles = Vec::with_capacity(num_input_partitions);
+            let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
             for i in 0..num_input_partitions {
                 let txs: HashMap<_, _> = state
                     .channels
@@ -534,28 +498,27 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let input_task: JoinHandle<Result<()>> =
-                    tokio::spawn(Self::pull_from_input(
-                        self.input.clone(),
-                        i,
-                        txs.clone(),
-                        self.partitioning.clone(),
-                        r_metrics,
-                        context.clone(),
-                    ));
+                let input_task = SpawnedTask::spawn(Self::pull_from_input(
+                    self.input.clone(),
+                    i,
+                    txs.clone(),
+                    self.partitioning.clone(),
+                    r_metrics,
+                    context.clone(),
+                ));
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                let join_handle = tokio::spawn(Self::wait_for_task(
-                    AbortOnDropSingle::new(input_task),
+                let wait_for_task = SpawnedTask::spawn(Self::wait_for_task(
+                    input_task,
                     txs.into_iter()
                         .map(|(partition, (tx, _reservation))| (partition, tx))
                         .collect(),
                 ));
-                join_handles.push(join_handle);
+                spawned_tasks.push(wait_for_task);
             }
 
-            state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
+            state.abort_helper = Arc::new(spawned_tasks)
         }
 
         trace!(
@@ -633,16 +596,57 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
+        let preserve_order = false;
+        let cache =
+            Self::compute_properties(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
             partitioning,
             state: Arc::new(Mutex::new(RepartitionExecState {
                 channels: HashMap::new(),
-                abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
+                abort_helper: Arc::new(Vec::new()),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
-            preserve_order: false,
+            preserve_order,
+            cache,
         })
+    }
+
+    fn maintains_input_order_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> Vec<bool> {
+        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
+        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
+    }
+
+    fn eq_properties_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> EquivalenceProperties {
+        // Equivalence Properties
+        let mut eq_properties = input.equivalence_properties().clone();
+        // If the ordering is lost, reset the ordering equivalence class:
+        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
+            eq_properties.clear_orderings();
+        }
+        eq_properties
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        preserve_order: bool,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = Self::eq_properties_helper(input, preserve_order);
+
+        PlanProperties::new(
+            eq_properties,          // Equivalence Properties
+            partitioning,           // Output Partitioning
+            input.execution_mode(), // Execution Mode
+        )
     }
 
     /// Specify if this reparititoning operation should preserve the order of
@@ -659,6 +663,8 @@ impl RepartitionExec {
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
+        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
+        self.cache = self.cache.with_eq_properties(eq_properties);
         self
     }
 
@@ -759,12 +765,13 @@ impl RepartitionExec {
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
     async fn wait_for_task(
-        input_task: AbortOnDropSingle<Result<()>>,
+        input_task: SpawnedTask<Result<()>>,
         txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-        match input_task.await {
+
+        match input_task.join().await {
             // Error in joining task
             Err(e) => {
                 let e = Arc::new(e);
@@ -813,7 +820,7 @@ struct RepartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDropMany<()>>,
+    drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -877,7 +884,7 @@ struct PerPartitionStream {
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDropMany<()>>,
+    drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -920,17 +927,7 @@ impl RecordBatchStream for PerPartitionStream {
 mod tests {
     use std::collections::HashSet;
 
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use futures::FutureExt;
-    use tokio::task::JoinHandle;
-
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-
+    use super::*;
     use crate::{
         test::{
             assert_is_pending,
@@ -942,7 +939,14 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use super::*;
+    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+
+    use futures::FutureExt;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1057,8 +1061,8 @@ mod tests {
 
     #[tokio::test]
     async fn many_to_many_round_robin_within_tokio_task() -> Result<()> {
-        let join_handle: JoinHandle<Result<Vec<Vec<RecordBatch>>>> =
-            tokio::spawn(async move {
+        let handle: SpawnedTask<Result<Vec<Vec<RecordBatch>>>> =
+            SpawnedTask::spawn(async move {
                 // define input partitions
                 let schema = test_schema();
                 let partition = create_vec_batches(50);
@@ -1069,7 +1073,7 @@ mod tests {
                 repartition(&schema, partitions, Partitioning::RoundRobinBatch(5)).await
             });
 
-        let output_partitions = join_handle.await.unwrap().unwrap();
+        let output_partitions = handle.join().await.unwrap().unwrap();
 
         assert_eq!(5, output_partitions.len());
         assert_eq!(30, output_partitions[0].len());

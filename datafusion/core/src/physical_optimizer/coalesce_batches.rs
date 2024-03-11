@@ -18,8 +18,10 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
-use crate::config::ConfigOptions;
+use std::sync::Arc;
+
 use crate::{
+    config::ConfigOptions,
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
@@ -27,8 +29,8 @@ use crate::{
         repartition::RepartitionExec, Partitioning,
     },
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use std::sync::Arc;
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
@@ -71,14 +73,15 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                     })
                     .unwrap_or(false);
             if wrap_in_coalesce {
-                Ok(Transformed::Yes(Arc::new(CoalesceBatchesExec::new(
+                Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,
                     target_batch_size,
                 ))))
             } else {
-                Ok(Transformed::No(plan))
+                Ok(Transformed::no(plan))
             }
         })
+        .data()
     }
 
     fn name(&self) -> &str {

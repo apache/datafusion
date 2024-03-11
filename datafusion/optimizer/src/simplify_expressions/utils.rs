@@ -17,11 +17,10 @@
 
 //! Utility functions for expression simplification
 
-use crate::simplify_expressions::SimplifyInfo;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr::{Between, BinaryExpr, InList},
+    expr::{Between, BinaryExpr, InList, ScalarFunction},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator, ScalarFunctionDefinition,
 };
@@ -534,18 +533,9 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
 
 #[cfg(test)]
 pub mod for_test {
-    use arrow::datatypes::DataType;
-    use datafusion_expr::{call_fn, lit, Cast, Expr};
+    use datafusion_expr::{call_fn, Expr};
 
     pub fn now_expr() -> Expr {
         call_fn("now", vec![]).unwrap()
-    }
-
-    pub fn cast_to_int64_expr(expr: Expr) -> Expr {
-        Expr::Cast(Cast::new(expr.into(), DataType::Int64))
-    }
-
-    pub fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
-        call_fn("to_timestamp", vec![lit(arg.into())]).unwrap()
     }
 }

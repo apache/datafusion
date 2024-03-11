@@ -42,15 +42,16 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = true }
+datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true, default-features = true }
 futures = { workspace = true }
-half = { version = "2.1", default-features = false }
+half = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = { workspace = true }
-itertools = { version = "0.12", features = ["use_std"] }
+itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 once_cell = "1.18.0"
 parking_lot = { workspace = true }

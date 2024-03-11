@@ -15,23 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use arrow::array::{BooleanArray, Int32Array};
 use arrow::record_batch::RecordBatch;
+
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::{DFField, DFSchema};
 use datafusion::error::Result;
-use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{
     analyze, create_physical_expr, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 use datafusion::prelude::*;
 use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{ColumnarValue, ExprSchemable, Operator};
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -113,10 +116,7 @@ fn evaluate_demo() -> Result<()> {
 fn simplify_demo() -> Result<()> {
     // For example, lets say you have has created an expression such
     // ts = to_timestamp("2020-09-08T12:00:00+00:00")
-    let expr = col("ts").eq(call_fn(
-        "to_timestamp",
-        vec![lit("2020-09-08T12:00:00+00:00")],
-    )?);
+    let expr = col("ts").eq(to_timestamp(vec![lit("2020-09-08T12:00:00+00:00")]));
 
     // Naively evaluating such an expression against a large number of
     // rows would involve re-converting "2020-09-08T12:00:00+00:00" to a

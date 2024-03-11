@@ -19,7 +19,6 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -48,6 +47,7 @@ use crate::utils::log_plan;
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
@@ -57,7 +57,16 @@ use log::{debug, warn};
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
 /// way. If there are no suitable transformations for the input plan,
-/// the optimizer can simply return it as is.
+/// the optimizer should simply return it unmodified.
+///
+/// To change the semantics of a `LogicalPlan`, see [`AnalyzerRule`]
+///
+/// Use [`SessionState::add_optimizer_rule`] to register additional
+/// `OptimizerRule`s.
+///
+/// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
+/// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionState.html#method.add_optimizer_rule
+
 pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan cannot be
     /// optimized by this rule.
@@ -458,9 +467,7 @@ mod tests {
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
-    use datafusion_common::{
-        plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
-    };
+    use datafusion_common::{plan_err, DFField, DFSchema, DFSchemaRef, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 

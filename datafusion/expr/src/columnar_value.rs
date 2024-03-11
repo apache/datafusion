@@ -19,8 +19,10 @@
 
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
-use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use arrow::compute::{kernels, CastOptions};
+use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
 /// Represents the result of evaluating an expression: either a single
@@ -121,6 +123,42 @@ impl ColumnarValue {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(args)
+    }
+
+    /// Cast's this [ColumnarValue] to the specified `DataType`
+    pub fn cast_to(
+        &self,
+        cast_type: &DataType,
+        cast_options: Option<&CastOptions<'static>>,
+    ) -> Result<ColumnarValue> {
+        let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
+        match self {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
+            )),
+            ColumnarValue::Scalar(scalar) => {
+                let scalar_array =
+                    if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
+                        if let ScalarValue::Float64(Some(float_ts)) = scalar {
+                            ScalarValue::Int64(Some(
+                                (float_ts * 1_000_000_000_f64).trunc() as i64,
+                            ))
+                            .to_array()?
+                        } else {
+                            scalar.to_array()?
+                        }
+                    } else {
+                        scalar.to_array()?
+                    };
+                let cast_array = kernels::cast::cast_with_options(
+                    &scalar_array,
+                    cast_type,
+                    &cast_options,
+                )?;
+                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
+                Ok(ColumnarValue::Scalar(cast_scalar))
+            }
+        }
     }
 }
 

@@ -27,7 +27,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::Accumulator;
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression

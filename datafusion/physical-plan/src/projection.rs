@@ -26,9 +26,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::{Column, PhysicalSortExpr};
+use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+use super::{
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
+};
 use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
@@ -40,7 +43,6 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
-use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -54,13 +56,10 @@ pub struct ProjectionExec {
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr that maps input to output
-    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl ProjectionExec {
@@ -94,18 +93,14 @@ impl ProjectionExec {
 
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
-
-        let input_eqs = input.equivalence_properties();
-        let project_eqs = input_eqs.project(&projection_mapping, schema.clone());
-        let output_ordering = project_eqs.oeq_class().output_ordering();
-
+        let cache =
+            Self::compute_properties(&input, &projection_mapping, schema.clone())?;
         Ok(Self {
             expr,
             schema,
             input,
-            output_ordering,
-            projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
+            cache,
         })
     }
 
@@ -117,6 +112,43 @@ impl ProjectionExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        projection_mapping: &ProjectionMapping,
+        schema: SchemaRef,
+    ) -> Result<PlanProperties> {
+        // Calculate equivalence properties:
+        let mut input_eq_properties = input.equivalence_properties().clone();
+        input_eq_properties.substitute_oeq_class(projection_mapping)?;
+        let eq_properties = input_eq_properties.project(projection_mapping, schema);
+
+        // Calculate output partitioning, which needs to respect aliases:
+        let input_partition = input.output_partitioning();
+        let output_partitioning = if let Partitioning::Hash(exprs, part) = input_partition
+        {
+            let normalized_exprs = exprs
+                .iter()
+                .map(|expr| {
+                    input_eq_properties
+                        .project_expr(expr, projection_mapping)
+                        .unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
+                })
+                .collect();
+            Partitioning::Hash(normalized_exprs, *part)
+        } else {
+            input_partition.clone()
+        };
+
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            input.execution_mode(),
+        ))
     }
 }
 
@@ -153,57 +185,17 @@ impl ExecutionPlan for ProjectionExec {
         self
     }
 
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
 
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // Output partition need to respect the alias
-        let input_partition = self.input.output_partitioning();
-        let input_eq_properties = self.input.equivalence_properties();
-        if let Partitioning::Hash(exprs, part) = input_partition {
-            let normalized_exprs = exprs
-                .into_iter()
-                .map(|expr| {
-                    input_eq_properties
-                        .project_expr(&expr, &self.projection_mapping)
-                        .unwrap_or_else(|| {
-                            Arc::new(UnKnownColumn::new(&expr.to_string()))
-                        })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, part)
-        } else {
-            input_partition
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
         vec![true]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input
-            .equivalence_properties()
-            .project(&self.projection_mapping, self.schema())
     }
 
     fn with_new_children(

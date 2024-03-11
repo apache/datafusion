@@ -28,9 +28,9 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 use futures::StreamExt;
 use object_store::path::Path;
@@ -356,7 +356,7 @@ async fn prune_date64() {
         .parse::<chrono::NaiveDate>()
         .unwrap()
         .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-    let date = ScalarValue::Date64(Some(date.timestamp_millis()));
+    let date = ScalarValue::Date64(Some(date.and_utc().timestamp_millis()));
 
     let output = ContextWithParquet::new(Scenario::Dates, Page)
         .await

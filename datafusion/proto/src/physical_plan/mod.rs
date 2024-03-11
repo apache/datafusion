@@ -60,6 +60,7 @@ use datafusion::physical_plan::{
     WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::ScalarUDF;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -467,6 +468,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
+                                                false,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
@@ -583,12 +585,24 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
                     protobuf::PartitionMode::Auto => PartitionMode::Auto,
                 };
+                let projection = if !hashjoin.projection.is_empty() {
+                    Some(
+                        hashjoin
+                            .projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
                     filter,
                     &join_type.into(),
+                    projection,
                     partition_mode,
                     hashjoin.null_equals_null,
                 )?))
@@ -1214,6 +1228,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
                         filter,
+                        projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
+                            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                        }),
                     },
                 ))),
             });
@@ -1911,6 +1928,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+
+    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
+    }
+
+    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

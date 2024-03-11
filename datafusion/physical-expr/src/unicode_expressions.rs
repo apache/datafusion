@@ -21,18 +21,20 @@
 
 //! Unicode expressions
 
+use std::cmp::{max, Ordering};
+use std::sync::Arc;
+
 use arrow::{
     array::{ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     datatypes::{ArrowNativeType, ArrowPrimitiveType},
 };
+use hashbrown::HashMap;
+use unicode_segmentation::UnicodeSegmentation;
+
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    exec_err, internal_err, DataFusionError, Result,
+    exec_err, Result,
 };
-use hashbrown::HashMap;
-use std::cmp::{max, Ordering};
-use std::sync::Arc;
-use unicode_segmentation::UnicodeSegmentation;
 
 /// Returns number of characters in the string.
 /// character_length('josé') = 4
@@ -312,7 +314,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => internal_err!(
+        other => exec_err!(
             "rpad was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
@@ -407,7 +409,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            internal_err!("substr was called with {other} arguments. It requires 2 or 3.")
+            exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
         }
     }
 }
@@ -463,7 +465,7 @@ pub fn translate<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
 pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 3 {
-        return internal_err!(
+        return exec_err!(
             "substr_index was called with {} arguments. It requires 3.",
             args.len()
         );
@@ -479,40 +481,28 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(count_array.iter())
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
-                let mut res = String::new();
-                match n {
-                    0 => {
-                        "".to_string();
-                    }
-                    _other => {
-                        if n > 0 {
-                            let idx = string
-                                .split(delimiter)
-                                .take(n as usize)
-                                .fold(0, |len, x| len + x.len() + delimiter.len())
-                                - delimiter.len();
-                            res.push_str(if idx >= string.len() {
-                                string
-                            } else {
-                                &string[..idx]
-                            });
-                        } else {
-                            let idx = (string.split(delimiter).take((-n) as usize).fold(
-                                string.len() as isize,
-                                |len, x| {
-                                    len - x.len() as isize - delimiter.len() as isize
-                                },
-                            ) + delimiter.len() as isize)
-                                as usize;
-                            res.push_str(if idx >= string.len() {
-                                string
-                            } else {
-                                &string[idx..]
-                            });
-                        }
-                    }
+                // In MySQL, these cases will return an empty string.
+                if n == 0 || string.is_empty() || delimiter.is_empty() {
+                    return Some(String::new());
                 }
-                Some(res)
+
+                let splitted: Box<dyn Iterator<Item = _>> = if n > 0 {
+                    Box::new(string.split(delimiter))
+                } else {
+                    Box::new(string.rsplit(delimiter))
+                };
+                let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+                // The length of the substring covered by substr_index.
+                let length = splitted
+                    .take(occurrences) // at least 1 element, since n != 0
+                    .map(|s| s.len() + delimiter.len())
+                    .sum::<usize>()
+                    - delimiter.len();
+                if n > 0 {
+                    Some(string[..length].to_owned())
+                } else {
+                    Some(string[string.len() - length..].to_owned())
+                }
             }
             _ => None,
         })
@@ -528,7 +518,7 @@ where
     T::Native: OffsetSizeTrait,
 {
     if args.len() != 2 {
-        return internal_err!(
+        return exec_err!(
             "find_in_set was called with {} arguments. It requires 2.",
             args.len()
         );

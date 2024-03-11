@@ -16,10 +16,6 @@
 // under the License.
 
 use arrow::csv::WriterBuilder;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::vec;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
@@ -37,7 +33,6 @@ use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
 use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::expressions::NthValueAgg;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
@@ -52,6 +47,7 @@ use datafusion::physical_plan::expressions::{
     StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::functions;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -66,7 +62,7 @@ use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
 use datafusion::physical_plan::{
-    functions, udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -82,6 +78,9 @@ use datafusion_expr::{
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -217,6 +216,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 on.clone(),
                 None,
                 join_type,
+                None,
                 *partition_mode,
                 false,
             )?))?;
@@ -600,10 +600,10 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
     let execution_props = ExecutionProps::new();
 
     let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Acos, &execution_props)?;
+        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
 
     let expr = ScalarFunctionExpr::new(
-        "acos",
+        "sin",
         fun_expr,
         vec![col("a", &schema)?],
         DataType::Float64,
@@ -724,65 +724,6 @@ fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
         col_arg,
         GetFieldAccessExpr::NamedStructField {
             name: ScalarValue::from("name"),
-        },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_index() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("key", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_key = col("key", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListIndex { key: col_key },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_list_range() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-        Field::new("start", DataType::Int64, true),
-        Field::new("stop", DataType::Int64, true),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let col_start = col("start", &schema)?;
-    let col_stop = col("stop", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::ListRange {
-            start: col_start,
-            stop: col_stop,
-            stride: Arc::new(Literal::new(ScalarValue::Int64(Some(1))))
-                as Arc<dyn PhysicalExpr>,
         },
     ));
 

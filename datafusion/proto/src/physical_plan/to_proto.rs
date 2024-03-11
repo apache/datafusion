@@ -167,9 +167,11 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         window_shift_expr.get_shift_offset(),
                     )))),
                 );
-                if let Some(default_value) = window_shift_expr.get_default_value() {
-                    args.insert(2, Arc::new(Literal::new(default_value)));
-                }
+                args.insert(
+                    2,
+                    Arc::new(Literal::new(window_shift_expr.get_default_value())),
+                );
+
                 if window_shift_expr.get_shift_offset() >= 0 {
                     protobuf::BuiltInWindowFunction::Lag
                 } else {
@@ -557,20 +559,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         name: Some(ScalarValue::try_from(name)?)
                     })
                 ),
-                GetFieldAccessExpr::ListIndex{key} => Some(
-                    protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(Box::new(protobuf::ListIndexExpr {
-                        key: Some(Box::new(key.to_owned().try_into()?))
-                    }))
-                ),
-                GetFieldAccessExpr::ListRange { start, stop, stride } => {
-                    Some(
-                        protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
-                            start: Some(Box::new(start.to_owned().try_into()?)),
-                            stop: Some(Box::new(stop.to_owned().try_into()?)),
-                            stride: Some(Box::new(stride.to_owned().try_into()?)),
-                        }))
-                    )
-                }
             };
 
             Ok(protobuf::PhysicalExprNode {

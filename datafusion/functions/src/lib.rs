@@ -84,32 +84,60 @@ use log::debug;
 #[macro_use]
 pub mod macros;
 
-make_package!(core, "core_expressions", "Core datafusion expressions");
+/// Core datafusion expressions
+/// Enabled via feature flag `core_expressions`
+#[cfg(feature = "core_expressions")]
+pub mod core;
+make_stub_package!(core, "core_expressions");
 
-make_package!(
-    encoding,
-    "encoding_expressions",
-    "Hex and binary `encode` and `decode` functions."
-);
+/// Date and time expressions.
+/// Contains functions such as to_timestamp
+/// Enabled via feature flag `datetime_expressions`
+#[cfg(feature = "datetime_expressions")]
+pub mod datetime;
+make_stub_package!(datetime, "datetime_expressions");
 
-make_package!(math, "math_expressions", "Mathematical functions.");
+/// Encoding expressions.
+/// Contains Hex and binary `encode` and `decode` functions.
+/// Enabled via feature flag `encoding_expressions`
+#[cfg(feature = "encoding_expressions")]
+pub mod encoding;
+make_stub_package!(encoding, "encoding_expressions");
+
+/// Mathematical functions.
+/// Enabled via feature flag `math_expressions`
+#[cfg(feature = "math_expressions")]
+pub mod math;
+make_stub_package!(math, "math_expressions");
+
+/// Regular expression functions.
+/// Enabled via feature flag `regex_expressions`
+#[cfg(feature = "regex_expressions")]
+pub mod regex;
+make_stub_package!(regex, "regex_expressions");
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
+    #[cfg(feature = "datetime_expressions")]
+    pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
     #[cfg(feature = "math_expressions")]
     pub use super::math::expr_fn::*;
+    #[cfg(feature = "regex_expressions")]
+    pub use super::regex::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let mut all_functions = core::functions()
         .into_iter()
+        .chain(datetime::functions())
         .chain(encoding::functions())
-        .chain(math::functions());
+        .chain(math::functions())
+        .chain(regex::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

@@ -44,9 +44,9 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     // We should have 1 row containing a list
     let column = actual[0].column(0);
     assert_eq!(column.len(), 1);
-
     let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&column)?;
     let mut scalars = scalar_vec[0].clone();
+
     // workaround lack of Ord of ScalarValue
     let cmp = |a: &ScalarValue, b: &ScalarValue| {
         a.partial_cmp(b).expect("Can compare ScalarValues")
@@ -318,6 +318,86 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
         "| a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770.0 |",
         "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+"];
     assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_first_value() -> Result<()> {
+    let session_ctx = SessionContext::new();
+    session_ctx
+        .sql("CREATE TABLE abc AS VALUES (null,2,3), (4,5,6)")
+        .await?
+        .collect()
+        .await?;
+
+    let results1 = session_ctx
+        .sql("SELECT FIRST_VALUE(column1) ignore nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected1 = [
+        "+--------------------------+",
+        "| FIRST_VALUE(abc.column1) |",
+        "+--------------------------+",
+        "| 4                        |",
+        "+--------------------------+",
+    ];
+    assert_batches_eq!(expected1, &results1);
+
+    let results2 = session_ctx
+        .sql("SELECT FIRST_VALUE(column1) respect nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected2 = [
+        "+--------------------------+",
+        "| FIRST_VALUE(abc.column1) |",
+        "+--------------------------+",
+        "|                          |",
+        "+--------------------------+",
+    ];
+    assert_batches_eq!(expected2, &results2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_first_value_with_sort() -> Result<()> {
+    let session_ctx = SessionContext::new();
+    session_ctx
+        .sql("CREATE TABLE abc AS VALUES (null,2,3), (null,1,6), (4, 5, 5), (1, 4, 7), (2, 3, 8)")
+        .await?
+        .collect()
+        .await?;
+
+    let results1 = session_ctx
+        .sql("SELECT FIRST_VALUE(column1 ORDER BY column2) ignore nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected1 = [
+        "+--------------------------+",
+        "| FIRST_VALUE(abc.column1) |",
+        "+--------------------------+",
+        "| 2                        |",
+        "+--------------------------+",
+    ];
+    assert_batches_eq!(expected1, &results1);
+
+    let results2 = session_ctx
+        .sql("SELECT FIRST_VALUE(column1 ORDER BY column2) respect nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected2 = [
+        "+--------------------------+",
+        "| FIRST_VALUE(abc.column1) |",
+        "+--------------------------+",
+        "|                          |",
+        "+--------------------------+",
+    ];
+    assert_batches_eq!(expected2, &results2);
 
     Ok(())
 }

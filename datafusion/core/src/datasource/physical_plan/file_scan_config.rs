@@ -24,10 +24,7 @@ use std::{
 
 use super::{get_projected_output_ordering, FileGroupPartitioner};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use crate::{error::Result, scalar::ScalarValue};
 
 use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;
@@ -158,6 +155,22 @@ impl FileScanConfig {
                 .cloned()
                 .collect()
         })
+    }
+
+    /// Projects only file schema, ignoring partition columns
+    pub(crate) fn projected_file_schema(&self) -> SchemaRef {
+        let fields = self.file_column_projection_indices().map(|indices| {
+            indices
+                .iter()
+                .map(|col_idx| self.file_schema.field(*col_idx))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+
+        fields.map_or_else(
+            || Arc::clone(&self.file_schema),
+            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+        )
     }
 
     pub(crate) fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
@@ -687,6 +700,66 @@ mod tests {
             "+---+----+----+------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[projected_batch]);
+    }
+
+    #[test]
+    fn test_projected_file_schema_with_partition_col() {
+        let schema = aggr_test_schema();
+        let partition_cols = vec![
+            (
+                "part1".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "part2".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+        ];
+
+        // Projected file schema for config with projection including partition column
+        let projection = config_for_projection(
+            schema.clone(),
+            Some(vec![0, 3, 5, schema.fields().len()]),
+            Statistics::new_unknown(&schema),
+            to_partition_cols(partition_cols.clone()),
+        )
+        .projected_file_schema();
+
+        // Assert partition column filtered out in projected file schema
+        let expected_columns = vec!["c1", "c4", "c6"];
+        let actual_columns = projection
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(expected_columns, actual_columns);
+    }
+
+    #[test]
+    fn test_projected_file_schema_without_projection() {
+        let schema = aggr_test_schema();
+        let partition_cols = vec![
+            (
+                "part1".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "part2".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+        ];
+
+        // Projected file schema for config without projection
+        let projection = config_for_projection(
+            schema.clone(),
+            None,
+            Statistics::new_unknown(&schema),
+            to_partition_cols(partition_cols.clone()),
+        )
+        .projected_file_schema();
+
+        // Assert projected file schema is equal to file schema
+        assert_eq!(projection.fields(), schema.fields());
     }
 
     // sets default for configs that play no role in projections

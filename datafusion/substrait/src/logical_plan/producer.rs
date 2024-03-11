@@ -672,7 +672,7 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by }) => {
+        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by, null_treatment: _, }) => {
             match func_def {
                 AggregateFunctionDefinition::BuiltIn (fun) => {
                     let sorts = if let Some(order_by) = order_by {
@@ -1115,6 +1115,7 @@ pub fn to_substrait_rex(
             partition_by,
             order_by,
             window_frame,
+            null_treatment: _,
         }) => {
             // function reference
             let function_anchor = _register_function(fun.to_string(), extension_info);
