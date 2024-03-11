@@ -60,11 +60,6 @@ impl ObjectStoreUrl {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
-
-    /// Returns as Url
-    pub fn as_url(&self) -> &Url {
-        &self.url
-    }
 }
 
 impl AsRef<str> for ObjectStoreUrl {
