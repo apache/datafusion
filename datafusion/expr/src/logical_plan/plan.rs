@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::dml::CopyTo;
 use super::DdlStatement;
+use crate::builder::change_redundant_column;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
 };
@@ -53,7 +54,6 @@ use datafusion_common::{
 };
 
 // backwards compatibility
-use crate::builder::change_redundant_column;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -1544,8 +1544,9 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         format_options,
-                        options, ..
-                                      }) => {
+                        options,
+                        ..
+                    }) => {
                         let op_str = options
                             .iter()
                             .map(|(k, v)| format!("{k} {v}"))

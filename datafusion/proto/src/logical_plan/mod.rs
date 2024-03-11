@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::csv::WriterBuilder;
-use datafusion_expr::ScalarUDF;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -32,6 +30,7 @@ use crate::{
     },
 };
 
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -57,7 +56,7 @@ use datafusion_expr::{
         EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 
 use prost::bytes::BufMut;

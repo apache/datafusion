@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::AccessLogOpt;
-use crate::{BenchmarkRun, CommonOpt};
+use std::path::PathBuf;
+
+use crate::{AccessLogOpt, BenchmarkRun, CommonOpt};
+
 use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::logical_expr::utils::disjunction;
@@ -25,7 +27,7 @@ use datafusion::physical_plan::collect;
 use datafusion::prelude::{col, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_common::instant::Instant;
-use std::path::PathBuf;
+
 use structopt::StructOpt;
 
 /// Test performance of parquet filter pushdown

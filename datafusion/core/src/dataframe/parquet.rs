@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::{FormatOptions, TableParquetOptions};
-
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
 };
+
+use datafusion_common::config::{FormatOptions, TableParquetOptions};
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -77,22 +77,20 @@ impl DataFrame {
 mod tests {
     use std::sync::Arc;
 
-    use object_store::local::LocalFileSystem;
-
-    use datafusion_common::file_options::parquet_writer::parse_compression_string;
-    use parquet::file::reader::FileReader;
-    use tempfile::TempDir;
-    use url::Url;
-
-    use datafusion_expr::{col, lit};
-
+    use super::super::Result;
+    use super::*;
     use crate::arrow::util::pretty;
     use crate::execution::context::SessionContext;
     use crate::execution::options::ParquetReadOptions;
     use crate::test_util;
 
-    use super::super::Result;
-    use super::*;
+    use datafusion_common::file_options::parquet_writer::parse_compression_string;
+    use datafusion_expr::{col, lit};
+
+    use object_store::local::LocalFileSystem;
+    use parquet::file::reader::FileReader;
+    use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn filter_pushdown_dataframe() -> Result<()> {

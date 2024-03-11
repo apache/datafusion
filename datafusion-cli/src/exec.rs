@@ -17,7 +17,6 @@
 
 //! Execution functions
 
-use datafusion_common::instant::Instant;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
@@ -27,10 +26,11 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::{unescape_input, CliHelper},
-    object_storage::get_object_store,
+    object_storage::{get_object_store, register_options},
     print_options::{MaxRows, PrintOptions},
 };
 
+use datafusion::common::instant::Instant;
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
@@ -40,11 +40,9 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
-use crate::object_storage::register_options;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
-use url::Url;
 
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
@@ -274,25 +272,33 @@ async fn create_plan(
     Ok(plan)
 }
 
-/// Asynchronously registers an object store and its configuration extensions in the session context.
+/// Asynchronously registers an object store and its configuration extensions
+/// to the session context.
 ///
-/// This function dynamically registers a cloud object store based on the provided location and options.
-/// It first parses the location to determine the scheme and constructs the URL accordingly.
-/// Depending on the scheme, it registers relevant options. The function then alters the default table
-/// options with the provided custom options. Finally, it retrieves and registers the object store in the
-/// session context.
+/// This function dynamically registers a cloud object store based on the given
+/// location and options. It first parses the location to determine the scheme
+/// and constructs the URL accordingly. Depending on the scheme, it also registers
+/// relevant options. The function then alters the default table options with the
+/// given custom options. Finally, it retrieves and registers the object store
+/// in the session context.
 ///
-/// # Arguments
-/// * `ctx`: A reference to the `SessionContext` in which the object store is to be registered.
+/// # Parameters
+///
+/// * `ctx`: A reference to the `SessionContext` for registering the object store.
 /// * `location`: A string reference representing the location of the object store.
-/// * `options`: A reference to a hash map containing configuration options for the object store.
+/// * `options`: A reference to a hash map containing configuration options for
+///   the object store.
 ///
 /// # Returns
-/// A `Result<()>` which is an Ok value indicating successful registration or an error upon failure.
+///
+/// A `Result<()>` which is an Ok value indicating successful registration, or
+/// an error upon failure.
 ///
 /// # Errors
-/// This function can return an error if the location parsing fails, options alteration fails,
-/// or if the object store cannot be retrieved and registered successfully.
+///
+/// This function can return an error if the location parsing fails, options
+/// alteration fails, or if the object store cannot be retrieved and registered
+/// successfully.
 pub(crate) async fn register_object_store_and_config_extensions(
     ctx: &SessionContext,
     location: &String,
@@ -305,7 +311,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let scheme = table_path.scheme();
 
     // Obtain a reference to the URL
-    let url: &Url = table_path.as_ref();
+    let url = table_path.as_ref();
 
     // Register the options based on the scheme extracted from the location
     register_options(ctx, scheme);
@@ -326,8 +332,11 @@ pub(crate) async fn register_object_store_and_config_extensions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use datafusion_common::config::FormatOptions;
     use datafusion_common::plan_err;
+
+    use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();

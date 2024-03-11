@@ -17,57 +17,23 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
-use arrow_array::RecordBatch;
-use async_trait::async_trait;
-use datafusion_common::stats::Precision;
-use datafusion_physical_plan::metrics::MetricsSet;
-use parquet::arrow::arrow_writer::{
-    compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn,
-};
-use parquet::file::writer::SerializedFileWriter;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::JoinSet;
-
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
-use arrow::datatypes::SchemaRef;
-use arrow::datatypes::{Fields, Schema};
-use bytes::{BufMut, BytesMut};
-use datafusion_common::config::TableParquetOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
-};
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, SharedBuffer};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
 };
-use crate::arrow::datatypes::DataType;
-
+use crate::arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
+use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -76,6 +42,38 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+use datafusion_common::config::TableParquetOptions;
+use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use parquet::arrow::arrow_writer::{
+    compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
+    ArrowLeafColumn,
+};
+use parquet::arrow::{
+    arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
+};
+use parquet::file::footer::{decode_footer, decode_metadata};
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::writer::SerializedFileWriter;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::task::JoinSet;
+
+use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
+use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore};
 
 /// Size of the buffer for [`AsyncArrowWriter`].
 const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
@@ -1005,7 +1003,9 @@ async fn output_single_parquet_file_parallelized(
 pub(crate) mod test_util {
     use super::*;
     use crate::test::object_store::local_unpartitioned_file;
+
     use arrow::record_batch::RecordBatch;
+
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;

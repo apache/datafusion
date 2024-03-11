@@ -17,13 +17,11 @@
 
 //! Options related to how csv files should be written
 
-use arrow::csv::WriterBuilder;
-
 use crate::config::CsvOptions;
-use crate::{
-    error::{DataFusionError, Result},
-    parsers::CompressionTypeVariant,
-};
+use crate::error::{DataFusionError, Result};
+use crate::parsers::CompressionTypeVariant;
+
+use arrow::csv::WriterBuilder;
 
 /// Options for writing CSV files
 #[derive(Clone, Debug)]

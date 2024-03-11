@@ -31,7 +31,7 @@ use crate::datasource::physical_plan::{
     FileMeta, FileScanConfig, SchemaAdapter,
 };
 use crate::{
-    config::ConfigOptions,
+    config::{ConfigOptions, TableParquetOptions},
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
@@ -48,7 +48,6 @@ use arrow::error::ArrowError;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use bytes::Bytes;
-use datafusion_common::config::TableParquetOptions;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;

@@ -60,13 +60,13 @@ pub struct JsonFormat {
 }
 
 impl JsonFormat {
-    /// Set the json options
+    /// Set JSON options
     pub fn with_options(mut self, options: JsonOptions) -> Self {
         self.options = options;
         self
     }
 
-    /// Retrieve the json options
+    /// Retrieve JSON options
     pub fn options(&self) -> &JsonOptions {
         &self.options
     }
@@ -260,8 +260,6 @@ impl JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let compression = &self.writer_options.compression;
-
         let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
 
         stateless_multipart_put(
@@ -270,7 +268,7 @@ impl JsonSink {
             "json".into(),
             Box::new(get_serializer),
             &self.config,
-            (*compression).into(),
+            self.writer_options.compression.into(),
         )
         .await
     }
@@ -303,20 +301,21 @@ impl DataSink for JsonSink {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
-    use arrow::util::pretty;
-    use datafusion_common::cast::as_int64_array;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, internal_err};
-    use futures::StreamExt;
-    use object_store::local::LocalFileSystem;
-    use regex::Regex;
-    use rstest::rstest;
-
     use super::*;
     use crate::execution::options::NdJsonReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
+
+    use arrow::util::pretty;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{assert_batches_eq, internal_err};
+
+    use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
+    use regex::Regex;
+    use rstest::rstest;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

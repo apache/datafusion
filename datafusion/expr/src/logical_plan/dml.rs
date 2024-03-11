@@ -16,11 +16,9 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::{self, Display};
 use std::hash::{Hash, Hasher};
-use std::{
-    fmt::{self, Display},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use datafusion_common::config::FormatOptions;
 use datafusion_common::{DFSchemaRef, OwnedTableReference};

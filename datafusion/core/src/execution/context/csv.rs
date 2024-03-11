@@ -89,6 +89,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+
     use async_trait::async_trait;
     use tempfile::TempDir;
 

@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+use std::sync::Arc;
+use std::vec;
+
 use arrow::csv::WriterBuilder;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
@@ -32,8 +36,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
-use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::expressions::NthValueAgg;
+use datafusion::physical_expr::expressions::{Literal, NthValueAgg};
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -78,9 +81,6 @@ use datafusion_expr::{
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::vec;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is

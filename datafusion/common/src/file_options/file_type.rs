@@ -17,11 +17,10 @@
 
 //! File type abstraction
 
-use crate::error::{DataFusionError, Result};
-
-use core::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::str::FromStr;
+
+use crate::error::{DataFusionError, Result};
 
 /// The default file extension of arrow files
 pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
@@ -105,9 +104,10 @@ impl FromStr for FileType {
 #[cfg(test)]
 #[cfg(feature = "parquet")]
 mod tests {
+    use std::str::FromStr;
+
     use crate::error::DataFusionError;
     use crate::FileType;
-    use std::str::FromStr;
 
     #[test]
     fn from_str() {

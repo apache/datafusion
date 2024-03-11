@@ -17,13 +17,11 @@
 
 //! Options related to how parquet files should be written
 
-use parquet::file::properties::WriterProperties;
-
 use crate::{config::TableParquetOptions, DataFusionError, Result};
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
-    file::properties::{EnabledStatistics, WriterVersion},
+    file::properties::{EnabledStatistics, WriterProperties, WriterVersion},
     schema::types::ColumnPath,
 };
 
@@ -69,95 +67,79 @@ impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
             )
             .set_bloom_filter_enabled(parquet_session_options.bloom_filter_enabled);
 
-        builder = match &parquet_session_options.encoding {
-            Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
-            None => builder,
-        };
+        if let Some(encoding) = &parquet_session_options.encoding {
+            builder = builder.set_encoding(parse_encoding_string(encoding)?);
+        }
 
-        builder = match &parquet_session_options.dictionary_enabled {
-            Some(enabled) => builder.set_dictionary_enabled(*enabled),
-            None => builder,
-        };
+        if let Some(enabled) = parquet_session_options.dictionary_enabled {
+            builder = builder.set_dictionary_enabled(enabled);
+        }
 
-        builder = match &parquet_session_options.compression {
-            Some(compression) => {
-                builder.set_compression(parse_compression_string(compression)?)
-            }
-            None => builder,
-        };
+        if let Some(compression) = &parquet_session_options.compression {
+            builder = builder.set_compression(parse_compression_string(compression)?);
+        }
 
-        builder = match &parquet_session_options.statistics_enabled {
-            Some(statistics) => {
-                builder.set_statistics_enabled(parse_statistics_string(statistics)?)
-            }
-            None => builder,
-        };
+        if let Some(statistics) = &parquet_session_options.statistics_enabled {
+            builder =
+                builder.set_statistics_enabled(parse_statistics_string(statistics)?);
+        }
 
-        builder = match &parquet_session_options.max_statistics_size {
-            Some(size) => builder.set_max_statistics_size(*size),
-            None => builder,
-        };
+        if let Some(size) = parquet_session_options.max_statistics_size {
+            builder = builder.set_max_statistics_size(size);
+        }
 
-        builder = match &parquet_session_options.bloom_filter_fpp {
-            Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
-            None => builder,
-        };
+        if let Some(fpp) = parquet_session_options.bloom_filter_fpp {
+            builder = builder.set_bloom_filter_fpp(fpp);
+        }
 
-        builder = match &parquet_session_options.bloom_filter_ndv {
-            Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
-            None => builder,
-        };
+        if let Some(ndv) = parquet_session_options.bloom_filter_ndv {
+            builder = builder.set_bloom_filter_ndv(ndv);
+        }
+
         for (column, options) in &parquet_options.column_specific_options {
             let path = ColumnPath::new(column.split('.').map(|s| s.to_owned()).collect());
-            builder = match &options.bloom_filter_enabled {
-                Some(bloom_filter_enabled) => builder
-                    .set_column_bloom_filter_enabled(path.clone(), *bloom_filter_enabled),
-                None => builder,
-            };
-            builder = match &options.encoding {
-                Some(encoding) => {
-                    let parsed_encoding = parse_encoding_string(encoding)?;
-                    builder.set_column_encoding(path.clone(), parsed_encoding)
-                }
-                None => builder,
-            };
-            builder = match &options.dictionary_enabled {
-                Some(dictionary_enabled) => builder
-                    .set_column_dictionary_enabled(path.clone(), *dictionary_enabled),
-                None => builder,
-            };
-            builder = match &options.compression {
-                Some(compression) => {
-                    let parsed_compression = parse_compression_string(compression)?;
-                    builder.set_column_compression(path.clone(), parsed_compression)
-                }
-                None => builder,
-            };
-            builder = match &options.statistics_enabled {
-                Some(statistics_enabled) => {
-                    let parsed_value = parse_statistics_string(statistics_enabled)?;
-                    builder.set_column_statistics_enabled(path.clone(), parsed_value)
-                }
-                None => builder,
-            };
-            builder = match &options.bloom_filter_fpp {
-                Some(bloom_filter_fpp) => {
-                    builder.set_column_bloom_filter_fpp(path.clone(), *bloom_filter_fpp)
-                }
-                None => builder,
-            };
-            builder = match &options.bloom_filter_ndv {
-                Some(bloom_filter_ndv) => {
-                    builder.set_column_bloom_filter_ndv(path.clone(), *bloom_filter_ndv)
-                }
-                None => builder,
-            };
-            builder = match &options.max_statistics_size {
-                Some(max_statistics_size) => {
-                    builder.set_column_max_statistics_size(path, *max_statistics_size)
-                }
-                None => builder,
-            };
+
+            if let Some(bloom_filter_enabled) = options.bloom_filter_enabled {
+                builder = builder
+                    .set_column_bloom_filter_enabled(path.clone(), bloom_filter_enabled);
+            }
+
+            if let Some(encoding) = &options.encoding {
+                let parsed_encoding = parse_encoding_string(encoding)?;
+                builder = builder.set_column_encoding(path.clone(), parsed_encoding);
+            }
+
+            if let Some(dictionary_enabled) = options.dictionary_enabled {
+                builder = builder
+                    .set_column_dictionary_enabled(path.clone(), dictionary_enabled);
+            }
+
+            if let Some(compression) = &options.compression {
+                let parsed_compression = parse_compression_string(compression)?;
+                builder =
+                    builder.set_column_compression(path.clone(), parsed_compression);
+            }
+
+            if let Some(statistics_enabled) = &options.statistics_enabled {
+                let parsed_value = parse_statistics_string(statistics_enabled)?;
+                builder =
+                    builder.set_column_statistics_enabled(path.clone(), parsed_value);
+            }
+
+            if let Some(bloom_filter_fpp) = options.bloom_filter_fpp {
+                builder =
+                    builder.set_column_bloom_filter_fpp(path.clone(), bloom_filter_fpp);
+            }
+
+            if let Some(bloom_filter_ndv) = options.bloom_filter_ndv {
+                builder =
+                    builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
+            }
+
+            if let Some(max_statistics_size) = options.max_statistics_size {
+                builder =
+                    builder.set_column_max_statistics_size(path, max_statistics_size);
+            }
         }
         Ok(ParquetWriterOptions {
             writer_options: builder.build(),
@@ -250,7 +232,6 @@ pub fn parse_compression_string(
         }
         "gzip" => {
             let level = require_level(codec, level)?;
-            println!("level {}", level);
             Ok(parquet::basic::Compression::GZIP(GzipLevel::try_new(
                 level,
             )?))

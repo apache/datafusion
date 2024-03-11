@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::parquet::plan_to_parquet;
-use parquet::file::properties::WriterProperties;
-
 use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
+use crate::datasource::physical_plan::parquet::plan_to_parquet;
+
+use parquet::file::properties::WriterProperties;
 
 impl SessionContext {
     /// Creates a [`DataFrame`] for reading a Parquet data source.
@@ -73,19 +73,19 @@ impl SessionContext {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-
+    use super::*;
     use crate::arrow::array::{Float32Array, Int32Array};
     use crate::arrow::datatypes::{DataType, Field, Schema};
     use crate::arrow::record_batch::RecordBatch;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
+
     use datafusion_common::config::TableParquetOptions;
     use datafusion_execution::config::SessionConfig;
-    use tempfile::tempdir;
 
-    use super::*;
+    use async_trait::async_trait;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {

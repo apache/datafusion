@@ -43,7 +43,7 @@ use crate::utils::{
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
@@ -55,8 +55,6 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema, UnnestOptions,
 };
-
-use super::plan::RecursiveQuery;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";

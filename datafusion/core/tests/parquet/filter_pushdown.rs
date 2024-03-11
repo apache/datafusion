@@ -34,6 +34,7 @@ use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_common::instant::Instant;
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
+
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;

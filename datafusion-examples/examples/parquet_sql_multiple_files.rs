@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::*;
+
 use object_store::local::LocalFileSystem;
-use std::path::Path;
-use std::sync::Arc;
 
 /// This example demonstrates executing a simple query against an Arrow data source (a directory
 /// with multiple Parquet files) and fetching results. The query is run twice, once showing

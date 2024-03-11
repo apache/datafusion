@@ -19,9 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
-use async_trait::async_trait;
-
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 #[cfg(feature = "parquet")]
@@ -35,11 +32,15 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::TableOptions;
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
+
+use async_trait::async_trait;
 
 /// Options that control the reading of CSV files.
 ///

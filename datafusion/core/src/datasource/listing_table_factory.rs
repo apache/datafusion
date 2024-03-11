@@ -34,11 +34,11 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common::config::TableOptions;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
-use datafusion_common::config::TableOptions;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -68,19 +68,19 @@ impl TableProviderFactory for ListingTableFactory {
         let file_extension = get_extension(cmd.location.as_str());
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {
-                let mut csv_options = table_options.csv.clone();
+                let mut csv_options = table_options.csv;
                 csv_options.has_header = cmd.has_header;
                 csv_options.delimiter = cmd.delimiter as u8;
                 csv_options.compression = cmd.file_compression_type;
                 Arc::new(CsvFormat::default().with_options(csv_options))
             }
             #[cfg(feature = "parquet")]
-            FileType::PARQUET => Arc::new(
-                ParquetFormat::default().with_options(table_options.parquet.clone()),
-            ),
+            FileType::PARQUET => {
+                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+            }
             FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => {
-                let mut json_options = table_options.json.clone();
+                let mut json_options = table_options.json;
                 json_options.compression = cmd.file_compression_type;
                 Arc::new(JsonFormat::default().with_options(json_options))
             }

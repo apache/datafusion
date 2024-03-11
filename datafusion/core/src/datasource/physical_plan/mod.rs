@@ -26,16 +26,16 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-pub use file_groups::FileGroupPartitioner;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
+pub use csv::{CsvConfig, CsvExec, CsvOpener};
+pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };

@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::env;
+use std::sync::Arc;
+
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
@@ -23,8 +26,6 @@ use datafusion::prelude::*;
 use datafusion_common::{FileType, GetExt};
 
 use object_store::aws::AmazonS3Builder;
-use std::env;
-use std::sync::Arc;
 use url::Url;
 
 /// This example demonstrates querying data from AmazonS3 and writing

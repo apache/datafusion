@@ -61,6 +61,7 @@ impl SessionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use async_trait::async_trait;
 
     // Test for compilation error when calling read_* functions from an #[async_trait] function.

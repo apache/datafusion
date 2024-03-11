@@ -21,6 +21,12 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
+use crate::common::proto_error;
+use crate::convert_required;
+use crate::logical_plan::{self, csv_writer_options_from_proto};
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::{self, copy_to_node};
+
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::csv::CsvSink;
@@ -35,13 +41,17 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, GetFieldAccessExpr,
+    GetIndexedFieldExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr,
+    NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
+};
+use datafusion_common::config::{
+    ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
+    TableParquetOptions,
 };
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
@@ -49,19 +59,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
 
-use crate::common::proto_error;
-use crate::convert_required;
-use crate::logical_plan;
-use crate::protobuf;
-use crate::protobuf::physical_expr_node::ExprType;
-
-use crate::logical_plan::csv_writer_options_from_proto;
-use crate::protobuf::copy_to_node;
 use chrono::{TimeZone, Utc};
-use datafusion_common::config::{
-    ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
-    TableParquetOptions,
-};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 

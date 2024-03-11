@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::sync::{Arc, Weak};
+
 use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
-use async_trait::async_trait;
+
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::plan_datafusion_err;
@@ -26,11 +29,10 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+
+use async_trait::async_trait;
 use dirs::home_dir;
 use parking_lot::RwLock;
-use std::any::Any;
-use std::sync::{Arc, Weak};
-use url::Url;
 
 /// Wraps another catalog, automatically creating table providers
 /// for local files if needed
@@ -163,7 +165,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let scheme = table_url.scheme();
-        let url: &Url = table_url.as_ref();
+        let url = table_url.as_ref();
 
         // If the store is already registered for this URL then `get_store`
         // will return `Ok` which means we don't need to register it again. However,
@@ -227,6 +229,7 @@ fn substitute_tilde(cur: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use datafusion::catalog::schema::SchemaProvider;
     use datafusion::prelude::SessionContext;
 

@@ -16,14 +16,15 @@
 // under the License.
 
 //! Runtime configuration, via [`ConfigOptions`]
+
+use std::any::Any;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{self, Display};
+use std::str::FromStr;
+
 use crate::error::_internal_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::{DataFusionError, FileType, Result};
-use core::fmt;
-use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::Display;
-use std::str::FromStr;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -1264,10 +1265,9 @@ impl TableOptions {
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct TableParquetOptions {
-    /// Global parquet options that propagates all columns
+    /// Global Parquet options that propagates to all columns.
     pub global: ParquetOptions,
-    /// Column specific options.
-    /// Default usage is parquet.XX::column.
+    /// Column specific options. Default usage is parquet.XX::column.
     pub column_specific_options: HashMap<String, ColumnOptions>,
 }
 
@@ -1555,6 +1555,13 @@ impl From<FileType> for FormatOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+
+    use crate::config::{
+        ConfigEntry, ConfigExtension, ExtensionOptions, Extensions, TableOptions,
+    };
+
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
         /// Should "foo" be replaced by "bar"?
@@ -1596,12 +1603,6 @@ mod tests {
     impl ConfigExtension for TestExtensionConfig {
         const PREFIX: &'static str = "test";
     }
-
-    use crate::config::{
-        ConfigEntry, ConfigExtension, ExtensionOptions, Extensions, TableOptions,
-    };
-    use std::any::Any;
-    use std::collections::HashMap;
 
     #[test]
     fn create_table_config() {

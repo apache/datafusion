@@ -17,109 +17,85 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::fmt::Debug;
+use std::ops::ControlFlow;
+use std::string::String;
+use std::sync::{Arc, Weak};
+
+use super::options::ReadOptions;
+use crate::{
+    catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
+    catalog::listing_schema::ListingSchemaProvider,
+    catalog::schema::{MemorySchemaProvider, SchemaProvider},
+    catalog::{
+        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
+        MemoryCatalogProviderList,
+    },
+    config::ConfigOptions,
+    dataframe::DataFrame,
+    datasource::{
+        cte_worktable::CteWorkTable,
+        function::{TableFunction, TableFunctionImpl},
+        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+        object_store::ObjectStoreUrl,
+        provider::{DefaultTableFactory, TableProviderFactory},
+    },
+    datasource::{provider_as_source, MemTable, TableProvider, ViewTable},
+    error::{DataFusionError, Result},
+    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    logical_expr::{
+        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
+        DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
+        TableSource, TableType, ToStringifiedPlan, UNNAMED_TABLE,
+    },
+    optimizer::analyzer::{Analyzer, AnalyzerRule},
+    optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
+    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
+    physical_plan::{udaf::AggregateUDF, udf::ScalarUDF, ExecutionPlan},
+    physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
+    variable::{VarProvider, VarType},
+};
+
+use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
+use datafusion_common::{
+    alias::AliasGenerator,
+    config::{ConfigExtension, TableOptions},
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+    OwnedTableReference, SchemaReference,
+};
+use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::{
+    logical_plan::{DdlStatement, Statement},
+    var_provider::is_system_variables,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement, DFParser},
+    planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
+    ResolvedTableReference, TableReference,
+};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use parking_lot::RwLock;
+use sqlparser::dialect::dialect_from_str;
+use url::Url;
+use uuid::Uuid;
+
+pub use datafusion_execution::config::SessionConfig;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
+
 mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
-
-use crate::{
-    catalog::{CatalogProviderList, MemoryCatalogProviderList},
-    datasource::{
-        cte_worktable::CteWorkTable,
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable},
-        provider::TableProviderFactory,
-    },
-    datasource::{MemTable, ViewTable},
-    logical_expr::{PlanType, ToStringifiedPlan},
-    optimizer::optimizer::Optimizer,
-    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-};
-use arrow_schema::Schema;
-use datafusion_common::{
-    alias::AliasGenerator,
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
-};
-use datafusion_execution::registry::SerializerRegistry;
-pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::var_provider::is_system_variables;
-use datafusion_expr::{
-    logical_plan::{DdlStatement, Statement},
-    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
-};
-use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
-use std::string::String;
-use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-};
-use std::{ops::ControlFlow, sync::Weak};
-
-use arrow::datatypes::{DataType, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
-use crate::catalog::{
-    schema::{MemorySchemaProvider, SchemaProvider},
-    {CatalogProvider, MemoryCatalogProvider},
-};
-use crate::dataframe::DataFrame;
-use crate::datasource::{
-    listing::{ListingTableConfig, ListingTableUrl},
-    provider_as_source, TableProvider,
-};
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-    CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable, DropView,
-    Explain, LogicalPlan, LogicalPlanBuilder, SetVariable, TableSource, TableType,
-    UNNAMED_TABLE,
-};
-use crate::optimizer::OptimizerRule;
-use datafusion_sql::{
-    parser::{CopyToSource, CopyToStatement},
-    planner::ParserOptions,
-    ResolvedTableReference, TableReference,
-};
-use sqlparser::dialect::dialect_from_str;
-
-use crate::config::ConfigOptions;
-use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_planner::DefaultPhysicalPlanner;
-use crate::physical_planner::PhysicalPlanner;
-use crate::variable::{VarProvider, VarType};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, SchemaReference};
-use datafusion_sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
-use url::Url;
-
-use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::listing_schema::ListingSchemaProvider;
-use crate::datasource::object_store::ObjectStoreUrl;
-use datafusion_common::config::{ConfigExtension, TableOptions};
-use datafusion_optimizer::{
-    analyzer::{Analyzer, AnalyzerRule},
-    OptimizerConfig,
-};
-use datafusion_sql::planner::object_name_to_table_reference;
-use uuid::Uuid;
-
-use crate::datasource::provider::DefaultTableFactory;
-use crate::execution::options::ArrowReadOptions;
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-
-use super::options::ReadOptions;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -1386,7 +1362,7 @@ pub struct SessionState {
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
-    ///
+    /// Table options
     table_option_namespace: TableOptions,
     /// Execution properties
     execution_props: ExecutionProps,
@@ -2339,8 +2315,11 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::options::CsvReadOptions;
-    use super::*;
+    use std::env;
+    use std::path::PathBuf;
+    use std::sync::Weak;
+
+    use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
@@ -2348,12 +2327,11 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use async_trait::async_trait;
+
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Weak;
+
+    use async_trait::async_trait;
     use tempfile::TempDir;
 
     #[tokio::test]

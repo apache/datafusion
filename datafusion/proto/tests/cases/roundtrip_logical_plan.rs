@@ -25,10 +25,6 @@ use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
-use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
-use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use prost::Message;
-
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
@@ -37,9 +33,10 @@ use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
-use datafusion_common::Result;
-use datafusion_common::{internal_err, not_impl_err, plan_err};
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
@@ -50,16 +47,20 @@ use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
     ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
-    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
+
+use prost::Message;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {

@@ -23,7 +23,6 @@ use std::time::SystemTime;
 use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
-use bytes::Bytes;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
@@ -36,6 +35,7 @@ use datafusion::physical_plan::{collect, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use object_store::memory::InMemory;

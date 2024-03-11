@@ -30,21 +30,19 @@ pub mod parquet_writer;
 mod tests {
     use std::collections::HashMap;
 
+    use super::parquet_writer::ParquetWriterOptions;
+    use crate::{
+        config::TableOptions,
+        file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+        parsers::CompressionTypeVariant,
+        Result,
+    };
+
     use parquet::{
         basic::{Compression, Encoding, ZstdLevel},
         file::properties::{EnabledStatistics, WriterVersion},
         schema::types::ColumnPath,
     };
-
-    use crate::{
-        config::TableOptions,
-        file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
-        parsers::CompressionTypeVariant,
-    };
-
-    use crate::Result;
-
-    use super::parquet_writer::ParquetWriterOptions;
 
     #[test]
     fn test_writeroptions_parquet_from_statement_options() -> Result<()> {
