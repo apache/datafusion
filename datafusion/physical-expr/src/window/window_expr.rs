@@ -30,7 +30,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
-    PartitionBatchState, WindowAggState, WindowFrameContext,
+    PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
@@ -235,11 +235,11 @@ pub trait AggregateWindowExpr: WindowExpr {
         let values = self.evaluate_args(record_batch)?;
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
-        let mut most_recent_row_obs = None;
-        if let Some(most_recent_row) = most_recent_row {
-            most_recent_row_obs =
-                Some(get_orderby_values(self.order_by_columns(most_recent_row)?));
-        }
+        let most_recent_row_order_bys = most_recent_row
+            .map(|batch| self.order_by_columns(batch))
+            .transpose()?
+            .map(get_orderby_values);
+
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
@@ -255,7 +255,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 && !is_end_bound_safe(
                     window_frame_ctx,
                     &order_bys,
-                    most_recent_row_obs.as_deref(),
+                    most_recent_row_order_bys.as_deref(),
                     self.order_by(),
                     idx,
                 )?
@@ -273,6 +273,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             row_wise_results.push(value);
             idx += 1;
         }
+
         if row_wise_results.is_empty() {
             let field = self.field()?;
             let out_type = field.data_type();
@@ -316,7 +317,20 @@ fn is_end_range_safe(
     })
 }
 
-/// Check whether end range calculate is safe (e.g. won't change with future data).
+/// Determines whether the end bound calculation for a window frame context is safe.
+/// It evaluates different window frame contexts (`Rows`, `Range`, `Groups`) and delegates
+/// to specific functions for each type. The function primarily checks if the end bound
+/// stays consistent with future incoming data based on the current sort expressions and order-by columns.
+///
+/// # Arguments
+/// * `window_frame_ctx`: The context of the window frame being evaluated.
+/// * `order_bys`: A slice of `ArrayRef` representing the order-by columns.
+/// * `most_recent_order_bys`: An optional reference to the most recent order-by columns.
+/// * `sort_exprs`: Lexicographical ordering references.
+/// * `idx`: The current index in the window frame.
+///
+/// # Returns
+/// A `Result` which is `Ok(true)` if the end bound is safe, `Ok(false)` otherwise.
 pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
@@ -324,77 +338,149 @@ pub(crate) fn is_end_bound_safe(
     sort_exprs: LexOrderingRef,
     idx: usize,
 ) -> Result<bool> {
-    let (sort_options, orderby_col, most_recent_ob_col) = if sort_exprs.is_empty() {
-        // If no information regarding ordering is present we cannot determine safe range.
+    if sort_exprs.is_empty() {
+        // Early return if no sorting expressions are present
         return Ok(false);
-    } else {
-        // In linear mode, it is only guaranteed that first entry of the ordering will progress (across different partitions).
-        // Hence, we should decide whether data is progressed or not using the first entry.
-        (
-            &sort_exprs[0].options,
-            &order_bys[0],
-            most_recent_order_bys.map(|items| &items[0]),
-        )
-    };
-    Ok(match window_frame_ctx {
-        WindowFrameContext::Rows(window_frame) => match &window_frame.end_bound {
-            WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => true,
-            WindowFrameBound::Following(value) => {
-                let zero = ScalarValue::new_zero(&value.data_type());
-                zero.map(|zero| value.eq(&zero)).unwrap_or(false)
-            }
-        },
-        WindowFrameContext::Range {
+    }
+
+    // Simplified destructuring
+    let (sort_options, orderby_col, most_recent_ob_col) = (
+        &sort_exprs[0].options,
+        &order_bys[0],
+        most_recent_order_bys.map(|items| &items[0]),
+    );
+
+    // Simplified match statement
+    match window_frame_ctx {
+        WindowFrameContext::Rows(window_frame) => {
+            is_end_bound_safe_for_rows(window_frame, &sort_exprs[0].options)
+        }
+        WindowFrameContext::Range { window_frame, .. } => is_end_bound_safe_for_range(
             window_frame,
-            state: _state,
-        } => match &window_frame.end_bound {
-            WindowFrameBound::Preceding(value) => {
-                let zero = ScalarValue::new_zero(&value.data_type())?;
-                if value.eq(&zero) {
-                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
-                } else {
-                    true
-                }
-            }
-            WindowFrameBound::CurrentRow => {
-                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
-            }
-            WindowFrameBound::Following(delta) => is_end_range_safe(
-                &order_bys[0],
-                most_recent_order_bys.map(|items| &items[0]),
-                sort_options,
-                idx,
-                delta,
-            )?,
-        },
+            orderby_col,
+            most_recent_ob_col,
+            sort_options,
+            idx,
+        ),
         WindowFrameContext::Groups {
             window_frame,
             state,
-        } => match &window_frame.end_bound {
-            WindowFrameBound::Preceding(value) => {
-                let zero = ScalarValue::new_zero(&value.data_type())?;
-                if value.eq(&zero) {
-                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
-                } else {
-                    true
-                }
-            }
-            WindowFrameBound::CurrentRow => {
+        } => is_end_bound_safe_for_groups(
+            window_frame,
+            state,
+            orderby_col,
+            most_recent_ob_col,
+            sort_options,
+        ),
+    }
+}
+
+/// For row-based window frames, determines if the end bound calculation is safe by evaluating
+/// the type of bound (Preceding, Following, CurrentRow). For 'Following', it compares the bound
+/// value to zero to ensure it doesn't extend beyond the current row.
+///
+/// # Arguments
+/// * `window_frame`: Reference to the window frame being evaluated.
+/// * `_sort_options`: The sorting options used in the window frame.
+///
+/// # Returns
+/// A `Result` indicating whether the end bound is safe for row-based window frames.
+fn is_end_bound_safe_for_rows(
+    window_frame: &WindowFrame,
+    _sort_options: &SortOptions,
+) -> Result<bool> {
+    match &window_frame.end_bound {
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => Ok(true),
+        WindowFrameBound::Following(value) => {
+            let zero = ScalarValue::new_zero(&value.data_type());
+            Ok(zero.map(|zero| value.eq(&zero)).unwrap_or(false))
+        }
+    }
+}
+
+/// For range-based window frames, this function checks if the end bound is safe by comparing
+/// it against specific values (zero, current row). It uses the `is_row_ahead` helper function
+/// to determine if the current row is ahead of the most recent row based on the order-by column
+/// and sorting options.
+///
+/// # Arguments
+/// * `window_frame`: Reference to the window frame being evaluated.
+/// * `orderby_col`: Reference to the column used for ordering.
+/// * `most_recent_ob_col`: Optional reference to the most recent order-by column.
+/// * `sort_options`: The sorting options used in the window frame.
+/// * `idx`: The current index in the window frame.
+///
+/// # Returns
+/// A `Result` indicating whether the end bound is safe for range-based window frames.
+fn is_end_bound_safe_for_range(
+    window_frame: &WindowFrame,
+    orderby_col: &ArrayRef,
+    most_recent_ob_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
+    idx: usize,
+) -> Result<bool> {
+    Ok(match &window_frame.end_bound {
+        WindowFrameBound::Preceding(value) => {
+            let zero = ScalarValue::new_zero(&value.data_type())?;
+            if value.eq(&zero) {
                 is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+            } else {
+                true
             }
-            WindowFrameBound::Following(value) => {
-                let offset = if let ScalarValue::UInt64(Some(offset)) = value {
-                    *offset as usize
-                } else {
-                    return Ok(false);
-                };
-                if state.group_end_indices.len() - state.current_group_idx == offset + 1 {
-                    is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
-                } else {
-                    false
-                }
+        }
+        WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+        }
+        WindowFrameBound::Following(delta) => {
+            is_end_range_safe(orderby_col, most_recent_ob_col, sort_options, idx, delta)?
+        }
+    })
+}
+
+/// For group-based window frames, this function determines if the end bound is safe by considering
+/// the group offset and whether the current row is ahead of the most recent row in terms of sorting.
+/// It checks if the end bound is within the bounds of the current group based on group end indices.
+///
+/// # Arguments
+/// * `window_frame`: Reference to the window frame being evaluated.
+/// * `state`: The state of the window frame for group calculations.
+/// * `orderby_col`: Reference to the column used for ordering.
+/// * `most_recent_ob_col`: Optional reference to the most recent order-by column.
+/// * `sort_options`: The sorting options used in the window frame.
+///
+/// # Returns
+/// A `Result` indicating whether the end bound is safe for group-based window frames.
+fn is_end_bound_safe_for_groups(
+    window_frame: &WindowFrame,
+    state: &WindowFrameStateGroups,
+    orderby_col: &ArrayRef,
+    most_recent_ob_col: Option<&ArrayRef>,
+    sort_options: &SortOptions,
+) -> Result<bool> {
+    Ok(match &window_frame.end_bound {
+        WindowFrameBound::Preceding(value) => {
+            let zero = ScalarValue::new_zero(&value.data_type())?;
+            if value.eq(&zero) {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+            } else {
+                true
             }
-        },
+        }
+        WindowFrameBound::CurrentRow => {
+            is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+        }
+        WindowFrameBound::Following(value) => {
+            let offset = if let ScalarValue::UInt64(Some(offset)) = value {
+                *offset as usize
+            } else {
+                return Ok(false);
+            };
+            if state.group_end_indices.len() - state.current_group_idx == offset + 1 {
+                is_row_ahead(orderby_col, most_recent_ob_col, sort_options)?
+            } else {
+                false
+            }
+        }
     })
 }
 
