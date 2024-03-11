@@ -20,7 +20,7 @@
 mod nullif;
 mod nvl;
 mod nvl2;
-mod r#struct;
+pub mod r#struct;
 
 // create UDFs
 make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);

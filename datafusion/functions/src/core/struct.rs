@@ -17,7 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Fields};
 use arrow_array::{ArrayRef, StructArray};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -61,7 +61,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 #[derive(Debug)]
-pub(super) struct StructFunc {
+pub struct StructFunc {
     signature: Signature,
 }
 
@@ -70,6 +70,12 @@ impl StructFunc {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for StructFunc {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -27,6 +27,8 @@ mod substring;
 mod unary_op;
 mod value;
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
@@ -37,6 +39,7 @@ use datafusion_common::{
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::ScalarUDF;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
@@ -584,7 +587,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-            StructFunc::new(),
+            Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::core::r#struct::StructFunc::new(),
+            )),
             args,
         )))
     }
