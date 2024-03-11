@@ -15,31 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides:
-//!
-//! 1. A SQL parser, [`DFParser`], that translates SQL query text into
-//! an abstract syntax tree (AST), [`Statement`].
-//!
-//! 2. A SQL query planner [`SqlToRel`] that creates [`LogicalPlan`]s
-//! from [`Statement`]s.
-//!
-//! [`DFParser`]: parser::DFParser
-//! [`Statement`]: parser::Statement
-//! [`SqlToRel`]: planner::SqlToRel
-//! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
-
 mod expr;
-pub mod parser;
-pub mod planner;
-mod query;
-mod relation;
-mod select;
-mod set_expr;
-mod statement;
-pub mod unparser;
-pub mod utils;
-mod values;
 
-pub use datafusion_common::{ResolvedTableReference, TableReference};
-pub use expr::arrow_cast::parse_data_type;
-pub use sqlparser;
+pub use expr::expr_to_sql;
+
+use self::dialect::{DefaultDialect, Dialect};
+pub mod dialect;
+
+pub struct Unparser<'a> {
+    dialect: &'a dyn Dialect,
+}
+
+impl<'a> Unparser<'a> {
+    pub fn new(dialect: &'a dyn Dialect) -> Self {
+        Self { dialect }
+    }
+}
+
+impl<'a> Default for Unparser<'a> {
+    fn default() -> Self {
+        Self {
+            dialect: &DefaultDialect {},
+        }
+    }
+}
