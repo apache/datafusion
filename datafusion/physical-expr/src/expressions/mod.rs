@@ -23,7 +23,6 @@ mod case;
 mod cast;
 mod column;
 mod datum;
-mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
