@@ -95,9 +95,40 @@ impl ScalarUDFImpl for GetFieldFunc {
                             }
                         }
                     }
+                    DataType::Map(a ,  b) =>{
+                        match a.data_type() {
+                            DataType::Struct(fields) => {
+                                let field_name = match &args[1] {
+                                    Expr::Literal(ScalarValue::Utf8(name)) => {
+                                        name.as_ref().map(|x| x.as_str())
+                                    }
+                                    _ => {
+                                        return exec_err!(
+                                                "get_field function requires the argument field_name to be a string"
+                                            );
+                                    }
+                                };
+                                let field =
+                                    fields.iter().find(|f| f.name() == field_name.unwrap());
+                                match field {
+                                    Some(field) => Ok(field.data_type().clone()),
+                                    None => {
+                                        exec_err!(
+                                                "get_field function can't find the field {} in the struct", field_name.unwrap()
+                                            )
+                                    }
+                                }
+                            }
+                            _ => {
+                                exec_err!(
+                                    "get_field function requires the first argument to be struct array"
+                                )
+                            }
+                        }
+                    }
                     _ => {
                         exec_err!(
-                            "get_field function requires the column to have struct type"
+                            "get_field function requires the first argument to be struct array"
                         )
                     }
                 }
@@ -120,6 +151,10 @@ impl ScalarUDFImpl for GetFieldFunc {
                         Expr::Literal(scalar) => {
                             println!("{:?}", scalar);
                             Ok(scalar.data_type().clone())
+                        }
+                        Expr::Column(name) => {
+                            let data_type = schema.data_type(name)?;
+                            Ok(data_type.clone())
                         }
                         _ => {
                             exec_err!(

@@ -1592,6 +1592,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_my() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+        CREATE TABLE values(
+            a INT,
+            b FLOAT,
+            c VARCHAR
+        ) AS VALUES
+          (1, 1.1, 'a'),
+          (2, 2.2, 'b'),
+          (3, 3.3, 'c')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"select struct(a, b, c)['c1'] from values"#;
+
+        let result = ctx.sql(query).await?;
+        result.show().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_array_agg_schema() -> Result<()> {
         let ctx = SessionContext::new();
 
