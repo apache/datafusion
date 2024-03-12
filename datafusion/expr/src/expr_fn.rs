@@ -586,8 +586,6 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
-
 scalar_expr!(
     ArrayPopBack,
     array_pop_back,
@@ -1278,7 +1276,6 @@ mod test {
 
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
-        test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
