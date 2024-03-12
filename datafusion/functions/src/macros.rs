@@ -66,9 +66,8 @@ macro_rules! export_functions {
 macro_rules! make_udf_function {
     ($UDF:ty, $GNAME:ident, $NAME:ident) => {
         /// Singleton instance of the function
-        pub static $GNAME: std::sync::OnceLock<
-            std::sync::Arc<datafusion_expr::ScalarUDF>,
-        > = std::sync::OnceLock::new();
+        static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
+            std::sync::OnceLock::new();
 
         /// Return a [`ScalarUDF`] for [`$UDF`]
         ///
