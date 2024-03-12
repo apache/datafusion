@@ -17,17 +17,14 @@
 
 //! [`ApplyFunctionRewrites`] to replace `Expr`s with function calls (e.g `||` to array_concat`)
 
-#[cfg(feature = "array_expressions")]
-use std::sync::Arc;
-
 use super::AnalyzerRule;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr_rewriter::{rewrite_preserving_name, FunctionRewrite};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{Expr, LogicalPlan};
+use std::sync::Arc;
 
 /// Analyzer rule that invokes [`FunctionRewrite`]s on expressions
 #[derive(Default)]
