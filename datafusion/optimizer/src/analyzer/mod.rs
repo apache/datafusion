@@ -56,7 +56,7 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<AnalyzerRuleRef> = vec![
             Arc::new(InlineTableScan::new()),
-            // Arc::new(OperatorToFunction::new()), register with `register_analyzer_rule`
+            // Arc::new(OperatorToFunction::new()), register in `funcitons-array` crate
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];
