@@ -1709,6 +1709,12 @@ mod tests {
     //       "+----+----------+-------------+-----------------+-------+",
     // where result for all rows except last 2 is calculated (To calculate result for row 9 where sn=8
     //   we need to receive sn=10 value to calculate it result.).
+    // In this test, out aim is to test for which portion of the input data `BoundedWindowExec` can generate
+    // a result. To test this behaviour, we generated the data at the source infinitely (no `None` signal
+    //    is sent to output from source). After, row:
+    //       "| 9  | 9        | 0           | 1               |",
+    // is sent. Source stops sending data to output. We collect, result emitted by the `BoundedWindowExec` at the
+    // end of the pipeline with a timeout (Since no `None` is sent from source. Collection never ends otherwise).
     #[tokio::test]
     async fn bounded_window_exec_linear_mode_range_information() -> Result<()> {
         let n_rows = 10;
