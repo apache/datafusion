@@ -17,21 +17,27 @@
 
 //! Analyzer rule for to replace operators with function calls (e.g `||` to array_concat`)
 
+#[cfg(feature = "array_expressions")]
 use std::sync::Arc;
 
 use super::AnalyzerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::utils::list_ndims;
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+#[cfg(feature = "array_expressions")]
+use datafusion_common::{utils::list_ndims, DFSchemaRef};
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{
-    BinaryExpr, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    ScalarFunctionDefinition,
-};
+use datafusion_expr::BuiltinScalarFunction;
+use datafusion_expr::GetFieldAccess;
+use datafusion_expr::GetIndexedField;
+#[cfg(feature = "array_expressions")]
+use datafusion_expr::{BinaryExpr, Operator, ScalarFunctionDefinition};
+use datafusion_expr::{Expr, LogicalPlan};
+#[cfg(feature = "array_expressions")]
+use datafusion_functions_array::expr_fn::{array_append, array_concat, array_prepend};
 
 #[derive(Default)]
 pub struct OperatorToFunction {}
@@ -71,6 +77,7 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
     }
 
     let mut expr_rewrite = OperatorToFunctionRewriter {
+        #[cfg(feature = "array_expressions")]
         schema: Arc::new(schema),
     };
 
@@ -88,6 +95,7 @@ fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
 }
 
 pub(crate) struct OperatorToFunctionRewriter {
+    #[cfg(feature = "array_expressions")]
     pub(crate) schema: DFSchemaRef,
 }
 
@@ -95,13 +103,14 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        #[cfg(feature = "array_expressions")]
         if let Expr::BinaryExpr(BinaryExpr {
             ref left,
             op,
             ref right,
         }) = expr
         {
-            if let Some(fun) = rewrite_array_concat_operator_to_func_for_column(
+            if let Some(expr) = rewrite_array_concat_operator_to_func_for_column(
                 left.as_ref(),
                 op,
                 right.as_ref(),
@@ -111,15 +120,92 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                 rewrite_array_concat_operator_to_func(left.as_ref(), op, right.as_ref())
             }) {
                 // Convert &Box<Expr> -> Expr
-                let left = (**left).clone();
-                let right = (**right).clone();
-                return Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                    args: vec![left, right],
-                })));
+                return Ok(Transformed::yes(expr));
+            }
+
+            // TODO: change OperatorToFunction to OperatoToArrayFunction and configure it with array_expressions feature
+            // after other array functions are udf-based
+            #[cfg(feature = "array_expressions")]
+            if let Some(expr) = rewrite_array_has_all_operator_to_func(left, op, right) {
+                return Ok(Transformed::yes(expr));
             }
         }
+
+        if let Expr::GetIndexedField(GetIndexedField {
+            ref expr,
+            ref field,
+        }) = expr
+        {
+            match field {
+                GetFieldAccess::ListIndex { ref key } => {
+                    let expr = *expr.clone();
+                    let key = *key.clone();
+                    let args = vec![expr, key];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArrayElement, args),
+                    )));
+                }
+                GetFieldAccess::ListRange {
+                    start,
+                    stop,
+                    stride,
+                } => {
+                    let expr = *expr.clone();
+                    let start = *start.clone();
+                    let stop = *stop.clone();
+                    let stride = *stride.clone();
+                    let args = vec![expr, start, stop, stride];
+                    return Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new(BuiltinScalarFunction::ArraySlice, args),
+                    )));
+                }
+                _ => {}
+            }
+        }
+
         Ok(Transformed::no(expr))
+    }
+}
+
+// Note This rewrite is only done if the built in DataFusion `array_expressions` feature is enabled.
+// Even if users  implement their own array functions, those functions are not equal to the DataFusion
+// udf based array functions, so this rewrite is not corrrect
+#[cfg(feature = "array_expressions")]
+fn rewrite_array_has_all_operator_to_func(
+    left: &Expr,
+    op: Operator,
+    right: &Expr,
+) -> Option<Expr> {
+    use super::array_has_all;
+
+    if op != Operator::AtArrow && op != Operator::ArrowAt {
+        return None;
+    }
+
+    match (left, right) {
+        // array1 @> array2 -> array_has_all(array1, array2)
+        // array1 <@ array2 -> array_has_all(array2, array1)
+        (
+            Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
+                args: _left_args,
+            }),
+            Expr::ScalarFunction(ScalarFunction {
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
+                args: _right_args,
+            }),
+        ) if left_fun.name() == "make_array" && right_fun.name() == "make_array" => {
+            let left = left.clone();
+            let right = right.clone();
+
+            let expr = if let Operator::ArrowAt = op {
+                array_has_all(right, left)
+            } else {
+                array_has_all(left, right)
+            };
+            Some(expr)
+        }
+        _ => None,
     }
 }
 
@@ -134,11 +220,12 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
 /// 4) (arry concat, array append, array prepend) || array -> array concat
 ///
 /// 5) (arry concat, array append, array prepend) || scalar -> array append
+#[cfg(feature = "array_expressions")]
 fn rewrite_array_concat_operator_to_func(
     left: &Expr,
     op: Operator,
     right: &Expr,
-) -> Option<BuiltinScalarFunction> {
+) -> Option<Expr> {
     // Convert `Array StringConcat Array` to ScalarFunction::ArrayConcat
 
     if op != Operator::StringConcat {
@@ -150,97 +237,65 @@ fn rewrite_array_concat_operator_to_func(
         // (arry concat, array append, array prepend) || array -> array concat
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-                args: _right_args,
-            }),
-        ) => Some(BuiltinScalarFunction::ArrayConcat),
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name())
+            && right_fun.name() == "make_array" =>
+        {
+            Some(array_concat(vec![left.clone(), right.clone()]))
+        }
         // Chain concat operator (a || b) || scalar,
         // (arry concat, array append, array prepend) || scalar -> array append
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            _scalar,
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
-                args: _left_args,
-            }),
-            _scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name()) =>
+        {
+            Some(array_append(left.clone(), right.clone()))
+        }
         // array || array -> array concat
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) => Some(BuiltinScalarFunction::ArrayConcat),
+        ) if left_fun.name() == "make_array" && right_fun.name() == "make_array" => {
+            Some(array_concat(vec![left.clone(), right.clone()]))
+        }
         // array || scalar -> array append
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             _right_scalar,
-        ) => Some(BuiltinScalarFunction::ArrayAppend),
+        ) if left_fun.name() == "make_array" => {
+            Some(array_append(left.clone(), right.clone()))
+        }
         // scalar || array -> array prepend
         (
             _left_scalar,
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
+                func_def: ScalarFunctionDefinition::UDF(right_fun),
                 args: _right_args,
             }),
-        ) => Some(BuiltinScalarFunction::ArrayPrepend),
+        ) if right_fun.name() == "make_array" => {
+            Some(array_prepend(left.clone(), right.clone()))
+        }
 
         _ => None,
     }
@@ -251,12 +306,13 @@ fn rewrite_array_concat_operator_to_func(
 /// 1) (arry concat, array append, array prepend) || column -> (array append, array concat)
 ///
 /// 2) column1 || column2 -> (array prepend, array append, array concat)
+#[cfg(feature = "array_expressions")]
 fn rewrite_array_concat_operator_to_func_for_column(
     left: &Expr,
     op: Operator,
     right: &Expr,
     schema: &DFSchema,
-) -> Result<Option<BuiltinScalarFunction>> {
+) -> Result<Option<Expr>> {
     if op != Operator::StringConcat {
         return Ok(None);
     }
@@ -266,33 +322,18 @@ fn rewrite_array_concat_operator_to_func_for_column(
         // 1) array_prepend/append/concat || column
         (
             Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayPrepend),
+                func_def: ScalarFunctionDefinition::UDF(left_fun),
                 args: _left_args,
             }),
             Expr::Column(c),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayAppend),
-                args: _left_args,
-            }),
-            Expr::Column(c),
-        )
-        | (
-            Expr::ScalarFunction(ScalarFunction {
-                func_def:
-                    ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::ArrayConcat),
-                args: _left_args,
-            }),
-            Expr::Column(c),
-        ) => {
+        ) if ["array_append", "array_prepend", "array_concat"]
+            .contains(&left_fun.name()) =>
+        {
             let d = schema.field_from_column(c)?.data_type();
             let ndim = list_ndims(d);
             match ndim {
-                0 => Ok(Some(BuiltinScalarFunction::ArrayAppend)),
-                _ => Ok(Some(BuiltinScalarFunction::ArrayConcat)),
+                0 => Ok(Some(array_append(left.clone(), right.clone()))),
+                _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }
         // 2) select column1 || column2
@@ -302,9 +343,9 @@ fn rewrite_array_concat_operator_to_func_for_column(
             let ndim1 = list_ndims(d1);
             let ndim2 = list_ndims(d2);
             match (ndim1, ndim2) {
-                (0, _) => Ok(Some(BuiltinScalarFunction::ArrayPrepend)),
-                (_, 0) => Ok(Some(BuiltinScalarFunction::ArrayAppend)),
-                _ => Ok(Some(BuiltinScalarFunction::ArrayConcat)),
+                (0, _) => Ok(Some(array_prepend(left.clone(), right.clone()))),
+                (_, 0) => Ok(Some(array_append(left.clone(), right.clone()))),
+                _ => Ok(Some(array_concat(vec![left.clone(), right.clone()]))),
             }
         }
         _ => Ok(None),

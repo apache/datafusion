@@ -127,9 +127,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -179,9 +177,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_seconds") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -228,9 +224,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_millis") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -277,9 +271,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_micros") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -326,9 +318,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_nanos") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -390,8 +380,6 @@ mod tests {
 
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
-
-    use crate::datetime::common::string_to_datetime_formatted;
 
     use super::*;
 

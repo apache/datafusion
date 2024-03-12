@@ -419,6 +419,11 @@ impl ScalarFunction {
             args,
         }
     }
+
+    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    pub fn new_func_def(func_def: ScalarFunctionDefinition, args: Vec<Expr>) -> Self {
+        Self { func_def, args }
+    }
 }
 
 /// Access a sub field of a nested type, such as `Field` or `List`

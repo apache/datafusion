@@ -222,6 +222,7 @@ pub fn hash_join_exec(
         on,
         filter,
         join_type,
+        None,
         PartitionMode::Partitioned,
         true,
     )?))

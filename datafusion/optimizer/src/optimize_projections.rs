@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
-use datafusion_expr::expr::{Alias, ScalarFunction, ScalarFunctionDefinition};
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -558,17 +558,16 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
             Expr::Cast(Cast::new(Box::new(new_expr), cast.data_type.clone()))
         }
         Expr::ScalarFunction(scalar_fn) => {
-            // TODO: Support UDFs.
-            let ScalarFunctionDefinition::BuiltIn(fun) = scalar_fn.func_def else {
-                return Ok(None);
-            };
             return Ok(scalar_fn
                 .args
                 .iter()
                 .map(|expr| rewrite_expr(expr, input))
                 .collect::<Result<Option<_>>>()?
                 .map(|new_args| {
-                    Expr::ScalarFunction(ScalarFunction::new(fun, new_args))
+                    Expr::ScalarFunction(ScalarFunction::new_func_def(
+                        scalar_fn.func_def.clone(),
+                        new_args,
+                    ))
                 }));
         }
         // Unsupported type for consecutive projection merge analysis.

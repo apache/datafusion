@@ -95,9 +95,7 @@ impl ScalarUDFImpl for ToDateFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_date") {
-                return value;
-            }
+            validate_data_types(args, "to_date")?;
         }
 
         match args[0].data_type() {
