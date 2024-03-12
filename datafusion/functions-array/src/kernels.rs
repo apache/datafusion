@@ -387,7 +387,7 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
     let mut offsets = vec![0];
     let mut valid = BooleanBufferBuilder::new(stop_array.len());
     for (idx, stop) in stop_array.iter().enumerate() {
-        match get_range_args(start_array, stop, step_array, idx) {
+        match retrieve_range_args(start_array, stop, step_array, idx) {
             Some((_, _, 0)) => {
                 return exec_err!(
                     "step can't be 0 for function {}(start [, stop, step])",
@@ -413,8 +413,8 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
             }
             // If any of the arguments are NULL, append a NULL value to the result.
             None => {
-                valid.append(false);
                 offsets.push(values.len() as i32);
+                valid.append(false);
             }
         };
     }
@@ -429,7 +429,7 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
 
 /// Returns (start, stop, step) for the range and generate_series function,
 /// Returns None if any of the arguments are NULL.
-fn get_range_args(
+fn retrieve_range_args(
     start_array: Option<&Int64Array>,
     stop: Option<i64>,
     step_array: Option<&Int64Array>,
