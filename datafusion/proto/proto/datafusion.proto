@@ -559,7 +559,7 @@ enum ScalarFunction {
   Signum = 15;
   Sin = 16;
   Sqrt = 17;
-  Tan = 18;
+  // Tan = 18;
   Trunc = 19;
   // 20 was Array
   // RegexpMatch = 21;
@@ -620,7 +620,7 @@ enum ScalarFunction {
   Atanh = 76;
   Sinh = 77;
   Cosh = 78;
-  Tanh = 79;
+  // Tanh = 79;
   Pi = 80;
   Degrees = 81;
   Radians = 82;
