@@ -411,7 +411,7 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
                 offsets.push(values.len() as i32);
                 valid.append(true);
             }
-            // If any of the arguments are NULL, append a NULL value to the result.
+            // If any of the arguments is NULL, append a NULL value to the result.
             None => {
                 offsets.push(values.len() as i32);
                 valid.append(false);
@@ -427,8 +427,8 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
     Ok(arr)
 }
 
-/// Returns (start, stop, step) for the range and generate_series function,
-/// Returns None if any of the arguments are NULL.
+/// Get the (start, stop, step) args for the range and generate_series function.
+/// If any of the arguments is NULL, returns None.
 fn retrieve_range_args(
     start_array: Option<&Int64Array>,
     stop: Option<i64>,
