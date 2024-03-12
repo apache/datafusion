@@ -45,7 +45,7 @@ type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 /// Identifier type. Current implementation use describe of an expression (type String) as
 /// Identifier.
 ///
-/// An Identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
+/// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
 /// collision (as low as possible)"
 ///
 /// Since an identifier is likely to be copied many times, it is better that an identifier
