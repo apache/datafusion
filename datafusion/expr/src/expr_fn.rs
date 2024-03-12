@@ -613,12 +613,6 @@ scalar_expr!(
     "Returns an array of the elements that appear in the first array but not in the second."
 );
 scalar_expr!(
-    ArrayDistinct,
-    array_distinct,
-    array,
-    "return distinct values from the array after removing duplicates."
-);
-scalar_expr!(
     ArrayPosition,
     array_position,
     array element index,

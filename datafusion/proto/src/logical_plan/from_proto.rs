@@ -47,12 +47,12 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array_distinct, array_element, array_except, array_intersect, array_pop_back,
-    array_pop_front, array_position, array_positions, array_remove, array_remove_all,
-    array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
-    array_resize, array_slice, array_union, ascii, asinh, atan, atan2, atanh, bit_length,
-    btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos,
-    cosh, cot, current_date, current_time, degrees, digest, ends_with, exp,
+    acosh, array_element, array_except, array_intersect, array_pop_back, array_pop_front,
+    array_position, array_positions, array_remove, array_remove_all, array_remove_n,
+    array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
+    array_slice, array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt,
+    ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, degrees, digest, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, from_unixtime, gcd, initcap, iszero, lcm, left,
     levenshtein, ln, log, log10, log2,
@@ -475,7 +475,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
-            ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
@@ -1463,9 +1462,6 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry, codec)?,
                     parse_expr(&args[3], registry, codec)?,
                 )),
-                ScalarFunction::ArrayDistinct => {
-                    Ok(array_distinct(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayElement => Ok(array_element(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
