@@ -21,33 +21,23 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
-use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
     DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
-
-use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::{ScalarUDF, ScalarUDFImpl};
-use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use prost::Message;
-
 use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
-use datafusion_common::file_options::StatementOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
-use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_common::{FileType, Result};
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
     Sort, Unnest,
@@ -57,16 +47,20 @@ use datafusion_expr::{
     col, create_udaf, lit, Accumulator, AggregateFunction,
     BuiltinScalarFunction::{Sqrt, Substr},
     ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
-    Signature, TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
 };
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
+
+use prost::Message;
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -321,15 +315,16 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let mut options = HashMap::new();
-    options.insert("foo".to_string(), "bar".to_string());
+    let mut table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    table_options.set("csv.delimiter", ";")?;
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
-        file_format: FileType::CSV,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::SQLOptions(StatementOptions::from(&options)),
+        format_options: FormatOptions::CSV(table_options.csv.clone()),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -345,24 +340,25 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let writer_properties = WriterProperties::builder()
-        .set_bloom_filter_enabled(true)
-        .set_created_by("DataFusion Test".to_string())
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_write_batch_size(111)
-        .set_data_page_size_limit(222)
-        .set_data_page_row_count_limit(333)
-        .set_dictionary_page_size_limit(444)
-        .set_max_row_group_size(555)
-        .build();
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut parquet_format = table_options.parquet;
+
+    parquet_format.global.bloom_filter_enabled = true;
+    parquet_format.global.created_by = "DataFusion Test".to_string();
+    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.write_batch_size = 111;
+    parquet_format.global.data_pagesize_limit = 222;
+    parquet_format.global.data_page_row_count_limit = 333;
+    parquet_format.global.dictionary_page_size_limit = 444;
+    parquet_format.global.max_row_group_size = 555;
+
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
-        file_format: FileType::PARQUET,
+        format_options: FormatOptions::PARQUET(parquet_format.clone()),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(writer_properties)),
-        )),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -372,27 +368,11 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.parquet", copy_to.output_url);
-            assert_eq!(FileType::PARQUET, copy_to.file_format);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::Parquet(p) => {
-                        let props = &p.writer_options;
-                        assert_eq!("DataFusion Test", props.created_by());
-                        assert_eq!(
-                            "PARQUET_2_0",
-                            format!("{:?}", props.writer_version())
-                        );
-                        assert_eq!(111, props.write_batch_size());
-                        assert_eq!(222, props.data_page_size_limit());
-                        assert_eq!(333, props.data_page_row_count_limit());
-                        assert_eq!(444, props.dictionary_page_size_limit());
-                        assert_eq!(555, props.max_row_group_size());
-                    }
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
+            assert_eq!(
+                copy_to.format_options,
+                FormatOptions::PARQUET(parquet_format)
+            );
         }
         _ => panic!(),
     }
@@ -408,11 +388,9 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
-        file_format: FileType::ARROW,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::Arrow(
-            ArrowWriterOptions::new(),
-        ))),
+        format_options: FormatOptions::ARROW,
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -422,15 +400,8 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.arrow", copy_to.output_url);
-            assert_eq!(FileType::ARROW, copy_to.file_format);
+            assert_eq!(FormatOptions::ARROW, copy_to.format_options);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::Arrow(_) => {}
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
         }
         _ => panic!(),
     }
@@ -444,25 +415,23 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
 
     let input = create_csv_scan(&ctx).await?;
 
-    let writer_properties = WriterBuilder::new()
-        .with_delimiter(b'*')
-        .with_date_format("dd/MM/yyyy".to_string())
-        .with_datetime_format("dd/MM/yyyy HH:mm:ss".to_string())
-        .with_timestamp_format("HH:mm:ss.SSSSSS".to_string())
-        .with_time_format("HH:mm:ss".to_string())
-        .with_null("NIL".to_string());
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+    let mut csv_format = table_options.csv;
+
+    csv_format.delimiter = b'*';
+    csv_format.date_format = Some("dd/MM/yyyy".to_string());
+    csv_format.datetime_format = Some("dd/MM/yyyy HH:mm:ss".to_string());
+    csv_format.timestamp_format = Some("HH:mm:ss.SSSSSS".to_string());
+    csv_format.time_format = Some("HH:mm:ss".to_string());
+    csv_format.null_value = Some("NIL".to_string());
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
-        file_format: FileType::CSV,
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        copy_options: CopyOptions::WriterOptions(Box::new(FileTypeWriterOptions::CSV(
-            CsvWriterOptions::new(
-                writer_properties,
-                CompressionTypeVariant::UNCOMPRESSED,
-            ),
-        ))),
+        format_options: FormatOptions::CSV(csv_format.clone()),
+        options: Default::default(),
     });
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -472,26 +441,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
             assert_eq!("test.csv", copy_to.output_url);
-            assert_eq!(FileType::CSV, copy_to.file_format);
+            assert_eq!(FormatOptions::CSV(csv_format), copy_to.format_options);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
-            match &copy_to.copy_options {
-                CopyOptions::WriterOptions(y) => match y.as_ref() {
-                    FileTypeWriterOptions::CSV(p) => {
-                        let props = &p.writer_options;
-                        assert_eq!(b'*', props.delimiter());
-                        assert_eq!("dd/MM/yyyy", props.date_format().unwrap());
-                        assert_eq!(
-                            "dd/MM/yyyy HH:mm:ss",
-                            props.datetime_format().unwrap()
-                        );
-                        assert_eq!("HH:mm:ss.SSSSSS", props.timestamp_format().unwrap());
-                        assert_eq!("HH:mm:ss", props.time_format().unwrap());
-                        assert_eq!("NIL", props.null());
-                    }
-                    _ => panic!(),
-                },
-                _ => panic!(),
-            }
         }
         _ => panic!(),
     }
@@ -608,6 +559,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_empty(make_array(vec![lit(1), lit(2), lit(3)])),
         array_length(make_array(vec![lit(1), lit(2), lit(3)])),
         flatten(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_sort(
+            make_array(vec![lit(3), lit(4), lit(1), lit(2)]),
+            lit("desc"),
+            lit("NULLS LAST"),
+        ),
+        array_distinct(make_array(vec![lit(1), lit(3), lit(3), lit(2), lit(2)])),
     ];
 
     // ensure expressions created with the expr api can be round tripped

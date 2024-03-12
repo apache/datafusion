@@ -282,8 +282,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Sinh => Arc::new(math_expressions::sinh),
         BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
-        BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
-        BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
         }
@@ -302,12 +300,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArraySort => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_sort)(args)
-        }),
-        BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_distinct)(args)
-        }),
         BuiltinScalarFunction::ArrayElement => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_element)(args)
         }),

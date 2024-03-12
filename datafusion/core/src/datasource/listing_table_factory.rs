@@ -24,8 +24,7 @@ use std::sync::Arc;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::{
-    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat,
-    file_compression_type::FileCompressionType, json::JsonFormat, FileFormat,
+    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat, FileFormat,
 };
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -35,7 +34,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
+use datafusion_common::config::TableOptions;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -59,34 +58,32 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
+        let mut table_options =
+            TableOptions::default_from_session_config(state.config_options());
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
-
+        table_options.set_file_format(file_type.clone());
+        table_options.alter_with_string_hash_map(&cmd.options)?;
         let file_extension = get_extension(cmd.location.as_str());
-
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => {
-                let mut statement_options = StatementOptions::from(&cmd.options);
-                let mut csv_format = CsvFormat::default()
-                    .with_has_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type);
-                if let Some(quote) = statement_options.take_str_option("quote") {
-                    csv_format = csv_format.with_quote(quote.as_bytes()[0])
-                }
-                if let Some(escape) = statement_options.take_str_option("escape") {
-                    csv_format = csv_format.with_escape(Some(escape.as_bytes()[0]))
-                }
-                Arc::new(csv_format)
+                let mut csv_options = table_options.csv;
+                csv_options.has_header = cmd.has_header;
+                csv_options.delimiter = cmd.delimiter as u8;
+                csv_options.compression = cmd.file_compression_type;
+                Arc::new(CsvFormat::default().with_options(csv_options))
             }
             #[cfg(feature = "parquet")]
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::PARQUET => {
+                Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+            }
             FileType::AVRO => Arc::new(AvroFormat),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
+            FileType::JSON => {
+                let mut json_options = table_options.json;
+                json_options.compression = cmd.file_compression_type;
+                Arc::new(JsonFormat::default().with_options(json_options))
+            }
             FileType::ARROW => Arc::new(ArrowFormat),
         };
 
@@ -133,48 +130,6 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let mut statement_options = StatementOptions::from(&cmd.options);
-
-        statement_options.take_str_option("unbounded");
-
-        let file_type = file_format.file_type();
-
-        // Use remaining options and session state to build FileTypeWriterOptions
-        let file_type_writer_options = FileTypeWriterOptions::build(
-            &file_type,
-            state.config_options(),
-            &statement_options,
-        )?;
-
-        // Some options have special syntax which takes precedence
-        // e.g. "WITH HEADER ROW" overrides (header false, ...)
-        let file_type_writer_options = match file_type {
-            FileType::CSV => {
-                let mut csv_writer_options =
-                    file_type_writer_options.try_into_csv()?.clone();
-                csv_writer_options.writer_options = csv_writer_options
-                    .writer_options
-                    .with_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter.try_into().map_err(|_| {
-                        DataFusionError::Internal(
-                            "Unable to convert CSV delimiter into u8".into(),
-                        )
-                    })?);
-                csv_writer_options.compression = cmd.file_compression_type;
-                FileTypeWriterOptions::CSV(csv_writer_options)
-            }
-            FileType::JSON => {
-                let mut json_writer_options =
-                    file_type_writer_options.try_into_json()?.clone();
-                json_writer_options.compression = cmd.file_compression_type;
-                FileTypeWriterOptions::JSON(json_writer_options)
-            }
-            #[cfg(feature = "parquet")]
-            FileType::PARQUET => file_type_writer_options,
-            FileType::ARROW => file_type_writer_options,
-            FileType::AVRO => file_type_writer_options,
-        };
-
         let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
@@ -182,8 +137,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(cmd.order_exprs.clone())
-            .with_write_options(file_type_writer_options);
+            .with_file_sort_order(cmd.order_exprs.clone());
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
@@ -255,6 +209,52 @@ mod tests {
             .as_any()
             .downcast_ref::<ListingTable>()
             .unwrap();
+        let listing_options = listing_table.options();
+        assert_eq!(".tbl", listing_options.file_extension);
+    }
+
+    #[tokio::test]
+    async fn test_create_using_non_std_file_ext_csv_options() {
+        let csv_file = tempfile::Builder::new()
+            .prefix("foo")
+            .suffix(".tbl")
+            .tempfile()
+            .unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = OwnedTableReference::bare("foo".to_string());
+
+        let mut options = HashMap::new();
+        options.insert("csv.schema_infer_max_rec".to_owned(), "1000".to_owned());
+        let cmd = CreateExternalTable {
+            name,
+            location: csv_file.path().to_str().unwrap().to_string(),
+            file_type: "csv".to_string(),
+            has_header: true,
+            delimiter: ',',
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options,
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let format = listing_table.options().format.clone();
+        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_options = csv_format.options().clone();
+        assert_eq!(csv_options.schema_infer_max_rec, 1000);
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }

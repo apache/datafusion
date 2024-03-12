@@ -100,24 +100,16 @@ pub enum BuiltinScalarFunction {
     Sinh,
     /// sqrt
     Sqrt,
-    /// tan
-    Tan,
-    /// tanh
-    Tanh,
     /// trunc
     Trunc,
     /// cot
     Cot,
 
     // array functions
-    /// array_sort
-    ArraySort,
     /// array_pop_front
     ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
-    /// array_distinct
-    ArrayDistinct,
     /// array_element
     ArrayElement,
     /// array_position
@@ -324,11 +316,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
-            BuiltinScalarFunction::Tan => Volatility::Immutable,
-            BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArraySort => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDistinct => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
@@ -419,8 +407,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArraySort => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayDistinct => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field)
                 | LargeList(field)
@@ -637,8 +623,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sinh
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Cbrt
-            | BuiltinScalarFunction::Tan
-            | BuiltinScalarFunction::Tanh
             | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Cot => match input_expr_types[0] {
                 Float32 => Ok(Float32),
@@ -656,16 +640,12 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArraySort => {
-                Signature::variadic_any(self.volatility())
-            }
             BuiltinScalarFunction::ArrayPopFront => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayElement => {
                 Signature::array_and_index(self.volatility())
             }
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayDistinct => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
             }
@@ -925,8 +905,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sin
             | BuiltinScalarFunction::Sinh
             | BuiltinScalarFunction::Sqrt
-            | BuiltinScalarFunction::Tan
-            | BuiltinScalarFunction::Tanh
             | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
@@ -976,7 +954,6 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Sinh
                 | BuiltinScalarFunction::Sqrt
                 | BuiltinScalarFunction::Cbrt
-                | BuiltinScalarFunction::Tanh
                 | BuiltinScalarFunction::Trunc
                 | BuiltinScalarFunction::Pi
         ) {
@@ -1022,8 +999,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sin => &["sin"],
             BuiltinScalarFunction::Sinh => &["sinh"],
             BuiltinScalarFunction::Sqrt => &["sqrt"],
-            BuiltinScalarFunction::Tan => &["tan"],
-            BuiltinScalarFunction::Tanh => &["tanh"],
             BuiltinScalarFunction::Trunc => &["trunc"],
 
             // conditional functions
@@ -1080,9 +1055,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => &["sha256"],
             BuiltinScalarFunction::SHA384 => &["sha384"],
             BuiltinScalarFunction::SHA512 => &["sha512"],
-
-            BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
-            BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
                 "array_extract",

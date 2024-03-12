@@ -23,16 +23,24 @@ use arrow::array::{
     LargeStringArray, ListArray, ListBuilder, OffsetSizeTrait, StringArray,
     StringBuilder, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::Field;
-use arrow::datatypes::UInt64Type;
-use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
+use arrow::compute;
+use arrow::datatypes::{
+    DataType, Date32Type, Field, IntervalMonthDayNanoType, UInt64Type,
+};
+use arrow::row::{RowConverter, SortField};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_schema::FieldRef;
+use arrow_schema::SortOptions;
+
 use datafusion_common::cast::{
     as_date32_array, as_generic_list_array, as_generic_string_array, as_int64_array,
     as_interval_mdn_array, as_large_list_array, as_list_array, as_null_array,
     as_string_array,
 };
-use datafusion_common::{exec_err, not_impl_datafusion_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_datafusion_err, DataFusionError, Result,
+};
+use itertools::Itertools;
 use std::any::type_name;
 use std::sync::Arc;
 
@@ -385,37 +393,64 @@ pub(super) fn gen_range(args: &[ArrayRef], include_upper: bool) -> Result<ArrayR
 
     let mut values = vec![];
     let mut offsets = vec![0];
+    let mut valid = BooleanBufferBuilder::new(stop_array.len());
     for (idx, stop) in stop_array.iter().enumerate() {
-        let stop = stop.unwrap_or(0);
-        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
-        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
-        if step == 0 {
-            return exec_err!(
-                "step can't be 0 for function {}(start [, stop, step])",
-                if include_upper {
-                    "generate_series"
-                } else {
-                    "range"
-                }
-            );
-        }
-        // Below, we utilize `usize` to represent steps.
-        // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
-        let step_abs = usize::try_from(step.unsigned_abs()).map_err(|_| {
-            not_impl_datafusion_err!("step {} can't fit into usize", step)
-        })?;
-        values.extend(
-            gen_range_iter(start, stop, step < 0, include_upper).step_by(step_abs),
-        );
-        offsets.push(values.len() as i32);
+        match retrieve_range_args(start_array, stop, step_array, idx) {
+            Some((_, _, 0)) => {
+                return exec_err!(
+                    "step can't be 0 for function {}(start [, stop, step])",
+                    if include_upper {
+                        "generate_series"
+                    } else {
+                        "range"
+                    }
+                );
+            }
+            Some((start, stop, step)) => {
+                // Below, we utilize `usize` to represent steps.
+                // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
+                let step_abs = usize::try_from(step.unsigned_abs()).map_err(|_| {
+                    not_impl_datafusion_err!("step {} can't fit into usize", step)
+                })?;
+                values.extend(
+                    gen_range_iter(start, stop, step < 0, include_upper)
+                        .step_by(step_abs),
+                );
+                offsets.push(values.len() as i32);
+                valid.append(true);
+            }
+            // If any of the arguments is NULL, append a NULL value to the result.
+            None => {
+                offsets.push(values.len() as i32);
+                valid.append(false);
+            }
+        };
     }
     let arr = Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", DataType::Int64, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(Int64Array::from(values)),
-        None,
+        Some(NullBuffer::new(valid.finish())),
     )?);
     Ok(arr)
+}
+
+/// Get the (start, stop, step) args for the range and generate_series function.
+/// If any of the arguments is NULL, returns None.
+fn retrieve_range_args(
+    start_array: Option<&Int64Array>,
+    stop: Option<i64>,
+    step_array: Option<&Int64Array>,
+    idx: usize,
+) -> Option<(i64, i64, i64)> {
+    // Default start value is 0 if not provided
+    let start =
+        start_array.map_or(Some(0), |arr| arr.is_valid(idx).then(|| arr.value(idx)))?;
+    let stop = stop?;
+    // Default step value is 1 if not provided
+    let step =
+        step_array.map_or(Some(1), |arr| arr.is_valid(idx).then(|| arr.value(idx)))?;
+    Some((start, stop, step))
 }
 
 /// Returns an iterator of i64 values from start to stop
@@ -711,6 +746,89 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Array_sort SQL function
+pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.is_empty() || args.len() > 3 {
+        return exec_err!("array_sort expects one to three arguments");
+    }
+
+    let sort_option = match args.len() {
+        1 => None,
+        2 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: true,
+            })
+        }
+        3 => {
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
+            Some(SortOptions {
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
+            })
+        }
+        _ => return exec_err!("array_sort expects 1 to 3 arguments"),
+    };
+
+    let list_array = as_list_array(&args[0])?;
+    let row_count = list_array.len();
+
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        if list_array.is_null(i) {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            let arr_ref = list_array.value(i);
+            let arr_ref = arr_ref.as_ref();
+
+            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            array_lengths.push(sorted_array.len());
+            arrays.push(sorted_array);
+            valid.append(true);
+        }
+    }
+
+    // Assume all arrays have the same data type
+    let data_type = list_array.value_type();
+    let buffer = valid.finish();
+
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
+
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => exec_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => exec_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
+}
+
 // Create new offsets that are euqiavlent to `flatten` the array.
 fn get_offsets_for_flatten<O: OffsetSizeTrait>(
     offsets: OffsetBuffer<O>,
@@ -778,4 +896,66 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
             exec_err!("flatten does not support type '{array_type:?}'")
         }
     }
+}
+
+/// array_distinct SQL function
+/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
+pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_distinct needs one argument");
+    }
+
+    // handle null
+    if args[0].data_type() == &DataType::Null {
+        return Ok(args[0].clone());
+    }
+
+    // handle for list & largelist
+    match args[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_distinct(array, field)
+        }
+        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
+    }
+}
+
+pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let dt = array.value_type();
+    let mut offsets = Vec::with_capacity(array.len());
+    offsets.push(OffsetSize::usize_as(0));
+    let mut new_arrays = Vec::with_capacity(array.len());
+    let converter = RowConverter::new(vec![SortField::new(dt)])?;
+    // distinct for each list in ListArray
+    for arr in array.iter().flatten() {
+        let values = converter.convert_columns(&[arr])?;
+        // sort elements in list and remove duplicates
+        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.first() {
+            Some(array) => array.clone(),
+            None => {
+                return internal_err!("array_distinct: failed to get array from rows")
+            }
+        };
+        new_arrays.push(array);
+    }
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field.clone(),
+        offsets,
+        values,
+        None,
+    )?))
 }

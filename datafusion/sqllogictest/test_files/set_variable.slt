@@ -65,7 +65,7 @@ SHOW datafusion.execution.batch_size
 datafusion.execution.batch_size 1
 
 # set variable unknown variable
-statement error DataFusion error: External error: could not find config namespace for key "aabbcc"
+statement error DataFusion error: Invalid or Unsupported Configuration: could not find config namespace for key "aabbcc"
 SET aabbcc to '1'
 
 # set bool variable
