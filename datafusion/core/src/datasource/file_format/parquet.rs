@@ -542,7 +542,8 @@ async fn fetch_statistics(
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    /// File metadata from successfully produced parquet files.
+    /// File metadata from successfully produced parquet files. The Mutex is only used
+    /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
     written: Arc<parking_lot::Mutex<HashMap<Path, FileMetaData>>>,
 }
 
@@ -1889,26 +1890,24 @@ mod tests {
         );
 
         // check the file metadata
-        for (
+        let (
             path,
             FileMetaData {
                 num_rows, schema, ..
             },
-        ) in written.take(1)
-        {
-            let path_parts = path.parts().collect::<Vec<_>>();
-            assert_eq!(path_parts.len(), 1, "should not have path prefix");
+        ) = written.take(1).next().unwrap();
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(path_parts.len(), 1, "should not have path prefix");
 
-            assert_eq!(num_rows, 2, "file metdata to have 2 rows");
-            assert!(
-                schema.iter().any(|col_schema| col_schema.name == "a"),
-                "output file metadata should contain col a"
-            );
-            assert!(
-                schema.iter().any(|col_schema| col_schema.name == "b"),
-                "output file metadata should contain col b"
-            );
-        }
+        assert_eq!(num_rows, 2, "file metdata to have 2 rows");
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "a"),
+            "output file metadata should contain col a"
+        );
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "b"),
+            "output file metadata should contain col b"
+        );
 
         Ok(())
     }
