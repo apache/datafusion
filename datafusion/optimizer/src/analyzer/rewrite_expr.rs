@@ -17,7 +17,6 @@
 
 //! Analyzer rule for to replace operators with function calls (e.g `||` to array_concat`)
 
-#[cfg(feature = "array_expressions")]
 use std::sync::Arc;
 
 use super::AnalyzerRule;
