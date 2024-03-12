@@ -2748,7 +2748,7 @@ pub enum ScalarFunction {
     SubstrIndex = 126,
     FindInSet = 127,
     /// / 128 was ArraySort
-    ArrayDistinct = 129,
+    /// / 129 was ArrayDistinct
     ArrayResize = 130,
     EndsWith = 131,
     /// / 132 was InStr
@@ -2861,7 +2861,6 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
-            ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::MakeDate => "MakeDate",
@@ -2966,7 +2965,6 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
-            "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
             "MakeDate" => Some(Self::MakeDate),

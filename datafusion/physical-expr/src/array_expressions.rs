@@ -1539,32 +1539,6 @@ pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     )?))
 }
 
-/// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
-pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_distinct needs one argument");
-    }
-
-    // handle null
-    if args[0].data_type() == &DataType::Null {
-        return Ok(args[0].clone());
-    }
-
-    // handle for list & largelist
-    match args[0].data_type() {
-        DataType::List(field) => {
-            let array = as_list_array(&args[0])?;
-            general_array_distinct(array, field)
-        }
-        DataType::LargeList(field) => {
-            let array = as_large_list_array(&args[0])?;
-            general_array_distinct(array, field)
-        }
-        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
-    }
-}
-
 /// array_resize SQL function
 pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
