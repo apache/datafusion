@@ -623,12 +623,6 @@ scalar_expr!(
     "searches for an element in the array, returns all occurrences."
 );
 scalar_expr!(
-    ArrayRepeat,
-    array_repeat,
-    element count,
-    "returns an array containing element `count` times."
-);
-scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
@@ -1270,7 +1264,6 @@ mod test {
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
         test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
