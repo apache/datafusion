@@ -1643,6 +1643,72 @@ mod tests {
         Ok(())
     }
 
+    // This test, tests whether most recent row guarantee by the input batch of the `BoundedWindowAggExec`
+    // helps `BoundedWindowAggExec` to generate low latency result in the `Linear` mode.
+    // Input data generated at the source is
+    //     "+----+----------+-------------+-----------------+",
+    //     "| sn | sn_clone | single_hash | duplicated_hash |",
+    //     "+----+----------+-------------+-----------------+",
+    //     "| 0  | 0        | 0           | 0               |",
+    //     "| 1  | 1        | 0           | 0               |",
+    //     "| 2  | 2        | 0           | 0               |",
+    //     "| 3  | 3        | 0           | 0               |",
+    //     "| 4  | 4        | 0           | 1               |",
+    //     "| 5  | 5        | 0           | 1               |",
+    //     "| 6  | 6        | 0           | 1               |",
+    //     "| 7  | 7        | 0           | 1               |",
+    //     "| 8  | 8        | 0           | 1               |",
+    //     "| 9  | 9        | 0           | 1               |",
+    //     "+----+----------+-------------+-----------------+",
+    //
+    // Effectively following query is run on this data
+    //
+    //   SELECT *, COUNT(*) OVER(PARTITION BY duplicated_hash ORDER BY sn RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+    //   FROM test;
+    //
+    // partition `duplicated_hash=0` receives following data from the input
+    //
+    //     "+----+----------+-------------+-----------------+",
+    //     "| sn | sn_clone | single_hash | duplicated_hash |",
+    //     "+----+----------+-------------+-----------------+",
+    //     "| 0  | 0        | 0           | 0               |",
+    //     "| 1  | 1        | 0           | 0               |",
+    //     "| 2  | 2        | 0           | 0               |",
+    //     "| 3  | 3        | 0           | 0               |",
+    //     "+----+----------+-------------+-----------------+",
+    // normally `BoundedWindowExec` can only generate following result from the input above
+    //
+    //      "+----+----------+-------------+-----------------+-------+",
+    //      "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
+    //      "+----+----------+-------------+-----------------+-------+",
+    //      "| 0  | 0        | 0           | 0               | 2     |",
+    //      "| 1  | 1        | 0           | 0               | 2     |",
+    //      "+----+----------+-------------+-----------------+-------+",
+    // where last result of last row is missing. Since window frame end is not may change with future data
+    // since window frame end is determined by 1 following (To generate result for row=3[where sn=2] we
+    // need to received sn=4 to make sure window frame end bound won't change with future data).
+    //
+    // With the ability of different partitions to use global ordering at the input (where most up-to date
+    //   row is
+    //      "| 9  | 9        | 0           | 1               |",
+    //   )
+    //
+    // `BoundedWindowExec` should be able to generate following result in the test
+    //
+    //       "+----+----------+-------------+-----------------+-------+",
+    //       "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
+    //       "+----+----------+-------------+-----------------+-------+",
+    //       "| 0  | 0        | 0           | 0               | 2     |",
+    //       "| 1  | 1        | 0           | 0               | 2     |",
+    //       "| 2  | 2        | 0           | 0               | 2     |",
+    //       "| 3  | 3        | 0           | 0               | 1     |",
+    //       "| 4  | 4        | 0           | 1               | 2     |",
+    //       "| 5  | 5        | 0           | 1               | 2     |",
+    //       "| 6  | 6        | 0           | 1               | 2     |",
+    //       "| 7  | 7        | 0           | 1               | 1     |",
+    //       "+----+----------+-------------+-----------------+-------+",
+    // where result for all rows except last 2 is calculated (To calculate result for row 9 where sn=8
+    //   we need to receive sn=10 value to calculate it result.).
     #[tokio::test]
     async fn bounded_window_exec_linear_mode_range_information() -> Result<()> {
         let n_rows = 10;
@@ -1678,7 +1744,6 @@ mod tests {
 
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
-        // let batches = collect_bonafide(plan, task_ctx).await?;
 
         let expected = [
             "+----+----------+-------------+-----------------+-------+",
@@ -1699,6 +1764,12 @@ mod tests {
         Ok(())
     }
 
+    // The similar comment applies to this test with above where query effectively executed is following:
+    //
+    //   SELECT *, COUNT(*) OVER(PARTITION BY duplicated_hash ORDER BY duplicated_hash RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+    //   FROM test;
+    //
+    // where ORDER BY is changed from `ORDER BY sn` to `ORDER BY duplicated_hash`
     #[tokio::test]
     async fn bounded_window_exec_linear_mode_range_information2() -> Result<()> {
         let n_rows = 10;
