@@ -16,8 +16,11 @@
 // under the License.
 
 use arrow::datatypes::DataType;
+use arrow_array::{Scalar, StringArray};
+use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{exec_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_expr::field_util::GetFieldAccessSchema;
+use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
@@ -69,143 +72,19 @@ impl ScalarUDFImpl for GetFieldFunc {
             );
         }
 
-        match &args[0] {
-            Expr::Column(name) => {
-                let data_type = schema.data_type(name)?;
-                match data_type {
-                    DataType::Struct(fields) => {
-                        let field_name = match &args[1] {
-                            Expr::Literal(ScalarValue::Utf8(name)) => {
-                                name.as_ref().map(|x| x.as_str())
-                            }
-                            _ => {
-                                return exec_err!(
-                                        "get_field function requires the argument field_name to be a string"
-                                    );
-                            }
-                        };
-                        let field =
-                            fields.iter().find(|f| f.name() == field_name.unwrap());
-                        match field {
-                            Some(field) => Ok(field.data_type().clone()),
-                            None => {
-                                exec_err!(
-                                        "get_field function can't find the field {} in the struct", field_name.unwrap()
-                                    )
-                            }
-                        }
-                    }
-                    DataType::Map(a ,  b) =>{
-                        match a.data_type() {
-                            DataType::Struct(fields) => {
-                                let field_name = match &args[1] {
-                                    Expr::Literal(ScalarValue::Utf8(name)) => {
-                                        name.as_ref().map(|x| x.as_str())
-                                    }
-                                    _ => {
-                                        return exec_err!(
-                                                "get_field function requires the argument field_name to be a string"
-                                            );
-                                    }
-                                };
-                                let field =
-                                    fields.iter().find(|f| f.name() == field_name.unwrap());
-                                match field {
-                                    Some(field) => Ok(field.data_type().clone()),
-                                    None => {
-                                        exec_err!(
-                                                "get_field function can't find the field {} in the struct", field_name.unwrap()
-                                            )
-                                    }
-                                }
-                            }
-                            _ => {
-                                exec_err!(
-                                    "get_field function requires the first argument to be struct array"
-                                )
-                            }
-                        }
-                    }
-                    _ => {
-                        exec_err!(
-                            "get_field function requires the first argument to be struct array"
-                        )
-                    }
-                }
-            }
-            Expr::ScalarFunction(fun) => {
-                let index = match &args[1] {
-                    Expr::Literal(ScalarValue::Utf8(name)) => {
-                        name.as_ref().map(|x| x.as_str()).unwrap()[1..]
-                            .parse::<usize>()
-                            .unwrap()
-                    }
-                    _ => {
-                        return exec_err!(
-                                "get_field function requires the argument field_name to be a string"
-                        );
-                    }
-                };
-                if let Some(expr) = fun.args.get(index) {
-                    match expr {
-                        Expr::Literal(scalar) => {
-                            println!("{:?}", scalar);
-                            Ok(scalar.data_type().clone())
-                        }
-                        Expr::Column(name) => {
-                            let data_type = schema.data_type(name)?;
-                            Ok(data_type.clone())
-                        }
-                        _ => {
-                            exec_err!(
-                                "get_field function requires the first argument to be struct array 1"
-                            )
-                        }
-                    }
-                } else {
-                    exec_err!(
-                        "get_field function requires the first argument to be struct array 2"
-                    )
-                }
-            }
-            Expr::Literal(scalar) => match scalar {
-                ScalarValue::Struct(struct_array) => {
-                    let field_name = match &args[1] {
-                        Expr::Literal(ScalarValue::Utf8(name)) => {
-                            name.as_ref().map(|x| x.as_str())
-                        }
-                        _ => {
-                            return exec_err!(
-                                        "get_field function requires the argument field_name to be a string"
-                                    );
-                        }
-                    };
-                    println!("{}", field_name.unwrap());
-                    let field = struct_array
-                        .fields()
-                        .iter()
-                        .find(|f| f.name() == field_name.unwrap());
-                    match field {
-                        Some(field) => Ok(field.data_type().clone()),
-                        None => {
-                            exec_err!(
-                                        "get_field function can't find the field {} in the struct", field_name.unwrap()
-                                    )
-                        }
-                    }
-                }
-                _ => {
-                    exec_err!(
-                            "get_field function requires the first argument to be struct array 3"
-                        )
-                }
-            },
+        let name = match &args[1] {
+            Expr::Literal(name) => name,
             _ => {
-                exec_err!(
-                    "get_field function requires the first argument to be struct array 4"
-                )
+                return exec_err!(
+                    "get_field function requires the argument field_name to be a string"
+                );
             }
-        }
+        };
+        let access_schema = GetFieldAccessSchema::NamedStructField { name: name.clone() };
+        let arg_dt = args[0].get_type(schema)?;
+        access_schema
+            .get_accessed_field(&arg_dt)
+            .map(|f| f.data_type().clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -216,73 +95,45 @@ impl ScalarUDFImpl for GetFieldFunc {
             );
         }
 
-        match &args[0] {
-            ColumnarValue::Array(array) => {
-                let struct_array = match array
-                    .as_any()
-                    .downcast_ref::<arrow::array::StructArray>()
-                {
-                    Some(struct_array) => struct_array,
-                    None => {
-                        return exec_err!(
-                            "get_field function requires the first argument to be struct array, 5"
-                        );
-                    }
-                };
-                match &args[1] {
-                    ColumnarValue::Scalar(scalar) => {
-                        let column_name = match scalar {
-                            ScalarValue::Utf8(name) => name.as_ref().map(|x| x.as_str()),
-                            _ => {
-                                return exec_err!(
-                                    "get_field function requires the argument field_name to be a string"
-                                );
-                            }
-                        };
-                        Ok(ColumnarValue::Array(
-                            struct_array
-                                .column_by_name(column_name.unwrap())
-                                .unwrap()
-                                .clone(),
-                        ))
-                    }
-                    _ => {
-                        exec_err!(
-                            "get_field function requires the argument field_name to be a string"
-                        )
-                    }
-                }
+        let arr;
+        let array = match &args[0] {
+            ColumnarValue::Array(array) => array,
+            ColumnarValue::Scalar(scalar) => {
+                arr = scalar.clone().to_array()?;
+                &arr
             }
-            ColumnarValue::Scalar(scalar) => match scalar {
-                ScalarValue::Struct(struct_array) => {
-                    let column_name = match &args[1] {
-                        ColumnarValue::Scalar(scalar) => match scalar {
-                            ScalarValue::Utf8(name) => name.as_ref().map(|x| x.as_str()),
-                            _ => {
-                                return exec_err!(
-                                            "get_field function requires the argument field_name to be a string"
-                                        );
-                            }
-                        },
-                        _ => {
-                            return exec_err!(
-                                    "get_field function requires the argument field_name to be a string"
-                                );
-                        }
-                    };
-                    Ok(ColumnarValue::Array(
-                        struct_array
-                            .column_by_name(column_name.unwrap())
-                            .unwrap()
-                            .clone(),
-                    ))
+        };
+        let name = match &args[1] {
+            ColumnarValue::Scalar(name) => name,
+            _ => {
+                return exec_err!(
+                    "get_field function requires the argument field_name to be a string"
+                );
+            }
+        };
+        match (array.data_type(), name) {
+                (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
+                    let map_array = as_map_array(array.as_ref())?;
+                    let key_scalar = Scalar::new(StringArray::from(vec![k.clone()]));
+                    let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
+                    let entries = arrow::compute::filter(map_array.entries(), &keys)?;
+                    let entries_struct_array = as_struct_array(entries.as_ref())?;
+                    Ok(ColumnarValue::Array(entries_struct_array.column(1).clone()))
                 }
-                _ => {
-                    exec_err!(
-                            "get_field function requires the first argument to be struct array"
-                        )
+                (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+                    let as_struct_array = as_struct_array(&array)?;
+                    match as_struct_array.column_by_name(&k) {
+                        None => exec_err!(
+                            "get indexed field {k} not found in struct"),
+                        Some(col) => Ok(ColumnarValue::Array(col.clone()))
+                    }
                 }
-            },
-        }
+                (DataType::Struct(_), name) => exec_err!(
+                    "get indexed field is only possible on struct with utf8 indexes. \
+                             Tried with {name:?} index"),
+                (dt, name) => exec_err!(
+                                "get indexed field is only possible on lists with int64 indexes or struct \
+                                         with utf8 indexes. Tried {dt:?} with {name:?} index"),
+            }
     }
 }
