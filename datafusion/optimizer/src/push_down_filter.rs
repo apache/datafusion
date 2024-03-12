@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    JoinConstraint, Result,
+    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, JoinConstraint,
+    Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::replace_col;
