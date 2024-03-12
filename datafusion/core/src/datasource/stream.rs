@@ -359,6 +359,6 @@ impl DataSink for StreamWrite {
             }
         }
         drop(sender);
-        write_task.join().await.unwrap()
+        write_task.join_unwind().await
     }
 }

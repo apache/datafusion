@@ -124,6 +124,10 @@ SELECT regexp_like('(?<=[A-Z]\w )Smith', 'John Smith', 'i');
 ----
 false
 
+query B
+select regexp_like('aaa-555', '.*-(\d*)');
+----
+true
 
 #
 # regexp_match tests

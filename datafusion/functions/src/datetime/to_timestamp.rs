@@ -127,9 +127,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -179,9 +177,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_seconds") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -228,9 +224,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_millis") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -277,9 +271,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_micros") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -326,9 +318,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            if let Some(value) = validate_data_types(args, "to_timestamp_nanos") {
-                return value;
-            }
+            validate_data_types(args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -390,8 +380,6 @@ mod tests {
 
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
-
-    use crate::datetime::common::string_to_datetime_formatted;
 
     use super::*;
 
@@ -549,6 +537,31 @@ mod tests {
 
         let expected_err =
             "Arrow error: Parser error: Error parsing timestamp from '2020-09-08 - 13:42:29.19085Z': error parsing time";
+        match to_timestamp(&[string_array]) {
+            Ok(_) => panic!("Expected error but got success"),
+            Err(e) => {
+                assert!(
+                    e.to_string().contains(expected_err),
+                    "Can not find expected error '{expected_err}'. Actual error '{e}'"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn to_timestamp_with_invalid_tz() -> Result<()> {
+        let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
+
+        date_string_builder.append_null();
+
+        date_string_builder.append_value("2020-09-08T13:42:29ZZ");
+
+        let string_array =
+            ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
+
+        let expected_err =
+            "Arrow error: Parser error: Invalid timezone \"ZZ\": 'ZZ' is not a valid timezone";
         match to_timestamp(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {

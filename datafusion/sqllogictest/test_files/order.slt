@@ -784,3 +784,110 @@ SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
 ----------------AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[], ordering_mode=PartiallySorted([0])
 ------------------ProjectionExec: expr=[column1@0 as t]
 --------------------ValuesExec
+
+#####
+# Multi column sorting with lists
+#####
+
+statement ok
+create table foo as values (2, [0]), (4, [1]), (2, [6]), (1, [2, 5]), (0, [3]), (3, [4]), (2, [2, 5]), (2, [7]);
+
+query I?
+select column1, column2 from foo ORDER BY column1, column2;
+----
+0 [3]
+1 [2, 5]
+2 [0]
+2 [2, 5]
+2 [6]
+2 [7]
+3 [4]
+4 [1]
+
+query I?
+select column1, column2 from foo ORDER BY column1 desc, column2;
+----
+4 [1]
+3 [4]
+2 [0]
+2 [2, 5]
+2 [6]
+2 [7]
+1 [2, 5]
+0 [3]
+
+query I?
+select column1, column2 from foo ORDER BY column1, column2 desc;
+----
+0 [3]
+1 [2, 5]
+2 [7]
+2 [6]
+2 [2, 5]
+2 [0]
+3 [4]
+4 [1]
+
+query I?
+select column1, column2 from foo ORDER BY column1 desc, column2 desc;
+----
+4 [1]
+3 [4]
+2 [7]
+2 [6]
+2 [2, 5]
+2 [0]
+1 [2, 5]
+0 [3]
+
+query ?I
+select column2, column1 from foo ORDER BY column2, column1;
+----
+[0] 2
+[1] 4
+[2, 5] 1
+[2, 5] 2
+[3] 0
+[4] 3
+[6] 2
+[7] 2
+
+query ?I
+select column2, column1 from foo ORDER BY column2 desc, column1;
+----
+[7] 2
+[6] 2
+[4] 3
+[3] 0
+[2, 5] 1
+[2, 5] 2
+[1] 4
+[0] 2
+
+query ?I
+select column2, column1 from foo ORDER BY column2, column1 desc;
+----
+[0] 2
+[1] 4
+[2, 5] 2
+[2, 5] 1
+[3] 0
+[4] 3
+[6] 2
+[7] 2
+
+query ?I
+select column2, column1 from foo ORDER BY column2 desc, column1 desc;
+----
+[7] 2
+[6] 2
+[4] 3
+[3] 0
+[2, 5] 2
+[2, 5] 1
+[1] 4
+[0] 2
+
+# Cleanup
+statement ok
+drop table foo;

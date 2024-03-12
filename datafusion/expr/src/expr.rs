@@ -17,28 +17,27 @@
 
 //! Logical Expressions: [`Expr`]
 
-use crate::expr_fn::binary_expr;
-use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
-use crate::window_frame;
-
-use crate::Operator;
-use crate::{aggregate_function, ExprSchemable};
-use crate::{built_in_function, BuiltinScalarFunction};
-use crate::{built_in_window_function, udaf};
-use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
-use datafusion_common::{plan_err, Column, Result, ScalarValue};
-use sqlparser::ast::NullTreatment;
 use std::collections::HashSet;
-use std::fmt;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{self, Display, Formatter, Write};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::Signature;
+use crate::expr_fn::binary_expr;
+use crate::logical_plan::Subquery;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::window_frame;
+use crate::{
+    aggregate_function, built_in_function, built_in_window_function, udaf,
+    BuiltinScalarFunction, ExprSchemable, Operator, Signature,
+};
+
+use arrow::datatypes::DataType;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    internal_err, plan_err, Column, DFSchema, OwnedTableReference, Result, ScalarValue,
+};
+use sqlparser::ast::NullTreatment;
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -420,6 +419,11 @@ impl ScalarFunction {
             args,
         }
     }
+
+    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    pub fn new_func_def(func_def: ScalarFunctionDefinition, args: Vec<Expr>) -> Self {
+        Self { func_def, args }
+    }
 }
 
 /// Access a sub field of a nested type, such as `Field` or `List`
@@ -544,6 +548,7 @@ pub struct AggregateFunction {
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
     pub order_by: Option<Vec<Expr>>,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
@@ -553,6 +558,7 @@ impl AggregateFunction {
         distinct: bool,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
             func_def: AggregateFunctionDefinition::BuiltIn(fun),
@@ -560,6 +566,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
+            null_treatment,
         }
     }
 
@@ -577,6 +584,7 @@ impl AggregateFunction {
             distinct,
             filter,
             order_by,
+            null_treatment: None,
         }
     }
 }
@@ -647,6 +655,7 @@ pub struct WindowFunction {
     pub order_by: Vec<Expr>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
+    /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -1275,8 +1284,9 @@ impl Expr {
                 rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
                 rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
             }
-            Ok(Transformed::Yes(expr))
+            Ok(Transformed::yes(expr))
         })
+        .data()
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
@@ -1471,9 +1481,13 @@ impl fmt::Display for Expr {
                 ref args,
                 filter,
                 order_by,
+                null_treatment,
                 ..
             }) => {
                 fmt_function(f, func_def.name(), *distinct, args, true)?;
+                if let Some(nt) = null_treatment {
+                    write!(f, " {}", nt)?;
+                }
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1804,6 +1818,7 @@ fn create_name(e: &Expr) -> Result<String> {
             args,
             filter,
             order_by,
+            null_treatment,
         }) => {
             let name = match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)
@@ -1823,6 +1838,9 @@ fn create_name(e: &Expr) -> Result<String> {
             if let Some(order_by) = order_by {
                 info += &format!(" ORDER BY [{}]", expr_vec_fmt!(order_by));
             };
+            if let Some(nt) = null_treatment {
+                info += &format!(" {}", nt);
+            }
             match func_def {
                 AggregateFunctionDefinition::BuiltIn(..)
                 | AggregateFunctionDefinition::Name(..) => {

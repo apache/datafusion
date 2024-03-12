@@ -16,6 +16,7 @@
 // under the License.
 
 use postgres_types::Type;
+use std::fmt::Display;
 use tokio_postgres::types::FromSql;
 
 pub struct PgRegtype {
@@ -37,8 +38,8 @@ impl<'a> FromSql<'a> for PgRegtype {
     }
 }
 
-impl ToString for PgRegtype {
-    fn to_string(&self) -> String {
-        self.value.clone()
+impl Display for PgRegtype {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
     }
 }

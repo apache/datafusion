@@ -174,14 +174,13 @@ impl ExecutionPlan for NdJsonExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
-        let (projected_schema, ..) = self.base_config.project();
 
         let object_store = context
             .runtime_env()
             .object_store(&self.base_config.object_store_url)?;
         let opener = JsonOpener {
             batch_size,
-            projected_schema,
+            projected_schema: self.base_config.projected_file_schema(),
             file_compression_type: self.file_compression_type.to_owned(),
             object_store,
         };
@@ -757,7 +756,7 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
         let out_dir_url = "file://local/out/";
         let df = ctx.sql("SELECT a, b FROM test").await?;
-        df.write_json(out_dir_url, DataFrameWriteOptions::new())
+        df.write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
@@ -851,7 +850,7 @@ mod tests {
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let out_dir_url = "file://local/out";
         let e = df
-            .write_json(out_dir_url, DataFrameWriteOptions::new())
+            .write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");

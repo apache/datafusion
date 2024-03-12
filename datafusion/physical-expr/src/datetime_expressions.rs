@@ -17,40 +17,20 @@
 
 //! DateTime expressions
 
-use std::ops::{Add, Sub};
-use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::compute::cast;
+use arrow::datatypes::TimeUnit;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow::{
-    array::{Array, ArrayRef, Float64Array, PrimitiveArray},
-    datatypes::{
-        ArrowNumericType, ArrowTemporalType, DataType, IntervalDayTimeType,
-        IntervalMonthDayNanoType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
-    },
-};
-use arrow::{
-    compute::kernels::temporal,
-    datatypes::TimeUnit,
-    temporal_conversions::{as_datetime_with_timezone, timestamp_ns_to_datetime},
+    array::{Array, ArrayRef, PrimitiveArray},
+    datatypes::DataType,
 };
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::temporal_conversions::NANOSECONDS;
-use arrow_array::timezone::Tz;
-use arrow_array::types::{ArrowTimestampType, Date32Type, Int32Type};
+use arrow_array::types::{Date32Type, Int32Type};
 use arrow_array::StringArray;
-use chrono::prelude::*;
-use chrono::{Duration, LocalResult, Months, NaiveDate};
-
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_primitive_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array,
-};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Create an implementation of `now()` that always returns the
@@ -419,728 +399,6 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-fn quarter_month<T>(date: &T) -> u32
-where
-    T: Datelike,
-{
-    1 + 3 * ((date.month() - 1) / 3)
-}
-
-fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
-where
-    T: Datelike + Timelike + Sub<Duration, Output = T> + Copy,
-{
-    let value = match granularity {
-        "millisecond" => value,
-        "microsecond" => value,
-        "second" => value.and_then(|d| d.with_nanosecond(0)),
-        "minute" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0)),
-        "hour" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0)),
-        "day" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0))
-            .and_then(|d| d.with_hour(0)),
-        "week" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0))
-            .and_then(|d| d.with_hour(0))
-            .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
-        "month" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0))
-            .and_then(|d| d.with_hour(0))
-            .and_then(|d| d.with_day0(0)),
-        "quarter" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0))
-            .and_then(|d| d.with_hour(0))
-            .and_then(|d| d.with_day0(0))
-            .and_then(|d| d.with_month(quarter_month(&d))),
-        "year" => value
-            .and_then(|d| d.with_nanosecond(0))
-            .and_then(|d| d.with_second(0))
-            .and_then(|d| d.with_minute(0))
-            .and_then(|d| d.with_hour(0))
-            .and_then(|d| d.with_day0(0))
-            .and_then(|d| d.with_month0(0)),
-        unsupported => {
-            return exec_err!("Unsupported date_trunc granularity: {unsupported}");
-        }
-    };
-    Ok(value)
-}
-
-fn _date_trunc_coarse_with_tz(
-    granularity: &str,
-    value: Option<DateTime<Tz>>,
-) -> Result<Option<i64>> {
-    if let Some(value) = value {
-        let local = value.naive_local();
-        let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
-        let truncated = truncated.and_then(|truncated| {
-            match truncated.and_local_timezone(value.timezone()) {
-                LocalResult::None => {
-                    // This can happen if the date_trunc operation moves the time into
-                    // an hour that doesn't exist due to daylight savings. On known example where
-                    // this can happen is with historic dates in the America/Sao_Paulo time zone.
-                    // To account for this adjust the time by a few hours, convert to local time,
-                    // and then adjust the time back.
-                    truncated
-                        .sub(Duration::hours(3))
-                        .and_local_timezone(value.timezone())
-                        .single()
-                        .map(|v| v.add(Duration::hours(3)))
-                }
-                LocalResult::Single(datetime) => Some(datetime),
-                LocalResult::Ambiguous(datetime1, datetime2) => {
-                    // Because we are truncating from an equally or more specific time
-                    // the original time must have been within the ambiguous local time
-                    // period. Therefore the offset of one of these times should match the
-                    // offset of the original time.
-                    if datetime1.offset().fix() == value.offset().fix() {
-                        Some(datetime1)
-                    } else {
-                        Some(datetime2)
-                    }
-                }
-            }
-        });
-        Ok(truncated.and_then(|value| value.timestamp_nanos_opt()))
-    } else {
-        _date_trunc_coarse::<NaiveDateTime>(granularity, None)?;
-        Ok(None)
-    }
-}
-
-fn _date_trunc_coarse_without_tz(
-    granularity: &str,
-    value: Option<NaiveDateTime>,
-) -> Result<Option<i64>> {
-    let value = _date_trunc_coarse::<NaiveDateTime>(granularity, value)?;
-    Ok(value.and_then(|value| value.timestamp_nanos_opt()))
-}
-
-/// Tuncates the single `value`, expressed in nanoseconds since the
-/// epoch, for granularities greater than 1 second, in taking into
-/// account that some granularities are not uniform durations of time
-/// (e.g. months are not always the same lengths, leap seconds, etc)
-fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i64> {
-    let value = match tz {
-        Some(tz) => {
-            // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
-            // and NaiveDateTime (ISO 8601) has no concept of timezones
-            let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, tz)
-                .ok_or(DataFusionError::Execution(format!(
-                "Timestamp {value} out of range"
-            )))?;
-            _date_trunc_coarse_with_tz(granularity, Some(value))
-        }
-        None => {
-            // Use chrono NaiveDateTime to clear the various fields, if we don't have a timezone.
-            let value = timestamp_ns_to_datetime(value).ok_or_else(|| {
-                DataFusionError::Execution(format!("Timestamp {value} out of range"))
-            })?;
-            _date_trunc_coarse_without_tz(granularity, Some(value))
-        }
-    }?;
-
-    // `with_x(0)` are infallible because `0` are always a valid
-    Ok(value.unwrap())
-}
-
-// truncates a single value with the given timeunit to the specified granularity
-fn general_date_trunc(
-    tu: TimeUnit,
-    value: &Option<i64>,
-    tz: Option<Tz>,
-    granularity: &str,
-) -> Result<Option<i64>, DataFusionError> {
-    let scale = match tu {
-        TimeUnit::Second => 1_000_000_000,
-        TimeUnit::Millisecond => 1_000_000,
-        TimeUnit::Microsecond => 1_000,
-        TimeUnit::Nanosecond => 1,
-    };
-
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
-    // convert to nanoseconds
-    let nano = date_trunc_coarse(granularity, scale * value, tz)?;
-
-    let result = match tu {
-        TimeUnit::Second => match granularity {
-            "minute" => Some(nano / 1_000_000_000 / 60 * 60),
-            _ => Some(nano / 1_000_000_000),
-        },
-        TimeUnit::Millisecond => match granularity {
-            "minute" => Some(nano / 1_000_000 / 1_000 / 60 * 1_000 * 60),
-            "second" => Some(nano / 1_000_000 / 1_000 * 1_000),
-            _ => Some(nano / 1_000_000),
-        },
-        TimeUnit::Microsecond => match granularity {
-            "minute" => Some(nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000),
-            "second" => Some(nano / 1_000 / 1_000_000 * 1_000_000),
-            "millisecond" => Some(nano / 1_000 / 1_000 * 1_000),
-            _ => Some(nano / 1_000),
-        },
-        _ => match granularity {
-            "minute" => Some(nano / 1_000_000_000 / 60 * 1_000_000_000 * 60),
-            "second" => Some(nano / 1_000_000_000 * 1_000_000_000),
-            "millisecond" => Some(nano / 1_000_000 * 1_000_000),
-            "microsecond" => Some(nano / 1_000 * 1_000),
-            _ => Some(nano),
-        },
-    };
-    Ok(result)
-}
-
-fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
-    tz.as_ref()
-        .map(|tz| {
-            Tz::from_str(tz).map_err(|op| {
-                DataFusionError::Execution(format!("failed on timezone {tz}: {:?}", op))
-            })
-        })
-        .transpose()
-}
-
-/// date_trunc SQL function
-pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let (granularity, array) = (&args[0], &args[1]);
-
-    let granularity =
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = granularity {
-            v.to_lowercase()
-        } else {
-            return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
-        };
-
-    fn process_array<T: ArrowTimestampType>(
-        array: &dyn Array,
-        granularity: String,
-        tz_opt: &Option<Arc<str>>,
-    ) -> Result<ColumnarValue> {
-        let parsed_tz = parse_tz(tz_opt)?;
-        let array = as_primitive_array::<T>(array)?;
-        let array = array
-            .iter()
-            .map(|x| general_date_trunc(T::UNIT, &x, parsed_tz, granularity.as_str()))
-            .collect::<Result<PrimitiveArray<T>>>()?
-            .with_timezone_opt(tz_opt.clone());
-        Ok(ColumnarValue::Array(Arc::new(array)))
-    }
-
-    fn process_scalar<T: ArrowTimestampType>(
-        v: &Option<i64>,
-        granularity: String,
-        tz_opt: &Option<Arc<str>>,
-    ) -> Result<ColumnarValue> {
-        let parsed_tz = parse_tz(tz_opt)?;
-        let value = general_date_trunc(T::UNIT, v, parsed_tz, granularity.as_str())?;
-        let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
-        Ok(ColumnarValue::Scalar(value))
-    }
-
-    Ok(match array {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
-        }
-        ColumnarValue::Array(array) => {
-            let array_type = array.data_type();
-            match array_type {
-                DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    process_array::<TimestampSecondType>(array, granularity, tz_opt)?
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    process_array::<TimestampMillisecondType>(array, granularity, tz_opt)?
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    process_array::<TimestampMicrosecondType>(array, granularity, tz_opt)?
-                }
-                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                    process_array::<TimestampNanosecondType>(array, granularity, tz_opt)?
-                }
-                _ => process_array::<TimestampNanosecondType>(array, granularity, &None)?,
-            }
-        }
-        _ => {
-            return exec_err!(
-                "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
-            );
-        }
-    })
-}
-
-// return time in nanoseconds that the source timestamp falls into based on the stride and origin
-fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> i64 {
-    let time_diff = source - origin;
-
-    // distance from origin to bin
-    let time_delta = compute_distance(time_diff, stride_nanos);
-
-    origin + time_delta
-}
-
-// distance from origin to bin
-fn compute_distance(time_diff: i64, stride: i64) -> i64 {
-    let time_delta = time_diff - (time_diff % stride);
-
-    if time_diff < 0 && stride > 1 {
-        // The origin is later than the source timestamp, round down to the previous bin
-        time_delta - stride
-    } else {
-        time_delta
-    }
-}
-
-// return time in nanoseconds that the source timestamp falls into based on the stride and origin
-fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64 {
-    // convert source and origin to DateTime<Utc>
-    let source_date = to_utc_date_time(source);
-    let origin_date = to_utc_date_time(origin);
-
-    // calculate the number of months between the source and origin
-    let month_diff = (source_date.year() - origin_date.year()) * 12
-        + source_date.month() as i32
-        - origin_date.month() as i32;
-
-    // distance from origin to bin
-    let month_delta = compute_distance(month_diff as i64, stride_months);
-
-    let mut bin_time = if month_delta < 0 {
-        origin_date - Months::new(month_delta.unsigned_abs() as u32)
-    } else {
-        origin_date + Months::new(month_delta as u32)
-    };
-
-    // If origin is not midnight of first date of the month, the bin_time may be larger than the source
-    // In this case, we need to move back to previous bin
-    if bin_time > source_date {
-        let month_delta = month_delta - stride_months;
-        bin_time = if month_delta < 0 {
-            origin_date - Months::new(month_delta.unsigned_abs() as u32)
-        } else {
-            origin_date + Months::new(month_delta as u32)
-        };
-    }
-
-    bin_time.timestamp_nanos_opt().unwrap()
-}
-
-fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
-    let secs = nanos / 1_000_000_000;
-    let nsec = (nanos % 1_000_000_000) as u32;
-    let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
-}
-
-/// DATE_BIN sql function
-pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() == 2 {
-        // Default to unix EPOCH
-        let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-            Some(0),
-            Some("+00:00".into()),
-        ));
-        date_bin_impl(&args[0], &args[1], &origin)
-    } else if args.len() == 3 {
-        date_bin_impl(&args[0], &args[1], &args[2])
-    } else {
-        exec_err!("DATE_BIN expected two or three arguments")
-    }
-}
-
-enum Interval {
-    Nanoseconds(i64),
-    Months(i64),
-}
-
-impl Interval {
-    /// Returns (`stride_nanos`, `fn`) where
-    ///
-    /// 1. `stride_nanos` is a width, in nanoseconds
-    /// 2. `fn` is a function that takes (stride_nanos, source, origin)
-    ///
-    /// `source` is the timestamp being binned
-    ///
-    /// `origin`  is the time, in nanoseconds, where windows are measured from
-    fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> i64) {
-        match self {
-            Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
-            Interval::Months(months) => (*months, date_bin_months_interval),
-        }
-    }
-}
-
-// Supported intervals:
-//  1. IntervalDayTime: this means that the stride is in days, hours, minutes, seconds and milliseconds
-//     We will assume month interval won't be converted into this type
-//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somwhere
-//             for month interval. I need to find that and make it ScalarValue::IntervalMonthDayNano instead
-// 2. IntervalMonthDayNano
-fn date_bin_impl(
-    stride: &ColumnarValue,
-    array: &ColumnarValue,
-    origin: &ColumnarValue,
-) -> Result<ColumnarValue> {
-    let stride = match stride {
-        ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
-            let (days, ms) = IntervalDayTimeType::to_parts(*v);
-            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
-                .num_nanoseconds();
-
-            match nanos {
-                Some(v) => Interval::Nanoseconds(v),
-                _ => return exec_err!("DATE_BIN stride argument is too large"),
-            }
-        }
-        ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(v))) => {
-            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
-
-            // If interval is months, its origin must be midnight of first date of the month
-            if months != 0 {
-                // Return error if days or nanos is not zero
-                if days != 0 || nanos != 0 {
-                    return not_impl_err!(
-                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals"
-                    );
-                } else {
-                    Interval::Months(months as i64)
-                }
-            } else {
-                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
-                    .num_nanoseconds();
-                match nanos {
-                    Some(v) => Interval::Nanoseconds(v),
-                    _ => return exec_err!("DATE_BIN stride argument is too large"),
-                }
-            }
-        }
-        ColumnarValue::Scalar(v) => {
-            return exec_err!(
-                "DATE_BIN expects stride argument to be an INTERVAL but got {}",
-                v.data_type()
-            )
-        }
-        ColumnarValue::Array(_) => {
-            return not_impl_err!(
-            "DATE_BIN only supports literal values for the stride argument, not arrays"
-        )
-        }
-    };
-
-    let origin = match origin {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => *v,
-        ColumnarValue::Scalar(v) => {
-            return exec_err!(
-                "DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got {}",
-                v.data_type()
-            )
-        }
-        ColumnarValue::Array(_) => return not_impl_err!(
-            "DATE_BIN only supports literal values for the origin argument, not arrays"
-        ),
-    };
-
-    let (stride, stride_fn) = stride.bin_fn();
-
-    // Return error if stride is 0
-    if stride == 0 {
-        return exec_err!("DATE_BIN stride must be non-zero");
-    }
-
-    fn stride_map_fn<T: ArrowTimestampType>(
-        origin: i64,
-        stride: i64,
-        stride_fn: fn(i64, i64, i64) -> i64,
-    ) -> impl Fn(Option<i64>) -> Option<i64> {
-        let scale = match T::UNIT {
-            TimeUnit::Nanosecond => 1,
-            TimeUnit::Microsecond => NANOSECONDS / 1_000_000,
-            TimeUnit::Millisecond => NANOSECONDS / 1_000,
-            TimeUnit::Second => NANOSECONDS,
-        };
-        move |x: Option<i64>| x.map(|x| stride_fn(stride, x * scale, origin) / scale)
-    }
-
-    Ok(match array {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                apply_stride_fn(*v),
-                tz_opt.clone(),
-            ))
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                apply_stride_fn(*v),
-                tz_opt.clone(),
-            ))
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                apply_stride_fn(*v),
-                tz_opt.clone(),
-            ))
-        }
-        ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                apply_stride_fn(*v),
-                tz_opt.clone(),
-            ))
-        }
-
-        ColumnarValue::Array(array) => {
-            fn transform_array_with_stride<T>(
-                origin: i64,
-                stride: i64,
-                stride_fn: fn(i64, i64, i64) -> i64,
-                array: &ArrayRef,
-                tz_opt: &Option<Arc<str>>,
-            ) -> Result<ColumnarValue>
-            where
-                T: ArrowTimestampType,
-            {
-                let array = as_primitive_array::<T>(array)?;
-                let apply_stride_fn = stride_map_fn::<T>(origin, stride, stride_fn);
-                let array = array
-                    .iter()
-                    .map(apply_stride_fn)
-                    .collect::<PrimitiveArray<T>>()
-                    .with_timezone_opt(tz_opt.clone());
-
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            match array.data_type() {
-                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
-                    transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
-                    )?
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
-                    )?
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
-                    )?
-                }
-                DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
-                    )?
-                }
-                _ => {
-                    return exec_err!(
-                        "DATE_BIN expects source argument to be a TIMESTAMP but got {}",
-                        array.data_type()
-                    )
-                }
-            }
-        }
-        _ => {
-            return exec_err!(
-                "DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
-            );
-        }
-    })
-}
-
-macro_rules! extract_date_part {
-    ($ARRAY: expr, $FN:expr) => {
-        match $ARRAY.data_type() {
-            DataType::Date32 => {
-                let array = as_date32_array($ARRAY)?;
-                Ok($FN(array)
-                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-            }
-            DataType::Date64 => {
-                let array = as_date64_array($ARRAY)?;
-                Ok($FN(array)
-                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-            }
-            DataType::Timestamp(time_unit, _) => match time_unit {
-                TimeUnit::Second => {
-                    let array = as_timestamp_second_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Millisecond => {
-                    let array = as_timestamp_millisecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Microsecond => {
-                    let array = as_timestamp_microsecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Nanosecond => {
-                    let array = as_timestamp_nanosecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-            },
-            datatype => exec_err!("Extract does not support datatype {:?}", datatype),
-        }
-    };
-}
-
-/// DATE_PART SQL function
-pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!("Expected two arguments in DATE_PART");
-    }
-    let (date_part, array) = (&args[0], &args[1]);
-
-    let date_part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = date_part {
-        v
-    } else {
-        return exec_err!("First argument of `DATE_PART` must be non-null scalar Utf8");
-    };
-
-    let is_scalar = matches!(array, ColumnarValue::Scalar(_));
-
-    let array = match array {
-        ColumnarValue::Array(array) => array.clone(),
-        ColumnarValue::Scalar(scalar) => scalar.to_array()?,
-    };
-
-    let arr = match date_part.to_lowercase().as_str() {
-        "year" => extract_date_part!(&array, temporal::year),
-        "quarter" => extract_date_part!(&array, temporal::quarter),
-        "month" => extract_date_part!(&array, temporal::month),
-        "week" => extract_date_part!(&array, temporal::week),
-        "day" => extract_date_part!(&array, temporal::day),
-        "doy" => extract_date_part!(&array, temporal::doy),
-        "dow" => extract_date_part!(&array, temporal::num_days_from_sunday),
-        "hour" => extract_date_part!(&array, temporal::hour),
-        "minute" => extract_date_part!(&array, temporal::minute),
-        "second" => extract_date_part!(&array, seconds),
-        "millisecond" => extract_date_part!(&array, millis),
-        "microsecond" => extract_date_part!(&array, micros),
-        "nanosecond" => extract_date_part!(&array, nanos),
-        "epoch" => extract_date_part!(&array, epoch),
-        _ => exec_err!("Date part '{date_part}' not supported"),
-    }?;
-
-    Ok(if is_scalar {
-        ColumnarValue::Scalar(ScalarValue::try_from_array(&arr?, 0)?)
-    } else {
-        ColumnarValue::Array(arr?)
-    })
-}
-
-fn to_ticks<T>(array: &PrimitiveArray<T>, frac: i32) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    let zipped = temporal::second(array)?
-        .values()
-        .iter()
-        .zip(temporal::nanosecond(array)?.values().iter())
-        .map(|o| ((*o.0 as f64 + (*o.1 as f64) / 1_000_000_000.0) * (frac as f64)))
-        .collect::<Vec<f64>>();
-
-    Ok(Float64Array::from(zipped))
-}
-
-fn seconds<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1)
-}
-
-fn millis<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000)
-}
-
-fn micros<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000_000)
-}
-
-fn nanos<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000_000_000)
-}
-
-fn epoch<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    let b = match array.data_type() {
-        DataType::Timestamp(tu, _) => {
-            let scale = match tu {
-                TimeUnit::Second => 1,
-                TimeUnit::Millisecond => 1_000,
-                TimeUnit::Microsecond => 1_000_000,
-                TimeUnit::Nanosecond => 1_000_000_000,
-            } as f64;
-            array.unary(|n| {
-                let n: i64 = n.into();
-                n as f64 / scale
-            })
-        }
-        DataType::Date32 => {
-            let seconds_in_a_day = 86400_f64;
-            array.unary(|n| {
-                let n: i64 = n.into();
-                n as f64 * seconds_in_a_day
-            })
-        }
-        DataType::Date64 => array.unary(|n| {
-            let n: i64 = n.into();
-            n as f64 / 1_000_f64
-        }),
-        _ => return exec_err!("Can not convert {:?} to epoch", array.data_type()),
-    };
-    Ok(b)
-}
-
 /// from_unixtime() SQL function implementation
 pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 1 {
@@ -1167,757 +425,18 @@ pub fn from_unixtime_invoke(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{as_primitive_array, ArrayRef, Int64Array, IntervalDayTimeArray};
-    use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+    use arrow::array::{ArrayRef, Int64Array};
     use arrow_array::{
         Date32Array, Date64Array, Int32Array, Time32MillisecondArray, Time32SecondArray,
         Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         UInt32Array,
     };
+    use chrono::{NaiveDateTime, Timelike};
+
     use datafusion_common::ScalarValue;
 
     use super::*;
-
-    #[test]
-    fn date_trunc_test() {
-        let cases = vec![
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "second",
-                "2020-09-08T13:42:29.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "minute",
-                "2020-09-08T13:42:00.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "hour",
-                "2020-09-08T13:00:00.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "day",
-                "2020-09-08T00:00:00.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "week",
-                "2020-09-07T00:00:00.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "month",
-                "2020-09-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-09-08T13:42:29.190855Z",
-                "year",
-                "2020-01-01T00:00:00.000000Z",
-            ),
-            // week
-            (
-                "2021-01-01T13:42:29.190855Z",
-                "week",
-                "2020-12-28T00:00:00.000000Z",
-            ),
-            (
-                "2020-01-01T13:42:29.190855Z",
-                "week",
-                "2019-12-30T00:00:00.000000Z",
-            ),
-            // quarter
-            (
-                "2020-01-01T13:42:29.190855Z",
-                "quarter",
-                "2020-01-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-02-01T13:42:29.190855Z",
-                "quarter",
-                "2020-01-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-03-01T13:42:29.190855Z",
-                "quarter",
-                "2020-01-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-04-01T13:42:29.190855Z",
-                "quarter",
-                "2020-04-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-08-01T13:42:29.190855Z",
-                "quarter",
-                "2020-07-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-11-01T13:42:29.190855Z",
-                "quarter",
-                "2020-10-01T00:00:00.000000Z",
-            ),
-            (
-                "2020-12-01T13:42:29.190855Z",
-                "quarter",
-                "2020-10-01T00:00:00.000000Z",
-            ),
-        ];
-
-        cases.iter().for_each(|(original, granularity, expected)| {
-            let left = string_to_timestamp_nanos(original).unwrap();
-            let right = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_trunc_coarse(granularity, left, None).unwrap();
-            assert_eq!(result, right, "{original} = {expected}");
-        });
-    }
-
-    #[test]
-    fn test_date_trunc_timezones() {
-        let cases = vec![
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                Some("+00".into()),
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                None,
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                Some("-02".into()),
-                vec![
-                    "2020-09-07T02:00:00Z",
-                    "2020-09-07T02:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T01:00:00+05",
-                    "2020-09-08T02:00:00+05",
-                    "2020-09-08T03:00:00+05",
-                    "2020-09-08T04:00:00+05",
-                ],
-                Some("+05".into()),
-                vec![
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T01:00:00+08",
-                    "2020-09-08T02:00:00+08",
-                    "2020-09-08T03:00:00+08",
-                    "2020-09-08T04:00:00+08",
-                ],
-                Some("+08".into()),
-                vec![
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                ],
-            ),
-            (
-                vec![
-                    "2024-10-26T23:00:00Z",
-                    "2024-10-27T00:00:00Z",
-                    "2024-10-27T01:00:00Z",
-                    "2024-10-27T02:00:00Z",
-                ],
-                Some("Europe/Berlin".into()),
-                vec![
-                    "2024-10-27T00:00:00+02",
-                    "2024-10-27T00:00:00+02",
-                    "2024-10-27T00:00:00+02",
-                    "2024-10-27T00:00:00+02",
-                ],
-            ),
-            (
-                vec![
-                    "2018-02-18T00:00:00Z",
-                    "2018-02-18T01:00:00Z",
-                    "2018-02-18T02:00:00Z",
-                    "2018-02-18T03:00:00Z",
-                    "2018-11-04T01:00:00Z",
-                    "2018-11-04T02:00:00Z",
-                    "2018-11-04T03:00:00Z",
-                    "2018-11-04T04:00:00Z",
-                ],
-                Some("America/Sao_Paulo".into()),
-                vec![
-                    "2018-02-17T00:00:00-02",
-                    "2018-02-17T00:00:00-02",
-                    "2018-02-17T00:00:00-02",
-                    "2018-02-18T00:00:00-03",
-                    "2018-11-03T00:00:00-03",
-                    "2018-11-03T00:00:00-03",
-                    "2018-11-04T01:00:00-02",
-                    "2018-11-04T01:00:00-02",
-                ],
-            ),
-        ];
-
-        cases.iter().for_each(|(original, tz_opt, expected)| {
-            let input = original
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let right = expected
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let result = date_trunc(&[
-                ColumnarValue::Scalar(ScalarValue::from("day")),
-                ColumnarValue::Array(Arc::new(input)),
-            ])
-            .unwrap();
-            if let ColumnarValue::Array(result) = result {
-                assert_eq!(
-                    result.data_type(),
-                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                );
-                let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                assert_eq!(left, &right);
-            } else {
-                panic!("unexpected column type");
-            }
-        });
-    }
-
-    #[test]
-    fn test_date_trunc_hour_timezones() {
-        let cases = vec![
-            (
-                vec![
-                    "2020-09-08T00:30:00Z",
-                    "2020-09-08T01:30:00Z",
-                    "2020-09-08T02:30:00Z",
-                    "2020-09-08T03:30:00Z",
-                    "2020-09-08T04:30:00Z",
-                ],
-                Some("+00".into()),
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:30:00Z",
-                    "2020-09-08T01:30:00Z",
-                    "2020-09-08T02:30:00Z",
-                    "2020-09-08T03:30:00Z",
-                    "2020-09-08T04:30:00Z",
-                ],
-                None,
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:30:00Z",
-                    "2020-09-08T01:30:00Z",
-                    "2020-09-08T02:30:00Z",
-                    "2020-09-08T03:30:00Z",
-                    "2020-09-08T04:30:00Z",
-                ],
-                Some("-02".into()),
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:30:00+05",
-                    "2020-09-08T01:30:00+05",
-                    "2020-09-08T02:30:00+05",
-                    "2020-09-08T03:30:00+05",
-                    "2020-09-08T04:30:00+05",
-                ],
-                Some("+05".into()),
-                vec![
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T01:00:00+05",
-                    "2020-09-08T02:00:00+05",
-                    "2020-09-08T03:00:00+05",
-                    "2020-09-08T04:00:00+05",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:30:00+08",
-                    "2020-09-08T01:30:00+08",
-                    "2020-09-08T02:30:00+08",
-                    "2020-09-08T03:30:00+08",
-                    "2020-09-08T04:30:00+08",
-                ],
-                Some("+08".into()),
-                vec![
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T01:00:00+08",
-                    "2020-09-08T02:00:00+08",
-                    "2020-09-08T03:00:00+08",
-                    "2020-09-08T04:00:00+08",
-                ],
-            ),
-            (
-                vec![
-                    "2024-10-26T23:30:00Z",
-                    "2024-10-27T00:30:00Z",
-                    "2024-10-27T01:30:00Z",
-                    "2024-10-27T02:30:00Z",
-                ],
-                Some("Europe/Berlin".into()),
-                vec![
-                    "2024-10-27T01:00:00+02",
-                    "2024-10-27T02:00:00+02",
-                    "2024-10-27T02:00:00+01",
-                    "2024-10-27T03:00:00+01",
-                ],
-            ),
-            (
-                vec![
-                    "2018-02-18T00:30:00Z",
-                    "2018-02-18T01:30:00Z",
-                    "2018-02-18T02:30:00Z",
-                    "2018-02-18T03:30:00Z",
-                    "2018-11-04T01:00:00Z",
-                    "2018-11-04T02:00:00Z",
-                    "2018-11-04T03:00:00Z",
-                    "2018-11-04T04:00:00Z",
-                ],
-                Some("America/Sao_Paulo".into()),
-                vec![
-                    "2018-02-17T22:00:00-02",
-                    "2018-02-17T23:00:00-02",
-                    "2018-02-17T23:00:00-03",
-                    "2018-02-18T00:00:00-03",
-                    "2018-11-03T22:00:00-03",
-                    "2018-11-03T23:00:00-03",
-                    "2018-11-04T01:00:00-02",
-                    "2018-11-04T02:00:00-02",
-                ],
-            ),
-        ];
-
-        cases.iter().for_each(|(original, tz_opt, expected)| {
-            let input = original
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let right = expected
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let result = date_trunc(&[
-                ColumnarValue::Scalar(ScalarValue::from("hour")),
-                ColumnarValue::Array(Arc::new(input)),
-            ])
-            .unwrap();
-            if let ColumnarValue::Array(result) = result {
-                assert_eq!(
-                    result.data_type(),
-                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                );
-                let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                assert_eq!(left, &right);
-            } else {
-                panic!("unexpected column type");
-            }
-        });
-    }
-
-    #[test]
-    fn test_date_bin_single() {
-        use chrono::Duration;
-
-        let cases = vec![
-            (
-                (
-                    Duration::minutes(15),
-                    "2004-04-09T02:03:04.123456789Z",
-                    "2001-01-01T00:00:00",
-                ),
-                "2004-04-09T02:00:00Z",
-            ),
-            (
-                (
-                    Duration::minutes(15),
-                    "2004-04-09T02:03:04.123456789Z",
-                    "2001-01-01T00:02:30",
-                ),
-                "2004-04-09T02:02:30Z",
-            ),
-            (
-                (
-                    Duration::minutes(15),
-                    "2004-04-09T02:03:04.123456789Z",
-                    "2005-01-01T00:02:30",
-                ),
-                "2004-04-09T02:02:30Z",
-            ),
-            (
-                (
-                    Duration::hours(1),
-                    "2004-04-09T02:03:04.123456789Z",
-                    "2001-01-01T00:00:00",
-                ),
-                "2004-04-09T02:00:00Z",
-            ),
-            (
-                (
-                    Duration::seconds(10),
-                    "2004-04-09T02:03:11.123456789Z",
-                    "2001-01-01T00:00:00",
-                ),
-                "2004-04-09T02:03:10Z",
-            ),
-        ];
-
-        cases
-            .iter()
-            .for_each(|((stride, source, origin), expected)| {
-                let stride1 = stride.num_nanoseconds().unwrap();
-                let source1 = string_to_timestamp_nanos(source).unwrap();
-                let origin1 = string_to_timestamp_nanos(origin).unwrap();
-
-                let expected1 = string_to_timestamp_nanos(expected).unwrap();
-                let result = date_bin_nanos_interval(stride1, source1, origin1);
-                assert_eq!(result, expected1, "{source} = {expected}");
-            })
-    }
-
-    #[test]
-    fn test_date_bin() {
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert!(res.is_ok());
-
-        let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Array(timestamps),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert!(res.is_ok());
-
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert!(res.is_ok());
-
-        // stride supports month-day-nano
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert!(res.is_ok());
-
-        //
-        // Fallible test cases
-        //
-
-        // invalid number of arguments
-        let res =
-            date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expected two or three arguments"
-        );
-
-        // stride: invalid type
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
-        );
-
-        // stride: invalid value
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(0))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN stride must be non-zero"
-        );
-
-        // stride: overflow of day-time interval
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(i64::MAX))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN stride argument is too large"
-        );
-
-        // stride: overflow of month-day-nano interval
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN stride argument is too large"
-        );
-
-        // stride: month intervals
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
-        );
-
-        // origin: invalid type
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got Timestamp(Microsecond, None)"
-        );
-
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert!(res.is_ok());
-
-        // unsupported array type for stride
-        let intervals = Arc::new((1..6).map(Some).collect::<IntervalDayTimeArray>());
-        let res = date_bin(&[
-            ColumnarValue::Array(intervals),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "This feature is not implemented: DATE_BIN only supports literal values for the stride argument, not arrays"
-        );
-
-        // unsupported array type for origin
-        let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Array(timestamps),
-        ]);
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
-        );
-    }
-
-    #[test]
-    fn test_date_bin_timezones() {
-        let cases = vec![
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                Some("+00".into()),
-                "1970-01-01T00:00:00Z",
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                None,
-                "1970-01-01T00:00:00Z",
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T01:00:00Z",
-                    "2020-09-08T02:00:00Z",
-                    "2020-09-08T03:00:00Z",
-                    "2020-09-08T04:00:00Z",
-                ],
-                Some("-02".into()),
-                "1970-01-01T00:00:00Z",
-                vec![
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                    "2020-09-08T00:00:00Z",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T01:00:00+05",
-                    "2020-09-08T02:00:00+05",
-                    "2020-09-08T03:00:00+05",
-                    "2020-09-08T04:00:00+05",
-                ],
-                Some("+05".into()),
-                "1970-01-01T00:00:00+05",
-                vec![
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                    "2020-09-08T00:00:00+05",
-                ],
-            ),
-            (
-                vec![
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T01:00:00+08",
-                    "2020-09-08T02:00:00+08",
-                    "2020-09-08T03:00:00+08",
-                    "2020-09-08T04:00:00+08",
-                ],
-                Some("+08".into()),
-                "1970-01-01T00:00:00+08",
-                vec![
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                    "2020-09-08T00:00:00+08",
-                ],
-            ),
-        ];
-
-        cases
-            .iter()
-            .for_each(|(original, tz_opt, origin, expected)| {
-                let input = original
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let right = expected
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let result = date_bin(&[
-                    ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                    ColumnarValue::Array(Arc::new(input)),
-                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                        Some(string_to_timestamp_nanos(origin).unwrap()),
-                        tz_opt.clone(),
-                    )),
-                ])
-                .unwrap();
-                if let ColumnarValue::Array(result) = result {
-                    assert_eq!(
-                        result.data_type(),
-                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                    );
-                    let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                    assert_eq!(left, &right);
-                } else {
-                    panic!("unexpected column type");
-                }
-            });
-    }
 
     #[test]
     fn test_make_date() {
@@ -2047,7 +566,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 "2020::01::02".to_string(),
             ),
@@ -2072,23 +591,29 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H".to_string())),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
@@ -2115,7 +640,7 @@ mod tests {
                 "2020::09::01".to_string(),
             ),
             (
-                ScalarValue::Date64(Some(date.timestamp_millis())),
+                ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
                 StringArray::from(vec!["%Y::%m::%d".to_string()]),
                 "2020::01::02".to_string(),
             ),
@@ -2140,23 +665,29 @@ mod tests {
                 "03-25-44 567890000".to_string(),
             ),
             (
-                ScalarValue::TimestampSecond(Some(date.timestamp()), None),
+                ScalarValue::TimestampSecond(Some(date.and_utc().timestamp()), None),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMillisecond(Some(date.timestamp_millis()), None),
+                ScalarValue::TimestampMillisecond(
+                    Some(date.and_utc().timestamp_millis()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H".to_string()]),
                 "2020::01::02 05::04::03".to_string(),
             ),
             (
-                ScalarValue::TimestampMicrosecond(Some(date.timestamp_micros()), None),
+                ScalarValue::TimestampMicrosecond(
+                    Some(date.and_utc().timestamp_micros()),
+                    None,
+                ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
                 "2020::01::02 05::04::03 000012000".to_string(),
             ),
             (
                 ScalarValue::TimestampNanosecond(
-                    Some(date.timestamp_nanos_opt().unwrap()),
+                    Some(date.and_utc().timestamp_nanos_opt().unwrap()),
                     None,
                 ),
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
@@ -2186,8 +717,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 StringArray::from(vec!["2020::01::02", "2026::07::08"]),
@@ -2202,8 +733,8 @@ mod tests {
             ),
             (
                 Arc::new(Date64Array::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
                 StringArray::from(vec!["2020::01::02", "08::07::2026"]),
@@ -2235,8 +766,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampSecondArray::from(vec![
-                    date.timestamp(),
-                    date2.timestamp(),
+                    date.and_utc().timestamp(),
+                    date2.and_utc().timestamp(),
                 ])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d %S::%M::%H", "%d::%m::%Y %S-%M-%H"]),
                 StringArray::from(vec![
@@ -2246,8 +777,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMillisecondArray::from(vec![
-                    date.timestamp_millis(),
-                    date2.timestamp_millis(),
+                    date.and_utc().timestamp_millis(),
+                    date2.and_utc().timestamp_millis(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -2260,8 +791,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampMicrosecondArray::from(vec![
-                    date.timestamp_micros(),
-                    date2.timestamp_micros(),
+                    date.and_utc().timestamp_micros(),
+                    date2.and_utc().timestamp_micros(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
@@ -2274,8 +805,8 @@ mod tests {
             ),
             (
                 Arc::new(TimestampNanosecondArray::from(vec![
-                    date.timestamp_nanos_opt().unwrap(),
-                    date2.timestamp_nanos_opt().unwrap(),
+                    date.and_utc().timestamp_nanos_opt().unwrap(),
+                    date2.and_utc().timestamp_nanos_opt().unwrap(),
                 ])) as ArrayRef,
                 StringArray::from(vec![
                     "%Y::%m::%d %S::%M::%H %f",
