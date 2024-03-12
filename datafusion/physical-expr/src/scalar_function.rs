@@ -34,14 +34,15 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::functions::out_ordering;
+use crate::functions::{create_physical_fun, out_ordering};
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
     ScalarFunctionDefinition, ScalarFunctionImplementation,
@@ -49,7 +50,7 @@ use datafusion_expr::{
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionImplementation,
+    fun: ScalarFunctionDefinition,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -60,6 +61,8 @@ pub struct ScalarFunctionExpr {
     monotonicity: Option<FuncMonotonicity>,
     // Whether this function can be invoked with zero arguments
     supports_zero_argument: bool,
+    // Execution properties
+    execution_props: ExecutionProps,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -79,11 +82,12 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionImplementation,
+        fun: ScalarFunctionDefinition,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
         supports_zero_argument: bool,
+        execution_props: &ExecutionProps,
     ) -> Self {
         Self {
             fun,
@@ -92,11 +96,12 @@ impl ScalarFunctionExpr {
             return_type,
             monotonicity,
             supports_zero_argument,
+            execution_props: execution_props.clone(),
         }
     }
 
     /// Get the scalar function implementation
-    pub fn fun(&self) -> &ScalarFunctionImplementation {
+    pub fn fun(&self) -> &ScalarFunctionDefinition {
         &self.fun
     }
 
@@ -171,8 +176,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 .collect::<Result<Vec<_>>>()?,
         };
 
+        let fun_implementation = match self.fun {
+            ScalarFunctionDefinition::BuiltIn(ref fun) => {
+                create_physical_fun(fun, &self.execution_props)?
+            }
+            _ => {
+                todo!("User-defined functions are not supported yet")
+            }
+        };
         // evaluate the function
-        let fun = self.fun.as_ref();
+        let fun = fun_implementation.as_ref();
         (fun)(&inputs)
     }
 
@@ -191,6 +204,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.return_type().clone(),
             self.monotonicity.clone(),
             self.supports_zero_argument,
+            &self.execution_props,
         )))
     }
 

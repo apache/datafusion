@@ -542,7 +542,7 @@ fn serialize_expr(
             })
         } else {
             let mut buf = Vec::new();
-            let udf = create_udf(expr.name(), expr., return_type, volatility, fun);
+            let udf = create_udf(expr.name(), expr, return_type, volatility, fun);
             // let _ = codec.try_encode_udf(, &mut buf);
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
