@@ -143,7 +143,7 @@ impl TreeNodeRewriter for OperatorToFunctionRewriter {
                     return Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(
                             Arc::new(ScalarUDF::new_from_impl(
-                                datafusion_functions::core::r#struct::StructFunc::new(),
+                                datafusion_functions::core::getfield::GetFieldFunc::new(),
                             )),
                             args,
                         ),
