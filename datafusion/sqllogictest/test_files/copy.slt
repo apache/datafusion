@@ -474,7 +474,7 @@ select * from validate_arrow;
 # Error cases:
 
 # Copy from table with options
-query error DataFusion error: Internal error: Config value "row_group_size" not found on JsonOptions.
+query error DataFusion error: Invalid or Unsupported Configuration: Config value "row_group_size" not found on JsonOptions
 COPY source_table  to 'test_files/scratch/copy/table.json' ('json.row_group_size' 55);
 
 # Incomplete statement

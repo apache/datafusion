@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use crate::error::_internal_err;
+use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::{DataFusionError, FileType, Result};
 
@@ -130,7 +130,7 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => return Err(DataFusionError::Internal(format!(
+                    _ => return Err(DataFusionError::Configuration(format!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
                     )))
                 }
@@ -639,7 +639,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
-            _ => _internal_err!("Config value \"{key}\" not found on ConfigOptions"),
+            _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
 
@@ -667,9 +667,9 @@ impl ConfigOptions {
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::External(
-                format!("could not find config namespace for key \"{key}\"",).into(),
-            )
+            DataFusionError::Configuration(format!(
+                "could not find config namespace for key \"{key}\"",
+            ))
         })?;
 
         if prefix == "datafusion" {
@@ -678,9 +678,9 @@ impl ConfigOptions {
 
         let e = self.extensions.0.get_mut(prefix);
         let e = e.ok_or_else(|| {
-            DataFusionError::External(
-                format!("Could not find config namespace \"{prefix}\"",).into(),
-            )
+            DataFusionError::Configuration(format!(
+                "Could not find config namespace \"{prefix}\""
+            ))
         })?;
         e.0.set(key, value)
     }
@@ -1090,7 +1090,7 @@ macro_rules! extensions_options {
                         Ok(())
                        }
                     )*
-                    _ => Err($crate::DataFusionError::Internal(
+                    _ => Err($crate::DataFusionError::Configuration(
                         format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
                     ))
                 }
@@ -1135,7 +1135,7 @@ impl ConfigField for TableOptions {
             "csv" => self.csv.set(rem, value),
             "parquet" => self.parquet.set(rem, value),
             "json" => self.json.set(rem, value),
-            _ => _internal_err!("Config value \"{key}\" not found on TableOptions"),
+            _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
 }
@@ -1165,32 +1165,29 @@ impl TableOptions {
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, _) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::External(
-                format!("could not find config namespace for key \"{key}\"",).into(),
-            )
+            DataFusionError::Configuration(format!(
+                "could not find config namespace for key \"{key}\""
+            ))
         })?;
 
         if prefix == "csv" || prefix == "json" || prefix == "parquet" {
             if let Some(format) = &self.current_format {
                 match format {
                     FileType::CSV if prefix != "csv" => {
-                        return Err(DataFusionError::External(
-                            format!("Key \"{key}\" is not applicable for CSV format")
-                                .into(),
-                        ))
+                        return Err(DataFusionError::Configuration(format!(
+                            "Key \"{key}\" is not applicable for CSV format"
+                        )))
                     }
                     #[cfg(feature = "parquet")]
                     FileType::PARQUET if prefix != "parquet" => {
-                        return Err(DataFusionError::External(
-                            format!("Key \"{key}\" is not applicable for PARQUET format")
-                                .into(),
-                        ))
+                        return Err(DataFusionError::Configuration(format!(
+                            "Key \"{key}\" is not applicable for PARQUET format"
+                        )))
                     }
                     FileType::JSON if prefix != "json" => {
-                        return Err(DataFusionError::External(
-                            format!("Key \"{key}\" is not applicable for JSON format")
-                                .into(),
-                        ))
+                        return Err(DataFusionError::Configuration(format!(
+                            "Key \"{key}\" is not applicable for JSON format"
+                        )))
                     }
                     _ => {}
                 }
@@ -1200,9 +1197,9 @@ impl TableOptions {
 
         let e = self.extensions.0.get_mut(prefix);
         let e = e.ok_or_else(|| {
-            DataFusionError::External(
-                format!("Could not find config namespace \"{prefix}\"",).into(),
-            )
+            DataFusionError::Configuration(format!(
+                "Could not find config namespace \"{prefix}\""
+            ))
         })?;
         e.0.set(key, value)
     }
@@ -1315,7 +1312,7 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => _internal_err!(
+                    _ => _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
                     )
                 }

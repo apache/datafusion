@@ -1470,6 +1470,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
+/// Infers the file type for a given target based on provided options or file extension.
+///
+/// This function tries to determine the file type based on the 'format' option present
+/// in the provided options hashmap. If 'format' is not explicitly set, the function attempts
+/// to infer the file type from the file extension of the target. It returns an error if neither
+/// the format option is set nor the file extension can be determined or parsed.
+///
+/// # Arguments
+///
+/// * `options` - A mutable reference to a HashMap containing options where the file format
+/// might be specified under the 'format' key.
+/// * `target` - A string slice representing the path to the file for which the file type needs to be inferred.
+///
+/// # Returns
+///
+/// Returns `Result<FileType>` which is Ok if the file type could be successfully inferred,
+/// otherwise returns an error in case of failure to determine or parse the file format or extension.
+///
+/// # Errors
+///
+/// This function returns an error in two cases:
+/// - If the 'format' option is not set and the file extension cannot be retrieved from `target`.
+/// - If the file extension is found but cannot be converted into a valid string.
+///
 pub fn try_infer_file_type(
     options: &mut HashMap<String, String>,
     target: &str,
@@ -1499,6 +1523,21 @@ pub fn try_infer_file_type(
     Ok(format)
 }
 
+/// Extracts and parses the 'partition_by' option from a provided options hashmap.
+///
+/// This function looks for a 'partition_by' key in the options hashmap. If found,
+/// it splits the value by commas, trims each resulting string, and replaces double
+/// single quotes with a single quote. It returns a vector of partition column names.
+///
+/// # Arguments
+///
+/// * `options` - A mutable reference to a HashMap containing options where 'partition_by'
+/// might be specified.
+///
+/// # Returns
+///
+/// Returns a `Vec<String>` containing partition column names. If the 'partition_by' option
+/// is not present, returns an empty vector.
 pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
     let partition_by = options.remove("partition_by");
     match partition_by {
