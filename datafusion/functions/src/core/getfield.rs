@@ -122,7 +122,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 }
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                     let as_struct_array = as_struct_array(&array)?;
-                    match as_struct_array.column_by_name(&k) {
+                    match as_struct_array.column_by_name(k) {
                         None => exec_err!(
                             "get indexed field {k} not found in struct"),
                         Some(col) => Ok(ColumnarValue::Array(col.clone()))
