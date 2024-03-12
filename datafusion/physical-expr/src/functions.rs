@@ -300,9 +300,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
         }),
-        BuiltinScalarFunction::ArrayResize => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_resize)(args)
-        }),
         BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_union)(args)
         }),

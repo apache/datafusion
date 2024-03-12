@@ -49,7 +49,7 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     acosh, array_element, array_except, array_intersect, array_pop_back, array_pop_front,
     array_position, array_positions, array_remove, array_remove_all, array_remove_n,
-    array_replace, array_replace_all, array_replace_n, array_resize, array_slice,
+    array_replace, array_replace_all, array_replace_n, array_slice,
     array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
     degrees, ends_with, exp,
@@ -489,6 +489,12 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
+            ScalarFunction::Md5 => Self::MD5,
+            ScalarFunction::Sha224 => Self::SHA224,
+            ScalarFunction::Sha256 => Self::SHA256,
+            ScalarFunction::Sha384 => Self::SHA384,
+            ScalarFunction::Sha512 => Self::SHA512,
+            ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -1452,11 +1458,6 @@ pub fn parse_expr(
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayResize => Ok(array_resize(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
