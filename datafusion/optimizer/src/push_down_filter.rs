@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, JoinConstraint,
-    Result, DataFusionError
+    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    JoinConstraint, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -860,12 +860,10 @@ impl OptimizerRule for PushDownFilter {
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
                 if filter_predicates.len() != results.len() {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
                         results.len(),
-                        filter_predicates.len(),
-
-                    )));
+                        filter_predicates.len());
                 }
 
                 let zip = filter_predicates.iter().zip(results);
