@@ -1951,7 +1951,7 @@ from_unixtime(expression)
 - [array_dims](#array_dims)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
-- [array_has_any](#array_has_any)]
+- [array_has_any](#array_has_any)
 - [array_element](#array_element)
 - [array_except](#array_except)
 - [array_extract](#array_extract)

@@ -614,11 +614,11 @@ enum ScalarFunction {
   Upper = 62;
   Coalesce = 63;
   Power = 64;
-  StructFun = 65;
+  // 65 was StructFun
   FromUnixtime = 66;
   Atan2 = 67;
   // 68 was DateBin
-  ArrowTypeof = 69;
+  // 69 was ArrowTypeof
   CurrentDate = 70;
   CurrentTime = 71;
   Uuid = 72;

@@ -26,7 +26,7 @@ use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
-use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
@@ -151,10 +151,6 @@ pub enum BuiltinScalarFunction {
     /// array_resize
     ArrayResize,
 
-    // struct functions
-    /// struct
-    Struct,
-
     // string functions
     /// ascii
     Ascii,
@@ -236,8 +232,6 @@ pub enum BuiltinScalarFunction {
     Upper,
     /// uuid
     Uuid,
-    /// arrow_typeof
-    ArrowTypeof,
     /// overlay
     OverLay,
     /// levenshtein
@@ -390,9 +384,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
-            BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
-            BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
@@ -598,14 +590,7 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
-            BuiltinScalarFunction::Struct => {
-                let return_fields = input_expr_types
-                    .iter()
-                    .enumerate()
-                    .map(|(pos, dt)| Field::new(format!("c{pos}"), dt.clone(), true))
-                    .collect::<Vec<Field>>();
-                Ok(Struct(Fields::from(return_fields)))
-            }
+
 
             BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
@@ -623,8 +608,6 @@ impl BuiltinScalarFunction {
             },
 
             BuiltinScalarFunction::Iszero => Ok(Boolean),
-
-            BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
             BuiltinScalarFunction::OverLay => {
                 utf8_to_str_type(&input_expr_types[0], "overlay")
@@ -713,7 +696,6 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
 
-            BuiltinScalarFunction::Struct => Signature::variadic_any(self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -911,7 +893,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::OverLay => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Int64, Int64]),
@@ -1100,9 +1081,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA384 => &["sha384"],
             BuiltinScalarFunction::SHA512 => &["sha512"],
 
-            // other functions
-            BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
-
             BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
             BuiltinScalarFunction::ArrayDistinct => &["array_distinct", "list_distinct"],
             BuiltinScalarFunction::ArrayElement => &[
@@ -1146,9 +1124,6 @@ impl BuiltinScalarFunction {
                 &["array_intersect", "list_intersect"]
             }
             BuiltinScalarFunction::OverLay => &["overlay"],
-
-            // struct functions
-            BuiltinScalarFunction::Struct => &["struct"],
         }
     }
 }
