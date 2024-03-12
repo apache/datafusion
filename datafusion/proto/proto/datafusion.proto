@@ -675,7 +675,7 @@ enum ScalarFunction {
   Levenshtein = 125;
   SubstrIndex = 126;
   FindInSet = 127;
-  ArraySort = 128;
+  /// 128 was ArraySort
   ArrayDistinct = 129;
   ArrayResize = 130;
   EndsWith = 131;
