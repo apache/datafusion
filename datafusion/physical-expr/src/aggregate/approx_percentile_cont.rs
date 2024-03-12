@@ -30,8 +30,8 @@ use arrow::{
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::{Accumulator, ColumnarValue};
 use std::{any::Any, iter, sync::Arc};
