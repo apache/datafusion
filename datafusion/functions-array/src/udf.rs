@@ -376,7 +376,7 @@ pub(super) struct ArraySort {
     aliases: Vec<String>,
 }
 
-impl crate::udf::ArraySort {
+impl ArraySort {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
@@ -385,7 +385,7 @@ impl crate::udf::ArraySort {
     }
 }
 
-impl ScalarUDFImpl for crate::udf::ArraySort {
+impl ScalarUDFImpl for ArraySort {
     fn as_any(&self) -> &dyn Any {
         self
     }

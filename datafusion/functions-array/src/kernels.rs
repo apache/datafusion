@@ -24,9 +24,12 @@ use arrow::array::{
     StringBuilder, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::buffer::OffsetBuffer;
+use arrow::compute;
 use arrow::datatypes::Field;
 use arrow::datatypes::UInt64Type;
 use arrow::datatypes::{DataType, Date32Type, IntervalMonthDayNanoType};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+use arrow_schema::SortOptions;
 use datafusion_common::cast::{
     as_date32_array, as_generic_list_array, as_generic_string_array, as_int64_array,
     as_interval_mdn_array, as_large_list_array, as_list_array, as_null_array,
@@ -35,9 +38,6 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, not_impl_datafusion_err, DataFusionError, Result};
 use std::any::type_name;
 use std::sync::Arc;
-use arrow::compute;
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
-use arrow_schema::SortOptions;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
