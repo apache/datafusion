@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::get_query_sql;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use super::{
+    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
+};
 use crate::{BenchmarkRun, CommonOpt};
+
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
 use datafusion::datasource::file_format::csv::CsvFormat;
@@ -26,20 +32,15 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::{MemTable, TableProvider};
+use datafusion::error::Result;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
-use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
-use log::info;
-
-use datafusion_common::instant::Instant;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use datafusion::error::Result;
 use datafusion::prelude::*;
-use structopt::StructOpt;
+use datafusion_common::instant::Instant;
+use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
-use super::{get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES};
+use log::info;
+use structopt::StructOpt;
 
 /// Run the tpch benchmark.
 ///
@@ -253,7 +254,7 @@ impl RunOpt {
                 }
                 "parquet" => {
                     let path = format!("{path}/{table}");
-                    let format = ParquetFormat::default().with_enable_pruning(Some(true));
+                    let format = ParquetFormat::default().with_enable_pruning(true);
 
                     (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
                 }
@@ -298,11 +299,12 @@ struct QueryResult {
 // Only run with "ci" mode when we have the data
 #[cfg(feature = "ci")]
 mod tests {
-    use super::*;
-    use datafusion::common::exec_err;
-    use datafusion::error::{DataFusionError, Result};
     use std::path::Path;
 
+    use super::*;
+
+    use datafusion::common::exec_err;
+    use datafusion::error::{DataFusionError, Result};
     use datafusion_proto::bytes::{
         logical_plan_from_bytes, logical_plan_to_bytes, physical_plan_from_bytes,
         physical_plan_to_bytes,

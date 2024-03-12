@@ -50,8 +50,12 @@ async fn parquet_exec() -> Result<()> {
         table_partition_cols: vec![],
         output_ordering: vec![],
     };
-    let parquet_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(ParquetExec::new(scan_config, None, None));
+    let parquet_exec: Arc<dyn ExecutionPlan> = Arc::new(ParquetExec::new(
+        scan_config,
+        None,
+        None,
+        Default::default(),
+    ));
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

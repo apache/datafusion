@@ -596,8 +596,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(value, input_schema, planner_context)
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Struct,
+        let struct_func = self
+            .context_provider
+            .get_function_meta("struct")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'struct' function")
+            })?;
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            struct_func,
             args,
         )))
     }

@@ -75,11 +75,10 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
     Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
@@ -96,6 +95,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_common::config::FormatOptions;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -568,25 +568,15 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Copy(CopyTo{
                     input,
                     output_url,
-                    file_format,
-                    copy_options,
+                    format_options,
                     partition_by,
+                    options: source_option_tuples
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
-
-                    let file_type_writer_options = match copy_options{
-                        CopyOptions::SQLOptions(statement_options) => {
-                            FileTypeWriterOptions::build(
-                                file_format,
-                                session_state.config_options(),
-                                statement_options)?
-                        },
-                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
-                    };
 
                     // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
                     // from the schema of the RecordBatch being written. This allows COPY statements to specify only
@@ -603,16 +593,30 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols,
                         overwrite: false,
-                        file_type_writer_options
                     };
-
-                    let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default()),
+                    let mut table_options = session_state.default_table_options().clone();
+                    let sink_format: Arc<dyn FileFormat> = match format_options {
+                        FormatOptions::CSV(options) => {
+                            table_options.csv = options.clone();
+                            table_options.set_file_format(FileType::CSV);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(CsvFormat::default().with_options(table_options.csv))
+                        },
+                        FormatOptions::JSON(options) => {
+                            table_options.json = options.clone();
+                            table_options.set_file_format(FileType::JSON);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(JsonFormat::default().with_options(table_options.json))
+                        },
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
-                        FileType::JSON => Arc::new(JsonFormat::default()),
-                        FileType::AVRO => Arc::new(AvroFormat {} ),
-                        FileType::ARROW => Arc::new(ArrowFormat {}),
+                        FormatOptions::PARQUET(options) => {
+                            table_options.parquet = options.clone();
+                            table_options.set_file_format(FileType::PARQUET);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+                        },
+                        FormatOptions::AVRO => Arc::new(AvroFormat {} ),
+                        FormatOptions::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await

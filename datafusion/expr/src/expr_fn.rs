@@ -538,11 +538,9 @@ scalar_expr!(Sqrt, sqrt, num, "square root of a number");
 scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
-scalar_expr!(Tan, tan, num, "tangent");
 scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
-scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
 scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
@@ -586,8 +584,6 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-scalar_expr!(ArraySort, array_sort, array desc null_first, "returns sorted array.");
-
 scalar_expr!(
     ArrayPopBack,
     array_pop_back,
@@ -613,12 +609,6 @@ scalar_expr!(
     array_except,
     first_array second_array,
     "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
-    ArrayDistinct,
-    array_distinct,
-    array,
-    "return distinct values from the array after removing duplicates."
 );
 scalar_expr!(
     ArrayPosition,
@@ -822,17 +812,9 @@ scalar_expr!(
     "returns true if a given number is +0.0 or -0.0 otherwise returns false"
 );
 
-scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
 scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
 scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
-
-scalar_expr!(
-    Struct,
-    struct_fun,
-    val,
-    "returns a vector of fields from the struct"
-);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -1218,11 +1200,9 @@ mod test {
         test_unary_scalar_expr!(Cbrt, cbrt);
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
-        test_unary_scalar_expr!(Tan, tan);
         test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
-        test_unary_scalar_expr!(Tanh, tanh);
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
@@ -1286,7 +1266,6 @@ mod test {
 
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
-        test_scalar_expr!(ArraySort, array_sort, array, desc, null_first);
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
@@ -1299,7 +1278,6 @@ mod test {
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
 
-        test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);

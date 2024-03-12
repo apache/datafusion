@@ -4299,11 +4299,283 @@ LIMIT 5;
 14 94
 
 # Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
-query T rowsort
-select lag(a) over () as x1
+query T
+select lag(a) over (order by a ASC NULLS FIRST) as x1
         from
         (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null);
 ----
 NULL
 NULL
-b
+NULL
+
+# Test for ignore nulls in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (null::bigint), (3), (4);
+
+query I
+SELECT FIRST_VALUE(column1) OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER() FROM t;
+----
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
+
+query II
+SELECT column1, column2 FROM t ORDER BY column2;
+----
+NULL 1
+NULL 2
+4 3
+3 4
+5 5
+6 6
+
+query II
+SELECT FIRST_VALUE(column1) OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+NULL 5
+NULL 6
+
+query II
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+NULL 5
+NULL 6
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+4 3
+4 4
+4 5
+4 6
+
+query II
+SELECT FIRST_VALUE(column1)OVER(ORDER BY column2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+4 4
+3 5
+5 6
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+NULL 1
+4 2
+4 3
+4 4
+3 5
+5 6
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in FIRST_VALUE with all NULL values
+statement ok
+CREATE TABLE t AS VALUES  (null::bigint, 4), (null::bigint, 3), (null::bigint, 1), (null::bigint, 2);
+
+query II
+SELECT FIRST_VALUE(column1) OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+query II
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (1), (3), (null::bigint);
+
+query I
+SELECT LAST_VALUE(column1) OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER() FROM t;
+----
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
+
+query II
+SELECT column1, column2 FROM t ORDER BY column2 DESC NULLS LAST;
+----
+6 6
+5 5
+3 4
+4 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST), column2 FROM t;
+----
+6 6
+5 5
+3 4
+4 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST), column2 FROM t;
+----
+6 6
+5 5
+3 4
+4 3
+4 2
+4 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 6
+NULL 5
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 6
+NULL 5
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+4 6
+4 5
+4 4
+4 3
+4 2
+4 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+5 6
+3 5
+4 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+5 6
+3 5
+4 4
+4 3
+4 2
+NULL 1
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in LAST_VALUE with all NULLs
+statement ok
+CREATE TABLE t AS VALUES  (null::bigint, 4), (null::bigint, 3), (null::bigint, 1), (null::bigint, 2);
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+statement ok
+DROP TABLE t;

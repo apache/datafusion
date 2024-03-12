@@ -33,7 +33,7 @@
 use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions, math_expressions,
-    string_expressions, struct_expressions, PhysicalExpr, ScalarFunctionExpr,
+    string_expressions, PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -282,8 +282,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Sinh => Arc::new(math_expressions::sinh),
         BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
-        BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
-        BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
         }
@@ -302,12 +300,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArraySort => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_sort)(args)
-        }),
-        BuiltinScalarFunction::ArrayDistinct => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_distinct)(args)
-        }),
         BuiltinScalarFunction::ArrayElement => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_element)(args)
         }),
@@ -362,8 +354,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_union)(args)
         }),
-        // struct functions
-        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
 
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
@@ -693,19 +683,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
-        BuiltinScalarFunction::ArrowTypeof => Arc::new(move |args| {
-            if args.len() != 1 {
-                return exec_err!(
-                    "arrow_typeof function requires 1 arguments, got {}",
-                    args.len()
-                );
-            }
-
-            let input_data_type = args[0].data_type();
-            Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
-                "{input_data_type}"
-            ))))
-        }),
         BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::overlay::<i32>)(args)

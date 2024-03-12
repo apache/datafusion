@@ -363,6 +363,70 @@ impl ScalarUDFImpl for ArrayDims {
 }
 
 make_udf_function!(
+    ArraySort,
+    array_sort,
+    array desc null_first,
+    "returns sorted array.",
+    array_sort_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArraySort {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArraySort {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec!["array_sort".to_string(), "list_sort".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArraySort {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_sort"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        match &arg_types[0] {
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_sort(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
     Cardinality,
     cardinality,
     array,
@@ -639,6 +703,70 @@ impl ScalarUDFImpl for Flatten {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::flatten(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    ArrayDistinct,
+    array_distinct,
+    array,
+    "return distinct values from the array after removing duplicates.",
+    array_distinct_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayDistinct {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl crate::udf::ArrayDistinct {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec!["array_distinct".to_string(), "list_distinct".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for crate::udf::ArrayDistinct {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_distinct"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        match &arg_types[0] {
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_distinct(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

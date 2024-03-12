@@ -24,39 +24,35 @@ use std::borrow::Cow;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use super::file_compression_type::FileCompressionType;
+use super::write::demux::start_demuxer_task;
+use super::write::{create_writer, SharedBuffer};
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
     ArrowExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
-use arrow::ipc::root_as_message;
-use arrow_ipc::writer::IpcWriteOptions;
-use arrow_ipc::CompressionType;
+use arrow::ipc::writer::IpcWriteOptions;
+use arrow::ipc::{root_as_message, CompressionType};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-
-use bytes::Bytes;
 use datafusion_common::{not_impl_err, DataFusionError, FileType, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use crate::physical_plan::{DisplayAs, DisplayFormatType};
-use async_trait::async_trait;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
-
-use super::file_compression_type::FileCompressionType;
-use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, SharedBuffer};
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -215,11 +211,6 @@ impl DataSink for ArrowFileSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        // No props are supported yet, but can be by updating FileTypeWriterOptions
-        // to populate this struct and use those options to initialize the arrow_ipc::writer::FileWriter
-        // https://github.com/apache/arrow-datafusion/issues/8635
-        let _arrow_props = self.config.file_type_writer_options.try_into_arrow()?;
-
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
@@ -390,12 +381,11 @@ async fn collect_at_least_n_bytes(
 
 #[cfg(test)]
 mod tests {
-    use chrono::DateTime;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
-
+    use super::*;
     use crate::execution::context::SessionContext;
 
-    use super::*;
+    use chrono::DateTime;
+    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
 
     #[tokio::test]
     async fn test_infer_schema_stream() -> Result<()> {

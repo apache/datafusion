@@ -51,9 +51,11 @@ pub mod expr_fn {
     pub use super::concat::array_prepend;
     pub use super::make_array::make_array;
     pub use super::udf::array_dims;
+    pub use super::udf::array_distinct;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
+    pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
@@ -82,6 +84,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_empty_udf(),
         udf::array_length_udf(),
         udf::flatten_udf(),
+        udf::array_sort_udf(),
+        udf::array_distinct_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

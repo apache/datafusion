@@ -15,20 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::csv::WriterBuilder;
-use datafusion_common::file_options::arrow_writer::ArrowWriterOptions;
-use datafusion_expr::ScalarUDF;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::common::proto_error;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{
-    copy_to_node, file_type_writer_options, CustomTableScanNode,
-    LogicalExprNodeCollection, SqlOption,
-};
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
@@ -37,6 +30,7 @@ use crate::{
     },
 };
 
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -51,9 +45,8 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    context, file_options::StatementOptions, internal_err, not_impl_err,
-    parsers::CompressionTypeVariant, plan_datafusion_err, DataFusionError, FileType,
-    FileTypeWriterOptions, OwnedTableReference, Result,
+    context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
+    plan_datafusion_err, DataFusionError, OwnedTableReference, Result,
 };
 use datafusion_expr::{
     dml,
@@ -63,13 +56,9 @@ use datafusion_expr::{
         EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 
-use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
-use datafusion_common::file_options::csv_writer::CsvWriterOptions;
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
-use datafusion_expr::dml::CopyOptions;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -361,21 +350,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))
                     })? {
                         #[cfg(feature = "parquet")]
-                        &FileFormatType::Parquet(protobuf::ParquetFormat {}) => {
-                            Arc::new(ParquetFormat::default())
+                        FileFormatType::Parquet(protobuf::ParquetFormat {options}) => {
+                            let mut parquet = ParquetFormat::default();
+                            if let Some(options) = options {
+                                parquet = parquet.with_options(options.try_into()?)
+                            }
+                            Arc::new(parquet)
                         }
                         FileFormatType::Csv(protobuf::CsvFormat {
-                            has_header,
-                            delimiter,
-                            quote,
-                            optional_escape
+                            options
                         }) => {
-                            let mut csv = CsvFormat::default()
-                            .with_has_header(*has_header)
-                            .with_delimiter(str_to_byte(delimiter, "delimiter")?)
-                            .with_quote(str_to_byte(quote, "quote")?);
-                            if let Some(protobuf::csv_format::OptionalEscape::Escape(escape)) = optional_escape {
-                                csv = csv.with_quote(str_to_byte(escape, "escape")?);
+                            let mut csv = CsvFormat::default();
+                            if let Some(options) = options {
+                                csv = csv.with_options(options.try_into()?)
                             }
                             Arc::new(csv)},
                         FileFormatType::Avro(..) => Arc::new(AvroFormat),
@@ -864,80 +851,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(copy.input, ctx, extension_codec)?;
 
-                let copy_options = match &copy.copy_options {
-                    Some(copy_to_node::CopyOptions::SqlOptions(opt)) => {
-                        let options = opt
-                            .option
-                            .iter()
-                            .map(|o| (o.key.clone(), o.value.clone()))
-                            .collect();
-                        CopyOptions::SQLOptions(StatementOptions::from(&options))
-                    }
-                    Some(copy_to_node::CopyOptions::WriterOptions(opt)) => {
-                        match &opt.file_type {
-                            Some(ft) => match ft {
-                                file_type_writer_options::FileType::ArrowOptions(_) => {
-                                    CopyOptions::WriterOptions(Box::new(
-                                        FileTypeWriterOptions::Arrow(
-                                            ArrowWriterOptions::new(),
-                                        ),
-                                    ))
-                                }
-                                file_type_writer_options::FileType::CsvOptions(
-                                    writer_options,
-                                ) => {
-                                    let writer_builder =
-                                        csv_writer_options_from_proto(writer_options)?;
-                                    CopyOptions::WriterOptions(Box::new(
-                                        FileTypeWriterOptions::CSV(
-                                            CsvWriterOptions::new(
-                                                writer_builder,
-                                                CompressionTypeVariant::UNCOMPRESSED,
-                                            ),
-                                        ),
-                                    ))
-                                }
-                                file_type_writer_options::FileType::ParquetOptions(
-                                    writer_options,
-                                ) => {
-                                    let writer_properties =
-                                        match &writer_options.writer_properties {
-                                            Some(serialized_writer_options) => {
-                                                writer_properties_from_proto(
-                                                    serialized_writer_options,
-                                                )?
-                                            }
-                                            _ => WriterProperties::default(),
-                                        };
-                                    CopyOptions::WriterOptions(Box::new(
-                                        FileTypeWriterOptions::Parquet(
-                                            ParquetWriterOptions::new(writer_properties),
-                                        ),
-                                    ))
-                                }
-                                _ => {
-                                    return Err(proto_error(
-                                        "WriterOptions unsupported file_type",
-                                    ))
-                                }
-                            },
-                            None => {
-                                return Err(proto_error(
-                                    "WriterOptions missing file_type",
-                                ))
-                            }
-                        }
-                    }
-                    None => return Err(proto_error("CopyTo missing CopyOptions")),
-                };
-
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
                         input: Arc::new(input),
                         output_url: copy.output_url.clone(),
-                        file_format: FileType::from_str(&copy.file_type)?,
                         partition_by: copy.partition_by.clone(),
-                        copy_options,
+                        format_options: convert_required!(copy.format_options)?,
+                        options: Default::default(),
                     },
                 ))
             }
@@ -1008,30 +928,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                         let mut maybe_some_type = None;
 
                         #[cfg(feature = "parquet")]
-                        if any.is::<ParquetFormat>() {
+                        if let Some(parquet) = any.downcast_ref::<ParquetFormat>() {
+                            let options = parquet.options();
                             maybe_some_type =
-                                Some(FileFormatType::Parquet(protobuf::ParquetFormat {}))
+                                Some(FileFormatType::Parquet(protobuf::ParquetFormat {
+                                    options: Some(options.try_into()?),
+                                }));
                         };
 
                         if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                            let options = csv.options();
                             maybe_some_type =
                                 Some(FileFormatType::Csv(protobuf::CsvFormat {
-                                    delimiter: byte_to_string(
-                                        csv.delimiter(),
-                                        "delimiter",
-                                    )?,
-                                    has_header: csv.has_header(),
-                                    quote: byte_to_string(csv.quote(), "quote")?,
-                                    optional_escape: if let Some(escape) = csv.escape() {
-                                        Some(
-                                            protobuf::csv_format::OptionalEscape::Escape(
-                                                byte_to_string(escape, "escape")?,
-                                            ),
-                                        )
-                                    } else {
-                                        None
-                                    },
-                                }))
+                                    options: Some(options.try_into()?),
+                                }));
                         }
 
                         if any.is::<AvroFormat>() {
@@ -1672,92 +1582,21 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,
-                file_format,
-                copy_options,
+                format_options,
                 partition_by,
+                ..
             }) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     input,
                     extension_codec,
                 )?;
 
-                let copy_options_proto: Option<copy_to_node::CopyOptions> =
-                    match copy_options {
-                        CopyOptions::SQLOptions(opt) => {
-                            let options: Vec<SqlOption> = opt
-                                .clone()
-                                .into_inner()
-                                .iter()
-                                .map(|(k, v)| SqlOption {
-                                    key: k.to_string(),
-                                    value: v.to_string(),
-                                })
-                                .collect();
-                            Some(copy_to_node::CopyOptions::SqlOptions(
-                                protobuf::SqlOptions { option: options },
-                            ))
-                        }
-                        CopyOptions::WriterOptions(opt) => {
-                            match opt.as_ref() {
-                                FileTypeWriterOptions::Arrow(_) => {
-                                    let arrow_writer_options =
-                                        file_type_writer_options::FileType::ArrowOptions(
-                                            protobuf::ArrowWriterOptions {},
-                                        );
-                                    Some(copy_to_node::CopyOptions::WriterOptions(
-                                        protobuf::FileTypeWriterOptions {
-                                            file_type: Some(arrow_writer_options),
-                                        },
-                                    ))
-                                }
-                                FileTypeWriterOptions::CSV(csv_opts) => {
-                                    let csv_options = &csv_opts.writer_options;
-                                    let csv_writer_options = csv_writer_options_to_proto(
-                                        csv_options,
-                                        &csv_opts.compression,
-                                    );
-                                    let csv_options =
-                                        file_type_writer_options::FileType::CsvOptions(
-                                            csv_writer_options,
-                                        );
-                                    Some(copy_to_node::CopyOptions::WriterOptions(
-                                        protobuf::FileTypeWriterOptions {
-                                            file_type: Some(csv_options),
-                                        },
-                                    ))
-                                }
-                                FileTypeWriterOptions::Parquet(parquet_opts) => {
-                                    let parquet_writer_options =
-                                        protobuf::ParquetWriterOptions {
-                                            writer_properties: Some(
-                                                writer_properties_to_proto(
-                                                    &parquet_opts.writer_options,
-                                                ),
-                                            ),
-                                        };
-                                    let parquet_options = file_type_writer_options::FileType::ParquetOptions(parquet_writer_options);
-                                    Some(copy_to_node::CopyOptions::WriterOptions(
-                                        protobuf::FileTypeWriterOptions {
-                                            file_type: Some(parquet_options),
-                                        },
-                                    ))
-                                }
-                                _ => {
-                                    return Err(proto_error(
-                                        "Unsupported FileTypeWriterOptions in CopyTo",
-                                    ))
-                                }
-                            }
-                        }
-                    };
-
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
                             output_url: output_url.to_string(),
-                            file_type: file_format.to_string(),
-                            copy_options: copy_options_proto,
+                            format_options: Some(format_options.try_into()?),
                             partition_by: partition_by.clone(),
                         },
                     ))),
@@ -1812,34 +1651,4 @@ pub(crate) fn csv_writer_options_from_proto(
         .with_timestamp_format(writer_options.timestamp_format.clone())
         .with_time_format(writer_options.time_format.clone())
         .with_null(writer_options.null_value.clone()))
-}
-
-pub(crate) fn writer_properties_to_proto(
-    props: &WriterProperties,
-) -> protobuf::WriterProperties {
-    protobuf::WriterProperties {
-        data_page_size_limit: props.data_page_size_limit() as u64,
-        dictionary_page_size_limit: props.dictionary_page_size_limit() as u64,
-        data_page_row_count_limit: props.data_page_row_count_limit() as u64,
-        write_batch_size: props.write_batch_size() as u64,
-        max_row_group_size: props.max_row_group_size() as u64,
-        writer_version: format!("{:?}", props.writer_version()),
-        created_by: props.created_by().to_string(),
-    }
-}
-
-pub(crate) fn writer_properties_from_proto(
-    props: &protobuf::WriterProperties,
-) -> Result<WriterProperties, DataFusionError> {
-    let writer_version =
-        WriterVersion::from_str(&props.writer_version).map_err(proto_error)?;
-    Ok(WriterProperties::builder()
-        .set_created_by(props.created_by.clone())
-        .set_writer_version(writer_version)
-        .set_dictionary_page_size_limit(props.dictionary_page_size_limit as usize)
-        .set_data_page_row_count_limit(props.data_page_row_count_limit as usize)
-        .set_data_page_size_limit(props.data_page_size_limit as usize)
-        .set_write_batch_size(props.write_batch_size as usize)
-        .set_max_row_group_size(props.max_row_group_size as usize)
-        .build())
 }

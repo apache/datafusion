@@ -1949,9 +1949,10 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distinct](#array_distinct)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
-- [array_has_any](#array_has_any)]
+- [array_has_any](#array_has_any)
 - [array_element](#array_element)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
@@ -1987,6 +1988,7 @@ from_unixtime(expression)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_distinct](#list_distinct)
 - [list_element](#list_element)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
@@ -2203,6 +2205,34 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distinct`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_distinct
 
 ### `array_element`
 
