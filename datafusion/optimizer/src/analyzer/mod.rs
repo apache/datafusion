@@ -36,14 +36,13 @@ use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
-use std::collections::LinkedList;
 use std::sync::Arc;
 
 /// A rule-based Analyzer.
 #[derive(Clone)]
 pub struct Analyzer {
     /// All rules to apply
-    pub rules: LinkedList<AnalyzerRuleRef>,
+    pub rules: Vec<AnalyzerRuleRef>,
 }
 
 impl Default for Analyzer {
@@ -66,9 +65,7 @@ impl Analyzer {
 
     /// Create a new analyzer with the given rules
     pub fn with_rules(rules: Vec<AnalyzerRuleRef>) -> Self {
-        Self {
-            rules: LinkedList::from_iter(rules),
-        }
+        Self { rules }
     }
 
     /// Analyze the logical plan by applying analyzer rules, and

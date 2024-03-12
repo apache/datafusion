@@ -39,7 +39,7 @@ mod utils;
 use analyzer::rewrite::OperatorToFunction;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::{analyzer::AnalyzerRuleRef, ScalarUDF};
+use datafusion_expr::ScalarUDF;
 use log::debug;
 use std::sync::Arc;
 
@@ -97,18 +97,12 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
 
-    let rules: Vec<(AnalyzerRuleRef, usize)> = vec![
-        // The order here should be adjusted based on the rules defined in the optimizer
-        //
-        // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
-        // and TypeCoercion may cast the argument types from Scalar to List.
-        (Arc::new(OperatorToFunction::new()), 1),
-    ];
+    let mut rules = registry.analyzer_rules();
+    // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
+    // and TypeCoercion may cast the argument types from Scalar to List.
+    rules.insert(1, Arc::new(OperatorToFunction::new()));
 
-    rules.into_iter().try_for_each(|(rule, index)| {
-        registry.register_analyzer_rule(rule, index)?;
-        Ok(()) as Result<()>
-    })?;
+    registry.with_analyzer_rules(rules);
 
     Ok(())
 }

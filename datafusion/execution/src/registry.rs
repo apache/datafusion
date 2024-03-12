@@ -68,15 +68,12 @@ pub trait FunctionRegistry {
         not_impl_err!("Registering WindowUDF")
     }
 
-    /// Registers a new `AnalyzerRule` at the given index.
-    /// Returns an error if the index is out of bounds.
-    fn register_analyzer_rule(
-        &mut self,
-        _rule: AnalyzerRuleRef,
-        _index: usize,
-    ) -> Result<()> {
-        not_impl_err!("Registering AnalyzerRule")
+    /// Return the existing analyzer rules
+    fn analyzer_rules(&self) -> Vec<AnalyzerRuleRef> {
+        vec![]
     }
+
+    fn with_analyzer_rules(&mut self, _rules: Vec<AnalyzerRuleRef>) {}
 
     /// Deregisters a [`ScalarUDF`], returning the implementation that was
     /// deregistered.
@@ -103,12 +100,6 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udwf(&mut self, _name: &str) -> Result<Option<Arc<WindowUDF>>> {
         not_impl_err!("Deregistering WindowUDF")
-    }
-
-    /// Deregsiters an `AnalyzerRule` at the given index.
-    /// Returns an error if the index is out of bounds.
-    fn deregister_analyzer_rule(&mut self, _index: usize) -> Result<()> {
-        not_impl_err!("DeRegistering AnalyzerRule")
     }
 }
 

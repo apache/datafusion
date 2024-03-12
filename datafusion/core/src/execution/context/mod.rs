@@ -50,7 +50,7 @@ use crate::{
         DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
         TableSource, TableType, ToStringifiedPlan, UNNAMED_TABLE,
     },
-    optimizer::analyzer::{Analyzer, AnalyzerRule},
+    optimizer::analyzer::Analyzer,
     optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
     physical_plan::{udaf::AggregateUDF, udf::ScalarUDF, ExecutionPlan},
@@ -69,6 +69,7 @@ use datafusion_common::{
     OwnedTableReference, SchemaReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::analyzer::AnalyzerRuleRef;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     var_provider::is_system_variables,
@@ -1702,12 +1703,6 @@ impl SessionState {
         self
     }
 
-    /// Override the `AnalyzerRule`s optimizer plan rules.
-    pub fn with_analyzer_rules(mut self, rules: Vec<AnalyzerRuleRef>) -> Self {
-        self.analyzer = Analyzer::with_rules(rules);
-        self
-    }
-
     /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
     pub fn with_optimizer_rules(
         mut self,
@@ -2242,23 +2237,14 @@ impl FunctionRegistry for SessionState {
         })
     }
 
-    /// Add `analyzer_rule` to the `index` of the list of
-    /// `AnalyzerRule`s used to rewrite queries.
-    fn register_analyzer_rule(
-        &mut self,
-        analyzer_rule: AnalyzerRuleRef,
-        index: usize,
-    ) -> Result<()> {
-        if index > self.analyzer.rules.len() {
-            return exec_err!(
-                "index out of range, index: {index}, length: {:?}",
-                self.analyzer.rules.len()
-            );
-        }
-        let mut split = self.analyzer.rules.split_off(index);
-        self.analyzer.rules.push_back(analyzer_rule);
-        self.analyzer.rules.append(&mut split);
-        Ok(())
+    /// Override the `AnalyzerRule`s optimizer plan rules.
+    fn with_analyzer_rules(&mut self, rules: Vec<AnalyzerRuleRef>) {
+        self.analyzer = Analyzer::with_rules(rules);
+    }
+
+    /// return the existing analyzer rules
+    fn analyzer_rules(&self) -> Vec<AnalyzerRuleRef> {
+        self.analyzer.rules.clone()
     }
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
@@ -2313,21 +2299,6 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udwf)
-    }
-
-    fn deregister_analyzer_rule(&mut self, index: usize) -> Result<()> {
-        if index > self.analyzer.rules.len() {
-            return exec_err!(
-                "index out of range, index: {index}, length: {:?}",
-                self.analyzer.rules.len()
-            );
-        }
-
-        let mut split = self.analyzer.rules.split_off(index);
-        // split off should includes the element at index
-        split.pop_front().unwrap();
-        self.analyzer.rules.append(&mut split);
-        Ok(())
     }
 }
 
