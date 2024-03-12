@@ -2861,7 +2861,7 @@ pub enum ScalarFunction {
     Signum = 15,
     Sin = 16,
     Sqrt = 17,
-    Tan = 18,
+    /// Tan = 18;
     Trunc = 19,
     /// 20 was Array
     /// RegexpMatch = 21;
@@ -2922,7 +2922,7 @@ pub enum ScalarFunction {
     Atanh = 76,
     Sinh = 77,
     Cosh = 78,
-    Tanh = 79,
+    /// Tanh = 79;
     Pi = 80,
     Degrees = 81,
     Radians = 82,
@@ -3005,7 +3005,6 @@ impl ScalarFunction {
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
-            ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
@@ -3053,7 +3052,6 @@ impl ScalarFunction {
             ScalarFunction::Atanh => "Atanh",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
-            ScalarFunction::Tanh => "Tanh",
             ScalarFunction::Pi => "Pi",
             ScalarFunction::Degrees => "Degrees",
             ScalarFunction::Radians => "Radians",
@@ -3109,7 +3107,6 @@ impl ScalarFunction {
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
-            "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
@@ -3157,7 +3154,6 @@ impl ScalarFunction {
             "Atanh" => Some(Self::Atanh),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
-            "Tanh" => Some(Self::Tanh),
             "Pi" => Some(Self::Pi),
             "Degrees" => Some(Self::Degrees),
             "Radians" => Some(Self::Radians),
