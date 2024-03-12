@@ -476,14 +476,14 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            (col("a").gt(lit(4)), r#"a > 4"#),
+            (col("a").gt(lit(4)), r#"(a > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"a.b.c > 4"#,
+                r#"(a.b.c > 4)"#,
             ),
         ];
 
