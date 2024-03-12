@@ -391,7 +391,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.digest.count() == 0.0 {
-            return exec_err!("aggregate function needs at least one non-null element");
+            return Ok(ScalarValue::Null);
         }
         let q = self.digest.estimate_quantile(self.percentile);
 
