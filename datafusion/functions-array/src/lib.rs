@@ -32,6 +32,7 @@ mod array_has;
 mod concat;
 mod kernels;
 mod make_array;
+mod rewrite;
 mod udf;
 mod utils;
 
@@ -94,5 +95,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
+
     Ok(())
 }
