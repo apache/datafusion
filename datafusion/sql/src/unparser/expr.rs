@@ -508,7 +508,7 @@ mod tests {
 
         let actual = format!("{}", ast);
 
-        let expected = r#"'a' > 4"#;
+        let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
 
         Ok(())
