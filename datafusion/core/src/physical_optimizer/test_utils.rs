@@ -287,6 +287,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
         },
         None,
         None,
+        Default::default(),
     ))
 }
 
@@ -310,6 +311,7 @@ pub fn parquet_exec_sorted(
         },
         None,
         None,
+        Default::default(),
     ))
 }
 

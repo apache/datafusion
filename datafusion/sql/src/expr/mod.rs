@@ -271,8 +271,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Cast {
-                expr, data_type, ..
+                expr,
+                data_type,
+                format,
             } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
                 let dt = self.convert_data_type(&data_type)?;
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
@@ -295,15 +301,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::TryCast {
-                expr, data_type, ..
-            } => Ok(Expr::TryCast(TryCast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+                expr,
+                data_type,
+                format,
+            } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
+                Ok(Expr::TryCast(TryCast::new(
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *expr,
+                        schema,
+                        planner_context,
+                    )?),
+                    self.convert_data_type(&data_type)?,
+                )))
+            }
 
             SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value)),
@@ -478,7 +492,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 trim_where,
                 trim_what,
                 trim_characters,
-                ..
             } => self.sql_trim_to_expr(
                 *expr,
                 trim_where,
@@ -583,8 +596,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(value, input_schema, planner_context)
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Struct,
+        let struct_func = self
+            .context_provider
+            .get_function_meta("struct")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'struct' function")
+            })?;
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            struct_func,
             args,
         )))
     }
@@ -801,7 +820,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 distinct,
                 order_by,
                 null_treatment,
-                ..
+                filter: None, // filter is passed in
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
                 args,
@@ -814,7 +833,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 order_by,
                 null_treatment,
             ))),
-            _ => plan_err!(
+            Expr::AggregateFunction(..) => {
+                internal_err!("Expected null filter clause in aggregate function")
+            }
+            _ => internal_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
             ),
         }

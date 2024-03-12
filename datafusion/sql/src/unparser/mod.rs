@@ -15,17 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Functions for parsing arbitrary passed strings to valid file_option settings
-use crate::{DataFusionError, Result};
+mod expr;
 
-/// Converts a String option to a bool, or returns an error if not a valid bool string.
-pub(crate) fn parse_boolean_string(option: &str, value: String) -> Result<bool> {
-    match value.to_lowercase().as_str() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unsupported value {value} for option {option}! \
-            Valid values are true or false!"
-        ))),
+pub use expr::expr_to_sql;
+
+use self::dialect::{DefaultDialect, Dialect};
+pub mod dialect;
+
+pub struct Unparser<'a> {
+    dialect: &'a dyn Dialect,
+}
+
+impl<'a> Unparser<'a> {
+    pub fn new(dialect: &'a dyn Dialect) -> Self {
+        Self { dialect }
+    }
+}
+
+impl<'a> Default for Unparser<'a> {
+    fn default() -> Self {
+        Self {
+            dialect: &DefaultDialect {},
+        }
     }
 }

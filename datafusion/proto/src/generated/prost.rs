@@ -122,27 +122,15 @@ pub struct ProjectionColumns {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvFormat {
-    #[prost(bool, tag = "1")]
-    pub has_header: bool,
-    #[prost(string, tag = "2")]
-    pub delimiter: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub quote: ::prost::alloc::string::String,
-    #[prost(oneof = "csv_format::OptionalEscape", tags = "4")]
-    pub optional_escape: ::core::option::Option<csv_format::OptionalEscape>,
-}
-/// Nested message and enum types in `CsvFormat`.
-pub mod csv_format {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum OptionalEscape {
-        #[prost(string, tag = "4")]
-        Escape(::prost::alloc::string::String),
-    }
+    #[prost(message, optional, tag = "5")]
+    pub options: ::core::option::Option<CsvOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ParquetFormat {}
+pub struct ParquetFormat {
+    #[prost(message, optional, tag = "2")]
+    pub options: ::core::option::Option<TableParquetOptions>,
+}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroFormat {}
@@ -509,38 +497,34 @@ pub struct CopyToNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(string, tag = "2")]
     pub output_url: ::prost::alloc::string::String,
-    #[prost(string, tag = "6")]
-    pub file_type: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "7")]
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(oneof = "copy_to_node::CopyOptions", tags = "4, 5")]
-    pub copy_options: ::core::option::Option<copy_to_node::CopyOptions>,
+    #[prost(oneof = "copy_to_node::FormatOptions", tags = "8, 9, 10, 11, 12")]
+    pub format_options: ::core::option::Option<copy_to_node::FormatOptions>,
 }
 /// Nested message and enum types in `CopyToNode`.
 pub mod copy_to_node {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum CopyOptions {
-        #[prost(message, tag = "4")]
-        SqlOptions(super::SqlOptions),
-        #[prost(message, tag = "5")]
-        WriterOptions(super::FileTypeWriterOptions),
+    pub enum FormatOptions {
+        #[prost(message, tag = "8")]
+        Csv(super::CsvOptions),
+        #[prost(message, tag = "9")]
+        Json(super::JsonOptions),
+        #[prost(message, tag = "10")]
+        Parquet(super::TableParquetOptions),
+        #[prost(message, tag = "11")]
+        Avro(super::AvroOptions),
+        #[prost(message, tag = "12")]
+        Arrow(super::ArrowOptions),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SqlOptions {
-    #[prost(message, repeated, tag = "1")]
-    pub option: ::prost::alloc::vec::Vec<SqlOption>,
-}
+pub struct AvroOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SqlOption {
-    #[prost(string, tag = "1")]
-    pub key: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub value: ::prost::alloc::string::String,
-}
+pub struct ArrowOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
@@ -1647,36 +1631,9 @@ pub struct PartitionColumn {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FileTypeWriterOptions {
-    #[prost(oneof = "file_type_writer_options::FileType", tags = "1, 2, 3, 4")]
-    pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
-}
-/// Nested message and enum types in `FileTypeWriterOptions`.
-pub mod file_type_writer_options {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum FileType {
-        #[prost(message, tag = "1")]
-        JsonOptions(super::JsonWriterOptions),
-        #[prost(message, tag = "2")]
-        ParquetOptions(super::ParquetWriterOptions),
-        #[prost(message, tag = "3")]
-        CsvOptions(super::CsvWriterOptions),
-        #[prost(message, tag = "4")]
-        ArrowOptions(super::ArrowWriterOptions),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ParquetWriterOptions {
-    #[prost(message, optional, tag = "1")]
-    pub writer_properties: ::core::option::Option<WriterProperties>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1706,26 +1663,57 @@ pub struct CsvWriterOptions {
     #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
 }
+/// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ArrowWriterOptions {}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct WriterProperties {
-    #[prost(uint64, tag = "1")]
-    pub data_page_size_limit: u64,
-    #[prost(uint64, tag = "2")]
-    pub dictionary_page_size_limit: u64,
-    #[prost(uint64, tag = "3")]
-    pub data_page_row_count_limit: u64,
-    #[prost(uint64, tag = "4")]
-    pub write_batch_size: u64,
-    #[prost(uint64, tag = "5")]
-    pub max_row_group_size: u64,
-    #[prost(string, tag = "6")]
-    pub writer_version: ::prost::alloc::string::String,
+pub struct CsvOptions {
+    /// Indicates if the CSV has a header row
+    #[prost(bool, tag = "1")]
+    pub has_header: bool,
+    /// Delimiter character as a byte
+    #[prost(bytes = "vec", tag = "2")]
+    pub delimiter: ::prost::alloc::vec::Vec<u8>,
+    /// Quote character as a byte
+    #[prost(bytes = "vec", tag = "3")]
+    pub quote: ::prost::alloc::vec::Vec<u8>,
+    /// Optional escape character as a byte
+    #[prost(bytes = "vec", tag = "4")]
+    pub escape: ::prost::alloc::vec::Vec<u8>,
+    /// Compression type
+    #[prost(enumeration = "CompressionTypeVariant", tag = "5")]
+    pub compression: i32,
+    /// Max records for schema inference
+    #[prost(uint64, tag = "6")]
+    pub schema_infer_max_rec: u64,
+    /// Optional date format
     #[prost(string, tag = "7")]
-    pub created_by: ::prost::alloc::string::String,
+    pub date_format: ::prost::alloc::string::String,
+    /// Optional datetime format
+    #[prost(string, tag = "8")]
+    pub datetime_format: ::prost::alloc::string::String,
+    /// Optional timestamp format
+    #[prost(string, tag = "9")]
+    pub timestamp_format: ::prost::alloc::string::String,
+    /// Optional timestamp with timezone format
+    #[prost(string, tag = "10")]
+    pub timestamp_tz_format: ::prost::alloc::string::String,
+    /// Optional time format
+    #[prost(string, tag = "11")]
+    pub time_format: ::prost::alloc::string::String,
+    /// Optional representation of null value
+    #[prost(string, tag = "12")]
+    pub null_value: ::prost::alloc::string::String,
+}
+/// Options controlling CSV format
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonOptions {
+    /// Compression type
+    #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
+    pub compression: i32,
+    /// Max records for schema inference
+    #[prost(uint64, tag = "2")]
+    pub schema_infer_max_rec: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1742,14 +1730,14 @@ pub struct FileSinkConfig {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub overwrite: bool,
-    #[prost(message, optional, tag = "9")]
-    pub file_type_writer_options: ::core::option::Option<FileTypeWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub writer_options: ::core::option::Option<JsonWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1768,6 +1756,8 @@ pub struct JsonSinkExecNode {
 pub struct CsvSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub writer_options: ::core::option::Option<CsvWriterOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1783,9 +1773,241 @@ pub struct CsvSinkExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TableParquetOptions {
+    #[prost(message, optional, tag = "1")]
+    pub global: ::core::option::Option<ParquetOptions>,
+    #[prost(message, repeated, tag = "2")]
+    pub column_specific_options: ::prost::alloc::vec::Vec<ColumnSpecificOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnSpecificOptions {
+    #[prost(string, tag = "1")]
+    pub column_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub options: ::core::option::Option<ColumnOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnOptions {
+    #[prost(oneof = "column_options::BloomFilterEnabledOpt", tags = "1")]
+    pub bloom_filter_enabled_opt: ::core::option::Option<
+        column_options::BloomFilterEnabledOpt,
+    >,
+    #[prost(oneof = "column_options::EncodingOpt", tags = "2")]
+    pub encoding_opt: ::core::option::Option<column_options::EncodingOpt>,
+    #[prost(oneof = "column_options::DictionaryEnabledOpt", tags = "3")]
+    pub dictionary_enabled_opt: ::core::option::Option<
+        column_options::DictionaryEnabledOpt,
+    >,
+    #[prost(oneof = "column_options::CompressionOpt", tags = "4")]
+    pub compression_opt: ::core::option::Option<column_options::CompressionOpt>,
+    #[prost(oneof = "column_options::StatisticsEnabledOpt", tags = "5")]
+    pub statistics_enabled_opt: ::core::option::Option<
+        column_options::StatisticsEnabledOpt,
+    >,
+    #[prost(oneof = "column_options::BloomFilterFppOpt", tags = "6")]
+    pub bloom_filter_fpp_opt: ::core::option::Option<column_options::BloomFilterFppOpt>,
+    #[prost(oneof = "column_options::BloomFilterNdvOpt", tags = "7")]
+    pub bloom_filter_ndv_opt: ::core::option::Option<column_options::BloomFilterNdvOpt>,
+    #[prost(oneof = "column_options::MaxStatisticsSizeOpt", tags = "8")]
+    pub max_statistics_size_opt: ::core::option::Option<
+        column_options::MaxStatisticsSizeOpt,
+    >,
+}
+/// Nested message and enum types in `ColumnOptions`.
+pub mod column_options {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterEnabledOpt {
+        #[prost(bool, tag = "1")]
+        BloomFilterEnabled(bool),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum EncodingOpt {
+        #[prost(string, tag = "2")]
+        Encoding(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DictionaryEnabledOpt {
+        #[prost(bool, tag = "3")]
+        DictionaryEnabled(bool),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CompressionOpt {
+        #[prost(string, tag = "4")]
+        Compression(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum StatisticsEnabledOpt {
+        #[prost(string, tag = "5")]
+        StatisticsEnabled(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterFppOpt {
+        #[prost(double, tag = "6")]
+        BloomFilterFpp(f64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterNdvOpt {
+        #[prost(uint64, tag = "7")]
+        BloomFilterNdv(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum MaxStatisticsSizeOpt {
+        #[prost(uint32, tag = "8")]
+        MaxStatisticsSize(u32),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetOptions {
+    /// Regular fields
+    ///
+    /// default = true
+    #[prost(bool, tag = "1")]
+    pub enable_page_index: bool,
+    /// default = true
+    #[prost(bool, tag = "2")]
+    pub pruning: bool,
+    /// default = true
+    #[prost(bool, tag = "3")]
+    pub skip_metadata: bool,
+    /// default = false
+    #[prost(bool, tag = "5")]
+    pub pushdown_filters: bool,
+    /// default = false
+    #[prost(bool, tag = "6")]
+    pub reorder_filters: bool,
+    /// default = 1024 * 1024
+    #[prost(uint64, tag = "7")]
+    pub data_pagesize_limit: u64,
+    /// default = 1024
+    #[prost(uint64, tag = "8")]
+    pub write_batch_size: u64,
+    /// default = "1.0"
+    #[prost(string, tag = "9")]
+    pub writer_version: ::prost::alloc::string::String,
+    /// default = false
+    #[prost(bool, tag = "20")]
+    pub bloom_filter_enabled: bool,
+    /// default = true
+    #[prost(bool, tag = "23")]
+    pub allow_single_file_parallelism: bool,
+    /// default = 1
+    #[prost(uint64, tag = "24")]
+    pub maximum_parallel_row_group_writers: u64,
+    /// default = 2
+    #[prost(uint64, tag = "25")]
+    pub maximum_buffered_record_batches_per_stream: u64,
+    #[prost(uint64, tag = "12")]
+    pub dictionary_page_size_limit: u64,
+    #[prost(uint64, tag = "18")]
+    pub data_page_row_count_limit: u64,
+    #[prost(uint64, tag = "15")]
+    pub max_row_group_size: u64,
+    #[prost(string, tag = "16")]
+    pub created_by: ::prost::alloc::string::String,
+    #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
+    pub metadata_size_hint_opt: ::core::option::Option<
+        parquet_options::MetadataSizeHintOpt,
+    >,
+    #[prost(oneof = "parquet_options::CompressionOpt", tags = "10")]
+    pub compression_opt: ::core::option::Option<parquet_options::CompressionOpt>,
+    #[prost(oneof = "parquet_options::DictionaryEnabledOpt", tags = "11")]
+    pub dictionary_enabled_opt: ::core::option::Option<
+        parquet_options::DictionaryEnabledOpt,
+    >,
+    #[prost(oneof = "parquet_options::StatisticsEnabledOpt", tags = "13")]
+    pub statistics_enabled_opt: ::core::option::Option<
+        parquet_options::StatisticsEnabledOpt,
+    >,
+    #[prost(oneof = "parquet_options::MaxStatisticsSizeOpt", tags = "14")]
+    pub max_statistics_size_opt: ::core::option::Option<
+        parquet_options::MaxStatisticsSizeOpt,
+    >,
+    #[prost(oneof = "parquet_options::ColumnIndexTruncateLengthOpt", tags = "17")]
+    pub column_index_truncate_length_opt: ::core::option::Option<
+        parquet_options::ColumnIndexTruncateLengthOpt,
+    >,
+    #[prost(oneof = "parquet_options::EncodingOpt", tags = "19")]
+    pub encoding_opt: ::core::option::Option<parquet_options::EncodingOpt>,
+    #[prost(oneof = "parquet_options::BloomFilterFppOpt", tags = "21")]
+    pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
+    #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
+    pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+}
+/// Nested message and enum types in `ParquetOptions`.
+pub mod parquet_options {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum MetadataSizeHintOpt {
+        #[prost(uint64, tag = "4")]
+        MetadataSizeHint(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CompressionOpt {
+        #[prost(string, tag = "10")]
+        Compression(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DictionaryEnabledOpt {
+        #[prost(bool, tag = "11")]
+        DictionaryEnabled(bool),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum StatisticsEnabledOpt {
+        #[prost(string, tag = "13")]
+        StatisticsEnabled(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum MaxStatisticsSizeOpt {
+        #[prost(uint64, tag = "14")]
+        MaxStatisticsSize(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ColumnIndexTruncateLengthOpt {
+        #[prost(uint64, tag = "17")]
+        ColumnIndexTruncateLength(u64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum EncodingOpt {
+        #[prost(string, tag = "19")]
+        Encoding(::prost::alloc::string::String),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterFppOpt {
+        #[prost(double, tag = "21")]
+        BloomFilterFpp(f64),
+    }
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BloomFilterNdvOpt {
+        #[prost(uint64, tag = "22")]
+        BloomFilterNdv(u64),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
+    #[prost(message, optional, tag = "2")]
+    pub parquet_options: ::core::option::Option<TableParquetOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2641,7 +2863,7 @@ pub enum ScalarFunction {
     Sqrt = 17,
     /// Tan = 18;
     Trunc = 19,
-    Array = 20,
+    /// 20 was Array
     /// RegexpMatch = 21;
     BitLength = 22,
     Btrim = 23,
@@ -2686,11 +2908,11 @@ pub enum ScalarFunction {
     Upper = 62,
     Coalesce = 63,
     Power = 64,
-    StructFun = 65,
+    /// 65 was StructFun
     FromUnixtime = 66,
     Atan2 = 67,
     /// 68 was DateBin
-    ArrowTypeof = 69,
+    /// 69 was ArrowTypeof
     CurrentDate = 70,
     CurrentTime = 71,
     Uuid = 72,
@@ -2707,15 +2929,15 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
-    ArrayAppend = 86,
-    ArrayConcat = 87,
+    /// 86 was ArrayAppend
+    /// 87 was ArrayConcat
     /// 88 was ArrayDims
     ArrayRepeat = 89,
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
     ArrayPosition = 92,
     ArrayPositions = 93,
-    ArrayPrepend = 94,
+    /// 94 was ArrayPrepend
     ArrayRemove = 95,
     ArrayReplace = 96,
     /// 97 was ArrayToString
@@ -2736,7 +2958,7 @@ pub enum ScalarFunction {
     Iszero = 114,
     /// 115 was ArrayEmpty
     ArrayPopBack = 116,
-    StringToArray = 117,
+    /// 117 was StringToArray
     /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
     ArrayUnion = 120,
@@ -2747,8 +2969,8 @@ pub enum ScalarFunction {
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
-    ArraySort = 128,
-    ArrayDistinct = 129,
+    /// / 128 was ArraySort
+    /// / 129 was ArrayDistinct
     ArrayResize = 130,
     EndsWith = 131,
     /// / 132 was InStr
@@ -2784,7 +3006,6 @@ impl ScalarFunction {
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::Array => "Array",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
@@ -2820,10 +3041,8 @@ impl ScalarFunction {
             ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::StructFun => "StructFun",
             ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::ArrowTypeof => "ArrowTypeof",
             ScalarFunction::CurrentDate => "CurrentDate",
             ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
@@ -2839,12 +3058,9 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayAppend => "ArrayAppend",
-            ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
-            ScalarFunction::ArrayPrepend => "ArrayPrepend",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::ArrayElement => "ArrayElement",
@@ -2857,7 +3073,6 @@ impl ScalarFunction {
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
-            ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
@@ -2866,8 +3081,6 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
-            ScalarFunction::ArraySort => "ArraySort",
-            ScalarFunction::ArrayDistinct => "ArrayDistinct",
             ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::MakeDate => "MakeDate",
@@ -2895,7 +3108,6 @@ impl ScalarFunction {
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
-            "Array" => Some(Self::Array),
             "BitLength" => Some(Self::BitLength),
             "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),
@@ -2931,10 +3143,8 @@ impl ScalarFunction {
             "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "StructFun" => Some(Self::StructFun),
             "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
-            "ArrowTypeof" => Some(Self::ArrowTypeof),
             "CurrentDate" => Some(Self::CurrentDate),
             "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
@@ -2950,12 +3160,9 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayAppend" => Some(Self::ArrayAppend),
-            "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
-            "ArrayPrepend" => Some(Self::ArrayPrepend),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
             "ArrayElement" => Some(Self::ArrayElement),
@@ -2968,7 +3175,6 @@ impl ScalarFunction {
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
-            "StringToArray" => Some(Self::StringToArray),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
@@ -2977,8 +3183,6 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
-            "ArraySort" => Some(Self::ArraySort),
-            "ArrayDistinct" => Some(Self::ArrayDistinct),
             "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
             "MakeDate" => Some(Self::MakeDate),

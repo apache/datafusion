@@ -29,7 +29,9 @@
 pub mod macros;
 
 mod array_has;
+mod concat;
 mod kernels;
+mod make_array;
 mod udf;
 mod utils;
 
@@ -44,32 +46,46 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::concat::array_append;
+    pub use super::concat::array_concat;
+    pub use super::concat::array_prepend;
+    pub use super::make_array::make_array;
     pub use super::udf::array_dims;
+    pub use super::udf::array_distinct;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
+    pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
+    pub use super::udf::string_to_array;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = vec![
         udf::array_to_string_udf(),
+        udf::string_to_array_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
         udf::array_dims_udf(),
         udf::cardinality_udf(),
         udf::array_ndims_udf(),
+        concat::array_append_udf(),
+        concat::array_prepend_udf(),
+        concat::array_concat_udf(),
+        make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
         udf::array_empty_udf(),
         udf::array_length_udf(),
         udf::flatten_udf(),
+        udf::array_sort_udf(),
+        udf::array_distinct_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

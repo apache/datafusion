@@ -26,16 +26,16 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-pub use file_groups::FileGroupPartitioner;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
+pub use csv::{CsvConfig, CsvExec, CsvOpener};
+pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
@@ -66,7 +66,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
+use datafusion_common::plan_err;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -90,8 +90,6 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
-    /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
-    pub file_type_writer_options: FileTypeWriterOptions,
 }
 
 impl FileSinkConfig {

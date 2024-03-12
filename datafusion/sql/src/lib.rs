@@ -36,6 +36,7 @@ mod relation;
 mod select;
 mod set_expr;
 mod statement;
+pub mod unparser;
 pub mod utils;
 mod values;
 

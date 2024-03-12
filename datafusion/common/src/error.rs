@@ -535,6 +535,9 @@ make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
 make_error!(exec_err, exec_datafusion_err, Execution);
 
+// Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
+make_error!(config_err, config_datafusion_err, Configuration);
+
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
 make_error!(substrait_err, substrait_datafusion_err, Substrait);
 
@@ -594,6 +597,7 @@ macro_rules! schema_err {
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
+pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
