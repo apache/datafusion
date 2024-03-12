@@ -27,7 +27,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use chrono::{Datelike, Duration};
+use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
     physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
@@ -310,6 +310,7 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
                 offset_nanos
                     + t.parse::<chrono::NaiveDateTime>()
                         .unwrap()
+                        .and_utc()
                         .timestamp_nanos_opt()
                         .unwrap()
             })
@@ -459,7 +460,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
                     .unwrap()
                     .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
                 let t = t + offset;
-                t.timestamp_millis()
+                t.and_utc().timestamp_millis()
             })
         })
         .collect::<Vec<_>>();
@@ -511,18 +512,18 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {
             vec![
-                make_timestamp_batch(Duration::seconds(0)),
-                make_timestamp_batch(Duration::seconds(10)),
-                make_timestamp_batch(Duration::minutes(10)),
-                make_timestamp_batch(Duration::days(10)),
+                make_timestamp_batch(TimeDelta::try_seconds(0).unwrap()),
+                make_timestamp_batch(TimeDelta::try_seconds(10).unwrap()),
+                make_timestamp_batch(TimeDelta::try_minutes(10).unwrap()),
+                make_timestamp_batch(TimeDelta::try_days(10).unwrap()),
             ]
         }
         Scenario::Dates => {
             vec![
-                make_date_batch(Duration::days(0)),
-                make_date_batch(Duration::days(10)),
-                make_date_batch(Duration::days(300)),
-                make_date_batch(Duration::days(3600)),
+                make_date_batch(TimeDelta::try_days(0).unwrap()),
+                make_date_batch(TimeDelta::try_days(10).unwrap()),
+                make_date_batch(TimeDelta::try_days(300).unwrap()),
+                make_date_batch(TimeDelta::try_days(3600).unwrap()),
             ]
         }
         Scenario::Int32 => {

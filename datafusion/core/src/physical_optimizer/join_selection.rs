@@ -37,7 +37,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
@@ -57,7 +57,7 @@ impl JoinSelection {
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
-// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
+// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
 /// Checks statistics for join swap.
 fn should_swap_join_order(
     left: &dyn ExecutionPlan,
@@ -135,6 +135,27 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
+/// This function swaps the given join's projection.
+fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<usize>> {
+    projection.map(|p| {
+        p.iter()
+            .map(|i| {
+                // If the index is less than the left schema length, it is from the left schema, so we add the right schema length to it.
+                // Otherwise, it is from the right schema, so we subtract the left schema length from it.
+                if *i < left_schema_len {
+                    *i + right_schema_len
+                } else {
+                    *i - left_schema_len
+                }
+            })
+            .collect()
+    })
+}
+
 /// This function swaps the inputs of the given join operator.
 fn swap_hash_join(
     hash_join: &HashJoinExec,
@@ -152,6 +173,11 @@ fn swap_hash_join(
             .collect(),
         swap_join_filter(hash_join.filter()),
         &swap_join_type(*hash_join.join_type()),
+        swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            hash_join.projection.as_ref(),
+        ),
         partition_mode,
         hash_join.null_equals_null(),
     )?;
@@ -236,7 +262,9 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan = plan.transform_up(&|p| apply_subrules(p, &subrules, config))?;
+        let new_plan = plan
+            .transform_up(&|p| apply_subrules(p, &subrules, config))
+            .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
         // - For a hash join with partition mode [`PartitionMode::Auto`], we will
@@ -251,13 +279,15 @@ impl PhysicalOptimizerRule for JoinSelection {
         let config = &config.optimizer;
         let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        new_plan.transform_up(&|plan| {
-            statistical_join_selection_subrule(
-                plan,
-                collect_threshold_byte_size,
-                collect_threshold_num_rows,
-            )
-        })
+        new_plan
+            .transform_up(&|plan| {
+                statistical_join_selection_subrule(
+                    plan,
+                    collect_threshold_byte_size,
+                    collect_threshold_num_rows,
+                )
+            })
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -333,6 +363,7 @@ fn try_collect_left(
                     hash_join.on().to_vec(),
                     hash_join.filter().cloned(),
                     hash_join.join_type(),
+                    hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
                 )?)))
@@ -344,6 +375,7 @@ fn try_collect_left(
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
         )?))),
@@ -371,6 +403,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
         )?))
@@ -433,9 +466,9 @@ fn statistical_join_selection_subrule(
         };
 
     Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
+        Transformed::yes(transformed)
     } else {
-        Transformed::No(plan)
+        Transformed::no(plan)
     })
 }
 
@@ -647,7 +680,7 @@ fn apply_subrules(
     for subrule in subrules {
         input = subrule(input, config_options)?;
     }
-    Ok(Transformed::Yes(input))
+    Ok(Transformed::yes(input))
 }
 
 #[cfg(test)]
@@ -808,8 +841,9 @@ mod tests_statistical {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan =
-            plan.transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))?;
+        let new_plan = plan
+            .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
+            .data()?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
@@ -840,6 +874,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -896,6 +931,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -957,6 +993,7 @@ mod tests_statistical {
                     )],
                     None,
                     &join_type,
+                    None,
                     PartitionMode::Partitioned,
                     false,
                 )
@@ -1027,6 +1064,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Inner,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1045,6 +1083,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Left,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1085,6 +1124,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -1288,6 +1328,7 @@ mod tests_statistical {
                 on,
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::Auto,
                 false,
             )
@@ -1742,6 +1783,7 @@ mod hash_join_tests {
             )],
             None,
             &t.initial_join_type,
+            None,
             t.initial_mode,
             false,
         )?);

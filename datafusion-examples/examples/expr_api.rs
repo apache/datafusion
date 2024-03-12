@@ -24,15 +24,16 @@ use arrow::record_batch::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::{DFField, DFSchema};
 use datafusion::error::Result;
-use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion::physical_expr::execution_props::ExecutionProps;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{
     analyze, create_physical_expr, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 use datafusion::prelude::*;
 use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{ColumnarValue, ExprSchemable, Operator};
 
 /// This example demonstrates the DataFusion [`Expr`] API.

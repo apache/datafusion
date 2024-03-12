@@ -85,6 +85,10 @@ pub trait ContextProvider {
 
     /// Get configuration options
     fn options(&self) -> &ConfigOptions;
+
+    fn udfs_names(&self) -> Vec<String>;
+    fn udafs_names(&self) -> Vec<String>;
+    fn udwfs_names(&self) -> Vec<String>;
 }
 
 /// SQL parser options
@@ -359,11 +363,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
             | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
-                let data_type = self.convert_data_type(inner_sql_type)?;
-
-                Ok(DataType::List(Arc::new(Field::new(
-                    "field", data_type, true,
-                ))))
+                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                Ok(DataType::new_list(inner_data_type, true))
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")

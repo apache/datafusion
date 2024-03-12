@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Struct expressions
-
-use arrow::array::*;
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field, Fields};
+use arrow_array::{ArrayRef, StructArray};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 use std::sync::Arc;
 
 fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -47,10 +47,9 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(StructArray::from(vec)))
 }
-
 /// put values in a struct array.
-pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays = values
+fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arrays = args
         .iter()
         .map(|x| {
             Ok(match x {
@@ -61,10 +60,55 @@ pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         .collect::<Result<Vec<ArrayRef>>>()?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
+#[derive(Debug)]
+pub struct StructFunc {
+    signature: Signature,
+}
+
+impl StructFunc {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl Default for StructFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScalarUDFImpl for StructFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "struct"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let return_fields = arg_types
+            .iter()
+            .enumerate()
+            .map(|(pos, dt)| Field::new(format!("c{pos}"), dt.clone(), true))
+            .collect::<Vec<Field>>();
+        Ok(DataType::Struct(Fields::from(return_fields)))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        struct_expr(args)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::Int64Array;
     use datafusion_common::cast::as_struct_array;
     use datafusion_common::ScalarValue;
 
