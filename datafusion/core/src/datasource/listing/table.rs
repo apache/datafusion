@@ -51,8 +51,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, Constraints, FileType, FileTypeWriterOptions,
-    SchemaExt, ToDFSchema,
+    internal_err, plan_err, project_schema, Constraints, FileType, SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -247,9 +246,6 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// This setting holds file format specific options which should be used
-    /// when inserting into this table.
-    pub file_type_write_options: Option<FileTypeWriterOptions>,
 }
 
 impl ListingOptions {
@@ -267,7 +263,6 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
-            file_type_write_options: None,
         }
     }
 
@@ -415,15 +410,6 @@ impl ListingOptions {
     /// ```
     pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
-        self
-    }
-
-    /// Configure file format specific writing options.
-    pub fn with_write_options(
-        mut self,
-        file_type_write_options: FileTypeWriterOptions,
-    ) -> Self {
-        self.file_type_write_options = Some(file_type_write_options);
         self
     }
 
@@ -760,15 +746,6 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-        let file_format = self.options().format.as_ref();
-
-        let file_type_writer_options = match &self.options().file_type_write_options {
-            Some(opt) => opt.clone(),
-            None => FileTypeWriterOptions::build_default(
-                &file_format.file_type(),
-                state.config_options(),
-            )?,
-        };
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
@@ -778,7 +755,6 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             overwrite,
-            file_type_writer_options,
         };
 
         let unsorted: Vec<Vec<Expr>> = vec![];
