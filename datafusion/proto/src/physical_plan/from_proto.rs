@@ -41,9 +41,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, GetFieldAccessExpr,
-    GetIndexedFieldExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr,
-    NotExpr, TryCastExpr,
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
