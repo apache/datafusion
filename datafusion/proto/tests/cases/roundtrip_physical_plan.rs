@@ -271,6 +271,7 @@ fn roundtrip_window() -> Result<()> {
             "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
             col("a", &schema)?,
             DataType::Int64,
+            false,
         )),
         &[col("b", &schema)?],
         &[PhysicalSortExpr {
