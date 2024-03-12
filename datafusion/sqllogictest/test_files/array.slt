@@ -5598,6 +5598,39 @@ select
 ----
 [] [9223372036854775807] [] [9223372036854775806] [] [-9223372036854775807] [] [-9223372036854775808]
 
+# Test range(start, stop, step) with NULL values
+query ?
+select range(start, stop, step) from
+  (values (1), (NULL)) as start_values(start),
+  (values (10), (NULL)) as stop_values(stop),
+  (values (3), (NULL)) as step_values(step)
+where start is null or stop is null or step is null
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Test range(start, stop) with NULL values
+query ?
+select range(start, stop) from
+  (values (1), (NULL)) as start_values(start),
+  (values (10), (NULL)) as stop_values(stop)
+where start is null or stop is null
+----
+NULL
+NULL
+NULL
+
+# Test range(stop) with NULL value
+query ?
+select range(NULL)
+----
+NULL
+
 ## should throw error
 query error
 select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
@@ -5677,6 +5710,39 @@ select
   generate_series(-9223372036854775808, -9223372036854775808, 1) as c4;
 ----
 [9223372036854775807] [9223372036854775807] [-9223372036854775808] [-9223372036854775808]
+
+# Test generate_series(start, stop, step) with NULL values
+query ?
+select generate_series(start, stop, step) from
+  (values (1), (NULL)) as start_values(start),
+  (values (10), (NULL)) as stop_values(stop),
+  (values (3), (NULL)) as step_values(step)
+where start is null or stop is null or step is null
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Test generate_series(start, stop) with NULL values
+query ?
+select generate_series(start, stop) from
+  (values (1), (NULL)) as start_values(start),
+  (values (10), (NULL)) as stop_values(stop)
+where start is null or stop is null
+----
+NULL
+NULL
+NULL
+
+# Test generate_series(stop) with NULL value
+query ?
+select generate_series(NULL)
+----
+NULL
 
 
 ## array_except
