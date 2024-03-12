@@ -102,9 +102,72 @@ impl ScalarUDFImpl for GetFieldFunc {
                     }
                 }
             }
+            Expr::ScalarFunction(fun) => {
+                let index = match &args[1] {
+                    Expr::Literal(ScalarValue::Utf8(name)) => {
+                        name.as_ref().map(|x| x.as_str()).unwrap()[1..]
+                            .parse::<usize>()
+                            .unwrap()
+                    }
+                    _ => {
+                        return exec_err!(
+                                "get_field function requires the argument field_name to be a string"
+                        );
+                    }
+                };
+                if let Some(expr) = fun.args.get(index) {
+                    match expr {
+                        Expr::Literal(scalar) => {
+                            println!("{:?}", scalar);
+                            Ok(scalar.data_type().clone())
+                        }
+                        _ => {
+                            exec_err!(
+                                "get_field function requires the first argument to be struct array 1"
+                            )
+                        }
+                    }
+                } else {
+                    exec_err!(
+                        "get_field function requires the first argument to be struct array 2"
+                    )
+                }
+            }
+            Expr::Literal(scalar) => match scalar {
+                ScalarValue::Struct(struct_array) => {
+                    let field_name = match &args[1] {
+                        Expr::Literal(ScalarValue::Utf8(name)) => {
+                            name.as_ref().map(|x| x.as_str())
+                        }
+                        _ => {
+                            return exec_err!(
+                                        "get_field function requires the argument field_name to be a string"
+                                    );
+                        }
+                    };
+                    println!("{}", field_name.unwrap());
+                    let field = struct_array
+                        .fields()
+                        .iter()
+                        .find(|f| f.name() == field_name.unwrap());
+                    match field {
+                        Some(field) => Ok(field.data_type().clone()),
+                        None => {
+                            exec_err!(
+                                        "get_field function can't find the field {} in the struct", field_name.unwrap()
+                                    )
+                        }
+                    }
+                }
+                _ => {
+                    exec_err!(
+                            "get_field function requires the first argument to be struct array 3"
+                        )
+                }
+            },
             _ => {
                 exec_err!(
-                    "get_field function requires the first argument to be struct array"
+                    "get_field function requires the first argument to be struct array 4"
                 )
             }
         }
@@ -127,7 +190,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                     Some(struct_array) => struct_array,
                     None => {
                         return exec_err!(
-                            "get_field function requires the first argument to be struct array"
+                            "get_field function requires the first argument to be struct array, 5"
                         );
                     }
                 };
@@ -155,11 +218,36 @@ impl ScalarUDFImpl for GetFieldFunc {
                     }
                 }
             }
-            _ => {
-                exec_err!(
-                    "get_field function requires the first argument to be struct array"
-                )
-            }
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Struct(struct_array) => {
+                    let column_name = match &args[1] {
+                        ColumnarValue::Scalar(scalar) => match scalar {
+                            ScalarValue::Utf8(name) => name.as_ref().map(|x| x.as_str()),
+                            _ => {
+                                return exec_err!(
+                                            "get_field function requires the argument field_name to be a string"
+                                        );
+                            }
+                        },
+                        _ => {
+                            return exec_err!(
+                                    "get_field function requires the argument field_name to be a string"
+                                );
+                        }
+                    };
+                    Ok(ColumnarValue::Array(
+                        struct_array
+                            .column_by_name(column_name.unwrap())
+                            .unwrap()
+                            .clone(),
+                    ))
+                }
+                _ => {
+                    exec_err!(
+                            "get_field function requires the first argument to be struct array"
+                        )
+                }
+            },
         }
     }
 }
