@@ -35,7 +35,6 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
-use itertools::Itertools;
 use log::warn;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -264,9 +263,9 @@ impl FileScanConfig {
                     file_group_indices
                         .into_iter()
                         .map(|idx| flattened_files[idx].clone())
-                        .collect_vec()
+                        .collect()
                 })
-                .collect_vec(),
+                .collect(),
         )
     }
 }
