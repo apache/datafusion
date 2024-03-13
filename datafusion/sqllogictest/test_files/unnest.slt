@@ -135,6 +135,10 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(column3) from unnest_table;
 
+## Multiple unnest functions in selection
+query error DataFusion error: This feature is not implemented: Only support single unnest expression for now
+select unnest(column1), unnest(column2) from unnest_table;
+
 ## Unnest scalar in select list
 query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(1);
