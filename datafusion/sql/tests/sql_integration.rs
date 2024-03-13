@@ -4495,9 +4495,16 @@ fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
         (TableReference::bare("person"), "age > 35", "(age > 35)"),
         (TableReference::bare("person"), "id = '10'", "(id = '10')"),
-        (TableReference::bare("person"), "CAST(id AS VARCHAR)", "CAST(id AS VARCHAR)"),
-        (TableReference::bare("person"), "SUM((age * 2))", "SUM((age * 2))"),
-
+        (
+            TableReference::bare("person"),
+            "CAST(id AS VARCHAR)",
+            "CAST(id AS VARCHAR)",
+        ),
+        (
+            TableReference::bare("person"),
+            "SUM((age * 2))",
+            "SUM((age * 2))",
+        ),
     ];
 
     let roundtrip = |table, sql: &str| -> Result<String> {
