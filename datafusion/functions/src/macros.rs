@@ -164,8 +164,7 @@ macro_rules! make_math_unary_udf {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
-            use datafusion_expr::ColumnarValue;
-            use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
             use std::any::Any;
             use std::sync::Arc;
 
