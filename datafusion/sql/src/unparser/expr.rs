@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_schema::DataType;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate};
 use datafusion_common::{
     not_impl_datafusion_err, not_impl_err, Column, Result, ScalarValue,
 };
@@ -43,7 +43,7 @@ static DAYS_FROM_CE_TO_UNIX_EPOCH: i32 = 719_163;
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "a > 4")
+/// assert_eq!(format!("{}", sql), "(a > 4)")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -318,7 +318,7 @@ impl Unparser<'_> {
             }
             ScalarValue::Date32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Date64(Some(ms)) => {
-                let datetime = NaiveDateTime::from_timestamp_millis(*ms).ok_or(
+                let datetime = DateTime::from_timestamp_millis(*ms).ok_or(
                     not_impl_datafusion_err!("Datetime overflow error for {ms:?}"),
                 )?;
                 Ok(ast::Expr::Cast {
@@ -467,7 +467,7 @@ impl Unparser<'_> {
 #[cfg(test)]
 mod tests {
     use datafusion_common::TableReference;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, expr::AggregateFunction, lit};
 
     use crate::unparser::dialect::CustomDialect;
 
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            (col("a").gt(lit(4)), r#"(a > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
@@ -484,6 +484,70 @@ mod tests {
                 })
                 .gt(lit(4)),
                 r#"(a.b.c > 4)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::Date64,
+                }),
+                r#"CAST(a AS DATETIME)"#,
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(col("a")),
+                    data_type: DataType::UInt32,
+                }),
+                r#"CAST(a AS INTEGER UNSIGNED)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date64(Some(0))),
+                r#"CAST('1970-01-01 00:00:00 UTC' AS DATETIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date64(Some(10000))),
+                r#"CAST('1970-01-01 00:00:10 UTC' AS DATETIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date64(Some(-10000))),
+                r#"CAST('1969-12-31 23:59:50 UTC' AS DATETIME)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date32(Some(0))),
+                r#"CAST('1970-01-01' AS DATE)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date32(Some(10))),
+                r#"CAST('1970-01-11' AS DATE)"#,
+            ),
+            (
+                Expr::Literal(ScalarValue::Date32(Some(-1))),
+                r#"CAST('1969-12-31' AS DATE)"#,
+            ),
+            (
+                Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::BuiltIn(
+                        datafusion_expr::AggregateFunction::Sum,
+                    ),
+                    args: vec![col("a")],
+                    distinct: false,
+                    filter: None,
+                    order_by: None,
+                    null_treatment: None,
+                }),
+                "SUM(a)",
+            ),
+            (
+                Expr::AggregateFunction(AggregateFunction {
+                    func_def: AggregateFunctionDefinition::BuiltIn(
+                        datafusion_expr::AggregateFunction::Count,
+                    ),
+                    args: vec![Expr::Wildcard { qualifier: None }],
+                    distinct: true,
+                    filter: None,
+                    order_by: None,
+                    null_treatment: None,
+                }),
+                "COUNT(*)",
             ),
         ];
 
