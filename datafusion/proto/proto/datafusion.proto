@@ -630,7 +630,7 @@ enum ScalarFunction {
   // 86 was ArrayAppend
   // 87 was ArrayConcat
   // 88 was ArrayDims
-  ArrayRepeat = 89;
+  // 89 was ArrayRepeat
   // 90 was ArrayLength
   // 91 was ArrayNdims
   ArrayPosition = 92;
