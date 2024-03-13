@@ -855,25 +855,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let file_type = try_infer_file_type(&mut options, &statement.target)?;
         let partition_by = take_partition_by(&mut options);
 
-        match &file_type {
-            // Renames un-prefixed keys to support legacy format specific options
-            FileType::CSV | FileType::JSON | FileType::PARQUET => {
-                let prefix = format!("{}", file_type);
-                let keys_to_rename: Vec<_> = options
-                    .keys()
-                    .filter(|key| !key.starts_with(&prefix))
-                    .cloned()
-                    .collect();
-
-                for key in keys_to_rename {
-                    if let Some(value) = options.remove(&key) {
-                        let new_key = format!("{}.{}", prefix, key);
-                        options.insert(new_key, value);
+        let rename_keys = |options: HashMap<String, String>| {
+            options
+                .into_iter()
+                .map(|(k, v)| {
+                    // If config does not belong to any namespace, assume it is
+                    // a legacy option and apply file_type namespace for backwards
+                    // compatibility.
+                    if !k.contains('.') {
+                        let new_key = format!("{}.{}", file_type, k);
+                        (new_key, v)
+                    } else {
+                        (k, v)
                     }
-                }
-            }
-            _ => {}
-        }
+                })
+                .collect()
+        };
+
+        // Renames un-prefixed keys to support legacy format specific options
+        let options = match &file_type {
+            FileType::CSV | FileType::JSON => rename_keys(options),
+            #[cfg(feature = "parquet")]
+            FileType::PARQUET => rename_keys(options),
+            _ => options,
+        };
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
