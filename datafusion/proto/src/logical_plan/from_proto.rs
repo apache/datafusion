@@ -495,7 +495,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha256 => Self::SHA256,
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
-            ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -1546,10 +1545,6 @@ pub fn parse_expr(
                     Ok(sha512(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Digest => Ok(digest(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Ascii => {
                     Ok(ascii(parse_expr(&args[0], registry, codec)?))
                 }

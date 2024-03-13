@@ -143,7 +143,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .chain(datetime::functions())
         .chain(encoding::functions())
         .chain(math::functions())
-        .chain(regex::functions());
+        .chain(regex::functions())
+        .chain(crypto::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

@@ -16,9 +16,9 @@
 // under the License.
 
 //! "crypto" DataFusion functions
-use super::basic::{digest, utf8_or_binary_to_binary_type, DigestAlgorithm};
+use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, TypeSignature::*, Volatility,
 };

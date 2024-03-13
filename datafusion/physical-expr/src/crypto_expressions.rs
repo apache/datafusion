@@ -54,36 +54,6 @@ enum DigestAlgorithm {
     Blake3,
 }
 
-fn digest_process(
-    value: &ColumnarValue,
-    digest_algorithm: DigestAlgorithm,
-) -> Result<ColumnarValue> {
-    match value {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => digest_algorithm.digest_utf8_array::<i32>(a.as_ref()),
-            DataType::LargeUtf8 => digest_algorithm.digest_utf8_array::<i64>(a.as_ref()),
-            DataType::Binary => digest_algorithm.digest_binary_array::<i32>(a.as_ref()),
-            DataType::LargeBinary => {
-                digest_algorithm.digest_binary_array::<i64>(a.as_ref())
-            }
-            other => exec_err!(
-                "Unsupported data type {other:?} for function {digest_algorithm}"
-            ),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                Ok(digest_algorithm
-                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
-            }
-            ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
-                .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
-            other => exec_err!(
-                "Unsupported data type {other:?} for function {digest_algorithm}"
-            ),
-        },
-    }
-}
-
 macro_rules! digest_to_array {
     ($METHOD:ident, $INPUT:expr) => {{
         let binary_array: BinaryArray = $INPUT
@@ -247,6 +217,35 @@ macro_rules! define_digest_function {
             digest_process(&args[0], DigestAlgorithm::$METHOD)
         }
     };
+}
+pub fn digest_process(
+    value: &ColumnarValue,
+    digest_algorithm: DigestAlgorithm,
+) -> Result<ColumnarValue> {
+    match value {
+        ColumnarValue::Array(a) => match a.data_type() {
+            DataType::Utf8 => digest_algorithm.digest_utf8_array::<i32>(a.as_ref()),
+            DataType::LargeUtf8 => digest_algorithm.digest_utf8_array::<i64>(a.as_ref()),
+            DataType::Binary => digest_algorithm.digest_binary_array::<i32>(a.as_ref()),
+            DataType::LargeBinary => {
+                digest_algorithm.digest_binary_array::<i64>(a.as_ref())
+            }
+            other => exec_err!(
+                "Unsupported data type {other:?} for function {digest_algorithm}"
+            ),
+        },
+        ColumnarValue::Scalar(scalar) => match scalar {
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+                Ok(digest_algorithm
+                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+            }
+            ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
+                .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
+            other => exec_err!(
+                "Unsupported data type {other:?} for function {digest_algorithm}"
+            ),
+        },
+    }
 }
 
 /// this function exists so that we do not need to pull in the crate hex. it is only used by md5

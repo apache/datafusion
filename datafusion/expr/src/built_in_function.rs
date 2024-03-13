@@ -60,8 +60,6 @@ pub enum BuiltinScalarFunction {
     Cosh,
     /// degrees
     Degrees,
-    /// Digest
-    Digest,
     /// exp
     Exp,
     /// factorial
@@ -361,7 +359,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SHA256 => Volatility::Immutable,
             BuiltinScalarFunction::SHA384 => Volatility::Immutable,
             BuiltinScalarFunction::SHA512 => Volatility::Immutable,
-            BuiltinScalarFunction::Digest => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
@@ -524,9 +521,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::SHA512 => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
-            }
-            BuiltinScalarFunction::Digest => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
             }
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
@@ -1049,7 +1043,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
             // hashing functions
-            BuiltinScalarFunction::Digest => &["digest"],
             BuiltinScalarFunction::MD5 => &["md5"],
             BuiltinScalarFunction::SHA224 => &["sha224"],
             BuiltinScalarFunction::SHA256 => &["sha256"],
