@@ -22,7 +22,7 @@ use std::{
     borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
 };
 
-use super::{get_projected_output_ordering, FileGroupPartitioner};
+use super::{get_projected_output_ordering, FileGroupPartitioner, MinMaxStatistics};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -139,12 +139,21 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let table_schema = Arc::new(
+        let projected_schema = Arc::new(
             Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
         );
+
+        let full_table_schema = {
+            let mut all_table_fields: Vec<_> =
+                self.file_schema.all_fields().into_iter().cloned().collect();
+            all_table_fields.extend(self.table_partition_cols.clone());
+            Arc::new(Schema::new(all_table_fields))
+        };
+
         let projected_output_ordering =
-            get_projected_output_ordering(self, &table_schema);
-        (table_schema, table_stats, projected_output_ordering)
+            get_projected_output_ordering(self, &projected_schema, &full_table_schema);
+
+        (projected_schema, table_stats, projected_output_ordering)
     }
 
     #[allow(unused)] // Only used by avro
@@ -196,36 +205,14 @@ impl FileScanConfig {
             .repartition_file_groups(&file_groups)
     }
 
-    #[allow(unused)]
-    fn sort_file_groups(
+    // TODO: documentation
+    pub fn sort_file_groups(
         table_schema: &SchemaRef,
-        file_groups: Vec<Vec<PartitionedFile>>,
-        sort_order: LexOrdering,
+        projected_schema: &SchemaRef,
+        file_groups: &[Vec<PartitionedFile>],
+        sort_order: &[PhysicalSortExpr],
     ) -> Option<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
-        let statistics_and_partition_values = flattened_files
-            .iter()
-            .map(|file| {
-                (file
-                    .statistics
-                    .as_ref()
-                    .zip(Some(file.partition_values.as_slice())))
-            })
-            .collect::<Option<Vec<_>>>()?;
-
-        let min_values = project_statistic(
-            table_schema,
-            &statistics_and_partition_values,
-            MinOrMax::Min,
-        )
-        .ok()?;
-        let max_values = project_statistic(
-            table_schema,
-            &statistics_and_partition_values,
-            MinOrMax::Max,
-        )
-        .ok()?;
-
         // First Fit:
         // * Choose the first file group that a file can be placed into.
         // * If it fits into no existing file groups, create a new one.
@@ -236,9 +223,13 @@ impl FileScanConfig {
         // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
         // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
 
-        let statistics =
-            MinMaxStatistics::new(&sort_order, table_schema, min_values, max_values)
-                .ok()?;
+        let statistics = MinMaxStatistics::new_from_files(
+            sort_order,
+            table_schema,
+            projected_schema,
+            flattened_files.iter().copied(),
+        )
+        .ok()?;
 
         let indices_sorted_by_min = {
             let mut sort: Vec<_> = statistics.min.iter().enumerate().collect();
@@ -248,28 +239,23 @@ impl FileScanConfig {
 
         let mut file_groups_indices: Vec<Vec<usize>> = vec![];
 
-        'outer: for (idx, min) in indices_sorted_by_min {
-            for file_group in &mut file_groups_indices {
-                match file_group.last() {
-                    Some(&other) => {
-                        // If our file is non-overlapping and comes _after_ the last file,
-                        // it fits in this file group.
-                        if min >= statistics.max.row(other) {
-                            file_group.push(idx);
-                            continue 'outer;
-                        }
-                    }
-                    None => {
-                        file_group.push(idx);
-                        continue 'outer;
-                    }
-                    _ => {}
-                }
+        for (idx, min) in indices_sorted_by_min {
+            let file_group_to_insert = file_groups_indices.iter_mut().find(|group| {
+                // If our file is non-overlapping and comes _after_ the last file,
+                // it fits in this file group.
+                min > statistics.max.row(
+                    *group
+                        .last()
+                        .expect("groups should be nonempty at construction"),
+                )
+            });
+            match file_group_to_insert {
+                Some(group) => group.push(idx),
+                None => file_groups_indices.push(vec![idx]),
             }
-
-            file_groups_indices.push(vec![idx]);
         }
 
+        // Assemble indices back into groups of PartitionedFiles
         Some(
             file_groups_indices
                 .into_iter()
@@ -281,87 +267,6 @@ impl FileScanConfig {
                 })
                 .collect_vec(),
         )
-    }
-}
-
-enum MinOrMax {
-    Min,
-    Max,
-}
-
-// A helper to read statistics from PartitionedFiles into a RecordBatch for further processing.
-fn project_statistic(
-    table_schema: &Schema,
-    statistics_and_partition_values: &[(&Statistics, &[ScalarValue])],
-    statistic: MinOrMax,
-) -> Result<RecordBatch> {
-    RecordBatch::try_new(
-        Arc::new(table_schema.to_owned()),
-        table_schema
-            .all_fields()
-            .into_iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                ScalarValue::iter_to_array(statistics_and_partition_values.iter().map(
-                    |(s, pv)| {
-                        if i < s.column_statistics.len() {
-                            match statistic {
-                                MinOrMax::Min => &s.column_statistics[i].min_value,
-                                MinOrMax::Max => &s.column_statistics[i].max_value,
-                            }
-                            .get_value()
-                            .cloned()
-                            .unwrap_or(ScalarValue::Null)
-                        } else {
-                            pv[i - s.column_statistics.len()].clone()
-                        }
-                    },
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?,
-    )
-    .map_err(From::from)
-}
-
-// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
-struct MinMaxStatistics {
-    min: arrow::row::Rows,
-    max: arrow::row::Rows,
-}
-
-impl MinMaxStatistics {
-    fn new(
-        sort_order: &[PhysicalSortExpr],
-        schema: &SchemaRef,
-        min_values: RecordBatch,
-        max_values: RecordBatch,
-    ) -> Result<Self> {
-        use arrow::row::*;
-
-        let sort_fields = sort_order
-            .iter()
-            .map(|expr| {
-                expr.expr
-                    .data_type(schema)
-                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let converter = RowConverter::new(sort_fields)?;
-
-        let [min, max] = [min_values, max_values].map(|values| {
-            let sorting_columns = sort_order
-                .iter()
-                .map(|expr| expr.evaluate_to_sort_column(&values))
-                .collect::<Result<Vec<_>>>()?;
-            converter.convert_columns(
-                &sorting_columns.into_iter().map(|c| c.values).collect_vec(),
-            )
-        });
-
-        Ok(Self {
-            min: min?,
-            max: max?,
-        })
     }
 }
 
@@ -1020,8 +925,9 @@ mod tests {
 
         let results = FileScanConfig::sort_file_groups(
             &table_schema,
-            file_groups.clone(),
-            sort_order_by_value,
+            &table_schema,
+            &file_groups,
+            &sort_order_by_value,
         )
         .unwrap();
 

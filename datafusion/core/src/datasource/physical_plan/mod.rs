@@ -66,7 +66,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use datafusion_common::plan_err;
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -448,14 +448,36 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
+    table_schema: &SchemaRef,
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
-            debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
-            base_config.output_ordering[0], base_config.file_groups);
+        // Check if all file groups are sorted
+        if base_config.file_groups.iter().all(|group| {
+            if group.len() <= 1 {
+                return true;
+            }
+
+            let statistics = match MinMaxStatistics::new_from_files(
+                output_ordering,
+                table_schema,
+                projected_schema,
+                group,
+            ) {
+                Ok(statistics) => statistics,
+                Err(e) => {
+                    log::debug!("Error fetching statistics for file group: {e}");
+                    return false;
+                }
+            };
+
+            statistics.is_sorted()
+        }) {
+            debug!("Skipping specified output ordering {:?}. Some file group couldn't be determined to be sorted: {:?}",
+                base_config.output_ordering[0], base_config.file_groups);
             return vec![];
         }
+
         let mut new_ordering = vec![];
         for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
@@ -480,6 +502,123 @@ fn get_projected_output_ordering(
         }
     }
     all_orderings
+}
+
+// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
+pub(crate) struct MinMaxStatistics {
+    min: arrow::row::Rows,
+    max: arrow::row::Rows,
+}
+
+impl MinMaxStatistics {
+    fn new_from_files<'a>(
+        sort_order: &[PhysicalSortExpr],
+        table_schema: &SchemaRef,
+        projected_schema: &SchemaRef,
+        files: impl IntoIterator<Item = &'a PartitionedFile>,
+    ) -> Result<Self> {
+        use datafusion_common::ScalarValue;
+
+        let statistics_and_partition_values = files
+            .into_iter()
+            .map(|file| {
+                file.statistics
+                    .as_ref()
+                    .zip(Some(file.partition_values.as_slice()))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                DataFusionError::Plan("Parquet file missing statistics".to_string())
+            })?;
+
+        let get_min_max = |i: usize| -> (Vec<ScalarValue>, Vec<ScalarValue>) {
+            statistics_and_partition_values
+                .iter()
+                .map(|(s, pv)| {
+                    if i < s.column_statistics.len() {
+                        (
+                            s.column_statistics[i]
+                                .min_value
+                                .get_value()
+                                .cloned()
+                                .unwrap_or(ScalarValue::Null),
+                            s.column_statistics[i]
+                                .max_value
+                                .get_value()
+                                .cloned()
+                                .unwrap_or(ScalarValue::Null),
+                        )
+                    } else {
+                        let partition_value = &pv[i - s.column_statistics.len()];
+                        (partition_value.clone(), partition_value.clone())
+                    }
+                })
+                .unzip()
+        };
+
+        let (min_values, max_values): (Vec<_>, Vec<_>) = projected_schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let (min, max) = get_min_max(table_schema.index_of(field.name())?);
+                Ok((
+                    (field.name(), ScalarValue::iter_to_array(min)?),
+                    (field.name(), ScalarValue::iter_to_array(max)?),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+
+        Self::new(
+            sort_order,
+            RecordBatch::try_from_iter(min_values)?,
+            RecordBatch::try_from_iter(max_values)?,
+        )
+    }
+
+    fn new(
+        sort_order: &[PhysicalSortExpr],
+        min_values: RecordBatch,
+        max_values: RecordBatch,
+    ) -> Result<Self> {
+        use arrow::row::*;
+
+        let sort_fields = sort_order
+            .iter()
+            .map(|expr| {
+                expr.expr
+                    .data_type(&min_values.schema())
+                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let converter = RowConverter::new(sort_fields)?;
+
+        let [min, max] = [min_values, max_values].map(|values| {
+            let sorting_columns = sort_order
+                .iter()
+                .map(|expr| expr.evaluate_to_sort_column(&values))
+                .collect::<Result<Vec<_>>>()?;
+            converter.convert_columns(
+                &sorting_columns
+                    .into_iter()
+                    .map(|c| c.values)
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+        Ok(Self {
+            min: min?,
+            max: max?,
+        })
+    }
+
+    fn is_sorted(&self) -> bool {
+        self.max
+            .iter()
+            .zip(self.min.iter().skip(1))
+            .all(|(max, next_min)| max < next_min)
+    }
 }
 
 /// Represents the possible outcomes of a range calculation.
