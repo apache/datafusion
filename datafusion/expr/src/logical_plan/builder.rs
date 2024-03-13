@@ -333,7 +333,7 @@ impl LogicalPlanBuilder {
         let fields = self.plan.schema().columns();
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| Expr::Column(fields[x]))
+            .map(|x| Expr::Column(fields[x].clone()))
             .collect();
         self.project(exprs)
     }
@@ -1112,67 +1112,70 @@ pub fn build_join_schema(
     ) -> Vec<(Option<OwnedTableReference>, Arc<Field>)> {
         fields
             .iter()
-            .map(|(q, f)| (q, f.clone().with_nullable(true)))
+            .map(|(q, f)| {
+                // TODO: find a good way to do that
+                let field = f.as_ref().clone().with_nullable(true);
+                (q.clone().map(|r| r.to_owned()), Arc::new(field))
+            })
             .collect()
     }
 
     let right_fields = right.iter();
     let left_fields = left.iter();
+    let right_fields = right_fields
+        .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.to_owned()))
+        .collect::<Vec<_>>();
+    let left_fields = left_fields
+        .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.to_owned()))
+        .collect::<Vec<_>>();
 
-    let fields: Vec<(Option<OwnedTableReference>, &Arc<Field>)> = match join_type {
+    let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = match join_type {
         JoinType::Inner => {
             // left then right
-            left_fields
-                // .iter()
-                .chain(right_fields)
-                .cloned()
-                .collect()
+            left_fields.into_iter().chain(right_fields).collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
             left_fields
-                // .iter()
-                .chain(&nullify_fields(right_fields))
-                .cloned()
+                .into_iter()
+                .chain(nullify_fields(&right_fields))
                 .collect()
         }
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                // .iter()
-                .chain(right_fields.iter())
-                .cloned()
+            nullify_fields(&left_fields)
+                .into_iter()
+                .chain(right_fields)
                 .collect()
         }
         JoinType::Full => {
             // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                // .iter()
-                .chain(&nullify_fields(right_fields))
-                .cloned()
+            nullify_fields(&left_fields)
+                .into_iter()
+                .chain(nullify_fields(&right_fields))
                 .collect()
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_fields.clone()
+            left_fields
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_fields.clone()
+            right_fields
         }
     };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
-        left_fields.len(),
+        left.fields().len(),
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Arc<Field>) =
-        fields.iter().unzip();
+    let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+        fields.into_iter().map(|(q, f)| (q, f.clone())).unzip();
     let schema = Schema::new_with_metadata(fields, metadata);
     let dfschema =
-        DFSchema::from_field_specific_qualified_schema(qualifiers, schema.into())?;
+        DFSchema::from_field_specific_qualified_schema(qualifiers, &Arc::new(schema))?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
@@ -1200,9 +1203,11 @@ fn add_group_by_exprs_from_dependencies(
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
-            let field = schema.field(idx);
-            let expr =
-                Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+            let field = schema.qualified_field(idx);
+            let expr = Expr::Column(Column::new(
+                field.0.map(|r| r.to_owned_reference()),
+                field.1.name(),
+            ));
             let expr_name = expr.display_name()?;
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
@@ -1279,37 +1284,34 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         Vec<Arc<Field>>,
     ) = zip(left_plan.schema().iter(), right_plan.schema().iter())
         .map(|(left_field, right_field)| {
-            let nullable = left_field.is_nullable() || right_field.is_nullable();
+            let nullable = left_field.1.is_nullable() || right_field.1.is_nullable();
             let data_type =
                 comparison_coercion(left_field.1.data_type(), right_field.1.data_type())
                     .ok_or_else(|| {
                         plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                right_field.name(),
-                right_field.data_type(),
-                left_field.name(),
-                left_field.data_type()
+                right_field.1.name(),
+                right_field.1.data_type(),
+                left_field.1.name(),
+                left_field.1.data_type()
             )
                     })?;
 
             Ok((
                 left_field.0,
-                Arc::new(Field::new(left_field.name(), data_type, nullable)),
+                Arc::new(Field::new(left_field.1.name(), data_type, nullable)),
             ))
-
-            // Ok(DFField::new(
-            //     left_field.qualifier().cloned(),
-            //     left_field.name(),
-            //     data_type,
-            //     nullable,
-            // ))
         })
+        .collect::<Result<Vec<_>>>()?
+        .iter()
+        .map(|(q, f)| (q.map(|r| r.to_owned()), f.clone()))
         .unzip();
-    // .collect::<Result<Vec<_>>>()?;
+    let union_schema: Schema = Schema::new_with_metadata(union_fields, HashMap::new());
 
-    // .to_dfschema()?;
-    let union_schema =
-        DFSchema::from_field_specific_qualified_schema(union_table_refs, union_fields);
+    let union_schema = DFSchema::from_field_specific_qualified_schema(
+        union_table_refs,
+        &Arc::new(union_schema),
+    )?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()

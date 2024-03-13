@@ -86,11 +86,10 @@ fn rewrite_in_terms_of_projection(
     expr.transform(&|expr| {
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
-            let col = Expr::Column(
-                found
-                    .to_field(input.schema())
-                    .map(|f| f.qualified_column())?,
-            );
+            let col = Expr::Column(found.to_field(input.schema()).map(|f| Column {
+                relation: f.0.clone(),
+                name: f.1.name().to_string(),
+            })?);
             return Ok(Transformed::Yes(col));
         }
 

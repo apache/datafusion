@@ -346,7 +346,7 @@ fn get_excluded_columns(
             schema.index_of_column_by_name(None, col_name)?
         };
         if let Some(field_idx) = field_idx {
-            let field = columns[field_idx];
+            let field = columns[field_idx].clone();
             result.push(field)
         }
     }
@@ -370,7 +370,7 @@ fn get_exprs_except_skipped(
             .iter()
             .filter_map(|c| {
                 if !columns_to_skip.contains(c) {
-                    Some(Expr::Column(c.name.into()))
+                    Some(Expr::Column(c.name.clone().into()))
                 } else {
                     None
                 }
@@ -440,7 +440,7 @@ pub fn expand_qualified_wildcard(
 
     let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
     let qualified_dfschema =
-        DFSchema::try_from_qualified_schema(qualifier, &qualified_schema)?
+        DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
@@ -816,11 +816,13 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         )),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
-            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
-                Ok(field) => Expr::Column(field.qualified_column()),
-                // expression not provided as input, do not convert to a column reference
-                Err(_) => e,
-            },
+            Ok(name) => {
+                match input_schema.field_and_qualifiers_with_unqualified_name(&name) {
+                    Ok(field) => Expr::Column(Column::new(field.0, field.1.name())),
+                    // expression not provided as input, do not convert to a column reference
+                    Err(_) => e,
+                }
+            }
             Err(_) => e,
         },
     }
@@ -859,7 +861,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
                 .find(|&(qu, fi)| {
                     col.relation == qu.cloned() && col.name == fi.name().clone()
                 })
-                .map(|(q, f)| (q.clone(), f.clone()));
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()));
             if let Some(field) = maybe_field {
                 Ok(Expr::Column(Column::new(field.0, field.1.name())))
             } else {

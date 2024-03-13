@@ -510,11 +510,11 @@ impl LogicalPlan {
                     cross.left.head_output_expr()
                 }
             }
-            LogicalPlan::Union(union) => {
-                Ok(Some(Expr::Column(union.schema.field_names()[0].into())))
-            }
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
+                union.schema.field_names()[0].clone().into(),
+            ))),
             LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
-                table.projected_schema.field_names()[0].into(),
+                table.projected_schema.field_names()[0].clone().into(),
             ))),
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
@@ -1969,7 +1969,7 @@ impl Window {
         let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = input
             .schema()
             .iter()
-            .map(|(q, f)| (q.map(|q| q.clone()), f.clone()))
+            .map(|(q, f)| (q.cloned(), f.clone()))
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
@@ -2097,7 +2097,7 @@ impl TableScan {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
                 let df_schema = DFSchema::try_from_qualified_schema(
-                    table_name,
+                    table_name.clone(),
                     &table_source.schema(),
                 )?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
@@ -2382,7 +2382,7 @@ impl Aggregate {
         if is_grouping_set {
             fields = fields
                 .into_iter()
-                .map(|(q, f)| (q, f.with_nullable(true).into()))
+                .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
         }
 
@@ -2498,7 +2498,7 @@ fn calc_func_dependencies_for_project(
                 }
                 _ => format!("{}", expr),
             };
-            input_fields.into_iter().position(|item| item == expr_name)
+            input_fields.iter().position(|item| *item == expr_name)
         })
         .collect::<Vec<_>>();
     Ok(input

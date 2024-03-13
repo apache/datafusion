@@ -193,9 +193,13 @@ pub fn coerce_plan_expr_for_schema(
         _ => {
             let exprs: Vec<Expr> = plan
                 .schema()
-                .fields()
                 .iter()
-                .map(|field| Expr::Column(field.qualified_column()))
+                .map(|field| {
+                    Expr::Column(Column::new(
+                        field.0.map(|r| r.to_owned_reference()),
+                        field.1.name(),
+                    ))
+                })
                 .collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;

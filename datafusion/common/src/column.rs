@@ -182,7 +182,7 @@ impl Column {
             match columns.len() {
                 0 => continue,
                 1 => {
-                    return Ok(columns[0].clone().into());
+                    return Ok(columns[0].clone());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -203,7 +203,7 @@ impl Column {
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifer from the first match.
                         if all_matched {
-                            return Ok(columns[0].clone().into());
+                            return Ok(columns[0].clone());
                         }
                     }
                 }

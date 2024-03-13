@@ -29,7 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError,
-    ExprSchema, OwnedTableReference, Result, TableReference,
+    ExprSchema, OwnedTableReference, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -316,12 +316,12 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => {
                 let field = input_schema.field_from_column(c)?;
-                Ok((c.relation, Arc::new(field.clone())))
+                Ok((c.relation.clone(), Arc::new(field.clone())))
             }
             Expr::Alias(Alias { relation, name, .. }) => {
                 if let Some(rel) = relation {
                     let field = input_schema.field_with_qualified_name(rel, name)?;
-                    Ok((Some(rel.into()), Arc::new(field.clone())))
+                    Ok((Some(rel.to_owned_reference()), Arc::new(field.clone())))
                 } else {
                     let field = input_schema.field_with_unqualified_name(name)?;
                     Ok((None, Arc::new(field.clone())))
@@ -404,8 +404,12 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
-                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let qualified_field = plan.schema().qualified_field(0);
+            let cast_expr = Expr::Column(Column::new(
+                qualified_field.0.map(|r| r.to_owned_reference()),
+                qualified_field.1.name(),
+            ))
+            .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,

@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, _plan_err};
 use crate::{
-    field_not_found, functional_dependencies, unqualified_field_not_found, Column,
-    FunctionalDependencies, OwnedTableReference, TableReference,
+    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
+    OwnedTableReference, TableReference,
 };
 
 use arrow::compute::can_cast_types;
@@ -165,8 +165,7 @@ impl DFSchema {
             .map(|maybe_q| {
                 maybe_q.map(|q| {
                     let qualifier = q.into();
-                    let owned_qualifier = qualifier.to_owned_reference();
-                    owned_qualifier
+                    qualifier.to_owned_reference()
                 })
             })
             .collect();
@@ -309,10 +308,10 @@ impl DFSchema {
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
         let fields = self.inner.fields().clone();
         let mut schema_builder = SchemaBuilder::new();
-        schema_builder.extend(fields.iter().map(|f| f.clone()));
+        schema_builder.extend(fields.iter().cloned());
 
         let other_fields = schema.inner.fields.clone();
-        schema_builder.extend(other_fields.iter().map(|f| f.clone()));
+        schema_builder.extend(other_fields.iter().cloned());
         let new_schema = schema_builder.finish();
 
         let mut new_metadata = self.inner.metadata.clone();
@@ -370,6 +369,11 @@ impl DFSchema {
     /// offset within the internal `fields` vector
     pub fn field(&self, i: usize) -> &Field {
         &self.inner.fields[i]
+    }
+
+    pub fn qualified_field(&self, i: usize) -> (Option<&OwnedTableReference>, &Field) {
+        let qualifier = self.field_qualifiers[i].as_ref();
+        (qualifier, self.field(i))
     }
 
     // #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
@@ -516,8 +520,41 @@ impl DFSchema {
     /// Return all `Column`s for the schema
     pub fn columns(&self) -> Vec<Column> {
         self.iter()
-            .map(|(q, f)| Column::new(q.map(|q| q.clone()), f.name().clone()))
+            .map(|(q, f)| Column::new(q.cloned(), f.name().clone()))
             .collect()
+    }
+
+    pub fn field_and_qualifiers_with_unqualified_name(
+        &self,
+        name: &str,
+    ) -> Result<(Option<OwnedTableReference>, &Field)> {
+        let matches = self.fields_and_qualifiers_with_unqualified_name(name);
+        match matches.len() {
+            0 => Err(unqualified_field_not_found(name, self)),
+            1 => Ok((matches[0].0.map(|r| r.to_owned_reference()), &matches[0].1)),
+            _ => {
+                let fields_without_qualifier = matches
+                    .iter()
+                    .filter(|(q, _)| q.is_none())
+                    .collect::<Vec<_>>();
+                if fields_without_qualifier.len() == 1 {
+                    Ok((
+                        fields_without_qualifier[0]
+                            .0
+                            .map(|r| r.to_owned_reference()),
+                        fields_without_qualifier[0].1,
+                    ))
+                } else {
+                    Err(DataFusionError::Internal("Field not found".to_string()))
+                    // _schema_err!(SchemaError::AmbiguousReference {
+                    //     field: Column {
+                    //         relation: None,
+                    //         name: name.to_string(),
+                    //     },
+                    // })
+                }
+            }
+        }
     }
 
     /// Find the field with the given name
@@ -544,15 +581,6 @@ impl DFSchema {
                 }
             }
         }
-        // let field = self.iter().find(|(_, f)| name == f.name());
-        // let field = self.iter().find(|(q, f)| match q {
-        //     Some(_) => false,
-        //     None => name == f.name(),
-        // });
-        // match field {
-        //     Some((_, f)) => Ok(f),
-        //     None => Err(DataFusionError::Internal("Field not found".to_string())),
-        // }
     }
 
     /// Find the field with the given qualified name
@@ -785,23 +813,21 @@ impl DFSchema {
 
     /// Strip all field qualifier in schema
     pub fn strip_qualifiers(self) -> Self {
-        let stripped_schema = DFSchema {
+        DFSchema {
             inner: self.inner.clone(),
             field_qualifiers: vec![None; self.inner.fields.len()],
             functional_dependencies: self.functional_dependencies.clone(),
-        };
-        stripped_schema
+        }
     }
 
     /// Replace all field qualifier with new value in schema
     pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
         let qualifier = qualifier.into();
-        let replaced_schema = DFSchema {
+        DFSchema {
             inner: self.inner.clone(),
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
             functional_dependencies: self.functional_dependencies.clone(),
-        };
-        replaced_schema
+        }
     }
 
     /// Get list of fully-qualified field names in this schema
@@ -821,9 +847,9 @@ impl DFSchema {
         &self.functional_dependencies
     }
 
-    pub fn iter<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (Option<&OwnedTableReference>, &'a FieldRef)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (Option<&OwnedTableReference>, &FieldRef)> {
         self.field_qualifiers
             .iter()
             .zip(self.inner.fields().iter())

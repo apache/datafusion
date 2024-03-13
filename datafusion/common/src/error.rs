@@ -596,7 +596,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 ) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema.columns().iter().map(|c| c.clone()).collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
@@ -604,7 +604,7 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
 pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema.columns().iter().map(|c| c.clone()).collect(),
+        valid_fields: schema.columns().to_vec(),
     })
 }
 
