@@ -548,7 +548,7 @@ enum ScalarFunction {
   Ascii = 4;
   Ceil = 5;
   Cos = 6;
-  Digest = 7;
+  // 7 was Digest
   Exp = 8;
   Floor = 9;
   Ln = 10;
@@ -559,7 +559,7 @@ enum ScalarFunction {
   Signum = 15;
   Sin = 16;
   Sqrt = 17;
-  Tan = 18;
+  // Tan = 18;
   Trunc = 19;
   // 20 was Array
   // RegexpMatch = 21;
@@ -576,7 +576,7 @@ enum ScalarFunction {
   Lpad = 32;
   Lower = 33;
   Ltrim = 34;
-  MD5 = 35;
+  // 35 was MD5
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
@@ -587,10 +587,10 @@ enum ScalarFunction {
   Right = 43;
   Rpad = 44;
   Rtrim = 45;
-  SHA224 = 46;
-  SHA256 = 47;
-  SHA384 = 48;
-  SHA512 = 49;
+  // 46 was SHA224
+  // 47 was SHA256
+  // 48 was SHA384
+  // 49 was SHA512
   SplitPart = 50;
   StartsWith = 51;
   Strpos = 52;
@@ -600,19 +600,19 @@ enum ScalarFunction {
   // 56 was ToTimestampMillis
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
-  Now = 59;
+  // 59 was Now
   Translate = 60;
   Trim = 61;
   Upper = 62;
   Coalesce = 63;
   Power = 64;
   // 65 was StructFun
-  FromUnixtime = 66;
+  // 66 was FromUnixtime
   Atan2 = 67;
   // 68 was DateBin
   // 69 was ArrowTypeof
-  CurrentDate = 70;
-  CurrentTime = 71;
+  // 70 was CurrentDate
+  // 71 was CurrentTime
   Uuid = 72;
   Cbrt = 73;
   Acosh = 74;
@@ -620,7 +620,7 @@ enum ScalarFunction {
   Atanh = 76;
   Sinh = 77;
   Cosh = 78;
-  Tanh = 79;
+  // Tanh = 79;
   Pi = 80;
   Degrees = 81;
   Radians = 82;
@@ -630,7 +630,7 @@ enum ScalarFunction {
   // 86 was ArrayAppend
   // 87 was ArrayConcat
   // 88 was ArrayDims
-  ArrayRepeat = 89;
+  // 89 was ArrayRepeat
   // 90 was ArrayLength
   // 91 was ArrayNdims
   ArrayPosition = 92;
@@ -1452,8 +1452,6 @@ message PhysicalExprNode {
     PhysicalScalarUdfNode scalar_udf = 16;
 
     PhysicalLikeExprNode like_expr = 18;
-
-    PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
 }
 
@@ -1868,17 +1866,4 @@ message ColumnStats {
   Precision max_value = 2;
   Precision null_count = 3;
   Precision distinct_count = 4;
-}
-
-message NamedStructFieldExpr {
-  ScalarValue name = 1;
-}
-
-message PhysicalGetIndexedFieldExprNode {
-  PhysicalExprNode arg = 1;
-  oneof field {
-    NamedStructFieldExpr named_struct_field_expr = 2;
-    // 3 was list_index_expr
-    // 4 was list_range_expr
-  }
 }

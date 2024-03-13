@@ -25,6 +25,7 @@ use crate::expr::{Alias, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
 };
@@ -32,6 +33,30 @@ use datafusion_common::{Column, DFSchema, Result};
 
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
+
+/// Trait for rewriting [`Expr`]s into function calls.
+///
+/// This trait is used with `FunctionRegistry::register_function_rewrite` to
+/// to evaluating `Expr`s using functions that may not be built in to DataFusion
+///
+/// For example, concatenating arrays `a || b` is represented as
+/// `Operator::ArrowAt`, but can be implemented by calling a function
+/// `array_concat` from the `functions-array` crate.
+pub trait FunctionRewrite {
+    /// Return a human readable name for this rewrite
+    fn name(&self) -> &str;
+
+    /// Potentially rewrite `expr` to some other expression
+    ///
+    /// Note that recursion is handled by the caller -- this method should only
+    /// handle `expr`, not recurse to its children.
+    fn rewrite(
+        &self,
+        expr: Expr,
+        schema: &DFSchema,
+        config: &ConfigOptions,
+    ) -> Result<Transformed<Expr>>;
+}
 
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.

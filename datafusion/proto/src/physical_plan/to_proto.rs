@@ -39,7 +39,6 @@ use datafusion::datasource::{
     physical_plan::FileSinkConfig,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
@@ -550,25 +549,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         pattern: Some(Box::new(expr.pattern().to_owned().try_into()?)),
                     }),
                 )),
-            })
-        } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
-            let field = match expr.field() {
-                GetFieldAccessExpr::NamedStructField{name} => Some(
-                    protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(protobuf::NamedStructFieldExpr {
-                        name: Some(ScalarValue::try_from(name)?)
-                    })
-                ),
-            };
-
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
-                        Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
-                            arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            field,
-                        }),
-                    ),
-                ),
             })
         } else {
             internal_err!("physical_plan::to_proto() unsupported expression {value:?}")

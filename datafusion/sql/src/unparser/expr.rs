@@ -166,14 +166,14 @@ impl Unparser<'_> {
         Ok(ast::Expr::Identifier(self.new_ident(col.name.to_string())))
     }
 
-    fn new_ident(&self, str: String) -> ast::Ident {
+    pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
             quote_style: self.dialect.identifier_quote_style(),
         }
     }
 
-    fn binary_op_to_sql(
+    pub(super) fn binary_op_to_sql(
         &self,
         lhs: ast::Expr,
         rhs: ast::Expr,
@@ -485,6 +485,8 @@ mod tests {
     use crate::unparser::dialect::CustomDialect;
 
     use super::*;
+
+    // See sql::tests for E2E tests.
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {

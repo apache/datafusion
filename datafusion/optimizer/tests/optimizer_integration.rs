@@ -32,8 +32,6 @@ use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 
-use chrono::DateTime;
-
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
@@ -235,38 +233,6 @@ fn concat_ws_literals() -> Result<()> {
 }
 
 #[test]
-fn timestamp_nano_ts_none_predicates() -> Result<()> {
-    let sql = "SELECT col_int32
-        FROM test
-        WHERE col_ts_nano_none < (now() - interval '1 hour')";
-    let plan = test_sql(sql)?;
-    // a scan should have the now()... predicate folded to a single
-    // constant and compared to the column without a cast so it can be
-    // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\
-         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    assert_eq!(expected, format!("{plan:?}"));
-    Ok(())
-}
-
-#[test]
-fn timestamp_nano_ts_utc_predicates() {
-    let sql = "SELECT col_int32
-        FROM test
-        WHERE col_ts_nano_utc < (now() - interval '1 hour')";
-    let plan = test_sql(sql).unwrap();
-    // a scan should have the now()... predicate folded to a single
-    // constant and compared to the column without a cast so it can be
-    // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    assert_eq!(expected, format!("{plan:?}"));
-}
-
-#[test]
 fn propagate_empty_relation() {
     let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
     let plan = test_sql(sql).unwrap();
@@ -340,17 +306,11 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
-
-    // create a logical query plan
     let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
-    // hard code the return value of now()
-    let now_time = DateTime::from_timestamp(1666615693, 0).unwrap();
-    let config = OptimizerContext::new()
-        .with_skip_failing_rules(false)
-        .with_query_execution_start_time(now_time);
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan

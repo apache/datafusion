@@ -60,8 +60,6 @@ pub enum BuiltinScalarFunction {
     Cosh,
     /// degrees
     Degrees,
-    /// Digest
-    Digest,
     /// exp
     Exp,
     /// factorial
@@ -100,10 +98,6 @@ pub enum BuiltinScalarFunction {
     Sinh,
     /// sqrt
     Sqrt,
-    /// tan
-    Tan,
-    /// tanh
-    Tanh,
     /// trunc
     Trunc,
     /// cot
@@ -126,8 +120,6 @@ pub enum BuiltinScalarFunction {
     ArrayRemoveN,
     /// array_remove_all
     ArrayRemoveAll,
-    /// array_repeat
-    ArrayRepeat,
     /// array_replace
     ArrayReplace,
     /// array_replace_n
@@ -174,8 +166,6 @@ pub enum BuiltinScalarFunction {
     Lower,
     /// ltrim
     Ltrim,
-    /// md5
-    MD5,
     /// octet_length
     OctetLength,
     /// random
@@ -192,14 +182,6 @@ pub enum BuiltinScalarFunction {
     Rpad,
     /// rtrim
     Rtrim,
-    /// sha224
-    SHA224,
-    /// sha256
-    SHA256,
-    /// sha384
-    SHA384,
-    /// Sha512
-    SHA512,
     /// split_part
     SplitPart,
     /// starts_with
@@ -210,14 +192,6 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// to_hex
     ToHex,
-    /// from_unixtime
-    FromUnixtime,
-    ///now
-    Now,
-    ///current_date
-    CurrentDate,
-    /// current_time
-    CurrentTime,
     /// make_date
     MakeDate,
     /// translate
@@ -320,8 +294,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
-            BuiltinScalarFunction::Tan => Volatility::Immutable,
-            BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
@@ -329,7 +301,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRepeat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
@@ -354,7 +325,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
             BuiltinScalarFunction::Ltrim => Volatility::Immutable,
-            BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
@@ -363,11 +333,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Right => Volatility::Immutable,
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
             BuiltinScalarFunction::Rtrim => Volatility::Immutable,
-            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
-            BuiltinScalarFunction::Digest => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
@@ -378,16 +343,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
-            BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
             BuiltinScalarFunction::FindInSet => Volatility::Immutable,
-
-            // Stable builtin functions
-            BuiltinScalarFunction::Now => Volatility::Stable,
-            BuiltinScalarFunction::CurrentDate => Volatility::Stable,
-            BuiltinScalarFunction::CurrentTime => Volatility::Stable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -405,7 +364,6 @@ impl BuiltinScalarFunction {
     /// 2. Deduce the output `DataType` based on the provided `input_expr_types`.
     pub fn return_type(self, input_expr_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        use TimeUnit::*;
 
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
@@ -427,11 +385,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
-            BuiltinScalarFunction::ArrayRepeat => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[0].clone(),
-                true,
-            )))),
             BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
@@ -496,7 +449,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ltrim => {
                 utf8_to_str_type(&input_expr_types[0], "ltrim")
             }
-            BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
             BuiltinScalarFunction::OctetLength => {
                 utf8_to_int_type(&input_expr_types[0], "octet_length")
             }
@@ -518,21 +470,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
                 utf8_to_str_type(&input_expr_types[0], "rtrim")
-            }
-            BuiltinScalarFunction::SHA224 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
-            }
-            BuiltinScalarFunction::SHA256 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha256")
-            }
-            BuiltinScalarFunction::SHA384 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha384")
-            }
-            BuiltinScalarFunction::SHA512 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
-            }
-            BuiltinScalarFunction::Digest => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
             }
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
@@ -558,12 +495,6 @@ impl BuiltinScalarFunction {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToChar => Ok(Utf8),
-            BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
-            BuiltinScalarFunction::Now => {
-                Ok(Timestamp(Nanosecond, Some("+00:00".into())))
-            }
-            BuiltinScalarFunction::CurrentDate => Ok(Date32),
-            BuiltinScalarFunction::CurrentTime => Ok(Time64(Nanosecond)),
             BuiltinScalarFunction::MakeDate => Ok(Date32),
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
@@ -629,8 +560,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sinh
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Cbrt
-            | BuiltinScalarFunction::Tan
-            | BuiltinScalarFunction::Tanh
             | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Cot => match input_expr_types[0] {
                 Float32 => Ok(Float32),
@@ -660,7 +589,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => {
                 Signature::array_and_element(self.volatility())
             }
-            BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => {
                 Signature::array_and_element(self.volatility())
             }
@@ -691,15 +619,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::SHA224
-            | BuiltinScalarFunction::SHA256
-            | BuiltinScalarFunction::SHA384
-            | BuiltinScalarFunction::SHA512
-            | BuiltinScalarFunction::MD5 => Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Ascii
             | BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
@@ -771,18 +690,6 @@ impl BuiltinScalarFunction {
                     Exact(vec![Duration(Millisecond), Utf8]),
                     Exact(vec![Duration(Microsecond), Utf8]),
                     Exact(vec![Duration(Nanosecond), Utf8]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::FromUnixtime => {
-                Signature::uniform(1, vec![Int64], self.volatility())
-            }
-            BuiltinScalarFunction::Digest => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
                 ],
                 self.volatility(),
             ),
@@ -913,8 +820,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sin
             | BuiltinScalarFunction::Sinh
             | BuiltinScalarFunction::Sqrt
-            | BuiltinScalarFunction::Tan
-            | BuiltinScalarFunction::Tanh
             | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
@@ -922,11 +827,6 @@ impl BuiltinScalarFunction {
                 // We accept f32 because in this case it is clear that the best approximation
                 // will be as good as the number of digits in the number
                 Signature::uniform(1, vec![Float64, Float32], self.volatility())
-            }
-            BuiltinScalarFunction::Now
-            | BuiltinScalarFunction::CurrentDate
-            | BuiltinScalarFunction::CurrentTime => {
-                Signature::uniform(0, vec![], self.volatility())
             }
             BuiltinScalarFunction::MakeDate => Signature::uniform(
                 3,
@@ -964,7 +864,6 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Sinh
                 | BuiltinScalarFunction::Sqrt
                 | BuiltinScalarFunction::Cbrt
-                | BuiltinScalarFunction::Tanh
                 | BuiltinScalarFunction::Trunc
                 | BuiltinScalarFunction::Pi
         ) {
@@ -1010,8 +909,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sin => &["sin"],
             BuiltinScalarFunction::Sinh => &["sinh"],
             BuiltinScalarFunction::Sqrt => &["sqrt"],
-            BuiltinScalarFunction::Tan => &["tan"],
-            BuiltinScalarFunction::Tanh => &["tanh"],
             BuiltinScalarFunction::Trunc => &["trunc"],
 
             // conditional functions
@@ -1054,20 +951,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // time/date functions
-            BuiltinScalarFunction::Now => &["now"],
-            BuiltinScalarFunction::CurrentDate => &["current_date", "today"],
-            BuiltinScalarFunction::CurrentTime => &["current_time"],
             BuiltinScalarFunction::MakeDate => &["make_date"],
             BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
-            BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
             // hashing functions
-            BuiltinScalarFunction::Digest => &["digest"],
-            BuiltinScalarFunction::MD5 => &["md5"],
-            BuiltinScalarFunction::SHA224 => &["sha224"],
-            BuiltinScalarFunction::SHA256 => &["sha256"],
-            BuiltinScalarFunction::SHA384 => &["sha384"],
-            BuiltinScalarFunction::SHA512 => &["sha512"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
                 "array_extract",
@@ -1088,7 +975,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => {
                 &["array_positions", "list_positions"]
             }
-            BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
             BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
             BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
             BuiltinScalarFunction::ArrayRemoveAll => {
@@ -1175,21 +1061,6 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
-
-fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
-    Ok(match arg_type {
-        DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeBinary => DataType::Binary,
-        DataType::Null => DataType::Null,
-        _ => {
-            return plan_err!(
-                "The {name:?} function can only accept strings or binary arrays."
-            );
-        }
-    })
-}
 
 #[cfg(test)]
 mod tests {

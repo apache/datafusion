@@ -2255,9 +2255,10 @@ select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query error DataFusion error: Execution error: aggregate function needs at least one non-null element
+query I
 select approx_median(a) from (select 1 as a where 1=0);
-
+----
+NULL
 
 # aggregate_decimal_sum
 query RT
