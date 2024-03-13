@@ -294,8 +294,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     transformed,
                     tnr: _,
                 } = expr.transform_up_mut(&mut |expr: Expr| {
-                    let column_name = expr.display_name()?;
                     if let Expr::Unnest(Unnest { ref exprs }) = expr {
+                        let column_name = expr.display_name()?;
                         unnest_columns.push(column_name.clone());
                         // Add alias for the argument expression, to avoid naming conflicts with other expressions
                         // in the select list. For example: `select unnest(col1), col1 from t`.
