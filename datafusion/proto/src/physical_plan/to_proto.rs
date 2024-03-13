@@ -22,7 +22,6 @@ use std::{
     sync::Arc,
 };
 
-use crate::logical_plan::csv_writer_options_to_proto;
 use crate::protobuf::{
     self, copy_to_node, physical_aggregate_expr_node, physical_window_expr_node,
     scalar_value::Value, ArrowOptions, AvroOptions, PhysicalSortExprNode,
@@ -32,10 +31,9 @@ use crate::protobuf::{
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 
-use datafusion_expr::{create_udf, ScalarUDF};
+use datafusion_expr::ScalarFunctionDefinition;
 
-use crate::logical_plan::{csv_writer_options_to_proto, writer_properties_to_proto};
-
+use crate::logical_plan::csv_writer_options_to_proto;
 use datafusion::datasource::{
     file_format::csv::CsvSink,
     file_format::json::JsonSink,
@@ -51,10 +49,10 @@ use datafusion::physical_plan::expressions::{
     ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
     CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
     DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
-    InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
-    Min, NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg,
-    Rank, RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum,
-    TryCastExpr, Variance, VariancePop, WindowShift,
+    InListExpr, IsNotNullExpr, IsNullExpr, LastValue, Literal, Max, Median, Min,
+    NegativeExpr, NotExpr, NthValue, NthValueAgg, Ntile, OrderSensitiveArrayAgg, Rank,
+    RankType, Regr, RegrType, RowNumber, Stddev, StddevPop, StringAgg, Sum, TryCastExpr,
+    Variance, VariancePop, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -382,7 +380,7 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     Ok(AggrFn { inner, distinct })
 }
 
-fn serialize_expr(
+pub fn serialize_expr(
     value: Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode, DataFusionError> {
@@ -541,20 +539,31 @@ fn serialize_expr(
             })
         } else {
             let mut buf = Vec::new();
-            let udf = create_udf(expr.name(), expr, return_type, volatility, fun);
-            // let _ = codec.try_encode_udf(, &mut buf);
+            match expr.fun() {
+                ScalarFunctionDefinition::UDF(udf) => {
+                    codec.try_encode_udf(udf, &mut buf)?;
+                }
+                _ => {
+                    return not_impl_err!(
+                        "Proto serialization error: Trying to serialize a unresolved function"
+                    );
+                }
+            }
+
+            let fun_definition = if buf.is_empty() { None } else { Some(buf) };
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
                     protobuf::PhysicalScalarUdfNode {
                         name: expr.name().to_string(),
                         args,
+                        fun_definition,
                         return_type: Some(expr.return_type().try_into()?),
                     },
                 )),
             })
-        } else {
-            internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
         }
+    } else {
+        internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
     }
 }
 
@@ -698,7 +707,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             let expr_node_vec = order
                 .iter()
                 .map(|sort_expr| {
-                    let expr = serialize_expr(sort_expr.expr, &codec)?;
+                    let expr = serialize_expr(sort_expr.expr.clone(), &codec)?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
                         asc: !sort_expr.options.descending,

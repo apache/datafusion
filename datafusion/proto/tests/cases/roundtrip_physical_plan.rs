@@ -32,7 +32,6 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
     FileSinkConfig, ParquetExec,
 };
-use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
@@ -49,7 +48,6 @@ use datafusion::physical_plan::expressions::{
     NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::functions;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -75,8 +73,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
-    SimpleAggregateUDF, WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarFunctionDefinition, Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound
 };
 use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
 use datafusion_proto::protobuf;
@@ -603,14 +600,11 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let execution_props = ExecutionProps::new();
-
-    let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
+    let fun_def = ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Sin);
 
     let expr = ScalarFunctionExpr::new(
         "sin",
-        fun_expr,
+        fun_def,
         vec![col("a", &schema)?],
         DataType::Float64,
         None,
@@ -646,9 +640,11 @@ fn roundtrip_scalar_udf() -> Result<()> {
         scalar_fn.clone(),
     );
 
+    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(udf.clone()));
+
     let expr = ScalarFunctionExpr::new(
         "dummy",
-        scalar_fn,
+        fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
         None,

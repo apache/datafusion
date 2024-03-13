@@ -41,11 +41,10 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_common::Result;
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionDefinition, ScalarFunctionImplementation,
+    ScalarFunctionDefinition,
 };
 
 /// Physical expression of a scalar function
@@ -61,8 +60,6 @@ pub struct ScalarFunctionExpr {
     monotonicity: Option<FuncMonotonicity>,
     // Whether this function can be invoked with zero arguments
     supports_zero_argument: bool,
-    // Execution properties
-    execution_props: ExecutionProps,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -87,7 +84,6 @@ impl ScalarFunctionExpr {
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
         supports_zero_argument: bool,
-        execution_props: &ExecutionProps,
     ) -> Self {
         Self {
             fun,
@@ -96,7 +92,6 @@ impl ScalarFunctionExpr {
             return_type,
             monotonicity,
             supports_zero_argument,
-            execution_props: execution_props.clone(),
         }
     }
 
@@ -177,9 +172,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         };
 
         let fun_implementation = match self.fun {
-            ScalarFunctionDefinition::BuiltIn(ref fun) => {
-                create_physical_fun(fun, &self.execution_props)?
-            }
+            ScalarFunctionDefinition::BuiltIn(ref fun) => create_physical_fun(fun)?,
             _ => {
                 todo!("User-defined functions are not supported yet")
             }
@@ -204,7 +197,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.return_type().clone(),
             self.monotonicity.clone(),
             self.supports_zero_argument,
-            &self.execution_props,
         )))
     }
 

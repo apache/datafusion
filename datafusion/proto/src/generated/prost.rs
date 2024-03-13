@@ -2092,6 +2092,8 @@ pub struct PhysicalScalarUdfNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "4")]
     pub return_type: ::core::option::Option<ArrowType>,
 }

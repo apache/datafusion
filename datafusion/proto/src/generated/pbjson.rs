@@ -20391,6 +20391,9 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         if !self.args.is_empty() {
             len += 1;
         }
+        if self.fun_definition.is_some() {
+            len += 1;
+        }
         if self.return_type.is_some() {
             len += 1;
         }
@@ -20400,6 +20403,10 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         }
         if !self.args.is_empty() {
             struct_ser.serialize_field("args", &self.args)?;
+        }
+        if let Some(v) = self.fun_definition.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.return_type.as_ref() {
             struct_ser.serialize_field("returnType", v)?;
@@ -20416,6 +20423,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
         const FIELDS: &[&str] = &[
             "name",
             "args",
+            "fun_definition",
+            "funDefinition",
             "return_type",
             "returnType",
         ];
@@ -20424,6 +20433,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
         enum GeneratedField {
             Name,
             Args,
+            FunDefinition,
             ReturnType,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -20448,6 +20458,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                         match value {
                             "name" => Ok(GeneratedField::Name),
                             "args" => Ok(GeneratedField::Args),
+                            "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "returnType" | "return_type" => Ok(GeneratedField::ReturnType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -20470,6 +20481,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
             {
                 let mut name__ = None;
                 let mut args__ = None;
+                let mut fun_definition__ = None;
                 let mut return_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -20485,6 +20497,14 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                             }
                             args__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::FunDefinition => {
+                            if fun_definition__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("funDefinition"));
+                            }
+                            fun_definition__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                         GeneratedField::ReturnType => {
                             if return_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("returnType"));
@@ -20496,6 +20516,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                 Ok(PhysicalScalarUdfNode {
                     name: name__.unwrap_or_default(),
                     args: args__.unwrap_or_default(),
+                    fun_definition: fun_definition__,
                     return_type: return_type__,
                 })
             }

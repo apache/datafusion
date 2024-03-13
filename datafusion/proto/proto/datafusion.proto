@@ -1458,6 +1458,7 @@ message PhysicalExprNode {
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
   ArrowType return_type = 4;
 }
 
