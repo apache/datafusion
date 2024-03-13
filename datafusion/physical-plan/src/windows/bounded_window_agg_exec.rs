@@ -1172,7 +1172,7 @@ mod tests {
     use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
-    use arrow_array::builder::UInt64Builder;
+    use arrow_array::builder::{Int64Builder, UInt64Builder};
     use arrow_array::RecordBatch;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::{
@@ -1407,29 +1407,18 @@ mod tests {
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("sn", DataType::UInt64, true),
-            Field::new("sn_clone", DataType::UInt64, true),
-            Field::new("single_hash", DataType::UInt64, true),
-            Field::new("duplicated_hash", DataType::UInt64, true),
+            Field::new("hash", DataType::Int64, true),
         ]))
     }
 
     fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
-        let orderings = vec![vec![
-            PhysicalSortExpr {
-                expr: col("sn", schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
+        let orderings = vec![vec![PhysicalSortExpr {
+            expr: col("sn", schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
             },
-            PhysicalSortExpr {
-                expr: col("sn_clone", schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            },
-        ]];
+        }]];
         Ok(orderings)
     }
 
@@ -1446,7 +1435,6 @@ mod tests {
         assert!(n_row > 0);
         assert!(n_chunk > 0);
         assert!(is_integer_division_safe(n_row, n_chunk));
-        let hash_value = 0;
         let hash_replicate = 4;
 
         let chunks = (0..n_row)
@@ -1457,33 +1445,18 @@ mod tests {
 
         // Send 2 RecordBatches at the source
         for sn_values in chunks {
-            let schema_values = sn_values
-                .into_iter()
-                .map(|sn| (sn, sn, hash_value))
-                .collect::<Vec<_>>();
+            let mut sn1_array = UInt64Builder::with_capacity(sn_values.len());
+            let mut hash_array = Int64Builder::with_capacity(sn_values.len());
 
-            let mut sn1_array = UInt64Builder::with_capacity(schema_values.len());
-            let mut sn2_array = UInt64Builder::with_capacity(schema_values.len());
-            let mut hash_array = UInt64Builder::with_capacity(schema_values.len());
-            let mut duplicated_hash_array =
-                UInt64Builder::with_capacity(schema_values.len());
-
-            for (sn1, sn2, hash_value) in schema_values {
-                sn1_array.append_value(sn1 as u64);
-                sn2_array.append_value(sn2 as u64);
+            for sn in sn_values {
+                sn1_array.append_value(sn as u64);
+                let hash_value = (2 - (sn / hash_replicate)) as i64;
                 hash_array.append_value(hash_value);
-                let duplicated_hash_value = (sn1 / hash_replicate) as u64;
-                duplicated_hash_array.append_value(duplicated_hash_value);
             }
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
-                vec![
-                    Arc::new(sn1_array.finish()),
-                    Arc::new(sn2_array.finish()),
-                    Arc::new(hash_array.finish()),
-                    Arc::new(duplicated_hash_array.finish()),
-                ],
+                vec![Arc::new(sn1_array.finish()), Arc::new(hash_array.finish())],
             )?;
             batches.push(batch);
         }
@@ -1646,73 +1619,78 @@ mod tests {
     // This test, tests whether most recent row guarantee by the input batch of the `BoundedWindowAggExec`
     // helps `BoundedWindowAggExec` to generate low latency result in the `Linear` mode.
     // Input data generated at the source is
-    //     "+----+----------+-------------+-----------------+",
-    //     "| sn | sn_clone | single_hash | duplicated_hash |",
-    //     "+----+----------+-------------+-----------------+",
-    //     "| 0  | 0        | 0           | 0               |",
-    //     "| 1  | 1        | 0           | 0               |",
-    //     "| 2  | 2        | 0           | 0               |",
-    //     "| 3  | 3        | 0           | 0               |",
-    //     "| 4  | 4        | 0           | 1               |",
-    //     "| 5  | 5        | 0           | 1               |",
-    //     "| 6  | 6        | 0           | 1               |",
-    //     "| 7  | 7        | 0           | 1               |",
-    //     "| 8  | 8        | 0           | 1               |",
-    //     "| 9  | 9        | 0           | 1               |",
-    //     "+----+----------+-------------+-----------------+",
+    //       "+----+------+",
+    //       "| sn | hash |",
+    //       "+----+------+",
+    //       "| 0  | 2    |",
+    //       "| 1  | 2    |",
+    //       "| 2  | 2    |",
+    //       "| 3  | 2    |",
+    //       "| 4  | 1    |",
+    //       "| 5  | 1    |",
+    //       "| 6  | 1    |",
+    //       "| 7  | 1    |",
+    //       "| 8  | 0    |",
+    //       "| 9  | 0    |",
+    //       "+----+------+",
     //
     // Effectively following query is run on this data
     //
     //   SELECT *, COUNT(*) OVER(PARTITION BY duplicated_hash ORDER BY sn RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
     //   FROM test;
     //
-    // partition `duplicated_hash=0` receives following data from the input
+    // partition `duplicated_hash=2` receives following data from the input
     //
-    //     "+----+----------+-------------+-----------------+",
-    //     "| sn | sn_clone | single_hash | duplicated_hash |",
-    //     "+----+----------+-------------+-----------------+",
-    //     "| 0  | 0        | 0           | 0               |",
-    //     "| 1  | 1        | 0           | 0               |",
-    //     "| 2  | 2        | 0           | 0               |",
-    //     "| 3  | 3        | 0           | 0               |",
-    //     "+----+----------+-------------+-----------------+",
+    //       "+----+------+",
+    //       "| sn | hash |",
+    //       "+----+------+",
+    //       "| 0  | 2    |",
+    //       "| 1  | 2    |",
+    //       "| 2  | 2    |",
+    //       "| 3  | 2    |",
+    //       "+----+------+",
     // normally `BoundedWindowExec` can only generate following result from the input above
     //
-    //      "+----+----------+-------------+-----------------+-------+",
-    //      "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
-    //      "+----+----------+-------------+-----------------+-------+",
-    //      "| 0  | 0        | 0           | 0               | 2     |",
-    //      "| 1  | 1        | 0           | 0               | 2     |",
-    //      "+----+----------+-------------+-----------------+-------+",
-    // where last result of last row is missing. Since window frame end is not may change with future data
+    //       "+----+------+---------+",
+    //       "| sn | hash |  count  |",
+    //       "+----+------+---------+",
+    //       "| 0  | 2    |  2      |",
+    //       "| 1  | 2    |  2      |",
+    //       "| 2  | 2    |<not yet>|",
+    //       "| 3  | 2    |<not yet>|",
+    //       "+----+------+---------+",
+    // where result of last 2 row is missing. Since window frame end is not may change with future data
     // since window frame end is determined by 1 following (To generate result for row=3[where sn=2] we
     // need to received sn=4 to make sure window frame end bound won't change with future data).
     //
     // With the ability of different partitions to use global ordering at the input (where most up-to date
     //   row is
-    //      "| 9  | 9        | 0           | 1               |",
+    //      "| 9  | 0    |",
     //   )
     //
     // `BoundedWindowExec` should be able to generate following result in the test
     //
-    //       "+----+----------+-------------+-----------------+-------+",
-    //       "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
-    //       "+----+----------+-------------+-----------------+-------+",
-    //       "| 0  | 0        | 0           | 0               | 2     |",
-    //       "| 1  | 1        | 0           | 0               | 2     |",
-    //       "| 2  | 2        | 0           | 0               | 2     |",
-    //       "| 3  | 3        | 0           | 0               | 1     |",
-    //       "| 4  | 4        | 0           | 1               | 2     |",
-    //       "| 5  | 5        | 0           | 1               | 2     |",
-    //       "| 6  | 6        | 0           | 1               | 2     |",
-    //       "| 7  | 7        | 0           | 1               | 1     |",
-    //       "+----+----------+-------------+-----------------+-------+",
+    //       "+----+------+-------+",
+    //       "| sn | hash | col_2 |",
+    //       "+----+------+-------+",
+    //       "| 0  | 2    | 2     |",
+    //       "| 1  | 2    | 2     |",
+    //       "| 2  | 2    | 2     |",
+    //       "| 3  | 2    | 1     |",
+    //       "| 4  | 1    | 2     |",
+    //       "| 5  | 1    | 2     |",
+    //       "| 6  | 1    | 2     |",
+    //       "| 7  | 1    | 1     |",
+    //       "+----+------+-------+",
+    //
     // where result for all rows except last 2 is calculated (To calculate result for row 9 where sn=8
     //   we need to receive sn=10 value to calculate it result.).
     // In this test, out aim is to test for which portion of the input data `BoundedWindowExec` can generate
     // a result. To test this behaviour, we generated the data at the source infinitely (no `None` signal
     //    is sent to output from source). After, row:
-    //       "| 9  | 9        | 0           | 1               |",
+    //
+    //       "| 9  | 0    |",
+    //
     // is sent. Source stops sending data to output. We collect, result emitted by the `BoundedWindowExec` at the
     // end of the pipeline with a timeout (Since no `None` is sent from source. Collection never ends otherwise).
     #[tokio::test]
@@ -1726,19 +1704,15 @@ mod tests {
         let source =
             generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;
 
-        let window = bounded_window_exec_pb_latent_range(
-            source,
-            n_future_range,
-            "duplicated_hash",
-            "sn",
-        )?;
+        let window =
+            bounded_window_exec_pb_latent_range(source, n_future_range, "hash", "sn")?;
 
         let plan = projection_exec(window)?;
 
         let expected_plan = vec![
-            "ProjectionExec: expr=[sn@0 as sn, sn_clone@1 as sn_clone, single_hash@2 as single_hash, duplicated_hash@3 as duplicated_hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@4 as col_4]",
-            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"duplicated_hash\\\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
-            "    StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
+            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]",
+            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
+            "    StreamingTableExec: partition_sizes=1, projection=[sn, hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST]",
         ];
 
         // Get string representation of the plan
@@ -1752,75 +1726,18 @@ mod tests {
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
 
         let expected = [
-            "+----+----------+-------------+-----------------+-------+",
-            "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
-            "+----+----------+-------------+-----------------+-------+",
-            "| 0  | 0        | 0           | 0               | 2     |",
-            "| 1  | 1        | 0           | 0               | 2     |",
-            "| 2  | 2        | 0           | 0               | 2     |",
-            "| 3  | 3        | 0           | 0               | 1     |",
-            "| 4  | 4        | 0           | 1               | 2     |",
-            "| 5  | 5        | 0           | 1               | 2     |",
-            "| 6  | 6        | 0           | 1               | 2     |",
-            "| 7  | 7        | 0           | 1               | 1     |",
-            "+----+----------+-------------+-----------------+-------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        Ok(())
-    }
-
-    // The similar comment applies to this test with above where query effectively executed is following:
-    //
-    //   SELECT *, COUNT(*) OVER(PARTITION BY duplicated_hash ORDER BY duplicated_hash RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
-    //   FROM test;
-    //
-    // where ORDER BY is changed from `ORDER BY sn` to `ORDER BY duplicated_hash`
-    #[tokio::test]
-    async fn bounded_window_exec_linear_mode_range_information2() -> Result<()> {
-        let n_rows = 10;
-        let chunk_length = 2;
-        let n_future_range = 1;
-
-        let timeout_duration = Duration::from_millis(2000);
-
-        let source =
-            generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;
-
-        let window = bounded_window_exec_pb_latent_range(
-            source,
-            n_future_range,
-            "duplicated_hash",
-            "duplicated_hash",
-        )?;
-
-        let plan = projection_exec(window)?;
-
-        let expected_plan = vec![
-            "ProjectionExec: expr=[sn@0 as sn, sn_clone@1 as sn_clone, single_hash@2 as single_hash, duplicated_hash@3 as duplicated_hash, COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"duplicated_hash\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]@4 as col_4]",
-            "  BoundedWindowAggExec: wdw=[COUNT([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"duplicated_hash\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"duplicated_hash\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"COUNT([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"duplicated_hash\\\", index: 3 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"duplicated_hash\\\", index: 3 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Linear]",
-            "    StreamingTableExec: partition_sizes=1, projection=[sn, sn_clone, single_hash, duplicated_hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST, sn_clone@1 ASC NULLS LAST]",
-        ];
-
-        // Get string representation of the plan
-        let actual = get_plan_string(&plan);
-        assert_eq!(
-            expected_plan, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_plan:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let task_ctx = task_context();
-        let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
-
-        let expected = [
-            "+----+----------+-------------+-----------------+-------+",
-            "| sn | sn_clone | single_hash | duplicated_hash | col_4 |",
-            "+----+----------+-------------+-----------------+-------+",
-            "| 0  | 0        | 0           | 0               | 4     |",
-            "| 1  | 1        | 0           | 0               | 4     |",
-            "| 2  | 2        | 0           | 0               | 4     |",
-            "| 3  | 3        | 0           | 0               | 4     |",
-            "+----+----------+-------------+-----------------+-------+",
+            "+----+------+-------+",
+            "| sn | hash | col_2 |",
+            "+----+------+-------+",
+            "| 0  | 2    | 2     |",
+            "| 1  | 2    | 2     |",
+            "| 2  | 2    | 2     |",
+            "| 3  | 2    | 1     |",
+            "| 4  | 1    | 2     |",
+            "| 5  | 1    | 2     |",
+            "| 6  | 1    | 2     |",
+            "| 7  | 1    | 1     |",
+            "+----+------+-------+",
         ];
         assert_batches_eq!(expected, &batches);
 
