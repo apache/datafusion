@@ -483,9 +483,6 @@ pub fn create_physical_fun(
             }
             other => exec_err!("Unsupported data type {other:?} for function ltrim"),
         }),
-        BuiltinScalarFunction::MD5 => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(md5, "md5"))
-        }
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
@@ -566,18 +563,6 @@ pub fn create_physical_fun(
             }
             other => exec_err!("Unsupported data type {other:?} for function rtrim"),
         }),
-        BuiltinScalarFunction::SHA224 => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(sha224, "sha224"))
-        }
-        BuiltinScalarFunction::SHA256 => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(sha256, "sha256"))
-        }
-        BuiltinScalarFunction::SHA384 => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(sha384, "sha384"))
-        }
-        BuiltinScalarFunction::SHA512 => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(sha512, "sha512"))
-        }
         BuiltinScalarFunction::SplitPart => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::split_part::<i32>)(args)

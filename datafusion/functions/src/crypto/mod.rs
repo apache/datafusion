@@ -19,9 +19,39 @@
 
 pub mod basic;
 pub mod digest;
+pub mod md5;
+pub mod sha224;
+pub mod sha256;
+pub mod sha384;
+pub mod sha512;
 make_udf_function!(digest::DigestFunc, DIGEST, digest);
+make_udf_function!(md5::Md5Func, MD5, md5);
+make_udf_function!(sha224::SHA224Func, SHA224, sha224);
+make_udf_function!(sha256::SHA256Func, SHA256, sha256);
+make_udf_function!(sha384::SHA384Func, SHA384, sha384);
+make_udf_function!(sha512::SHA512Func, SHA512, sha512);
 export_functions!((
     digest,
     input_arg1 input_arg2,
-    "returns a list of regular expression matches in a string. "
+    "Computes the binary hash of an expression using the specified algorithm."
+),(
+    md5,
+    input_arg,
+    "Computes an MD5 128-bit checksum for a string expression."
+),(
+    sha224,
+    input_arg1,
+    "Computes the SHA-224 hash of a binary string."
+),(
+    sha256,
+    input_arg1,
+    "Computes the SHA-256 hash of a binary string."
+),(
+    sha384,
+    input_arg1,
+    "Computes the SHA-384 hash of a binary string."
+),(
+    sha512,
+    input_arg1,
+    "Computes the SHA-512 hash of a binary string."
 ));

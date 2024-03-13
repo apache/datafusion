@@ -168,8 +168,6 @@ pub enum BuiltinScalarFunction {
     Lower,
     /// ltrim
     Ltrim,
-    /// md5
-    MD5,
     /// octet_length
     OctetLength,
     /// random
@@ -186,14 +184,6 @@ pub enum BuiltinScalarFunction {
     Rpad,
     /// rtrim
     Rtrim,
-    /// sha224
-    SHA224,
-    /// sha256
-    SHA256,
-    /// sha384
-    SHA384,
-    /// Sha512
-    SHA512,
     /// split_part
     SplitPart,
     /// starts_with
@@ -346,7 +336,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
             BuiltinScalarFunction::Ltrim => Volatility::Immutable,
-            BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
@@ -355,10 +344,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Right => Volatility::Immutable,
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
             BuiltinScalarFunction::Rtrim => Volatility::Immutable,
-            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
@@ -487,7 +472,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ltrim => {
                 utf8_to_str_type(&input_expr_types[0], "ltrim")
             }
-            BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
             BuiltinScalarFunction::OctetLength => {
                 utf8_to_int_type(&input_expr_types[0], "octet_length")
             }
@@ -509,18 +493,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
                 utf8_to_str_type(&input_expr_types[0], "rtrim")
-            }
-            BuiltinScalarFunction::SHA224 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
-            }
-            BuiltinScalarFunction::SHA256 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha256")
-            }
-            BuiltinScalarFunction::SHA384 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha384")
-            }
-            BuiltinScalarFunction::SHA512 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
             }
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
@@ -677,15 +649,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::SHA224
-            | BuiltinScalarFunction::SHA256
-            | BuiltinScalarFunction::SHA384
-            | BuiltinScalarFunction::SHA512
-            | BuiltinScalarFunction::MD5 => Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Ascii
             | BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
@@ -1156,6 +1119,7 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
+#[warn(dead_code)]
 fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
     Ok(match arg_type {
         DataType::LargeUtf8
