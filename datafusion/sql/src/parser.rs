@@ -158,7 +158,7 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 /// [ WITH HEADER ROW ]
 /// [ DELIMITER <char> ]
 /// [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
-/// [ PARTITIONED BY (<column list>) ]
+/// [ PARTITIONED BY (<column_definition list> | <column list>) ]
 /// [ WITH ORDER (<ordered column list>)
 /// [ OPTIONS (<key_value_list>) ]
 /// LOCATION <literal>
@@ -609,7 +609,7 @@ impl<'a> DFParser<'a> {
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name(true)?;
-        let (columns, constraints) = self.parse_columns()?;
+        let (mut columns, mut constraints) = self.parse_columns()?;
 
         #[derive(Default)]
         struct Builder {
@@ -679,7 +679,20 @@ impl<'a> DFParser<'a> {
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
                         ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                        let peeked = self.parser.peek_nth_token(2);
+                        if peeked == Token::Comma || peeked == Token::RParen {
+                            // list of column names
+                            builder.table_partition_cols = Some(self.parse_partitions()?)
+                        } else {
+                            // list of column defs
+                            let (cols, cons) = self.parse_columns()?;
+                            builder.table_partition_cols = Some(
+                                cols.iter().map(|col| col.name.to_string()).collect(),
+                            );
+
+                            columns.extend(cols);
+                            constraints.extend(cons);
+                        }
                     }
                     Keyword::OPTIONS => {
                         ensure_not_set(&builder.options, "OPTIONS")?;
@@ -1092,10 +1105,28 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // Error cases: partition column does not support type
+        // positive case: column definiton allowed in 'partition by' clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(None)),
+                make_column_def("p1", DataType::Int(None)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec!["p1".to_string()],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
 
         // positive case: additional options (one entry) can be specified
         let sql =
