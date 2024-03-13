@@ -1121,7 +1121,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{lit, ScalarFunctionDefinition};
+    use crate::ScalarFunctionDefinition;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
