@@ -332,17 +332,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .project(inner_projection_exprs)?
                 .build()
         } else {
+            if unnest_columns.len() > 1 {
+                return not_impl_err!("Only support single unnest expression for now");
+            }
+            let unnest_column = unnest_columns.pop().unwrap();
             // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
             let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-
-            let mut builder =
-                LogicalPlanBuilder::from(input).project(inner_projection_exprs)?;
-
-            for unnest_column in unnest_columns {
-                builder = builder
-                    .unnest_column_with_options(unnest_column, unnest_options.clone())?;
-            }
-            builder.project(outer_projection_exprs)?.build()
+            LogicalPlanBuilder::from(input)
+                .project(inner_projection_exprs)?
+                .unnest_column_with_options(unnest_column, unnest_options)?
+                .project(outer_projection_exprs)?
+                .build()
         }
     }
 

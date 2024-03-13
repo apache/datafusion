@@ -313,25 +313,5 @@ select unnest(array_remove(column1, 3)) - 1 as c1, column3 from unnest_table;
 5 3
 11 NULL
 
-
-## Unnest multiple columns
-query II
-select unnest(column1), unnest(column2) from unnest_table;
-----
-1 7
-2 7
-3 7
-4 8
-4 9
-4 10
-5 8
-5 9
-5 10
-6 11
-6 12
-12 NULL
-12 42
-12 NULL
-
 statement ok
 drop table unnest_table;
