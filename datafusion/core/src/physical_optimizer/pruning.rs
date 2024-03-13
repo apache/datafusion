@@ -53,7 +53,7 @@ use log::trace;
 ///
 /// 1. Minimum and maximum values for columns
 ///
-/// 2. Null counts for columns
+/// 2. Null counts and row counts for columns
 ///
 /// 3. Whether the values in a column are contained in a set of literals
 ///
@@ -112,7 +112,7 @@ pub trait PruningStatistics {
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 
-    /// Return the total row counts for the named column in each container
+    /// Return the number of rows for the named column in each container
     /// as an `Option<UInt64Array>`.
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
@@ -3203,10 +3203,10 @@ mod tests {
         let statistics = statistics.with_row_counts(
             "i",
             vec![
-                Some(10),
-                Some(9),
-                None,    // unknown row counts
-                Some(4), // 4 rows of data
+                Some(10), // 10 rows of data
+                Some(9),  // 9 rows of data
+                None,     // unknown row counts
+                Some(4),
                 Some(10),
             ],
         );
