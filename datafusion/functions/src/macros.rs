@@ -147,7 +147,16 @@ macro_rules! downcast_arg {
     }};
 }
 
-macro_rules! make_math_unary_function {
+/// Macro to create a unary math UDF.
+///
+/// A unary math function takes an argument of type Float32 or Float64,
+/// applies a unary floating function to the argument, and returns a value of the same type.
+///
+/// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
+/// $GNAME: a singleton instance of the UDF
+/// $NAME: the name of the function
+/// $UNARY_FUNC: the unary function to apply to the argument
+macro_rules! make_math_unary_udf {
     ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 

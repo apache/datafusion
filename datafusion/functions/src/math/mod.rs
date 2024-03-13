@@ -20,13 +20,14 @@
 mod abs;
 mod nans;
 
-// create  UDFs
+// Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
-make_math_unary_function!(TanhFunc, TANH, tanh, tanh);
-make_math_unary_function!(AcosFunc, ACOS, acos, acos);
-make_math_unary_function!(AsinFunc, ASIN, asin, asin);
-make_math_unary_function!(TanFunc, TAN, tan, tan);
+
+make_math_unary_udf!(TanhFunc, TANH, tanh, tanh);
+make_math_unary_udf!(AcosFunc, ACOS, acos, acos);
+make_math_unary_udf!(AsinFunc, ASIN, asin, asin);
+make_math_unary_udf!(TanFunc, TAN, tan, tan);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
