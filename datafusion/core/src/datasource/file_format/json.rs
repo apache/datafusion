@@ -27,7 +27,6 @@ use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
@@ -42,6 +41,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow_array::RecordBatch;
+use datafusion_common::config::JsonOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -53,26 +54,27 @@ use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JsonFormat {
-    schema_infer_max_rec: Option<usize>,
-    file_compression_type: FileCompressionType,
-}
-
-impl Default for JsonFormat {
-    fn default() -> Self {
-        Self {
-            schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-        }
-    }
+    options: JsonOptions,
 }
 
 impl JsonFormat {
+    /// Set JSON options
+    pub fn with_options(mut self, options: JsonOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Retrieve JSON options
+    pub fn options(&self) -> &JsonOptions {
+        &self.options
+    }
+
     /// Set a limit in terms of records to scan to infer the schema
     /// - defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
-    pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
-        self.schema_infer_max_rec = max_rec;
+    pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
+        self.options.schema_infer_max_rec = max_rec;
         self
     }
 
@@ -82,7 +84,7 @@ impl JsonFormat {
         mut self,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        self.file_compression_type = file_compression_type;
+        self.options.compression = file_compression_type.into();
         self
     }
 }
@@ -100,8 +102,8 @@ impl FileFormat for JsonFormat {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
-        let file_compression_type = self.file_compression_type.to_owned();
+        let mut records_to_read = self.options.schema_infer_max_rec;
+        let file_compression_type = FileCompressionType::from(self.options.compression);
         for object in objects {
             let mut take_while = || {
                 let should_take = records_to_read > 0;
@@ -154,7 +156,8 @@ impl FileFormat for JsonFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
+        let exec =
+            NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
         Ok(Arc::new(exec))
     }
 
@@ -169,11 +172,10 @@ impl FileFormat for JsonFormat {
             return not_impl_err!("Overwrites are not implemented yet for Json");
         }
 
-        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
-        }
+        let writer_options = JsonWriterOptions::try_from(&self.options)?;
+
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(JsonSink::new(conf));
+        let sink = Arc::new(JsonSink::new(conf, writer_options));
 
         Ok(Arc::new(FileSinkExec::new(
             input,
@@ -217,6 +219,8 @@ impl BatchSerializer for JsonSerializer {
 pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
+    ///
+    writer_options: JsonWriterOptions,
 }
 
 impl Debug for JsonSink {
@@ -239,8 +243,11 @@ impl DisplayAs for JsonSink {
 
 impl JsonSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    pub fn new(config: FileSinkConfig, writer_options: JsonWriterOptions) -> Self {
+        Self {
+            config,
+            writer_options,
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -253,9 +260,6 @@ impl JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let writer_options = self.config.file_type_writer_options.try_into_json()?;
-        let compression = &writer_options.compression;
-
         let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
 
         stateless_multipart_put(
@@ -264,9 +268,13 @@ impl JsonSink {
             "json".into(),
             Box::new(get_serializer),
             &self.config,
-            (*compression).into(),
+            self.writer_options.compression.into(),
         )
         .await
+    }
+    /// Retrieve the writer options
+    pub fn writer_options(&self) -> &JsonWriterOptions {
+        &self.writer_options
     }
 }
 
@@ -293,20 +301,21 @@ impl DataSink for JsonSink {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
-    use arrow::util::pretty;
-    use datafusion_common::cast::as_int64_array;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, internal_err};
-    use futures::StreamExt;
-    use object_store::local::LocalFileSystem;
-    use regex::Regex;
-    use rstest::rstest;
-
     use super::*;
     use crate::execution::options::NdJsonReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
+
+    use arrow::util::pretty;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{assert_batches_eq, internal_err};
+
+    use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
+    use regex::Regex;
+    use rstest::rstest;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -413,7 +422,7 @@ mod tests {
         let ctx = session.state();
         let store = Arc::new(LocalFileSystem::new()) as _;
         let filename = "tests/data/schema_infer_limit.json";
-        let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
+        let format = JsonFormat::default().with_schema_infer_max_rec(3);
 
         let file_schema = format
             .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])

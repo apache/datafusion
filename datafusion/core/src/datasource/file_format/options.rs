@@ -19,9 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema, SchemaRef};
-use async_trait::async_trait;
-
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 #[cfg(feature = "parquet")]
@@ -35,10 +32,15 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::config::TableOptions;
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
+
+use async_trait::async_trait;
 
 /// Options that control the reading of CSV files.
 ///
@@ -430,7 +432,11 @@ impl<'a> NdJsonReadOptions<'a> {
 /// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions;
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        table_options: TableOptions,
+    ) -> ListingOptions;
 
     /// Infer and resolve the schema from the files/sources provided.
     async fn get_resolved_schema(
@@ -455,7 +461,7 @@ pub trait ReadOptions<'a> {
             return Ok(Arc::new(s.to_owned()));
         }
 
-        self.to_listing_options(config)
+        self.to_listing_options(config, state.default_table_options().clone())
             .infer_schema(&state, &table_path)
             .await
     }
@@ -463,13 +469,18 @@ pub trait ReadOptions<'a> {
 
 #[async_trait]
 impl ReadOptions<'_> for CsvReadOptions<'_> {
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        table_options: TableOptions,
+    ) -> ListingOptions {
         let file_format = CsvFormat::default()
+            .with_options(table_options.csv)
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
@@ -493,10 +504,19 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 #[cfg(feature = "parquet")]
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ParquetFormat::new()
-            .with_enable_pruning(self.parquet_pruning)
-            .with_skip_metadata(self.skip_metadata);
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        table_options: TableOptions,
+    ) -> ListingOptions {
+        let mut file_format = ParquetFormat::new().with_options(table_options.parquet);
+
+        if let Some(parquet_pruning) = self.parquet_pruning {
+            file_format = file_format.with_enable_pruning(parquet_pruning)
+        }
+        if let Some(skip_metadata) = self.skip_metadata {
+            file_format = file_format.with_skip_metadata(skip_metadata)
+        }
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -518,9 +538,14 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
 #[async_trait]
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        table_options: TableOptions,
+    ) -> ListingOptions {
         let file_format = JsonFormat::default()
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_options(table_options.json)
+            .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
@@ -543,7 +568,11 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        _table_options: TableOptions,
+    ) -> ListingOptions {
         let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
@@ -565,7 +594,11 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 
 #[async_trait]
 impl ReadOptions<'_> for ArrowReadOptions<'_> {
-    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+    fn to_listing_options(
+        &self,
+        config: &SessionConfig,
+        _table_options: TableOptions,
+    ) -> ListingOptions {
         let file_format = ArrowFormat;
 
         ListingOptions::new(Arc::new(file_format))

@@ -1474,6 +1474,7 @@ pub(crate) mod tests {
             },
             None,
             None,
+            Default::default(),
         ))
     }
 
@@ -1501,6 +1502,7 @@ pub(crate) mod tests {
             },
             None,
             None,
+            Default::default(),
         ))
     }
 
