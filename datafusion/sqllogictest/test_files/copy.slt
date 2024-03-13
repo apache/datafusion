@@ -484,3 +484,35 @@ COPY (select col2, sum(col1) from source_table
 # Copy from table with non literal
 query error DataFusion error: SQL error: ParserError\("Expected ',' or '\)' after option definition, found: \+"\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
+
+
+# Legacy Format Options Support
+
+# Copy with legacy format options for Parquet
+query IT
+COPY source_table TO 'test_files/scratch/copy/format_table/' (
+    format parquet,
+    compression snappy,
+    'compression::col1' 'zstd(5)'
+);
+----
+2
+
+# Copy with legacy format options for JSON
+query IT
+COPY source_table  to 'test_files/scratch/copy/format_table' (format json, compression gzip);
+----
+2
+
+# Copy with legacy format options for CSV
+query IT
+COPY source_table to 'test_files/scratch/copy/format_table' (
+    format csv,
+    has_header false,
+    compression xz,
+    datetime_format '%FT%H:%M:%S.%9f',
+    delimiter ';',
+    null_value 'NULLVAL'
+);
+----
+2
