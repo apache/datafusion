@@ -234,6 +234,7 @@ impl FileScanConfig {
         // we can produce the smallest number of file groups such that
         // files within a group are in order and non-overlapping.
         // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
+        // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
 
         let statistics =
             MinMaxStatistics::new(&sort_order, table_schema, min_values, max_values)
