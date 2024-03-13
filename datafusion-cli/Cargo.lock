@@ -1249,6 +1249,8 @@ dependencies = [
  "arrow",
  "arrow-array",
  "base64 0.22.0",
+ "blake2",
+ "blake3",
  "chrono",
  "datafusion-common",
  "datafusion-execution",
@@ -1257,7 +1259,9 @@ dependencies = [
  "hex",
  "itertools",
  "log",
+ "md-5",
  "regex",
+ "sha2",
 ]
 
 [[package]]
