@@ -846,7 +846,7 @@ mod tests {
     }
 
     /// Parses sql and asserts that the expected error message was found
-    fn expect_parse_error(sql: &str, expected_error: &str) {
+    fn _expect_parse_error(sql: &str, expected_error: &str) {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
