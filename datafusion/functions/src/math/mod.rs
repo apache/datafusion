@@ -18,19 +18,15 @@
 //! "math" DataFusion functions
 
 mod abs;
-mod acos;
-mod asin;
 mod nans;
-mod tan;
-mod tanh;
 
 // create  UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
-make_udf_function!(acos::AcosFunc, ACOS, acos);
-make_udf_function!(asin::AsinFunc, ASIN, asin);
-make_udf_function!(tan::TanFunc, TAN, tan);
-make_udf_function!(tanh::TanhFunc, TANH, tanh);
+make_math_unary_function!(TanhFunc, TANH, tanh, tanh);
+make_math_unary_function!(AcosFunc, ACOS, acos, acos);
+make_math_unary_function!(AsinFunc, ASIN, asin, asin);
+make_math_unary_function!(TanFunc, TAN, tan, tan);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
