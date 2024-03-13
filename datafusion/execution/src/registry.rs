@@ -18,6 +18,7 @@
 //! FunctionRegistry trait
 
 use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
+use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -92,6 +93,20 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udwf(&mut self, _name: &str) -> Result<Option<Arc<WindowUDF>>> {
         not_impl_err!("Deregistering WindowUDF")
+    }
+
+    /// Registers a new [`FunctionRewrite`] with the registry.
+    ///
+    /// `FunctionRewrite` rules are used to rewrite certain / operators in the
+    /// logical plan to function calls.  For example `a || b` might be written to
+    /// `array_concat(a, b)`.
+    ///
+    /// This allows the behavior of operators to be customized by the user.
+    fn register_function_rewrite(
+        &mut self,
+        _rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        not_impl_err!("Registering FunctionRewrite")
     }
 }
 

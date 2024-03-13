@@ -32,6 +32,7 @@ mod array_has;
 mod concat;
 mod kernels;
 mod make_array;
+mod rewrite;
 mod udf;
 mod utils;
 
@@ -51,20 +52,25 @@ pub mod expr_fn {
     pub use super::concat::array_prepend;
     pub use super::make_array::make_array;
     pub use super::udf::array_dims;
+    pub use super::udf::array_distinct;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
+    pub use super::udf::array_repeat;
+    pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
+    pub use super::udf::string_to_array;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = vec![
         udf::array_to_string_udf(),
+        udf::string_to_array_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
         udf::array_dims_udf(),
@@ -80,6 +86,9 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_empty_udf(),
         udf::array_length_udf(),
         udf::flatten_udf(),
+        udf::array_sort_udf(),
+        udf::array_distinct_udf(),
+        udf::array_repeat_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
@@ -88,5 +97,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
+
     Ok(())
 }

@@ -17,9 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for array functions.
 
+use arrow::array::{NullArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
+use arrow_schema::DataType::{LargeUtf8, List, Utf8};
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
@@ -82,6 +84,81 @@ impl ScalarUDFImpl for ArrayToString {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::array_to_string(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(StringToArray,
+    string_to_array,
+    string delimiter null_string, // arg name
+    "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`", // doc
+    string_to_array_udf // internal function name
+);
+#[derive(Debug)]
+pub(super) struct StringToArray {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl StringToArray {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![
+                String::from("string_to_array"),
+                String::from("string_to_list"),
+            ],
+        }
+    }
+}
+
+impl ScalarUDFImpl for StringToArray {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "string_to_array"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        Ok(match arg_types[0] {
+            Utf8 | LargeUtf8 => {
+                List(Arc::new(Field::new("item", arg_types[0].clone(), true)))
+            }
+            _ => {
+                return plan_err!(
+                    "The string_to_array function can only accept Utf8 or LargeUtf8."
+                );
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let mut args = ColumnarValue::values_to_arrays(args)?;
+        // Case: delimiter is NULL, needs to be handled as well.
+        if args[1].as_any().is::<NullArray>() {
+            args[1] = Arc::new(StringArray::new_null(args[1].len()));
+        };
+
+        match args[0].data_type() {
+            Utf8 => {
+                crate::kernels::string_to_array::<i32>(&args).map(ColumnarValue::Array)
+            }
+            LargeUtf8 => {
+                crate::kernels::string_to_array::<i64>(&args).map(ColumnarValue::Array)
+            }
+            other => {
+                exec_err!("unsupported type for string_to_array function as {other}")
+            }
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -287,6 +364,70 @@ impl ScalarUDFImpl for ArrayDims {
 }
 
 make_udf_function!(
+    ArraySort,
+    array_sort,
+    array desc null_first,
+    "returns sorted array.",
+    array_sort_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArraySort {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArraySort {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec!["array_sort".to_string(), "list_sort".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArraySort {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_sort"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        match &arg_types[0] {
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_sort(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
     Cardinality,
     cardinality,
     array,
@@ -449,6 +590,58 @@ impl ScalarUDFImpl for ArrayEmpty {
 }
 
 make_udf_function!(
+    ArrayRepeat,
+    array_repeat,
+    element count, // arg name
+    "returns an array containing element `count` times.", // doc
+    array_repeat_udf // internal function name
+);
+#[derive(Debug)]
+pub(super) struct ArrayRepeat {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayRepeat {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![String::from("array_repeat"), String::from("list_repeat")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayRepeat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_repeat"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_repeat(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
     ArrayLength,
     array_length,
     array,
@@ -563,6 +756,70 @@ impl ScalarUDFImpl for Flatten {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::flatten(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    ArrayDistinct,
+    array_distinct,
+    array,
+    "return distinct values from the array after removing duplicates.",
+    array_distinct_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayDistinct {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl crate::udf::ArrayDistinct {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec!["array_distinct".to_string(), "list_distinct".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for crate::udf::ArrayDistinct {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_distinct"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        match &arg_types[0] {
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_distinct(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

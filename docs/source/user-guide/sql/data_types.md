@@ -30,11 +30,11 @@ the `arrow_typeof` function. For example:
 
 ```sql
 select arrow_typeof(interval '1 month');
-+-------------------------------------+
-| arrowtypeof(IntervalYearMonth("1")) |
-+-------------------------------------+
-| Interval(YearMonth)                 |
-+-------------------------------------+
++---------------------------------------------------------------------+
+| arrow_typeof(IntervalMonthDayNano("79228162514264337593543950336")) |
++---------------------------------------------------------------------+
+| Interval(MonthDayNano)                                              |
++---------------------------------------------------------------------+
 ```
 
 You can cast a SQL expression to a specific Arrow type using the `arrow_cast` function
