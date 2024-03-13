@@ -1,3 +1,5 @@
+# Runs the benchmark command on the PR and
+# on the branch, posting the results as a comment back the PR
 name: Benchmarks
 
 on:
