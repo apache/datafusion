@@ -26,17 +26,14 @@ use super::{get_projected_output_ordering, FileGroupPartitioner};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
+use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow::{
-    array::{ArrayData, BufferBuilder},
-    compute::concat_batches,
-};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, Statistics};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
 use itertools::Itertools;
 use log::warn;
@@ -201,20 +198,10 @@ impl FileScanConfig {
 
     #[allow(unused)]
     fn sort_file_groups(
-        table_schema: &Schema,
+        table_schema: &SchemaRef,
         file_groups: Vec<Vec<PartitionedFile>>,
         sort_order: LexOrdering,
     ) -> Option<Vec<Vec<PartitionedFile>>> {
-        use arrow::row::{RowConverter, SortField};
-        let sort_columns = sort_order
-            .iter()
-            .map(|sort_expr| {
-                sort_expr
-                    .expr
-                    .as_any()
-                    .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-            })
-            .collect::<Option<Vec<_>>>()?;
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         let statistics_and_partition_values = flattened_files
             .iter()
@@ -226,63 +213,47 @@ impl FileScanConfig {
             })
             .collect::<Option<Vec<_>>>()?;
 
-        let min_values =
-            get_statistic(table_schema, &statistics_and_partition_values, |s| {
-                s.min_value.get_value().unwrap().clone()
-            })
-            .ok()?;
+        let min_values = project_statistic(
+            table_schema,
+            &statistics_and_partition_values,
+            MinOrMax::Min,
+        )
+        .ok()?;
+        let max_values = project_statistic(
+            table_schema,
+            &statistics_and_partition_values,
+            MinOrMax::Max,
+        )
+        .ok()?;
 
-        let max_values =
-            get_statistic(table_schema, &statistics_and_partition_values, |s| {
-                s.max_value.get_value().unwrap().clone()
-            })
-            .ok()?;
+        // First Fit:
+        // * Choose the first file group that a file can be placed into.
+        // * If it fits into no existing file groups, create a new one.
+        //
+        // By sorting files by min values and then applying first-fit bin packing,
+        // we can produce the smallest number of file groups such that
+        // files within a group are in order and non-overlapping.
+        // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
 
-        // first fit
-        use arrow::row::*;
-
-        let min_and_max_values =
-            concat_batches(&min_values.schema(), &[min_values, max_values]).ok()?;
-        let rows = {
-            let sorting_columns = sort_order
-                .iter()
-                .map(|expr| expr.evaluate_to_sort_column(&min_and_max_values))
-                .collect::<Result<Vec<_>>>()
+        let statistics =
+            MinMaxStatistics::new(&sort_order, table_schema, min_values, max_values)
                 .ok()?;
-            let sort_fields = sorting_columns
-                .iter()
-                .map(|c| match c.options {
-                    Some(opts) => {
-                        SortField::new_with_options(c.values.data_type().clone(), opts)
-                    }
-                    None => SortField::new(c.values.data_type().clone()),
-                })
-                .collect_vec();
-
-            let converter = RowConverter::new(sort_fields).ok()?;
-            converter
-                .convert_columns(
-                    &sorting_columns.into_iter().map(|c| c.values).collect_vec(),
-                )
-                .ok()?
-        };
 
         let indices_sorted_by_min = {
-            let mut sort: Vec<_> =
-                rows.iter().take(rows.num_rows() / 2).enumerate().collect();
+            let mut sort: Vec<_> = statistics.min.iter().enumerate().collect();
             sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-            sort.iter().map(|(i, _)| *i).collect_vec()
+            sort
         };
 
         let mut file_groups_indices: Vec<Vec<usize>> = vec![];
 
-        'outer: for idx in indices_sorted_by_min {
-            let min = rows.row(idx);
+        'outer: for (idx, min) in indices_sorted_by_min {
             for file_group in &mut file_groups_indices {
                 match file_group.last() {
-                    Some(&idx_other) => {
-                        let other_max = rows.row(flattened_files.len() + idx_other);
-                        if min >= other_max {
+                    Some(&other) => {
+                        // If our file is non-overlapping and comes _after_ the last file,
+                        // it fits in this file group.
+                        if min >= statistics.max.row(other) {
                             file_group.push(idx);
                             continue 'outer;
                         }
@@ -309,6 +280,87 @@ impl FileScanConfig {
                 })
                 .collect_vec(),
         )
+    }
+}
+
+enum MinOrMax {
+    Min,
+    Max,
+}
+
+// A helper to read statistics from PartitionedFiles into a RecordBatch for further processing.
+fn project_statistic(
+    table_schema: &Schema,
+    statistics_and_partition_values: &[(&Statistics, &[ScalarValue])],
+    statistic: MinOrMax,
+) -> Result<RecordBatch> {
+    RecordBatch::try_new(
+        Arc::new(table_schema.to_owned()),
+        table_schema
+            .all_fields()
+            .into_iter()
+            .enumerate()
+            .map(|(i, _field)| {
+                ScalarValue::iter_to_array(statistics_and_partition_values.iter().map(
+                    |(s, pv)| {
+                        if i < s.column_statistics.len() {
+                            match statistic {
+                                MinOrMax::Min => &s.column_statistics[i].min_value,
+                                MinOrMax::Max => &s.column_statistics[i].max_value,
+                            }
+                            .get_value()
+                            .cloned()
+                            .unwrap_or(ScalarValue::Null)
+                        } else {
+                            pv[i - s.column_statistics.len()].clone()
+                        }
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    )
+    .map_err(From::from)
+}
+
+// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
+struct MinMaxStatistics {
+    min: arrow::row::Rows,
+    max: arrow::row::Rows,
+}
+
+impl MinMaxStatistics {
+    fn new(
+        sort_order: &[PhysicalSortExpr],
+        schema: &SchemaRef,
+        min_values: RecordBatch,
+        max_values: RecordBatch,
+    ) -> Result<Self> {
+        use arrow::row::*;
+
+        let sort_fields = sort_order
+            .iter()
+            .map(|expr| {
+                expr.expr
+                    .data_type(schema)
+                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let converter = RowConverter::new(sort_fields)?;
+
+        let [min, max] = [min_values, max_values].map(|values| {
+            let sorting_columns = sort_order
+                .iter()
+                .map(|expr| expr.evaluate_to_sort_column(&values))
+                .collect::<Result<Vec<_>>>()?;
+            converter.convert_columns(
+                &sorting_columns.into_iter().map(|c| c.values).collect_vec(),
+            )
+        });
+
+        Ok(Self {
+            min: min?,
+            max: max?,
+        })
     }
 }
 
@@ -550,33 +602,6 @@ fn create_output_array(
     }
 
     val.to_array_of_size(len)
-}
-
-fn get_statistic(
-    table_schema: &Schema,
-    statistics_and_partition_values: &[(&Statistics, &[ScalarValue])],
-    f: impl Fn(&ColumnStatistics) -> ScalarValue,
-) -> Result<RecordBatch> {
-    RecordBatch::try_new(
-        Arc::new(table_schema.to_owned()),
-        table_schema
-            .all_fields()
-            .into_iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                ScalarValue::iter_to_array(statistics_and_partition_values.iter().map(
-                    |(s, pv)| {
-                        if i < s.column_statistics.len() {
-                            f(&s.column_statistics[i])
-                        } else {
-                            pv[i - s.column_statistics.len()].clone()
-                        }
-                    },
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?,
-    )
-    .map_err(From::from)
 }
 
 #[cfg(test)]
@@ -978,10 +1003,10 @@ mod tests {
             }],
         ];
 
-        let table_schema = Schema::new(vec![
+        let table_schema = Arc::new(Schema::new(vec![
             Field::new("value".to_string(), DataType::Float64, false),
             Field::new("date".to_string(), DataType::Utf8, false),
-        ]);
+        ]));
 
         use datafusion_physical_expr::expressions::Column;
         let sort_order_by_value = vec![PhysicalSortExpr {
