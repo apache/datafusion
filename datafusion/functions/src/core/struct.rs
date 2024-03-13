@@ -61,7 +61,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 #[derive(Debug)]
-pub struct StructFunc {
+pub(super) struct StructFunc {
     signature: Signature,
 }
 
@@ -70,12 +70,6 @@ impl StructFunc {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
-    }
-}
-
-impl Default for StructFunc {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
