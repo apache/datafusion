@@ -22,8 +22,6 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
-use super::basic::utf8_or_binary_to_binary_type;
-
 #[derive(Debug)]
 pub(super) struct Md5Func {
     signature: Signature,
