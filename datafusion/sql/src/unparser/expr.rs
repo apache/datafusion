@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
-use chrono::{DateTime, NaiveDate};
 use datafusion_common::{
-    not_impl_datafusion_err, not_impl_err, Column, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
@@ -27,9 +27,6 @@ use datafusion_expr::{
 use sqlparser::ast::{self, Function, FunctionArg, Ident};
 
 use super::Unparser;
-
-/// The number of days from day 1 CE (0001-01-01) to Unix Epoch (1970-01-01)
-static DAYS_FROM_CE_TO_UNIX_EPOCH: i32 = 719_163;
 
 /// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
 ///
@@ -302,12 +299,19 @@ impl Unparser<'_> {
             ScalarValue::FixedSizeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::List(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::LargeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Date32(Some(d)) => {
-                let date =
-                    NaiveDate::from_num_days_from_ce_opt(d + DAYS_FROM_CE_TO_UNIX_EPOCH)
-                        .ok_or(not_impl_datafusion_err!(
-                            "Date overflow error for {d:?}"
-                        ))?;
+            ScalarValue::Date32(Some(_)) => {
+                let date = v
+                    .to_array()?
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .ok_or(internal_datafusion_err!(
+                        "Unable to downcast to Date32 from Date32 scalar"
+                    ))?
+                    .value_as_date(0)
+                    .ok_or(internal_datafusion_err!(
+                        "Unable to convert Date32 to NaiveDate"
+                    ))?;
+
                 Ok(ast::Expr::Cast {
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         date.to_string(),
@@ -317,10 +321,19 @@ impl Unparser<'_> {
                 })
             }
             ScalarValue::Date32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Date64(Some(ms)) => {
-                let datetime = DateTime::from_timestamp_millis(*ms).ok_or(
-                    not_impl_datafusion_err!("Datetime overflow error for {ms:?}"),
-                )?;
+            ScalarValue::Date64(Some(_)) => {
+                let datetime = v
+                    .to_array()?
+                    .as_any()
+                    .downcast_ref::<Date64Array>()
+                    .ok_or(internal_datafusion_err!(
+                        "Unable to downcast to Date64 from Date64 scalar"
+                    ))?
+                    .value_as_datetime(0)
+                    .ok_or(internal_datafusion_err!(
+                        "Unable to convert Date64 to NaiveDateTime"
+                    ))?;
+
                 Ok(ast::Expr::Cast {
                     expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                         datetime.to_string(),
@@ -501,15 +514,15 @@ mod tests {
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
-                r#"CAST('1970-01-01 00:00:00 UTC' AS DATETIME)"#,
+                r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(10000))),
-                r#"CAST('1970-01-01 00:00:10 UTC' AS DATETIME)"#,
+                r#"CAST('1970-01-01 00:00:10' AS DATETIME)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(-10000))),
-                r#"CAST('1969-12-31 23:59:50 UTC' AS DATETIME)"#,
+                r#"CAST('1969-12-31 23:59:50' AS DATETIME)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date32(Some(0))),

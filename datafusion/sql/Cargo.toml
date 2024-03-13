@@ -35,12 +35,12 @@ path = "src/lib.rs"
 [features]
 default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
-unparser = ["dep:chrono"]
+unparser = []
 
 [dependencies]
 arrow = { workspace = true }
+arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
-chrono = { workspace = true , optional=true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 log = { workspace = true }
