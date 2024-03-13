@@ -146,7 +146,7 @@ impl Unparser<'_> {
                     filter: None,
                     null_treatment: None,
                     over: None,
-                    distinct: false,
+                    distinct: agg.distinct,
                     special: false,
                     order_by: vec![],
                 }))
@@ -560,7 +560,7 @@ mod tests {
                     order_by: None,
                     null_treatment: None,
                 }),
-                "COUNT(*)",
+                "COUNT(DISTINCT *)",
             ),
         ];
 
