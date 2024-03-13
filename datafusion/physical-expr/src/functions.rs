@@ -84,51 +84,6 @@ pub fn create_physical_expr(
     )))
 }
 
-#[cfg(feature = "crypto_expressions")]
-macro_rules! invoke_if_crypto_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {{
-        use crate::crypto_expressions;
-        crypto_expressions::$FUNC
-    }};
-}
-
-#[cfg(not(feature = "crypto_expressions"))]
-macro_rules! invoke_if_crypto_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {
-        use datafusion_common::internal_err;
-        |_: &[ColumnarValue]| -> Result<ColumnarValue> {
-            internal_err!(
-                "function {} requires compilation with feature flag: crypto_expressions.",
-                $NAME
-            )
-        }
-    };
-}
-
-#[cfg(not(feature = "regex_expressions"))]
-macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {
-        |_: &[ArrayRef]| -> Result<ArrayRef> {
-            internal_err!(
-                "function {} requires compilation with feature flag: regex_expressions.",
-                $NAME
-            )
-        }
-    };
-}
-
-#[cfg(not(feature = "regex_expressions"))]
-macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {
-        |_: &[ColumnarValue]| -> Result<ScalarFunctionImplementation> {
-            internal_err!(
-                "function {} requires compilation with feature flag: regex_expressions.",
-                $NAME
-            )
-        }
-    };
-}
-
 #[cfg(feature = "unicode_expressions")]
 macro_rules! invoke_if_unicode_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {{
