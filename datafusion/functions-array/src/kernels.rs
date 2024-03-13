@@ -39,7 +39,7 @@ use datafusion_common::cast::{
     as_string_array,
 };
 use datafusion_common::{
-    exec_err, internal_err, internal_datafusion_err, not_impl_datafusion_err,
+    exec_err, internal_datafusion_err, internal_err, not_impl_datafusion_err,
     DataFusionError, Result, ScalarValue,
 };
 use itertools::Itertools;
