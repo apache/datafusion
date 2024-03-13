@@ -240,7 +240,7 @@ where
 /// Create a physical scalar function.
 pub fn create_physical_fun(
     fun: &BuiltinScalarFunction,
-    execution_props: &ExecutionProps,
+    _execution_props: &ExecutionProps,
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
@@ -414,29 +414,8 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
             make_scalar_function_inner(string_expressions::concat_ws)(args)
         }),
-        BuiltinScalarFunction::Now => {
-            // bind value for now at plan time
-            Arc::new(datetime_expressions::make_now(
-                execution_props.query_execution_start_time,
-            ))
-        }
-        BuiltinScalarFunction::CurrentDate => {
-            // bind value for current_date at plan time
-            Arc::new(datetime_expressions::make_current_date(
-                execution_props.query_execution_start_time,
-            ))
-        }
-        BuiltinScalarFunction::CurrentTime => {
-            // bind value for current_time at plan time
-            Arc::new(datetime_expressions::make_current_time(
-                execution_props.query_execution_start_time,
-            ))
-        }
         BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
         BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
-        BuiltinScalarFunction::FromUnixtime => {
-            Arc::new(datetime_expressions::from_unixtime_invoke)
-        }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::initcap::<i32>)(args)
@@ -2622,7 +2601,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let funs = [
-            BuiltinScalarFunction::Now,
             BuiltinScalarFunction::Pi,
             BuiltinScalarFunction::Random,
             BuiltinScalarFunction::Uuid,
