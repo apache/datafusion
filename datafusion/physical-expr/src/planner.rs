@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::GetFieldAccessExpr;
 use crate::{
-    expressions::{self, binary, like, Column, GetIndexedFieldExpr, Literal},
+    expressions::{self, binary, like, Column, Literal},
     functions, udf, PhysicalExpr,
 };
 use arrow::datatypes::Schema;
@@ -228,10 +227,12 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let field = match field {
-                GetFieldAccess::NamedStructField { name } => {
-                    GetFieldAccessExpr::NamedStructField { name: name.clone() }
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
+            match field {
+                GetFieldAccess::NamedStructField { name: _ } => {
+                    unreachable!(
+                        "NamedStructField should be rewritten in OperatorToFunction"
+                    )
                 }
                 GetFieldAccess::ListIndex { key: _ } => {
                     unreachable!("ListIndex should be rewritten in OperatorToFunction")
@@ -244,10 +245,6 @@ pub fn create_physical_expr(
                     unreachable!("ListRange should be rewritten in OperatorToFunction")
                 }
             };
-            Ok(Arc::new(GetIndexedFieldExpr::new(
-                create_physical_expr(expr, input_dfschema, execution_props)?,
-                field,
-            )))
         }
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
