@@ -164,9 +164,7 @@ pub struct ListingTableScanNode {
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
-    pub file_format_type: ::core::option::Option<
-        listing_table_scan_node::FileFormatType,
-    >,
+    pub file_format_type: ::core::option::Option<listing_table_scan_node::FileFormatType>,
 }
 /// Nested message and enum types in `ListingTableScanNode`.
 pub mod listing_table_scan_node {
@@ -351,10 +349,8 @@ pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "15")]
     pub constraints: ::core::option::Option<Constraints>,
     #[prost(map = "string, message", tag = "16")]
-    pub column_defaults: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        LogicalExprNode,
-    >,
+    pub column_defaults:
+        ::std::collections::HashMap<::prost::alloc::string::String, LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1463,7 +1459,10 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
+    #[prost(
+        oneof = "plan_type::PlanTypeEnum",
+        tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10"
+    )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1529,9 +1528,8 @@ pub struct FullTableReference {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnedTableReference {
     #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
-    pub table_reference_enum: ::core::option::Option<
-        owned_table_reference::TableReferenceEnum,
-    >,
+    pub table_reference_enum:
+        ::core::option::Option<owned_table_reference::TableReferenceEnum>,
 }
 /// Nested message and enum types in `OwnedTableReference`.
 pub mod owned_table_reference {
@@ -1791,29 +1789,25 @@ pub struct ColumnSpecificOptions {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnOptions {
     #[prost(oneof = "column_options::BloomFilterEnabledOpt", tags = "1")]
-    pub bloom_filter_enabled_opt: ::core::option::Option<
-        column_options::BloomFilterEnabledOpt,
-    >,
+    pub bloom_filter_enabled_opt:
+        ::core::option::Option<column_options::BloomFilterEnabledOpt>,
     #[prost(oneof = "column_options::EncodingOpt", tags = "2")]
     pub encoding_opt: ::core::option::Option<column_options::EncodingOpt>,
     #[prost(oneof = "column_options::DictionaryEnabledOpt", tags = "3")]
-    pub dictionary_enabled_opt: ::core::option::Option<
-        column_options::DictionaryEnabledOpt,
-    >,
+    pub dictionary_enabled_opt:
+        ::core::option::Option<column_options::DictionaryEnabledOpt>,
     #[prost(oneof = "column_options::CompressionOpt", tags = "4")]
     pub compression_opt: ::core::option::Option<column_options::CompressionOpt>,
     #[prost(oneof = "column_options::StatisticsEnabledOpt", tags = "5")]
-    pub statistics_enabled_opt: ::core::option::Option<
-        column_options::StatisticsEnabledOpt,
-    >,
+    pub statistics_enabled_opt:
+        ::core::option::Option<column_options::StatisticsEnabledOpt>,
     #[prost(oneof = "column_options::BloomFilterFppOpt", tags = "6")]
     pub bloom_filter_fpp_opt: ::core::option::Option<column_options::BloomFilterFppOpt>,
     #[prost(oneof = "column_options::BloomFilterNdvOpt", tags = "7")]
     pub bloom_filter_ndv_opt: ::core::option::Option<column_options::BloomFilterNdvOpt>,
     #[prost(oneof = "column_options::MaxStatisticsSizeOpt", tags = "8")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        column_options::MaxStatisticsSizeOpt,
-    >,
+    pub max_statistics_size_opt:
+        ::core::option::Option<column_options::MaxStatisticsSizeOpt>,
 }
 /// Nested message and enum types in `ColumnOptions`.
 pub mod column_options {
@@ -1916,27 +1910,22 @@ pub struct ParquetOptions {
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
-    pub metadata_size_hint_opt: ::core::option::Option<
-        parquet_options::MetadataSizeHintOpt,
-    >,
+    pub metadata_size_hint_opt:
+        ::core::option::Option<parquet_options::MetadataSizeHintOpt>,
     #[prost(oneof = "parquet_options::CompressionOpt", tags = "10")]
     pub compression_opt: ::core::option::Option<parquet_options::CompressionOpt>,
     #[prost(oneof = "parquet_options::DictionaryEnabledOpt", tags = "11")]
-    pub dictionary_enabled_opt: ::core::option::Option<
-        parquet_options::DictionaryEnabledOpt,
-    >,
+    pub dictionary_enabled_opt:
+        ::core::option::Option<parquet_options::DictionaryEnabledOpt>,
     #[prost(oneof = "parquet_options::StatisticsEnabledOpt", tags = "13")]
-    pub statistics_enabled_opt: ::core::option::Option<
-        parquet_options::StatisticsEnabledOpt,
-    >,
+    pub statistics_enabled_opt:
+        ::core::option::Option<parquet_options::StatisticsEnabledOpt>,
     #[prost(oneof = "parquet_options::MaxStatisticsSizeOpt", tags = "14")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        parquet_options::MaxStatisticsSizeOpt,
-    >,
+    pub max_statistics_size_opt:
+        ::core::option::Option<parquet_options::MaxStatisticsSizeOpt>,
     #[prost(oneof = "parquet_options::ColumnIndexTruncateLengthOpt", tags = "17")]
-    pub column_index_truncate_length_opt: ::core::option::Option<
-        parquet_options::ColumnIndexTruncateLengthOpt,
-    >,
+    pub column_index_truncate_length_opt:
+        ::core::option::Option<parquet_options::ColumnIndexTruncateLengthOpt>,
     #[prost(oneof = "parquet_options::EncodingOpt", tags = "19")]
     pub encoding_opt: ::core::option::Option<parquet_options::EncodingOpt>,
     #[prost(oneof = "parquet_options::BloomFilterFppOpt", tags = "21")]
@@ -2108,10 +2097,12 @@ pub struct PhysicalAggregateExprNode {
     pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
-    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
-    pub aggregate_function: ::core::option::Option<
-        physical_aggregate_expr_node::AggregateFunction,
-    >,
+    #[prost(
+        oneof = "physical_aggregate_expr_node::AggregateFunction",
+        tags = "1, 4"
+    )]
+    pub aggregate_function:
+        ::core::option::Option<physical_aggregate_expr_node::AggregateFunction>,
 }
 /// Nested message and enum types in `PhysicalAggregateExprNode`.
 pub mod physical_aggregate_expr_node {
@@ -2138,9 +2129,8 @@ pub struct PhysicalWindowExprNode {
     #[prost(string, tag = "8")]
     pub name: ::prost::alloc::string::String,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
-    pub window_function: ::core::option::Option<
-        physical_window_expr_node::WindowFunction,
-    >,
+    pub window_function:
+        ::core::option::Option<physical_window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `PhysicalWindowExprNode`.
 pub mod physical_window_expr_node {
@@ -2768,7 +2758,9 @@ pub mod physical_get_indexed_field_expr_node {
         NamedStructFieldExpr(super::NamedStructFieldExpr),
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinType {
     Inner = 0,
@@ -2812,7 +2804,9 @@ impl JoinType {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinConstraint {
     On = 0,
@@ -2838,7 +2832,9 @@ impl JoinConstraint {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum ScalarFunction {
     ///   0 was Abs before
@@ -2878,7 +2874,7 @@ pub enum ScalarFunction {
     Lpad = 32,
     Lower = 33,
     Ltrim = 34,
-    Md5 = 35,
+    /// 35 was MD5
     ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
@@ -3182,7 +3178,9 @@ impl ScalarFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum AggregateFunction {
     Min = 0,
@@ -3319,7 +3317,9 @@ impl AggregateFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
     RowNumber = 0,
@@ -3372,7 +3372,9 @@ impl BuiltInWindowFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
     Rows = 0,
@@ -3401,7 +3403,9 @@ impl WindowFrameUnits {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameBoundType {
     CurrentRow = 0,
@@ -3430,7 +3434,9 @@ impl WindowFrameBoundType {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum DateUnit {
     Day = 0,
@@ -3456,7 +3462,9 @@ impl DateUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum TimeUnit {
     Second = 0,
@@ -3488,7 +3496,9 @@ impl TimeUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum IntervalUnit {
     YearMonth = 0,
@@ -3517,7 +3527,9 @@ impl IntervalUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum UnionMode {
     Sparse = 0,
@@ -3543,7 +3555,9 @@ impl UnionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum CompressionTypeVariant {
     Gzip = 0,
@@ -3578,7 +3592,9 @@ impl CompressionTypeVariant {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum PartitionMode {
     CollectLeft = 0,
@@ -3607,7 +3623,9 @@ impl PartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum StreamPartitionMode {
     SinglePartition = 0,
@@ -3633,7 +3651,9 @@ impl StreamPartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum AggregateMode {
     Partial = 0,
@@ -3668,7 +3688,9 @@ impl AggregateMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum JoinSide {
     LeftSide = 0,
@@ -3694,7 +3716,9 @@ impl JoinSide {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum PrecisionInfo {
     Exact = 0,
