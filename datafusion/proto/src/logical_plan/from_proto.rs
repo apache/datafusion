@@ -54,7 +54,7 @@ use datafusion_expr::{
     array_resize, array_slice, array_sort, array_union, arrow_typeof, ascii, asinh, atan,
     atan2, atanh, bit_length, btrim, cbrt, ceil, character_length, chr, coalesce,
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
-    date_part, date_trunc, degrees, digest, ends_with, exp,
+    date_part, date_trunc, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, iszero, lcm,
     left, levenshtein, ln, log, log10, log2,
@@ -512,7 +512,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha256 => Self::SHA256,
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
-            ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -1616,10 +1615,6 @@ pub fn parse_expr(
                     Ok(sha512(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Digest => Ok(digest(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Ascii => {
                     Ok(ascii(parse_expr(&args[0], registry, codec)?))
                 }

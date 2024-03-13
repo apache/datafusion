@@ -760,7 +760,6 @@ scalar_expr!(
     code_point,
     "converts the Unicode code point to a UTF8 character"
 );
-scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
@@ -1367,21 +1366,6 @@ mod test {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = digest(col("tableA.a"), lit("md5"))
-        {
-            let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
         } else {
             unreachable!();
         }

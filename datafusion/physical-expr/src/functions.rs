@@ -520,9 +520,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::MD5 => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(md5, "md5"))
         }
-        BuiltinScalarFunction::Digest => {
-            Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
-        }
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {

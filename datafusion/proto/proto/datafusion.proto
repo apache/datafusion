@@ -556,7 +556,7 @@ enum ScalarFunction {
   Ascii = 4;
   Ceil = 5;
   Cos = 6;
-  Digest = 7;
+  // 7 was Digest
   Exp = 8;
   Floor = 9;
   Ln = 10;
