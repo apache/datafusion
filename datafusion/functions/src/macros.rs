@@ -202,7 +202,6 @@ macro_rules! make_math_unary_udf {
                     let arg_type = &arg_types[0];
 
                     match arg_type {
-                        DataType::Float64 => Ok(DataType::Float64),
                         DataType::Float32 => Ok(DataType::Float32),
 
                         // For other types (possible values null/int), use Float 64
