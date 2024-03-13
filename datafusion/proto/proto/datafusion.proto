@@ -576,7 +576,7 @@ enum ScalarFunction {
   Lpad = 32;
   Lower = 33;
   Ltrim = 34;
-  MD5 = 35;
+  // 35 was MD5
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
