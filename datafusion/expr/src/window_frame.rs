@@ -110,8 +110,8 @@ impl fmt::Debug for WindowFrame {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WindowFrame {{ units: {:?}, start_bound: {:?}, end_bound: {:?} }}",
-            self.units, self.start_bound, self.end_bound
+            "WindowFrame {{ units: {:?}, start_bound: {:?}, end_bound: {:?}, is_causal: {:?} }}",
+            self.units, self.start_bound, self.end_bound, self.causal
         )?;
         Ok(())
     }
