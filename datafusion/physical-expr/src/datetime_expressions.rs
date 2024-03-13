@@ -303,43 +303,9 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Array(a) => Some(a.len()),
         });
 
-    let is_scalar = len.is_none();
-    let array_size = if is_scalar { 1 } else { len.unwrap() };
-
     let years = args[0].cast_to(&DataType::Int32, None)?;
     let months = args[1].cast_to(&DataType::Int32, None)?;
     let days = args[2].cast_to(&DataType::Int32, None)?;
-
-    // since the epoch for the date32 datatype is the unix epoch
-    // we need to subtract the unix epoch from the current date
-    // note this can result in a negative value
-    let unix_days_from_ce = NaiveDate::from_ymd_opt(1970, 1, 1)
-        .unwrap()
-        .num_days_from_ce();
-
-    let mut builder: PrimitiveBuilder<Date32Type> = PrimitiveArray::builder(array_size);
-
-    let construct_date_fn = |builder: &mut PrimitiveBuilder<Date32Type>,
-                             year: i32,
-                             month: i32,
-                             day: i32,
-                             unix_days_from_ce: i32|
-     -> Result<()> {
-        let Ok(m) = u32::try_from(month) else {
-            return exec_err!("Month value '{month:?}' is out of range");
-        };
-        let Ok(d) = u32::try_from(day) else {
-            return exec_err!("Day value '{day:?}' is out of range");
-        };
-
-        let date = NaiveDate::from_ymd_opt(year, m, d);
-
-        match date {
-            Some(d) => builder.append_value(d.num_days_from_ce() - unix_days_from_ce),
-            None => return exec_err!("Unable to parse date from {year}, {month}, {day}"),
-        };
-        Ok(())
-    };
 
     let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
         let ColumnarValue::Scalar(s) = col else {
@@ -351,51 +317,77 @@ pub fn make_date(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Ok(*i)
     };
 
-    // For scalar only columns the operation is faster without using the PrimitiveArray
-    if is_scalar {
-        construct_date_fn(
-            &mut builder,
-            scalar_value_fn(&years)?,
-            scalar_value_fn(&months)?,
-            scalar_value_fn(&days)?,
-            unix_days_from_ce,
-        )?;
-    } else {
-        let to_primitive_array = |col: &ColumnarValue,
-                                  scalar_count: usize|
-         -> Result<PrimitiveArray<Int32Type>> {
+    let value = if let Some(array_size) = len {
+        let to_primitive_array_fn = |col: &ColumnarValue| -> PrimitiveArray<Int32Type> {
             match col {
-                ColumnarValue::Array(a) => Ok(a.as_primitive::<Int32Type>().to_owned()),
+                ColumnarValue::Array(a) => a.as_primitive::<Int32Type>().to_owned(),
                 _ => {
                     let v = scalar_value_fn(col).unwrap();
-                    Ok(PrimitiveArray::<Int32Type>::from_value(v, scalar_count))
+                    PrimitiveArray::<Int32Type>::from_value(v, array_size)
                 }
             }
         };
 
-        let years = to_primitive_array(&years, array_size).unwrap();
-        let months = to_primitive_array(&months, array_size).unwrap();
-        let days = to_primitive_array(&days, array_size).unwrap();
+        let years = to_primitive_array_fn(&years);
+        let months = to_primitive_array_fn(&months);
+        let days = to_primitive_array_fn(&days);
+
+        let mut builder: PrimitiveBuilder<Date32Type> =
+            PrimitiveArray::builder(array_size);
         for i in 0..array_size {
-            construct_date_fn(
-                &mut builder,
+            process_date(
                 years.value(i),
                 months.value(i),
                 days.value(i),
-                unix_days_from_ce,
+                |days: i32| builder.append_value(days),
             )?;
         }
-    }
 
-    let arr = builder.finish();
+        let arr = builder.finish();
 
-    if is_scalar {
-        // If all inputs are scalar, keeps output as scalar
-        Ok(ColumnarValue::Scalar(ScalarValue::Date32(Some(
-            arr.value(0),
-        ))))
+        ColumnarValue::Array(Arc::new(arr))
     } else {
-        Ok(ColumnarValue::Array(Arc::new(arr)))
+        // For scalar only columns the operation is faster without using the PrimitiveArray.
+        // Also, keep the output as scalar since all inputs are scalar.
+        let mut value = 0;
+        process_date(
+            scalar_value_fn(&years)?,
+            scalar_value_fn(&months)?,
+            scalar_value_fn(&days)?,
+            |days: i32| value = days,
+        )?;
+
+        ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
+    };
+
+    Ok(value)
+}
+
+fn process_date(
+    year: i32,
+    month: i32,
+    day: i32,
+    mut date_consumer_fn: impl FnMut(i32),
+) -> Result<()> {
+    let Ok(m) = u32::try_from(month) else {
+        return exec_err!("Month value '{month:?}' is out of range");
+    };
+    let Ok(d) = u32::try_from(day) else {
+        return exec_err!("Day value '{day:?}' is out of range");
+    };
+
+    if let Some(date) = NaiveDate::from_ymd_opt(year, m, d) {
+        // The number of days until the start of the unix epoch in the proleptic Gregorian calendar
+        // (with January 1, Year 1 (CE) as day 1). See [Datelike::num_days_from_ce].
+        const UNIX_DAYS_FROM_CE: i32 = 719_163;
+
+        // since the epoch for the date32 datatype is the unix epoch
+        // we need to subtract the unix epoch from the current date
+        // note that this can result in a negative value
+        date_consumer_fn(date.num_days_from_ce() - UNIX_DAYS_FROM_CE);
+        Ok(())
+    } else {
+        exec_err!("Unable to parse date from {year}, {month}, {day}")
     }
 }
 
