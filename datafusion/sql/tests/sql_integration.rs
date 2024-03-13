@@ -386,7 +386,7 @@ fn plan_rollback_transaction_chained() {
 
 #[test]
 fn plan_copy_to() {
-    let sql = "COPY test_decimal to 'output.csv'";
+    let sql = "COPY test_decimal to 'output.csv' STORED AS CSV";
     let plan = r#"
 CopyTo: format=csv output_url=output.csv options: ()
   TableScan: test_decimal
@@ -397,7 +397,7 @@ CopyTo: format=csv output_url=output.csv options: ()
 
 #[test]
 fn plan_explain_copy_to() {
-    let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
+    let sql = "EXPLAIN COPY test_decimal to 'output.csv' STORED AS CSV";
     let plan = r#"
 Explain
   CopyTo: format=csv output_url=output.csv options: ()
@@ -409,7 +409,7 @@ Explain
 
 #[test]
 fn plan_copy_to_query() {
-    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv' STORED AS CSV";
     let plan = r#"
 CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10

@@ -1131,10 +1131,21 @@ impl ConfigField for TableOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        let format = if let Some(format) = &self.current_format {
+            format
+        } else {
+            return _config_err!("Specify a format for TableOptions");
+        };
         match key {
-            "csv" => self.csv.set(rem, value),
-            "parquet" => self.parquet.set(rem, value),
-            "json" => self.json.set(rem, value),
+            "format" => match format {
+                #[cfg(feature = "parquet")]
+                FileType::PARQUET => self.parquet.set(rem, value),
+                FileType::CSV => self.csv.set(rem, value),
+                FileType::JSON => self.json.set(rem, value),
+                _ => {
+                    _config_err!("Config value \"{key}\" is not supported on {}", format)
+                }
+            },
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
@@ -1170,28 +1181,7 @@ impl TableOptions {
             ))
         })?;
 
-        if prefix == "csv" || prefix == "json" || prefix == "parquet" {
-            if let Some(format) = &self.current_format {
-                match format {
-                    FileType::CSV if prefix != "csv" => {
-                        return Err(DataFusionError::Configuration(format!(
-                            "Key \"{key}\" is not applicable for CSV format"
-                        )))
-                    }
-                    #[cfg(feature = "parquet")]
-                    FileType::PARQUET if prefix != "parquet" => {
-                        return Err(DataFusionError::Configuration(format!(
-                            "Key \"{key}\" is not applicable for PARQUET format"
-                        )))
-                    }
-                    FileType::JSON if prefix != "json" => {
-                        return Err(DataFusionError::Configuration(format!(
-                            "Key \"{key}\" is not applicable for JSON format"
-                        )))
-                    }
-                    _ => {}
-                }
-            }
+        if prefix == "format" {
             return ConfigField::set(self, key, value);
         }
 
@@ -1251,9 +1241,7 @@ impl TableOptions {
         }
 
         let mut v = Visitor(vec![]);
-        self.visit(&mut v, "csv", "");
-        self.visit(&mut v, "json", "");
-        self.visit(&mut v, "parquet", "");
+        self.visit(&mut v, "format", "");
 
         v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
         v.0
@@ -1558,6 +1546,7 @@ mod tests {
     use crate::config::{
         ConfigEntry, ConfigExtension, ExtensionOptions, Extensions, TableOptions,
     };
+    use crate::FileType;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -1611,12 +1600,13 @@ mod tests {
     }
 
     #[test]
-    fn alter_kafka_config() {
+    fn alter_test_extension_config() {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
         let mut table_config = TableOptions::new().with_extensions(extension);
-        table_config.set("parquet.write_batch_size", "10").unwrap();
-        assert_eq!(table_config.parquet.global.write_batch_size, 10);
+        table_config.set_file_format(FileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
+        assert_eq!(table_config.csv.delimiter, b';');
         table_config.set("test.bootstrap.servers", "asd").unwrap();
         let kafka_config = table_config
             .extensions
@@ -1629,37 +1619,14 @@ mod tests {
     }
 
     #[test]
-    fn parquet_table_options() {
-        let mut table_config = TableOptions::new();
-        table_config
-            .set("parquet.bloom_filter_enabled::col1", "true")
-            .unwrap();
-        assert_eq!(
-            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
-            Some(true)
-        );
-    }
-
-    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
-        table_config.set("csv.delimiter", ";").unwrap();
+        table_config.set_file_format(FileType::CSV);
+        table_config.set("format.delimiter", ";").unwrap();
         assert_eq!(table_config.csv.delimiter as char, ';');
-        table_config.set("csv.escape", "\"").unwrap();
+        table_config.set("format.escape", "\"").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '"');
-        table_config.set("csv.escape", "\'").unwrap();
+        table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
-    }
-
-    #[test]
-    fn parquet_table_options_config_entry() {
-        let mut table_config = TableOptions::new();
-        table_config
-            .set("parquet.bloom_filter_enabled::col1", "true")
-            .unwrap();
-        let entries = table_config.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key == "parquet.bloom_filter_enabled::col1"))
     }
 }

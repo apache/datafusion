@@ -67,7 +67,10 @@ async fn unsupported_copy_returns_error() {
 
     let options = SQLOptions::new().with_allow_dml(false);
 
-    let sql = format!("copy (values(1)) to '{}'", tmpfile.to_string_lossy());
+    let sql = format!(
+        "copy (values(1)) to '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
     let df = ctx.sql_with_options(&sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),

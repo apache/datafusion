@@ -35,7 +35,7 @@ use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    DataFusionError, FileType, Result, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -314,10 +314,9 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-
-    let mut table_options =
-        TableOptions::default_from_session_config(ctx.state().config_options());
-    table_options.set("csv.delimiter", ";")?;
+    let mut table_options = ctx.state().default_table_options().clone();
+    table_options.set_file_format(FileType::CSV);
+    table_options.set("format.delimiter", ";")?;
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),

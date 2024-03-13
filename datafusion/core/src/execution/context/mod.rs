@@ -1785,11 +1785,7 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::CopyTo(CopyToStatement {
-                    source,
-                    target: _,
-                    options: _,
-                }) => match source {
+                DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                     CopyToSource::Relation(table_name) => {
                         visitor.insert(table_name);
                     }
