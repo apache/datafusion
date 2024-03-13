@@ -52,17 +52,17 @@ use datafusion_expr::{
     array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
     array_slice, array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt,
     ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, degrees, digest, ends_with, exp,
+    current_date, current_time, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, from_unixtime, gcd, initcap, iszero, lcm, left,
     levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256, sha384,
-    sha512, signum, sin, sinh, split_part, sqrt, starts_with, strpos, substr,
-    substr_index, substring, to_hex, translate, trim, trunc, upper, uuid,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    lower, lpad, ltrim, nanvl, now, octet_length, overlay, pi, power, radians, random,
+    repeat, replace, reverse, right, round, rpad, rtrim, signum, sin, sinh, split_part,
+    sqrt, starts_with, strpos, substr, substr_index, substring, to_hex, translate, trim,
+    trunc, upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -490,11 +490,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Md5 => Self::MD5,
-            ScalarFunction::Sha224 => Self::SHA224,
-            ScalarFunction::Sha256 => Self::SHA256,
-            ScalarFunction::Sha384 => Self::SHA384,
-            ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -1532,19 +1527,6 @@ pub fn parse_expr(
                 ScalarFunction::Rtrim => {
                     Ok(rtrim(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Sha224 => {
-                    Ok(sha224(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha256 => {
-                    Ok(sha256(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha384 => {
-                    Ok(sha384(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha512 => {
-                    Ok(sha512(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Ascii => {
                     Ok(ascii(parse_expr(&args[0], registry, codec)?))
                 }

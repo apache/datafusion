@@ -726,15 +726,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::Digest => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::SplitPart => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8, Int64]),
@@ -1006,11 +997,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
             // hashing functions
-            BuiltinScalarFunction::MD5 => &["md5"],
-            BuiltinScalarFunction::SHA224 => &["sha224"],
-            BuiltinScalarFunction::SHA256 => &["sha256"],
-            BuiltinScalarFunction::SHA384 => &["sha384"],
-            BuiltinScalarFunction::SHA512 => &["sha512"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
                 "array_extract",
