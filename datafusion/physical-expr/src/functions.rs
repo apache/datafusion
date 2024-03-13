@@ -757,8 +757,8 @@ mod tests {
     use crate::expressions::try_cast;
     use arrow::{
         array::{
-            Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-            Int32Array, StringArray, UInt64Array,
+            Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array,
+            StringArray, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
