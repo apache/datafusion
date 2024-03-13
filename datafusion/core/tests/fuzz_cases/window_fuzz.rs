@@ -575,6 +575,9 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     window_frame
 }
 
+// This util converts `PRECEDING(0)` or `FOLLOWING(0)` in the window frame bounds
+// to `CURRENT ROW` with 50% probability. This enables us to test behaviour of the system
+// in the `CURRENT ROW` mode.
 fn convert_bound_to_current_row_if_applicable(
     rng: &mut StdRng,
     bound: &WindowFrameBound,

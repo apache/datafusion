@@ -353,7 +353,7 @@ pub(crate) fn is_end_bound_safe(
     // Simplified match statement
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {
-            is_end_bound_safe_for_rows(window_frame, &sort_exprs[0].options)
+            is_end_bound_safe_for_rows(window_frame)
         }
         WindowFrameContext::Range { window_frame, .. } => is_end_bound_safe_for_range(
             window_frame,
@@ -381,14 +381,10 @@ pub(crate) fn is_end_bound_safe(
 ///
 /// # Arguments
 /// * `window_frame`: Reference to the window frame being evaluated.
-/// * `_sort_options`: The sorting options used in the window frame.
 ///
 /// # Returns
 /// A `Result` indicating whether the end bound is safe for row-based window frames.
-fn is_end_bound_safe_for_rows(
-    window_frame: &WindowFrame,
-    _sort_options: &SortOptions,
-) -> Result<bool> {
+fn is_end_bound_safe_for_rows(window_frame: &WindowFrame) -> Result<bool> {
     match &window_frame.end_bound {
         WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow => Ok(true),
         WindowFrameBound::Following(value) => {
