@@ -38,6 +38,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
+use itertools::Itertools;
 use log::warn;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -904,6 +905,8 @@ mod tests {
 
         // Assert projected file schema is equal to file schema
         assert_eq!(projection.fields(), schema.fields());
+    }
+
     fn test_sort_file_groups() {
         use chrono::TimeZone;
         use object_store::{path::Path, ObjectMeta};
@@ -957,7 +960,7 @@ mod tests {
                     last_modified: chrono::Utc.timestamp_nanos(0),
                     size: 0,
                     e_tag: None,
-                    version: None
+                    version: None,
                 },
                 partition_values: vec![ScalarValue::from("2023-01-02")],
                 range: None,
