@@ -203,8 +203,7 @@ macro_rules! make_math_unary_udf {
 
                     match arg_type {
                         DataType::Float32 => Ok(DataType::Float32),
-
-                        // For other types (possible values null/int), use Float 64
+                        // For other types (possible values float64/null/int), use Float64
                         _ => Ok(DataType::Float64),
                     }
                 }
