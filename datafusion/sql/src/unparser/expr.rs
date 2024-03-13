@@ -28,7 +28,7 @@ use sqlparser::ast::{self, Function, FunctionArg, Ident};
 
 use super::Unparser;
 
-/// The number of days from day 1 CE (0001-1-1) to Unix Epoch (1970-01-01)
+/// The number of days from day 1 CE (0001-01-01) to Unix Epoch (1970-01-01)
 static DAYS_FROM_CE_TO_UNIX_EPOCH: i32 = 719_163;
 
 /// Convert a DataFusion [`Expr`] to `sqlparser::ast::Expr`
