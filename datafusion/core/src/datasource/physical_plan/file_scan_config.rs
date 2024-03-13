@@ -220,6 +220,7 @@ impl FileScanConfig {
         // By sorting files by min values and then applying first-fit bin packing,
         // we can produce the smallest number of file groups such that
         // files within a group are in order and non-overlapping.
+        //
         // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
         // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
 
