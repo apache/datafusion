@@ -32,6 +32,7 @@ mod array_has;
 mod concat;
 mod kernels;
 mod make_array;
+mod rewrite;
 mod udf;
 mod utils;
 
@@ -55,6 +56,7 @@ pub mod expr_fn {
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
+    pub use super::udf::array_repeat;
     pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
@@ -86,6 +88,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::flatten_udf(),
         udf::array_sort_udf(),
         udf::array_distinct_udf(),
+        udf::array_repeat_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
@@ -94,5 +97,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
+
     Ok(())
 }

@@ -530,12 +530,3 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
         )),
     }
 }
-
-#[cfg(test)]
-pub mod for_test {
-    use datafusion_expr::{call_fn, Expr};
-
-    pub fn now_expr() -> Expr {
-        call_fn("now", vec![]).unwrap()
-    }
-}

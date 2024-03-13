@@ -185,10 +185,6 @@ fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
     ))
 }
 
-fn now_expr() -> Expr {
-    call_fn("now", vec![]).unwrap()
-}
-
 fn cast_to_int64_expr(expr: Expr) -> Expr {
     Expr::Cast(Cast::new(expr.into(), DataType::Int64))
 }
@@ -255,7 +251,7 @@ fn now_less_than_timestamp() -> Result<()> {
     //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
     let plan = LogicalPlanBuilder::from(table_scan)
         .filter(
-            cast_to_int64_expr(now_expr())
+            cast_to_int64_expr(now())
                 .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000_i64)),
         )?
         .build()?;
@@ -368,14 +364,14 @@ fn test_const_evaluator_now() {
     let time = chrono::Utc.timestamp_nanos(ts_nanos);
     let ts_string = "2020-09-08T12:05:00+00:00";
     // now() --> ts
-    test_evaluate_with_start_time(now_expr(), lit_timestamp_nano(ts_nanos), &time);
+    test_evaluate_with_start_time(now(), lit_timestamp_nano(ts_nanos), &time);
 
     // CAST(now() as int64) + 100_i64 --> ts + 100_i64
-    let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
+    let expr = cast_to_int64_expr(now()) + lit(100_i64);
     test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
     //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
-    let expr = cast_to_int64_expr(now_expr())
+    let expr = cast_to_int64_expr(now())
         .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
     test_evaluate_with_start_time(expr, lit(true), &time);
 }
@@ -412,4 +408,26 @@ fn test_evaluator_udfs() {
         folded_args,
     ));
     test_evaluate(expr, expected_expr);
+}
+
+#[test]
+fn multiple_now() -> Result<()> {
+    let table_scan = test_table_scan();
+    let time = Utc::now();
+    let proj = vec![now(), now().alias("t2")];
+    let plan = LogicalPlanBuilder::from(table_scan)
+        .project(proj)?
+        .build()?;
+
+    // expect the same timestamp appears in both exprs
+    let actual = get_optimized_plan_formatted(&plan, &time);
+    let expected = format!(
+        "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
+            \n  TableScan: test",
+        time.timestamp_nanos_opt().unwrap(),
+        time.timestamp_nanos_opt().unwrap()
+    );
+
+    assert_eq!(expected, actual);
+    Ok(())
 }
