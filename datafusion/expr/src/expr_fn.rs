@@ -706,7 +706,6 @@ scalar_expr!(
     code_point,
     "converts the Unicode code point to a UTF8 character"
 );
-scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
@@ -716,7 +715,6 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the beginning of a string"
 );
-scalar_expr!(MD5, md5, string, "returns the MD5 hash of a string");
 scalar_expr!(
     OctetLength,
     octet_length,
@@ -733,10 +731,6 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the end of a string"
 );
-scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
-scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
-scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
-scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
@@ -1112,7 +1106,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{lit, ScalarFunctionDefinition};
+    use crate::ScalarFunctionDefinition;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -1216,7 +1210,6 @@ mod test {
         test_nary_scalar_expr!(Btrim, btrim, string, characters);
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
-        test_scalar_expr!(Digest, digest, string, algorithm);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
@@ -1225,7 +1218,6 @@ mod test {
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
         test_scalar_expr!(Ltrim, ltrim, string);
-        test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
@@ -1234,10 +1226,6 @@ mod test {
         test_nary_scalar_expr!(Rpad, rpad, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
         test_scalar_expr!(Rtrim, rtrim, string);
-        test_scalar_expr!(SHA224, sha224, string);
-        test_scalar_expr!(SHA256, sha256, string);
-        test_scalar_expr!(SHA384, sha384, string);
-        test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
@@ -1277,21 +1265,6 @@ mod test {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = digest(col("tableA.a"), lit("md5"))
-        {
-            let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
         } else {
             unreachable!();
         }

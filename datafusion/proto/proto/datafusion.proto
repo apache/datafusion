@@ -548,7 +548,7 @@ enum ScalarFunction {
   Ascii = 4;
   Ceil = 5;
   Cos = 6;
-  Digest = 7;
+  // 7 was Digest
   Exp = 8;
   Floor = 9;
   Ln = 10;
@@ -576,7 +576,7 @@ enum ScalarFunction {
   Lpad = 32;
   Lower = 33;
   Ltrim = 34;
-  MD5 = 35;
+  // 35 was MD5
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
@@ -587,10 +587,10 @@ enum ScalarFunction {
   Right = 43;
   Rpad = 44;
   Rtrim = 45;
-  SHA224 = 46;
-  SHA256 = 47;
-  SHA384 = 48;
-  SHA512 = 49;
+  // 46 was SHA224
+  // 47 was SHA256
+  // 48 was SHA384
+  // 49 was SHA512
   SplitPart = 50;
   StartsWith = 51;
   Strpos = 52;
