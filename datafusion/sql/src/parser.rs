@@ -693,9 +693,9 @@ impl<'a> DFParser<'a> {
                             columns.extend(cols);
 
                             if !cons.is_empty() {
-                                return Err(ParserError::ParserError(format!(
-                                    "Should this be allowed?",
-                                )));
+                                return Err(ParserError::ParserError(
+                                    "Should this be allowed?".to_string(),
+                                ));
                             }
                         }
                     }
