@@ -15,33 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod count_wildcard_rule;
-pub mod inline_table_scan;
-pub mod rewrite_expr;
-pub mod subquery;
-pub mod type_coercion;
+use std::sync::Arc;
 
-use crate::analyzer::count_wildcard_rule::CountWildcardRule;
-use crate::analyzer::inline_table_scan::InlineTableScan;
+use log::debug;
 
-use crate::analyzer::subquery::check_subquery_expr;
-use crate::analyzer::type_coercion::TypeCoercion;
-use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
-use log::debug;
-use std::sync::Arc;
 
-#[cfg(feature = "array_expressions")]
-use datafusion_functions_array::expr_fn::array_has_all;
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::inline_table_scan::InlineTableScan;
+use crate::analyzer::subquery::check_subquery_expr;
+use crate::analyzer::type_coercion::TypeCoercion;
+use crate::utils::log_plan;
 
-use self::rewrite_expr::OperatorToFunction;
+use self::function_rewrite::ApplyFunctionRewrites;
+
+pub mod count_wildcard_rule;
+pub mod function_rewrite;
+pub mod inline_table_scan;
+pub mod subquery;
+pub mod type_coercion;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
@@ -65,9 +65,15 @@ pub trait AnalyzerRule {
     /// A human readable name for this analyzer rule
     fn name(&self) -> &str;
 }
+
 /// A rule-based Analyzer.
+///
+/// An `Analyzer` transforms a `LogicalPlan`
+/// prior to the rest of the DataFusion optimization process.
 #[derive(Clone)]
 pub struct Analyzer {
+    /// Expr --> Function writes to apply prior to analysis passes
+    pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
     /// All rules to apply
     pub rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
 }
@@ -83,9 +89,6 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
-            // OperatorToFunction should be run before TypeCoercion, since it rewrite based on the argument types (List or Scalar),
-            // and TypeCoercion may cast the argument types from Scalar to List.
-            Arc::new(OperatorToFunction::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];
@@ -94,7 +97,18 @@ impl Analyzer {
 
     /// Create a new analyzer with the given rules
     pub fn with_rules(rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>) -> Self {
-        Self { rules }
+        Self {
+            function_rewrites: vec![],
+            rules,
+        }
+    }
+
+    /// Add a function rewrite rule
+    pub fn add_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) {
+        self.function_rewrites.push(rewrite);
     }
 
     /// Analyze the logical plan by applying analyzer rules, and
@@ -111,8 +125,18 @@ impl Analyzer {
         let start_time = Instant::now();
         let mut new_plan = plan.clone();
 
+        // Create an analyzer pass that rewrites `Expr`s to function_calls, as
+        // appropriate.
+        //
+        // Note this is run before all other rules since it rewrites based on
+        // the argument types (List or Scalar), and TypeCoercion may cast the
+        // argument types from Scalar to List.
+        let expr_to_function: Arc<dyn AnalyzerRule + Send + Sync> =
+            Arc::new(ApplyFunctionRewrites::new(self.function_rewrites.clone()));
+        let rules = std::iter::once(&expr_to_function).chain(self.rules.iter());
+
         // TODO add common rule executor for Analyzer and Optimizer
-        for rule in &self.rules {
+        for rule in rules {
             new_plan = rule.analyze(new_plan, config).map_err(|e| {
                 DataFusionError::Context(rule.name().to_string(), Box::new(e))
             })?;

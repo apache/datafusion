@@ -90,6 +90,7 @@ use uuid::Uuid;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
 
 mod avro;
 mod csv;
@@ -1285,6 +1286,13 @@ impl FunctionRegistry for SessionContext {
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         self.state.write().register_udwf(udwf)
     }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.state.write().register_function_rewrite(rewrite)
+    }
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
@@ -2208,6 +2216,14 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
     }
 }
 
