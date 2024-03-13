@@ -1105,22 +1105,6 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
-#[warn(dead_code)]
-fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
-    Ok(match arg_type {
-        DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeBinary => DataType::Binary,
-        DataType::Null => DataType::Null,
-        _ => {
-            return plan_err!(
-                "The {name:?} function can only accept strings or binary arrays."
-            );
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
