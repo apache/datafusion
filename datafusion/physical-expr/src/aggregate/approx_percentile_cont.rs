@@ -28,8 +28,8 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::Accumulator;
 use std::{any::Any, iter, sync::Arc};
@@ -394,7 +394,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         if self.digest.count() == 0.0 {
-            return exec_err!("aggregate function needs at least one non-null element");
+            return ScalarValue::try_from(self.return_type.clone());
         }
         let q = self.digest.estimate_quantile(self.percentile);
 
