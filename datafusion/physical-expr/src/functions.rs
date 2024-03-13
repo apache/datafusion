@@ -32,8 +32,8 @@
 
 use crate::sort_properties::SortProperties;
 use crate::{
-    array_expressions, conditional_expressions, datetime_expressions, math_expressions,
-    string_expressions, PhysicalExpr, ScalarFunctionExpr,
+    array_expressions, conditional_expressions, math_expressions, string_expressions,
+    PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,

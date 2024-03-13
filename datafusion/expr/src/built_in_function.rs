@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
