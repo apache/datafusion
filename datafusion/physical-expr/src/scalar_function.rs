@@ -41,7 +41,7 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
     ScalarFunctionDefinition,
@@ -173,8 +173,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         let fun_implementation = match self.fun {
             ScalarFunctionDefinition::BuiltIn(ref fun) => create_physical_fun(fun)?,
-            _ => {
-                todo!("User-defined functions are not supported yet")
+            ScalarFunctionDefinition::UDF(ref fun) => fun.fun(),
+            ScalarFunctionDefinition::Name(_) => {
+                return internal_err!(
+                    "Name function must be resolved to one of the other variants prior to physical planning"
+                );
             }
         };
         // evaluate the function
