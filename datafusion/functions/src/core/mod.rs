@@ -18,7 +18,7 @@
 //! "core" DataFusion functions
 
 mod arrowtypeof;
-pub mod getfield;
+mod getfield;
 mod nullif;
 mod nvl;
 mod nvl2;

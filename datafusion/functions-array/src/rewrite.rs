@@ -28,6 +28,7 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{
     BinaryExpr, BuiltinScalarFunction, Expr, GetFieldAccess, GetIndexedField, Operator,
 };
+use datafusion_functions::expr_fn::get_field;
 
 /// Rewrites expressions into function calls to array functions
 pub(crate) struct ArrayFunctionRewriter {}
@@ -145,6 +146,15 @@ impl FunctionRewrite for ArrayFunctionRewriter {
                 if op == Operator::StringConcat && is_func(&right, "make_array") =>
             {
                 Transformed::yes(array_prepend(*left, *right))
+            }
+
+            Expr::GetIndexedField(GetIndexedField {
+                expr,
+                field: GetFieldAccess::NamedStructField { name },
+            }) => {
+                let expr = *expr.clone();
+                let name = Expr::Literal(name);
+                Transformed::yes(get_field(expr, name.clone()))
             }
 
             // expr[idx] ==> array_element(expr, idx)
