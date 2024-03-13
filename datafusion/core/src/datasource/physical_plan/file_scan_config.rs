@@ -907,6 +907,7 @@ mod tests {
         assert_eq!(projection.fields(), schema.fields());
     }
 
+    #[test]
     fn test_sort_file_groups() {
         use chrono::TimeZone;
         use object_store::{path::Path, ObjectMeta};
