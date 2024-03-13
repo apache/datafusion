@@ -318,9 +318,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_positions)(args)
         }),
-        BuiltinScalarFunction::ArrayRepeat => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_repeat)(args)
-        }),
         BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_remove)(args)
         }),
