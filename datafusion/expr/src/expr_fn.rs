@@ -1243,10 +1243,6 @@ mod test {
         test_nary_scalar_expr!(Rpad, rpad, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
         test_scalar_expr!(Rtrim, rtrim, string);
-        test_scalar_expr!(SHA224, sha224, string);
-        test_scalar_expr!(SHA256, sha256, string);
-        test_scalar_expr!(SHA384, sha384, string);
-        test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
