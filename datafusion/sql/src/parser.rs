@@ -609,7 +609,7 @@ impl<'a> DFParser<'a> {
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name(true)?;
-        let (mut columns, mut constraints) = self.parse_columns()?;
+        let (mut columns, constraints) = self.parse_columns()?;
 
         #[derive(Default)]
         struct Builder {
@@ -691,7 +691,12 @@ impl<'a> DFParser<'a> {
                             );
 
                             columns.extend(cols);
-                            constraints.extend(cons);
+
+                            if !cons.is_empty() {
+                                return Err(ParserError::ParserError(format!(
+                                    "Should this be allowed?",
+                                )));
+                            }
                         }
                     }
                     Keyword::OPTIONS => {
