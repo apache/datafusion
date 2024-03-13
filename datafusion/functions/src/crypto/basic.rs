@@ -17,10 +17,13 @@
 
 //! "crypto" DataFusion functions
 
+use arrow::array::StringArray;
 use arrow::array::{Array, ArrayRef, BinaryArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
+use datafusion_common::cast::as_binary_array;
+
 use datafusion_common::plan_err;
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
@@ -169,31 +172,31 @@ impl fmt::Display for DigestAlgorithm {
     }
 }
 // /// computes md5 hash digest of the given input
-// pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-//     if args.len() != 1 {
-//         return exec_err!(
-//             "{:?} args were supplied but {} takes exactly one argument",
-//             args.len(),
-//             DigestAlgorithm::Md5
-//         );
-//     }
-//     let value = digest_process(&args[0], DigestAlgorithm::Md5)?;
-//     // md5 requires special handling because of its unique utf8 return type
-//     Ok(match value {
-//         ColumnarValue::Array(array) => {
-//             let binary_array = as_binary_array(&array)?;
-//             let string_array: StringArray = binary_array
-//                 .iter()
-//                 .map(|opt| opt.map(hex_encode::<_>))
-//                 .collect();
-//             ColumnarValue::Array(Arc::new(string_array))
-//         }
-//         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-//             ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
-//         }
-//         _ => return exec_err!("Impossibly got invalid results from digest"),
-//     })
-// }
+pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return exec_err!(
+            "{:?} args were supplied but {} takes exactly one argument",
+            args.len(),
+            DigestAlgorithm::Md5
+        );
+    }
+    let value = digest_process(&args[0], DigestAlgorithm::Md5)?;
+    // md5 requires special handling because of its unique utf8 return type
+    Ok(match value {
+        ColumnarValue::Array(array) => {
+            let binary_array = as_binary_array(&array)?;
+            let string_array: StringArray = binary_array
+                .iter()
+                .map(|opt| opt.map(hex_encode::<_>))
+                .collect();
+            ColumnarValue::Array(Arc::new(string_array))
+        }
+        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
+            ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
+        }
+        _ => return exec_err!("Impossibly got invalid results from digest"),
+    })
+}
 
 /// this function exists so that we do not need to pull in the crate hex. it is only used by md5
 /// function below

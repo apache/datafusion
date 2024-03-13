@@ -769,7 +769,6 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the beginning of a string"
 );
-scalar_expr!(MD5, md5, string, "returns the MD5 hash of a string");
 scalar_expr!(
     OctetLength,
     octet_length,
@@ -786,10 +785,6 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the end of a string"
 );
-scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
-scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
-scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
-scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
