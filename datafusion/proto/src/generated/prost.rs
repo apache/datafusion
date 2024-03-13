@@ -2902,19 +2902,19 @@ pub enum ScalarFunction {
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
-    Now = 59,
+    /// 59 was Now
     Translate = 60,
     Trim = 61,
     Upper = 62,
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
-    FromUnixtime = 66,
+    /// 66 was FromUnixtime
     Atan2 = 67,
     /// 68 was DateBin
     /// 69 was ArrowTypeof
-    CurrentDate = 70,
-    CurrentTime = 71,
+    /// 70 was CurrentDate
+    /// 71 was CurrentTime
     Uuid = 72,
     Cbrt = 73,
     Acosh = 74,
@@ -3035,16 +3035,12 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
             ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::CurrentDate => "CurrentDate",
-            ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Acosh => "Acosh",
@@ -3136,16 +3132,12 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
             "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
-            "CurrentDate" => Some(Self::CurrentDate),
-            "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
             "Acosh" => Some(Self::Acosh),
