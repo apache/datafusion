@@ -132,9 +132,9 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion is a "disaggregated" query engine.  This
+//! DataFusion is a "disaggregated" query engine. This
 //! means developers can start with a working, full featured engine, and then
-//! extend the parts of DataFusion they need to specialize for their usecase. For example,
+//! extend the areas they need to specialize for their usecase. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
 //! built in SQL planner, [`SqlToRel`].
@@ -145,7 +145,7 @@
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
 //! * build your own query language or plans ([`LogicalPlanBuilder`])
 //! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
-//! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
+//! * add custom plan rewrite passes ([`AnalyzerRule`], [`OptimizerRule`]  and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
 //! You can find examples of each of them in the [datafusion-examples] directory.
@@ -158,6 +158,7 @@
 //! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
+//! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
 //!
 //! # Architecture
@@ -480,6 +481,11 @@ pub use parquet;
 /// re-export of [`datafusion_common`] crate
 pub mod common {
     pub use datafusion_common::*;
+
+    /// re-export of [`datafusion_common_runtime`] crate
+    pub mod runtime {
+        pub use datafusion_common_runtime::*;
+    }
 }
 
 // Backwards compatibility
@@ -524,7 +530,7 @@ pub mod functions {
 /// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
 pub mod functions_array {
     #[cfg(feature = "array_expressions")]
-    pub use datafusion_functions::*;
+    pub use datafusion_functions_array::*;
 }
 
 #[cfg(test)]

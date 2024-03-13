@@ -34,13 +34,14 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
-bytes = { version = "1.4.0", optional = true }
+bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.4.8", features = ["derive", "env"] }
-datafusion = { path = "../core", version = "35.0.0" }
-datafusion-common = { workspace = true }
-futures = { version = "0.3.28" }
-half = { workspace = true }
+datafusion = { workspace = true, default-features = true }
+datafusion-common = { workspace = true, default-features = true }
+datafusion-common-runtime = { workspace = true, default-features = true }
+futures = { workspace = true }
+half = { workspace = true, default-features = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }

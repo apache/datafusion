@@ -26,7 +26,7 @@ use crate::joins::{
 };
 use crate::memory::MemoryExec;
 use crate::repartition::RepartitionExec;
-use crate::{common, ExecutionPlan, Partitioning};
+use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
@@ -142,6 +142,7 @@ pub async fn partitioned_hash_join_with_filter(
         on,
         filter,
         join_type,
+        None,
         PartitionMode::Partitioned,
         null_equals_null,
     )?);

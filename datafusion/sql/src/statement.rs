@@ -16,6 +16,8 @@
 // under the License.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
@@ -28,34 +30,34 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue, SchemaError, SchemaReference,
-    TableReference, ToDFSchema,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
+    SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
-    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
-    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
+    CreateMemoryTable, CreateView, DescribeTable, DmlStatement, DropCatalogSchema,
+    DropFunction, DropTable, DropView, EmptyRelation, Explain, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
+    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    WriteOp,
+    Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, ColumnDef, CreateTableOptions, Expr as SQLExpr, Expr, Ident, ObjectName,
-    ObjectType, Query, SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter,
-    Statement, TableConstraint, TableFactor, TableWithJoins, TransactionMode,
-    UnaryOperator, Value,
+    Assignment, ColumnDef, CreateTableOptions, DescribeAlias, Expr as SQLExpr, Expr,
+    FromTable, Ident, ObjectName, ObjectType, Query, SchemaName, SetExpr,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -177,7 +179,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let sql = Some(statement.to_string());
         match statement {
             Statement::ExplainTable {
-                describe_alias: true, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                hive_format: _,
                 table_name,
             } => self.describe_table_to_plan(table_name),
             Statement::Explain {
@@ -625,12 +628,130 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
+            Statement::CreateFunction {
+                or_replace,
+                temporary,
+                name,
+                args,
+                return_type,
+                params,
+            } => {
+                let return_type = match return_type {
+                    Some(t) => Some(self.convert_data_type(&t)?),
+                    None => None,
+                };
+                let mut planner_context = PlannerContext::new();
+                let empty_schema = &DFSchema::empty();
 
-            _ => not_impl_err!("Unsupported SQL statement: {sql:?}"),
+                let args = match args {
+                    Some(function_args) => {
+                        let function_args = function_args
+                            .into_iter()
+                            .map(|arg| {
+                                let data_type = self.convert_data_type(&arg.data_type)?;
+
+                                let default_expr = match arg.default_expr {
+                                    Some(expr) => Some(self.sql_to_expr(
+                                        expr,
+                                        empty_schema,
+                                        &mut planner_context,
+                                    )?),
+                                    None => None,
+                                };
+                                Ok(OperateFunctionArg {
+                                    name: arg.name,
+                                    default_expr,
+                                    data_type,
+                                })
+                            })
+                            .collect::<Result<Vec<OperateFunctionArg>>>();
+                        Some(function_args?)
+                    }
+                    None => None,
+                };
+                // at the moment functions can't be qualified `schema.name`
+                let name = match &name.0[..] {
+                    [] => exec_err!("Function should have name")?,
+                    [n] => n.value.clone(),
+                    [..] => not_impl_err!("Qualified functions are not supported")?,
+                };
+                //
+                // convert resulting expression to data fusion expression
+                //
+                let arg_types = args.as_ref().map(|arg| {
+                    arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
+                });
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(arg_types.unwrap_or_default());
+
+                let result_expression = match params.return_ {
+                    Some(r) => Some(self.sql_to_expr(
+                        r,
+                        &DFSchema::empty(),
+                        &mut planner_context,
+                    )?),
+                    None => None,
+                };
+
+                let params = CreateFunctionBody {
+                    language: params.language,
+                    behavior: params.behavior.map(|b| match b {
+                        ast::FunctionBehavior::Immutable => Volatility::Immutable,
+                        ast::FunctionBehavior::Stable => Volatility::Stable,
+                        ast::FunctionBehavior::Volatile => Volatility::Volatile,
+                    }),
+                    as_: params.as_.map(|m| m.into()),
+                    return_: result_expression,
+                };
+
+                let statement = DdlStatement::CreateFunction(CreateFunction {
+                    or_replace,
+                    temporary,
+                    name,
+                    return_type,
+                    args,
+                    params,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                });
+
+                Ok(LogicalPlan::Ddl(statement))
+            }
+            Statement::DropFunction {
+                if_exists,
+                func_desc,
+                ..
+            } => {
+                // according to postgresql documentation it can be only one function
+                // specified in drop statement
+                if let Some(desc) = func_desc.first() {
+                    // at the moment functions can't be qualified `schema.name`
+                    let name = match &desc.name.0[..] {
+                        [] => exec_err!("Function should have name")?,
+                        [n] => n.value.clone(),
+                        [..] => not_impl_err!("Qualified functions are not supported")?,
+                    };
+                    let statement = DdlStatement::DropFunction(DropFunction {
+                        if_exists,
+                        name,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    });
+                    Ok(LogicalPlan::Ddl(statement))
+                } else {
+                    exec_err!("Function name not provided")
+                }
+            }
+            _ => {
+                not_impl_err!("Unsupported SQL statement: {sql:?}")
+            }
         }
     }
 
-    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+    fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
+        let mut from = match from {
+            FromTable::WithFromKeyword(v) => v,
+            FromTable::WithoutKeyword(v) => v,
+        };
+
         if from.len() != 1 {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got {}: {from:?}",
@@ -709,23 +830,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        // TODO, parse options as Vec<(String, String)> to avoid this conversion
-        let options = statement
-            .options
-            .iter()
-            .map(|(s, v)| (s.to_owned(), v.to_string()))
-            .collect::<Vec<(String, String)>>();
+        let mut options = HashMap::new();
+        for (key, value) in statement.options {
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!("Unsupported Value in COPY statement {}", value);
+                }
+            };
+            options.insert(key.to_lowercase(), value_string.to_lowercase());
+        }
 
-        let mut statement_options = StatementOptions::new(options);
-        let file_format = statement_options.try_infer_file_type(&statement.target)?;
-
-        let copy_options = CopyOptions::SQLOptions(statement_options);
+        let file_type = try_infer_file_type(&mut options, &statement.target)?;
+        let partition_by = take_partition_by(&mut options);
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format,
-            copy_options,
+            format_options: file_type.into(),
+            partition_by,
+            options,
         }))
     }
 
@@ -1332,5 +1467,84 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.context_provider
             .get_table_source(tables_reference)
             .is_ok()
+    }
+}
+
+/// Infers the file type for a given target based on provided options or file extension.
+///
+/// This function tries to determine the file type based on the 'format' option present
+/// in the provided options hashmap. If 'format' is not explicitly set, the function attempts
+/// to infer the file type from the file extension of the target. It returns an error if neither
+/// the format option is set nor the file extension can be determined or parsed.
+///
+/// # Arguments
+///
+/// * `options` - A mutable reference to a HashMap containing options where the file format
+/// might be specified under the 'format' key.
+/// * `target` - A string slice representing the path to the file for which the file type needs to be inferred.
+///
+/// # Returns
+///
+/// Returns `Result<FileType>` which is Ok if the file type could be successfully inferred,
+/// otherwise returns an error in case of failure to determine or parse the file format or extension.
+///
+/// # Errors
+///
+/// This function returns an error in two cases:
+/// - If the 'format' option is not set and the file extension cannot be retrieved from `target`.
+/// - If the file extension is found but cannot be converted into a valid string.
+///
+pub fn try_infer_file_type(
+    options: &mut HashMap<String, String>,
+    target: &str,
+) -> Result<FileType> {
+    let explicit_format = options.remove("format");
+    let format = match explicit_format {
+        Some(s) => FileType::from_str(&s),
+        None => {
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(target)
+                .extension()
+                .ok_or(DataFusionError::Configuration(
+                    "Format not explicitly set and unable to get file extension!"
+                        .to_string(),
+                ))?
+                .to_str()
+                .ok_or(DataFusionError::Configuration(
+                    "Format not explicitly set and failed to parse file extension!"
+                        .to_string(),
+                ))?
+                .to_lowercase();
+
+            FileType::from_str(extension)
+        }
+    }?;
+
+    Ok(format)
+}
+
+/// Extracts and parses the 'partition_by' option from a provided options hashmap.
+///
+/// This function looks for a 'partition_by' key in the options hashmap. If found,
+/// it splits the value by commas, trims each resulting string, and replaces double
+/// single quotes with a single quote. It returns a vector of partition column names.
+///
+/// # Arguments
+///
+/// * `options` - A mutable reference to a HashMap containing options where 'partition_by'
+/// might be specified.
+///
+/// # Returns
+///
+/// Returns a `Vec<String>` containing partition column names. If the 'partition_by' option
+/// is not present, returns an empty vector.
+pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
+    let partition_by = options.remove("partition_by");
+    match partition_by {
+        Some(part_cols) => part_cols
+            .split(',')
+            .map(|s| s.trim().replace("''", "'"))
+            .collect::<Vec<_>>(),
+        None => vec![],
     }
 }

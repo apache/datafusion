@@ -575,6 +575,12 @@ select log(null, null) a, log(null) b;
 ----
 NULL NULL
 
+# log scalar fraction
+query RR rowsort
+select log(2, 2.0/3) a, log(10, 2.0/3) b;
+----
+-0.584962500721 -0.176091259056
+
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
@@ -614,6 +620,12 @@ select log10(null);
 ----
 NULL
 
+# log10 scalar fraction
+query R rowsort
+select log10(2.0/3);
+----
+-0.176091259056
+
 # log10 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query R rowsort
@@ -643,6 +655,12 @@ query R rowsort
 select log2(null);
 ----
 NULL
+
+# log2 scalar fraction
+query R rowsort
+select log2(2.0/3);
+----
+-0.584962500721
 
 # log2 scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
@@ -922,6 +940,25 @@ select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integ
 2 NULL NULL
 NaN 10 NaN
 NaN 100 NaN
+
+# sqrt scalar fraction
+query RR rowsort
+select sqrt(1.4), sqrt(2.0/3);
+----
+1.18321595662 0.816496580928
+
+# sqrt scalar cast
+query R rowsort
+select sqrt(cast(10e8 as double));
+----
+31622.776601683792
+
+
+# sqrt scalar negative
+query R rowsort
+select sqrt(-1);
+----
+NaN
 
 ## tan
 
@@ -1804,6 +1841,51 @@ SELECT COALESCE(c1 * c2, 0) FROM test
 statement ok
 drop table test
 
+# coalesce date32
+
+statement ok
+CREATE TABLE test(
+  d1_date DATE,
+  d2_date DATE,
+  d3_date DATE
+) as VALUES
+  ('2022-12-12','2022-12-12','2022-12-12'),
+  (NULL,'2022-12-11','2022-12-12'),
+  ('2022-12-12','2022-12-10','2022-12-12'),
+  ('2022-12-12',NULL,'2022-12-12'),
+  ('2022-12-12','2022-12-8','2022-12-12'),
+  ('2022-12-12','2022-12-7',NULL),
+  ('2022-12-12',NULL,'2022-12-12'),
+  (NULL,'2022-12-5','2022-12-12')
+;
+
+query D
+SELECT COALESCE(d1_date, d2_date, d3_date) FROM test
+----
+2022-12-12
+2022-12-11
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-12
+2022-12-05
+
+query T
+SELECT arrow_typeof(COALESCE(d1_date, d2_date, d3_date)) FROM test
+----
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+Date32
+
+statement ok
+drop table test
+
 statement ok
 CREATE TABLE test(
   i32 INT,
@@ -1840,7 +1922,7 @@ statement error Error during planning: No function matches the given name and ar
 SELECT concat();
 
 # error message for wrong function signature (Uniform: t args all from some common types)
-statement error DataFusion error: Failed to coerce arguments for NULLIF
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.
 SELECT nullif(1);
 
 
@@ -1855,6 +1937,16 @@ SELECT arrow_typeof(1, 1);
 # error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
 statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
 SELECT power(1, 2, 3);
+
+# The following functions need 1 argument
+statement error Error during planning: No function matches the given name and argument types 'abs\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs\(Any\)
+SELECT abs();
+
+statement error Error during planning: No function matches the given name and argument types 'acos\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tacos\(Float64/Float32\)
+SELECT acos();
+
+statement error Error during planning: No function matches the given name and argument types 'isnan\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tisnan\(Float32\)\n\tisnan\(Float64\)
+SELECT isnan();
 
 # turn off enable_ident_normalization
 statement ok
@@ -1995,5 +2087,80 @@ select position('' in '')
 1
 
 
-query error DataFusion error: Error during planning: The INSTR/POSITION function can only accept strings, but got Int64.
+query error DataFusion error: Error during planning: The STRPOS/INSTR/POSITION function can only accept strings, but got Int64.
 select position(1 in 1)
+
+
+query I
+select strpos('abc', 'c');
+----
+3
+
+query I
+select strpos('abc', 'd');
+----
+0
+
+
+query I
+select strpos('abc', '');
+----
+1
+
+query I
+select strpos('helloworld', 'world');
+----
+6
+
+query I
+select strpos('helloworld', arrow_cast(null, 'Utf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'hello');
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+6
+
+query I
+select strpos(arrow_cast(null, 'LargeUtf8'), arrow_cast('world', 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos(arrow_cast('Helloworld', 'LargeUtf8'), arrow_cast(null, 'LargeUtf8'));
+----
+NULL
+
+query I
+select strpos('josé', 'é');
+----
+4
+
+query I
+select strpos('joséésoj', 'so');
+----
+6
+
+
+query I
+select strpos('joséésoj', 'abc');
+----
+0
+
+query I
+select strpos(arrow_cast(null, 'Utf8'), 'abc');
+----
+NULL
+
+query I
+select strpos('joséésoj', arrow_cast(null, 'Utf8'));
+----
+NULL
+
+

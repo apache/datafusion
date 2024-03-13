@@ -21,9 +21,9 @@
 # DataFusion CI does
 
 set -e
-if ! command -v cargo-tomlfmt &> /dev/null; then
-    echo "Installing cargo-tomlfmt using cargo"
-    cargo install cargo-tomlfmt
+if ! command -v taplo &> /dev/null; then
+    echo "Installing taplo using cargo"
+    cargo install taplo-cli
 fi
 
 ci/scripts/rust_fmt.sh

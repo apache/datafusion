@@ -1735,7 +1735,7 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Projection:
+------Projection: 
 --------Sort: aggregate_test_100.c1 ASC NULLS LAST
 ----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 ------------Projection: aggregate_test_100.c1
@@ -3257,13 +3257,13 @@ ProjectionExec: expr=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_da
 --------ProjectionExec: expr=[CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 as CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a, a@1 as a, d@4 as d, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 ----------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.b, annotated_data_infinite2.a] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------CoalesceBatchesExec: target_batch_size=4096
---------------RepartitionExec: partitioning=Hash([b@2, a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------RepartitionExec: partitioning=Hash([b@2, a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.d] ORDER BY [annotated_data_infinite2.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[PartiallySorted([0])]
 ------------------CoalesceBatchesExec: target_batch_size=4096
---------------------RepartitionExec: partitioning=Hash([a@1, d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------------RepartitionExec: partitioning=Hash([a@1, d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------------BoundedWindowAggExec: wdw=[SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(annotated_data_infinite2.a) PARTITION BY [annotated_data_infinite2.a, annotated_data_infinite2.b] ORDER BY [annotated_data_infinite2.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ------------------------CoalesceBatchesExec: target_batch_size=4096
---------------------------RepartitionExec: partitioning=Hash([a@1, b@2], 2), input_partitions=2, preserve_order=true, sort_exprs=CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
+--------------------------RepartitionExec: partitioning=Hash([a@1, b@2], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a@0 ASC NULLS LAST
 ----------------------------ProjectionExec: expr=[CAST(a@0 AS Int64) as CAST(annotated_data_infinite2.a AS Int64)annotated_data_infinite2.a, a@0 as a, b@1 as b, c@2 as c, d@3 as d]
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------------------------StreamingTableExec: partition_sizes=1, projection=[a, b, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
@@ -3580,9 +3580,9 @@ SortPreservingMergeExec: [c@3 ASC NULLS LAST]
 --ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW@5 as avg_d]
 ----BoundedWindowAggExec: wdw=[AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW: Ok(Field { name: "AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: CurrentRow }], mode=[Linear]
 ------CoalesceBatchesExec: target_batch_size=4096
---------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
+--------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST
 ----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST]
+------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]]
 
 # CTAS with NTILE function
 statement ok
@@ -4102,3 +4102,480 @@ ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRE
 ----------CoalesceBatchesExec: target_batch_size=4096
 ------------FilterExec: a@0 = 1
 --------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id) as x,
+       lag(a, 1, null) ignore nulls over (order by id) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id) as x2,
+       lag(a) respect nulls over (order by id) as x3,
+       lag(a, 1, null) respect nulls over (order by id) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+NULL NULL def NULL NULL NULL
+b b b b b b
+b b b NULL NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and default offset 1
+query TTTTTT
+select lag(a) ignore nulls over (order by id desc) as x,
+       lag(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a) respect nulls over (order by id desc) as x3,
+       lag(a, 1, null) respect nulls over (order by id desc) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def
+x x x x x x
+x x x NULL NULL NULL
+b b b b b b
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and default offset 1 trigger evaluate_all
+query TTTTTTI
+select lag(a) ignore nulls over (order by id desc) as x,
+       lag(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a) respect nulls over (order by id desc) as x3,
+       lag(a, 1, null) respect nulls over (order by id desc) as x4,
+       lag(a, 1, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL NULL def NULL NULL def 10
+x x x x x x 10
+x x x NULL NULL NULL 10
+b b b b b b 10
+
+# LAG window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset trigger evaluate_all
+query TTTTI
+select lag(a, 2, null) ignore nulls over (order by id) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id) as x2,
+       lag(a, 2, null) respect nulls over (order by id) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b 10
+NULL def NULL NULL 10
+NULL def NULL def 10
+NULL def NULL def 10
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+query TTTT
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def
+NULL def NULL def
+NULL def x x
+x x NULL NULL
+
+# LAG window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
+# To trigger WindowAggExec, we added a sum window function with all of the ranges.
+query TTTTI
+select lag(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lag(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lag(a, 2, null) respect nulls over (order by id desc) as x4,
+       lag(a, 2, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def NULL def 10
+NULL def NULL def 10
+NULL def x x 10
+x x NULL NULL 10
+
+# LEAD window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
+query TTTTTT
+select lead(a) ignore nulls over (order by id) as x,
+       lead(a, 1, null) ignore nulls over (order by id) as x1,
+       lead(a, 1, 'def') ignore nulls over (order by id) as x2,
+       lead(a) respect nulls over (order by id) as x3,
+       lead(a, 1, null) respect nulls over (order by id) as x4,
+       lead(a, 1, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+b b b b b b
+x x x NULL NULL NULL
+x x x x x x
+NULL NULL def NULL NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and default offset 1
+query TTTTTT
+select lead(a) ignore nulls over (order by id desc) as x,
+       lead(a, 1, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 1, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a) respect nulls over (order by id desc) as x3,
+       lead(a, 1, null) respect nulls over (order by id desc) as x4,
+       lead(a, 1, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+b b b NULL NULL NULL
+b b b b b b
+NULL NULL def NULL NULL NULL
+NULL NULL def NULL NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with ascending order and nondefault offset
+query TTTT
+select lead(a, 2, null) ignore nulls over (order by id) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id) as x2,
+       lead(a, 2, null) respect nulls over (order by id) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+x x NULL NULL
+NULL def x x
+NULL def NULL def
+NULL def NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset
+query TTTT
+select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a, 2, null) respect nulls over (order by id desc) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id desc) as x5
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b
+NULL def NULL NULL
+NULL def NULL def
+NULL def NULL def
+
+# LEAD window function IGNORE/RESPECT NULLS support with descending order and nondefault offset.
+# To trigger WindowAggExec, we added a sum window function with all of the ranges.
+query TTTTI
+select lead(a, 2, null) ignore nulls over (order by id desc) as x1,
+       lead(a, 2, 'def') ignore nulls over (order by id desc) as x2,
+       lead(a, 2, null) respect nulls over (order by id desc) as x4,
+       lead(a, 2, 'def') respect nulls over (order by id desc) as x5,
+       sum(id) over (order by id desc ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as sum_id
+from (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null union all select 4 id, 'x')
+----
+NULL def b b 10
+NULL def NULL NULL 10
+NULL def NULL def 10
+NULL def NULL def 10
+
+
+statement ok
+set datafusion.execution.batch_size = 1000;
+
+query II
+SELECT LAG(c1, 2) IGNORE NULLS OVER(),
+       LEAD(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78 50
+63 38
+3 53
+24 31
+14 94
+
+# result should be same with above, when LAG/LEAD algorithm work with pruned data.
+# decreasing batch size, causes data to be produced in smaller chunks at the source.
+# Hence sliding window algorithm is used during calculations.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+SELECT LAG(c1, 2) IGNORE NULLS OVER(),
+       LEAD(c1, 2) IGNORE NULLS OVER()
+FROM null_cases
+ORDER BY c2
+LIMIT 5;
+----
+78 50
+63 38
+3 53
+24 31
+14 94
+
+# Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
+query T
+select lag(a) over (order by a ASC NULLS FIRST) as x1
+        from
+        (select 2 id, 'b' a union all select 1 id, null a union all select 3 id, null);
+----
+NULL
+NULL
+NULL
+
+# Test for ignore nulls in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (null::bigint), (3), (4);
+
+query I
+SELECT FIRST_VALUE(column1) OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER() FROM t;
+----
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
+
+query II
+SELECT column1, column2 FROM t ORDER BY column2;
+----
+NULL 1
+NULL 2
+4 3
+3 4
+5 5
+6 6
+
+query II
+SELECT FIRST_VALUE(column1) OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+NULL 5
+NULL 6
+
+query II
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+NULL 5
+NULL 6
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+4 3
+4 4
+4 5
+4 6
+
+query II
+SELECT FIRST_VALUE(column1)OVER(ORDER BY column2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+4 4
+3 5
+5 6
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+NULL 1
+4 2
+4 3
+4 4
+3 5
+5 6
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in FIRST_VALUE with all NULL values
+statement ok
+CREATE TABLE t AS VALUES  (null::bigint, 4), (null::bigint, 3), (null::bigint, 1), (null::bigint, 2);
+
+query II
+SELECT FIRST_VALUE(column1) OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+query II
+SELECT FIRST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+query II
+SELECT FIRST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2), column2 FROM t;
+----
+NULL 1
+NULL 2
+NULL 3
+NULL 4
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (1), (3), (null::bigint);
+
+query I
+SELECT LAST_VALUE(column1) OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER() FROM t;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER() FROM t;
+----
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
+
+query II
+SELECT column1, column2 FROM t ORDER BY column2 DESC NULLS LAST;
+----
+6 6
+5 5
+3 4
+4 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST), column2 FROM t;
+----
+6 6
+5 5
+3 4
+4 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST), column2 FROM t;
+----
+6 6
+5 5
+3 4
+4 3
+4 2
+4 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 6
+NULL 5
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 6
+NULL 5
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+4 6
+4 5
+4 4
+4 3
+4 2
+4 1
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+5 6
+3 5
+4 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), column2 FROM t;
+----
+5 6
+3 5
+4 4
+4 3
+4 2
+NULL 1
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore nulls with ORDER BY in LAST_VALUE with all NULLs
+statement ok
+CREATE TABLE t AS VALUES  (null::bigint, 4), (null::bigint, 3), (null::bigint, 1), (null::bigint, 2);
+
+query II
+SELECT LAST_VALUE(column1) OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) RESPECT NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+query II
+SELECT LAST_VALUE(column1) IGNORE NULLS OVER(ORDER BY column2 DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), column2 FROM t;
+----
+NULL 4
+NULL 3
+NULL 2
+NULL 1
+
+statement ok
+DROP TABLE t;

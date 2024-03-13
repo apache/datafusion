@@ -18,12 +18,12 @@
 [package]
 name = "datafusion-benchmarks"
 description = "DataFusion Benchmarks"
-version = "35.0.0"
+version = { workspace = true }
 edition = { workspace = true }
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-license = "Apache-2.0"
+authors = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
 rust-version = { workspace = true }
 
 [features]
@@ -33,8 +33,8 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow = { workspace = true }
-datafusion = { path = "../datafusion/core", version = "35.0.0" }
-datafusion-common = { path = "../datafusion/common", version = "35.0.0" }
+datafusion = { workspace = true, default-features = true }
+datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
@@ -49,4 +49,4 @@ test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 
 [dev-dependencies]
-datafusion-proto = { path = "../datafusion/proto", version = "35.0.0" }
+datafusion-proto = { workspace = true }

@@ -28,7 +28,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
@@ -54,7 +54,7 @@ use itertools::izip;
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_physical_expr::execution_props::ExecutionProps;
+/// # use datafusion_expr::execution_props::ExecutionProps;
 /// // For a logical expression `a = 1`, we can create a physical expression
 /// let expr = col("a").eq(lit(1));
 /// // To create a PhysicalExpr we need 1. a schema
@@ -74,7 +74,7 @@ use itertools::izip;
 /// # use datafusion_common::{assert_batches_eq, DFSchema};
 /// # use datafusion_expr::{Expr, col, lit, ColumnarValue};
 /// # use datafusion_physical_expr::create_physical_expr;
-/// # use datafusion_physical_expr::execution_props::ExecutionProps;
+/// # use datafusion_expr::execution_props::ExecutionProps;
 /// # let expr = col("a").eq(lit(1));
 /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 /// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();
@@ -252,7 +252,7 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
-        expr.with_new_children(children)
+        Ok(expr.with_new_children(children)?)
     } else {
         Ok(expr)
     }

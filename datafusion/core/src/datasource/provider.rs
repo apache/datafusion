@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{not_impl_err, Constraints, DataFusionError, Statistics};
+use datafusion_common::{not_impl_err, Constraints, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -166,6 +166,7 @@ pub trait TableProvider: Sync + Send {
 
     /// Tests whether the table provider can make use of any or all filter expressions
     /// to optimise data retrieval.
+    /// Note:  the returned vector much have the same size as the filters argument.
     #[allow(deprecated)]
     fn supports_filters_pushdown(
         &self,

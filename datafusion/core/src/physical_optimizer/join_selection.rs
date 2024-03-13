@@ -27,9 +27,6 @@ use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::pipeline_checker::{
-    children_unbounded, PipelineStatePropagator,
-};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use crate::physical_plan::joins::{
@@ -37,12 +34,11 @@ use crate::physical_plan::joins::{
     SymmetricHashJoinExec,
 };
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, JoinSide};
-use datafusion_common::{DataFusionError, JoinType};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -61,7 +57,7 @@ impl JoinSelection {
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
-// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
+// TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
 /// Checks statistics for join swap.
 fn should_swap_join_order(
     left: &dyn ExecutionPlan,
@@ -139,6 +135,27 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
+/// This function swaps the given join's projection.
+fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+) -> Option<Vec<usize>> {
+    projection.map(|p| {
+        p.iter()
+            .map(|i| {
+                // If the index is less than the left schema length, it is from the left schema, so we add the right schema length to it.
+                // Otherwise, it is from the right schema, so we subtract the left schema length from it.
+                if *i < left_schema_len {
+                    *i + right_schema_len
+                } else {
+                    *i - left_schema_len
+                }
+            })
+            .collect()
+    })
+}
+
 /// This function swaps the inputs of the given join operator.
 fn swap_hash_join(
     hash_join: &HashJoinExec,
@@ -156,6 +173,11 @@ fn swap_hash_join(
             .collect(),
         swap_join_filter(hash_join.filter()),
         &swap_join_type(*hash_join.join_type()),
+        swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            hash_join.projection.as_ref(),
+        ),
         partition_mode,
         hash_join.null_equals_null(),
     )?;
@@ -231,7 +253,6 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = PipelineStatePropagator::new_default(plan);
         // First, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
@@ -241,7 +262,9 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let state = pipeline.transform_up(&|p| apply_subrules(p, &subrules, config))?;
+        let new_plan = plan
+            .transform_up(&|p| apply_subrules(p, &subrules, config))
+            .data()?;
         // Next, we apply another subrule that tries to optimize joins using any
         // statistics their inputs might have.
         // - For a hash join with partition mode [`PartitionMode::Auto`], we will
@@ -256,13 +279,15 @@ impl PhysicalOptimizerRule for JoinSelection {
         let config = &config.optimizer;
         let collect_threshold_byte_size = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        state.plan.transform_up(&|plan| {
-            statistical_join_selection_subrule(
-                plan,
-                collect_threshold_byte_size,
-                collect_threshold_num_rows,
-            )
-        })
+        new_plan
+            .transform_up(&|plan| {
+                statistical_join_selection_subrule(
+                    plan,
+                    collect_threshold_byte_size,
+                    collect_threshold_num_rows,
+                )
+            })
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -338,6 +363,7 @@ fn try_collect_left(
                     hash_join.on().to_vec(),
                     hash_join.filter().cloned(),
                     hash_join.join_type(),
+                    hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
                 )?)))
@@ -349,6 +375,7 @@ fn try_collect_left(
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
         )?))),
@@ -376,6 +403,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             hash_join.on().to_vec(),
             hash_join.filter().cloned(),
             hash_join.join_type(),
+            hash_join.projection.clone(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
         )?))
@@ -438,15 +466,15 @@ fn statistical_join_selection_subrule(
         };
 
     Ok(if let Some(transformed) = transformed {
-        Transformed::Yes(transformed)
+        Transformed::yes(transformed)
     } else {
-        Transformed::No(plan)
+        Transformed::no(plan)
     })
 }
 
 /// Pipeline-fixing join selection subrule.
 pub type PipelineFixerSubrule =
-    dyn Fn(PipelineStatePropagator, &ConfigOptions) -> Result<PipelineStatePropagator>;
+    dyn Fn(Arc<dyn ExecutionPlan>, &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>;
 
 /// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
 ///
@@ -464,16 +492,13 @@ pub type PipelineFixerSubrule =
 /// it returns `None`. If applicable, it returns `Some(Ok(...))` with the modified pipeline state,
 /// or `Some(Err(...))` if an error occurs during the transformation.
 fn hash_join_convert_symmetric_subrule(
-    mut input: PipelineStatePropagator,
+    input: Arc<dyn ExecutionPlan>,
     config_options: &ConfigOptions,
-) -> Result<PipelineStatePropagator> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
-    if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        // Determine if left and right children are unbounded.
-        let ub_flags = children_unbounded(&input);
-        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        // Update the unbounded flag of the input.
-        input.data = left_unbounded || right_unbounded;
+    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
+        let left_unbounded = hash_join.left.execution_mode().is_unbounded();
+        let right_unbounded = hash_join.right.execution_mode().is_unbounded();
         // Process only if both left and right sides are unbounded.
         if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
@@ -550,10 +575,7 @@ fn hash_join_convert_symmetric_subrule(
                 right_order,
                 mode,
             )
-            .map(|exec| {
-                input.plan = Arc::new(exec) as _;
-                input
-            });
+            .map(|exec| Arc::new(exec) as _);
         }
     }
     Ok(input)
@@ -601,15 +623,12 @@ fn hash_join_convert_symmetric_subrule(
 ///
 /// ```
 fn hash_join_swap_subrule(
-    mut input: PipelineStatePropagator,
+    mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
-) -> Result<PipelineStatePropagator> {
-    if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = children_unbounded(&input);
-        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        input.data = left_unbounded || right_unbounded;
-        if left_unbounded
-            && !right_unbounded
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
+        if hash_join.left.execution_mode().is_unbounded()
+            && !hash_join.right.execution_mode().is_unbounded()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -618,7 +637,7 @@ fn hash_join_swap_subrule(
                     | JoinType::LeftAnti
             )
         {
-            input.plan = swap_join_according_to_unboundedness(hash_join)?;
+            input = swap_join_according_to_unboundedness(hash_join)?;
         }
     }
     Ok(input)
@@ -654,24 +673,14 @@ fn swap_join_according_to_unboundedness(
 /// Apply given `PipelineFixerSubrule`s to a given plan. This plan, along with
 /// auxiliary boundedness information, is in the `PipelineStatePropagator` object.
 fn apply_subrules(
-    mut input: PipelineStatePropagator,
+    mut input: Arc<dyn ExecutionPlan>,
     subrules: &Vec<Box<PipelineFixerSubrule>>,
     config_options: &ConfigOptions,
-) -> Result<Transformed<PipelineStatePropagator>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     for subrule in subrules {
         input = subrule(input, config_options)?;
     }
-    input.data = input
-        .plan
-        .unbounded_output(&children_unbounded(&input))
-        // Treat the case where an operator can not run on unbounded data as
-        // if it can and it outputs unbounded data. Do not raise an error yet.
-        // Such operators may be fixed, adjusted or replaced later on during
-        // optimization passes -- sorts may be removed, windows may be adjusted
-        // etc. If this doesn't happen, the final `PipelineChecker` rule will
-        // catch this and raise an error anyway.
-        .unwrap_or(true);
-    Ok(Transformed::Yes(input))
+    Ok(Transformed::yes(input))
 }
 
 #[cfg(test)]
@@ -680,7 +689,6 @@ mod tests_statistical {
 
     use super::*;
     use crate::{
-        physical_optimizer::test_utils::check_integrity,
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
@@ -829,19 +837,18 @@ mod tests_statistical {
     }
 
     pub(crate) fn crosscheck_plans(plan: Arc<dyn ExecutionPlan>) -> Result<()> {
-        let pipeline = PipelineStatePropagator::new_default(plan);
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let state = pipeline
+        let new_plan = plan
             .transform_up(&|p| apply_subrules(p, &subrules, &ConfigOptions::new()))
-            .and_then(check_integrity)?;
+            .data()?;
         // TODO: End state payloads will be checked here.
         let config = ConfigOptions::new().optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
         let collect_threshold_num_rows = config.hash_join_single_partition_threshold_rows;
-        let _ = state.plan.transform_up(&|plan| {
+        let _ = new_plan.transform_up(&|plan| {
             statistical_join_selection_subrule(
                 plan,
                 collect_left_threshold,
@@ -867,6 +874,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -923,6 +931,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Left,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -984,6 +993,7 @@ mod tests_statistical {
                     )],
                     None,
                     &join_type,
+                    None,
                     PartitionMode::Partitioned,
                     false,
                 )
@@ -1054,6 +1064,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Inner,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1072,6 +1083,7 @@ mod tests_statistical {
             )],
             None,
             &JoinType::Left,
+            None,
             PartitionMode::CollectLeft,
             false,
         )
@@ -1112,6 +1124,7 @@ mod tests_statistical {
                 )],
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::CollectLeft,
                 false,
             )
@@ -1315,6 +1328,7 @@ mod tests_statistical {
                 on,
                 None,
                 &JoinType::Inner,
+                None,
                 PartitionMode::Auto,
                 false,
             )
@@ -1391,8 +1405,9 @@ mod util_tests {
 
 #[cfg(test)]
 mod hash_join_tests {
-    use self::tests_statistical::crosscheck_plans;
+    use std::sync::Arc;
 
+    use self::tests_statistical::crosscheck_plans;
     use super::*;
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
@@ -1400,12 +1415,12 @@ mod hash_join_tests {
     use crate::physical_plan::joins::PartitionMode;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::test_util::UnboundedExec;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::utils::DataPtr;
     use datafusion_common::JoinType;
-    use datafusion_physical_plan::empty::EmptyExec;
-    use std::sync::Arc;
+    use datafusion_physical_plan::ExecutionPlanProperties;
 
     struct TestCase {
         case: String,
@@ -1768,22 +1783,13 @@ mod hash_join_tests {
             )],
             None,
             &t.initial_join_type,
+            None,
             t.initial_mode,
             false,
         )?);
 
-        let left_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
-        let right_child = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
-        let children = vec![
-            PipelineStatePropagator::new(left_child, left_unbounded, vec![]),
-            PipelineStatePropagator::new(right_child, right_unbounded, vec![]),
-        ];
-        let initial_hash_join_state =
-            PipelineStatePropagator::new(join.clone(), false, children);
-
-        let optimized_hash_join =
-            hash_join_swap_subrule(initial_hash_join_state, &ConfigOptions::new())?;
-        let optimized_join_plan = optimized_hash_join.plan;
+        let optimized_join_plan =
+            hash_join_swap_subrule(join.clone(), &ConfigOptions::new())?;
 
         // If swap did happen
         let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();
@@ -1814,12 +1820,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if left.unbounded_output(&[])? {
+                    if left.execution_mode().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if right.unbounded_output(&[])? {
+                    if right.execution_mode().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

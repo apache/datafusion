@@ -17,6 +17,8 @@
 
 //! An optimizer rule that detects aggregate operations that could use a limited bucket count
 
+use std::sync::Arc;
+
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -24,14 +26,15 @@ use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
+
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 pub struct TopKAggregation {}
@@ -86,7 +89,7 @@ impl TopKAggregation {
 
         let children = sort.children();
         let child = children.iter().exactly_one().ok()?;
-        let order = sort.output_ordering()?;
+        let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;
 
@@ -101,13 +104,13 @@ impl TopKAggregation {
         let mut cardinality_preserved = true;
         let mut closure = |plan: Arc<dyn ExecutionPlan>| {
             if !cardinality_preserved {
-                return Ok(Transformed::No(plan));
+                return Ok(Transformed::no(plan));
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
                 match Self::transform_agg(aggr, order, limit) {
                     None => cardinality_preserved = false,
-                    Some(plan) => return Ok(Transformed::Yes(plan)),
+                    Some(plan) => return Ok(Transformed::yes(plan)),
                 }
             } else {
                 // or we continue down whitelisted nodes of other types
@@ -115,9 +118,9 @@ impl TopKAggregation {
                     cardinality_preserved = false;
                 }
             }
-            Ok(Transformed::No(plan))
+            Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down_mut(&mut closure).ok()?;
+        let child = child.clone().transform_down_mut(&mut closure).data().ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
@@ -137,20 +140,20 @@ impl PhysicalOptimizerRule for TopKAggregation {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = if config.optimizer.enable_topk_aggregation {
+        if config.optimizer.enable_topk_aggregation {
             plan.transform_down(&|plan| {
                 Ok(
                     if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
-                        Transformed::Yes(plan)
+                        Transformed::yes(plan)
                     } else {
-                        Transformed::No(plan)
+                        Transformed::no(plan)
                     },
                 )
-            })?
+            })
+            .data()
         } else {
-            plan
-        };
-        Ok(plan)
+            Ok(plan)
+        }
     }
 
     fn name(&self) -> &str {

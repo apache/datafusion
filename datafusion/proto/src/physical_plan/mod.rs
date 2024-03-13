@@ -19,6 +19,22 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use self::from_proto::parse_physical_window_expr;
+
+use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::convert_required;
+use crate::physical_plan::from_proto::{
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_protobuf_file_scan_config,
+};
+use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::physical_plan_node::PhysicalPlanType;
+use crate::protobuf::repartition_exec_node::PartitionMethod;
+use crate::protobuf::{
+    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
+};
+
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::csv::CsvSink;
@@ -60,25 +76,10 @@ use datafusion::physical_plan::{
     WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::ScalarUDF;
+
 use prost::bytes::BufMut;
 use prost::Message;
-
-use crate::common::str_to_byte;
-use crate::common::{byte_to_string, proto_error};
-use crate::convert_required;
-use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_protobuf_file_scan_config,
-};
-use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
-use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{
-    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
-};
-
-use self::from_proto::parse_physical_window_expr;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -210,7 +211,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )
                     })
                     .transpose()?;
-                Ok(Arc::new(ParquetExec::new(base_config, predicate, None)))
+                Ok(Arc::new(ParquetExec::new(
+                    base_config,
+                    predicate,
+                    None,
+                    Default::default(),
+                )))
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
@@ -467,6 +473,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
+                                                false,
                                             )
                                         }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
@@ -583,12 +590,24 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
                     protobuf::PartitionMode::Auto => PartitionMode::Auto,
                 };
+                let projection = if !hashjoin.projection.is_empty() {
+                    Some(
+                        hashjoin
+                            .projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
                     right,
                     on,
                     filter,
                     &join_type.into(),
+                    projection,
                     partition_mode,
                     hashjoin.null_equals_null,
                 )?))
@@ -1214,6 +1233,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         partition_mode: partition_mode.into(),
                         null_equals_null: exec.null_equals_null(),
                         filter,
+                        projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
+                            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                        }),
                     },
                 ))),
             });
@@ -1911,6 +1933,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+
+    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
+    }
+
+    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

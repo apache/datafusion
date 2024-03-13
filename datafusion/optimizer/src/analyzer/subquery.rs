@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+
 use crate::analyzer::check_plan;
 use crate::utils::collect_subquery_cols;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{plan_err, DataFusionError, Result};
+
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator,
     Window,
 };
-use std::ops::Deref;
 
 /// Do necessary check on subquery expressions and fail the invalid plan
 /// 1) Check whether the outer plan is in the allowed outer plans list to use subquery expressions,
@@ -146,7 +148,7 @@ fn check_inner_plan(
         LogicalPlan::Aggregate(_) => {
             inner_plan.apply_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, true, can_contain_outer_ref)?;
-                Ok(VisitRecursion::Continue)
+                Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
@@ -171,7 +173,7 @@ fn check_inner_plan(
             check_mixed_out_refer_in_window(window)?;
             inner_plan.apply_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
-                Ok(VisitRecursion::Continue)
+                Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
@@ -188,7 +190,7 @@ fn check_inner_plan(
         | LogicalPlan::SubqueryAlias(_) => {
             inner_plan.apply_children(&mut |plan| {
                 check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
-                Ok(VisitRecursion::Continue)
+                Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
@@ -206,7 +208,7 @@ fn check_inner_plan(
                         is_aggregate,
                         can_contain_outer_ref,
                     )?;
-                    Ok(VisitRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
             }
@@ -221,7 +223,7 @@ fn check_inner_plan(
             JoinType::Full => {
                 inner_plan.apply_children(&mut |plan| {
                     check_inner_plan(plan, is_scalar, is_aggregate, false)?;
-                    Ok(VisitRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
             }
@@ -287,12 +289,11 @@ fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
                 .into_iter()
                 .partition(|e| e.contains_outer());
 
-            correlated
-                .into_iter()
-                .for_each(|expr| exprs.push(strip_outer_reference(expr.clone())));
-            return Ok(VisitRecursion::Continue);
+            for expr in correlated {
+                exprs.push(strip_outer_reference(expr.clone()));
+            }
         }
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })?;
     Ok(exprs)
 }

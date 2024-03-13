@@ -57,6 +57,18 @@ files in the `dir_name` directory:
 +-------+
 ```
 
+Copy the contents of `source_table` to multiple directories
+of hive-style partitioned parquet files:
+
+```sql
+> COPY source_table TO 'dir_name' (FORMAT parquet, partition_by 'column1, column2');
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
 Run the query `SELECT * from source ORDER BY time` and write the
 results (maintaining the order) to a parquet file named
 `output.parquet` with a maximum parquet row group size of 10MB:

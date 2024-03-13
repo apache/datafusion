@@ -27,6 +27,7 @@ use std::sync::{
 };
 
 use datafusion::datasource::MemTable;
+use datafusion::test_util::plan_and_collect;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float64Array, TimestampNanosecondArray},
@@ -42,9 +43,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{
-    assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
-};
+use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
 use datafusion_expr::{
     create_udaf, AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
 };
@@ -256,6 +255,29 @@ async fn simple_udaf() -> Result<()> {
 }
 
 #[tokio::test]
+async fn deregister_udaf() -> Result<()> {
+    let ctx = SessionContext::new();
+    let my_avg = create_udaf(
+        "my_avg",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg.clone());
+
+    assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    ctx.deregister_udaf("my_avg");
+
+    assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
@@ -295,6 +317,42 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_user_defined_functions_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let my_avg = create_udaf(
+        "dummy",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    )
+    .with_aliases(vec!["dummy_alias"]);
+
+    ctx.register_udaf(my_avg);
+
+    let expected = [
+        "+------------+",
+        "| dummy(t.i) |",
+        "+------------+",
+        "| 1.0        |",
+        "+------------+",
+    ];
+
+    let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
+    assert_batches_eq!(expected, &result);
+
+    let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
+    assert_batches_eq!(expected, &alias_result);
 
     Ok(())
 }

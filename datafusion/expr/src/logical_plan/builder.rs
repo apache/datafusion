@@ -24,7 +24,7 @@ use std::convert::TryFrom;
 use std::iter::zip;
 use std::sync::Arc;
 
-use crate::dml::{CopyOptions, CopyTo};
+use crate::dml::CopyTo;
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -43,19 +43,18 @@ use crate::utils::{
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
 };
-
-use super::plan::RecursiveQuery;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -262,14 +261,16 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        file_format: FileType,
-        copy_options: CopyOptions,
+        format_options: FormatOptions,
+        options: HashMap<String, String>,
+        partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
-            file_format,
-            copy_options,
+            format_options,
+            options,
+            partition_by,
         })))
     }
 
@@ -1124,7 +1125,27 @@ impl LogicalPlanBuilder {
         )?))
     }
 }
-
+pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
+    let mut name_map = HashMap::new();
+    fields
+        .into_iter()
+        .map(|field| {
+            let counter = name_map.entry(field.name().to_string()).or_insert(0);
+            *counter += 1;
+            if *counter > 1 {
+                let new_name = format!("{}:{}", field.name(), *counter - 1);
+                DFField::new(
+                    field.qualifier().cloned(),
+                    &new_name,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )
+            } else {
+                field
+            }
+        })
+        .collect()
+}
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
 pub fn build_join_schema(
@@ -1237,6 +1258,7 @@ pub(crate) fn validate_unique_names<'a>(
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
     let mut unique_names = HashMap::new();
+
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
         let name = expr.display_name()?;
         match unique_names.get(&name) {
@@ -1375,6 +1397,7 @@ pub fn project(
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
+
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -2074,6 +2097,29 @@ mod tests {
             .union(join)?
             .build()?;
 
+        Ok(())
+    }
+    #[test]
+    fn test_change_redundant_column() -> Result<()> {
+        let t1_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t2_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t2_field_3 = DFField::new_unqualified("a", DataType::Int32, false);
+        let t1_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
+        let t2_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
+
+        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
+        let remove_redundant = change_redundant_column(field_vec);
+
+        assert_eq!(
+            remove_redundant,
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("a:1", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+                DFField::new_unqualified("b:1", DataType::Int32, false),
+                DFField::new_unqualified("a:2", DataType::Int32, false),
+            ]
+        );
         Ok(())
     }
 }

@@ -31,8 +31,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
+    Result, ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -170,12 +170,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::DatePart,
-                    vec![
-                        Expr::Literal(ScalarValue::from(format!("{field}"))),
-                        self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                    ],
+                let date_part = self
+                    .context_provider
+                    .get_function_meta("date_part")
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Unable to find expected 'date_part' function"
+                        )
+                    })?;
+                let args = vec![
+                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+                ];
+                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    date_part, args,
                 )))
             }
 
@@ -203,9 +211,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::ArrayIndex { obj, indexes } => {
+                fn is_unsupported(expr: &SQLExpr) -> bool {
+                    matches!(expr, SQLExpr::JsonAccess { .. })
+                }
+                fn simplify_array_index_expr(expr: Expr, index: Expr) -> (Expr, bool) {
+                    match &expr {
+                        Expr::AggregateFunction(agg_func) if agg_func.func_def == datafusion_expr::expr::AggregateFunctionDefinition::BuiltIn(AggregateFunction::ArrayAgg) => {
+                            let mut new_args = agg_func.args.clone();
+                            new_args.push(index.clone());
+                            (Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new(
+                                datafusion_expr::AggregateFunction::NthValue,
+                                new_args,
+                                agg_func.distinct,
+                                agg_func.filter.clone(),
+                                agg_func.order_by.clone(),
+                                agg_func.null_treatment,
+                            )), true)
+                        },
+                        _ => (expr, false),
+                    }
+                }
                 let expr =
                     self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                self.plan_indexed(expr, indexes, schema, planner_context)
+                if indexes.len() > 1 || is_unsupported(&indexes[0]) {
+                    return self.plan_indexed(expr, indexes, schema, planner_context);
+                }
+                let (new_expr, changed) = simplify_array_index_expr(
+                    expr,
+                    self.sql_expr_to_logical_expr(
+                        indexes[0].clone(),
+                        schema,
+                        planner_context,
+                    )?,
+                );
+
+                if changed {
+                    Ok(new_expr)
+                } else {
+                    self.plan_indexed(new_expr, indexes, schema, planner_context)
+                }
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
@@ -227,8 +271,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Cast {
-                expr, data_type, ..
+                expr,
+                data_type,
+                format,
             } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
                 let dt = self.convert_data_type(&data_type)?;
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
@@ -251,15 +301,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::TryCast {
-                expr, data_type, ..
-            } => Ok(Expr::TryCast(TryCast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+                expr,
+                data_type,
+                format,
+            } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
+                Ok(Expr::TryCast(TryCast::new(
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *expr,
+                        schema,
+                        planner_context,
+                    )?),
+                    self.convert_data_type(&data_type)?,
+                )))
+            }
 
             SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value)),
@@ -433,11 +491,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 trim_where,
                 trim_what,
-                ..
+                trim_characters,
             } => self.sql_trim_to_expr(
                 *expr,
                 trim_where,
                 trim_what,
+                trim_characters,
                 schema,
                 planner_context,
             ),
@@ -537,8 +596,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(value, input_schema, planner_context)
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Struct,
+        let struct_func = self
+            .context_provider
+            .get_function_meta("struct")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'struct' function")
+            })?;
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            struct_func,
             args,
         )))
     }
@@ -557,7 +622,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             limit,
             within_group,
         } = array_agg;
-
         let order_by = if let Some(order_by) = order_by {
             Some(self.order_by_to_sort_expr(
                 &order_by,
@@ -581,10 +645,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
 
         // next, aggregate built-ins
-        let fun = AggregateFunction::ArrayAgg;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None, order_by,
+            AggregateFunction::ArrayAgg,
+            args,
+            distinct,
+            None,
+            order_by,
+            None,
         )))
+        // see if we can rewrite it into NTH-VALUE
     }
 
     fn sql_in_list_to_expr(
@@ -660,6 +729,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         expr: SQLExpr,
         trim_where: Option<TrimWhereField>,
         trim_what: Option<Box<SQLExpr>>,
+        trim_characters: Option<Vec<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -669,15 +739,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
             None => BuiltinScalarFunction::Trim,
         };
+
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
-        let args = match trim_what {
-            Some(to_trim) => {
+        let args = match (trim_what, trim_characters) {
+            (Some(to_trim), None) => {
                 let to_trim =
                     self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
-                vec![arg, to_trim]
+                Ok(vec![arg, to_trim])
             }
-            None => vec![arg],
-        };
+            (None, Some(trim_characters)) => {
+                if let Some(first) = trim_characters.first() {
+                    let to_trim = self.sql_expr_to_logical_expr(
+                        first.clone(),
+                        schema,
+                        planner_context,
+                    )?;
+                    Ok(vec![arg, to_trim])
+                } else {
+                    plan_err!("TRIM CHARACTERS cannot be empty")
+                }
+            }
+            (Some(_), Some(_)) => {
+                plan_err!("Both TRIM and TRIM CHARACTERS cannot be specified")
+            }
+            (None, None) => Ok(vec![arg]),
+        }?;
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
@@ -713,7 +799,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::InStr;
+        let fun = BuiltinScalarFunction::Strpos;
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
@@ -733,7 +819,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 args,
                 distinct,
                 order_by,
-                ..
+                null_treatment,
+                filter: None, // filter is passed in
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
                 args,
@@ -744,8 +831,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                 )?)),
                 order_by,
+                null_treatment,
             ))),
-            _ => plan_err!(
+            Expr::AggregateFunction(..) => {
+                internal_err!("Expected null filter clause in aggregate function")
+            }
+            _ => internal_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
             ),
         }
@@ -848,8 +939,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -862,6 +951,8 @@ mod tests {
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
     use crate::TableReference;
+
+    use super::*;
 
     struct TestContextProvider {
         options: ConfigOptions,
@@ -913,6 +1004,18 @@ mod tests {
 
         fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
             None
+        }
+
+        fn udfs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udafs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udwfs_names(&self) -> Vec<String> {
+            Vec::new()
         }
     }
 

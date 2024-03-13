@@ -518,9 +518,9 @@ pub fn coerced_fixed_size_list_to_list(data_type: &DataType) -> DataType {
 /// Compute the number of dimensions in a list data type.
 pub fn list_ndims(data_type: &DataType) -> u64 {
     match data_type {
-        DataType::List(field) | DataType::LargeList(field) => {
-            1 + list_ndims(field.data_type())
-        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => 1 + list_ndims(field.data_type()),
         _ => 0,
     }
 }

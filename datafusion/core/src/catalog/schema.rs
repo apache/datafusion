@@ -20,12 +20,12 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, DataFusionError};
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 
 /// Represents a schema, comprising a number of named tables.
 ///
@@ -49,7 +49,10 @@ pub trait SchemaProvider: Sync + Send {
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>>;
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
 
     /// If supported by the implementation, adds a new table named `name` to
     /// this schema.
@@ -111,8 +114,11 @@ impl SchemaProvider for MemorySchemaProvider {
             .collect()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables.get(name).map(|table| table.value().clone())
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        Ok(self.tables.get(name).map(|table| table.value().clone()))
     }
 
     fn register_table(

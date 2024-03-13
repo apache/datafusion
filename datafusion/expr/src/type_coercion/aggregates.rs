@@ -24,7 +24,7 @@ use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 

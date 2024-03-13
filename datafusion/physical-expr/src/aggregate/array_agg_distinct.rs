@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
+use arrow_array::cast::AsArray;
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
@@ -138,9 +139,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
         let array = &values[0];
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(array)?;
-        for scalars in scalar_vec {
-            self.values.extend(scalars);
+
+        for i in 0..array.len() {
+            let scalar = ScalarValue::try_from_array(&array, i)?;
+            self.values.insert(scalar);
         }
 
         Ok(())
@@ -151,7 +153,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        self.update_batch(states)
+        let array = &states[0];
+
+        assert_eq!(array.len(), 1, "state array should only include 1 row!");
+        // Unwrap outer ListArray then do update batch
+        let inner_array = array.as_list::<i32>().value(0);
+        self.update_batch(&[inner_array])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -181,47 +188,55 @@ mod tests {
     use arrow_array::Array;
     use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
-    use datafusion_common::utils::array_into_list_array;
-    use datafusion_common::{internal_err, DataFusionError};
+    use datafusion_common::internal_err;
 
-    // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
-    fn sort_list_inner(arr: ScalarValue) -> ScalarValue {
-        let arr = match arr {
-            ScalarValue::List(arr) => arr.value(0),
-            _ => {
-                panic!("Expected ScalarValue::List, got {:?}", arr)
-            }
-        };
+    // arrow::compute::sort can't sort nested ListArray directly, so we compare the scalar values pair-wise.
+    fn compare_list_contents(
+        expected: Vec<ScalarValue>,
+        actual: ScalarValue,
+    ) -> Result<()> {
+        let array = actual.to_array()?;
+        let list_array = array.as_list::<i32>();
+        let inner_array = list_array.value(0);
+        let mut actual_scalars = vec![];
+        for index in 0..inner_array.len() {
+            let sv = ScalarValue::try_from_array(&inner_array, index)?;
+            actual_scalars.push(sv);
+        }
 
-        let arr = arrow::compute::sort(&arr, None).unwrap();
-        let list_arr = array_into_list_array(arr);
-        ScalarValue::List(Arc::new(list_arr))
-    }
+        if actual_scalars.len() != expected.len() {
+            return internal_err!(
+                "Expected and actual list lengths differ: expected={}, actual={}",
+                expected.len(),
+                actual_scalars.len()
+            );
+        }
 
-    fn compare_list_contents(expected: ScalarValue, actual: ScalarValue) -> Result<()> {
-        let actual = sort_list_inner(actual);
-
-        match (&expected, &actual) {
-            (ScalarValue::List(arr1), ScalarValue::List(arr2)) => {
-                if arr1.eq(arr2) {
-                    Ok(())
-                } else {
-                    internal_err!(
-                        "Actual value {:?} not found in expected values {:?}",
-                        actual,
-                        expected
-                    )
+        let mut seen = vec![false; expected.len()];
+        for v in expected {
+            let mut found = false;
+            for (i, sv) in actual_scalars.iter().enumerate() {
+                if sv == &v {
+                    seen[i] = true;
+                    found = true;
+                    break;
                 }
             }
-            _ => {
-                internal_err!("Expected scalar lists as inputs")
+            if !found {
+                return internal_err!(
+                    "Expected value {:?} not found in actual values {:?}",
+                    v,
+                    actual_scalars
+                );
             }
         }
+
+        Ok(())
     }
 
     fn check_distinct_array_agg(
         input: ArrayRef,
-        expected: ScalarValue,
+        expected: Vec<ScalarValue>,
         datatype: DataType,
     ) -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
@@ -234,14 +249,13 @@ mod tests {
             true,
         ));
         let actual = aggregate(&batch, agg)?;
-
         compare_list_contents(expected, actual)
     }
 
     fn check_merge_distinct_array_agg(
         input1: ArrayRef,
         input2: ArrayRef,
-        expected: ScalarValue,
+        expected: Vec<ScalarValue>,
         datatype: DataType,
     ) -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
@@ -262,23 +276,20 @@ mod tests {
         accum1.merge_batch(&[array])?;
 
         let actual = accum1.evaluate()?;
-
         compare_list_contents(expected, actual)
     }
 
     #[test]
     fn distinct_array_agg_i32() -> Result<()> {
         let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
-        let expected =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                    Some(1),
-                    Some(2),
-                    Some(4),
-                    Some(5),
-                    Some(7),
-                ])]),
-            ));
+
+        let expected = vec![
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(2)),
+            ScalarValue::Int32(Some(4)),
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(7)),
+        ];
 
         check_distinct_array_agg(col, expected, DataType::Int32)
     }
@@ -288,18 +299,15 @@ mod tests {
         let col1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
         let col2: ArrayRef = Arc::new(Int32Array::from(vec![1, 3, 7, 8, 4]));
 
-        let expected =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    Some(4),
-                    Some(5),
-                    Some(7),
-                    Some(8),
-                ])]),
-            ));
+        let expected = vec![
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(2)),
+            ScalarValue::Int32(Some(3)),
+            ScalarValue::Int32(Some(4)),
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(7)),
+            ScalarValue::Int32(Some(8)),
+        ];
 
         check_merge_distinct_array_agg(col1, col2, expected, DataType::Int32)
     }
@@ -351,23 +359,16 @@ mod tests {
         let l2 = ScalarValue::List(Arc::new(l2));
         let l3 = ScalarValue::List(Arc::new(l3));
 
-        // Duplicate l1 in the input array and check that it is deduped in the output.
-        let array = ScalarValue::iter_to_array(vec![l1.clone(), l2, l3, l1]).unwrap();
-
-        let expected =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    Some(4),
-                    Some(5),
-                    Some(6),
-                    Some(7),
-                    Some(8),
-                    Some(9),
-                ])]),
-            ));
+        // Duplicate l1 and l3 in the input array and check that it is deduped in the output.
+        let array = ScalarValue::iter_to_array(vec![
+            l1.clone(),
+            l2.clone(),
+            l3.clone(),
+            l3.clone(),
+            l1.clone(),
+        ])
+        .unwrap();
+        let expected = vec![l1, l2, l3];
 
         check_distinct_array_agg(
             array,
@@ -426,22 +427,10 @@ mod tests {
         let l3 = ScalarValue::List(Arc::new(l3));
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
-        let input1 = ScalarValue::iter_to_array(vec![l1.clone(), l2]).unwrap();
-        let input2 = ScalarValue::iter_to_array(vec![l1, l3]).unwrap();
+        let input1 = ScalarValue::iter_to_array(vec![l1.clone(), l2.clone()]).unwrap();
+        let input2 = ScalarValue::iter_to_array(vec![l1.clone(), l3.clone()]).unwrap();
 
-        let expected =
-            ScalarValue::List(Arc::new(
-                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                    Some(1),
-                    Some(2),
-                    Some(3),
-                    Some(4),
-                    Some(5),
-                    Some(6),
-                    Some(7),
-                    Some(8),
-                ])]),
-            ));
+        let expected = vec![l1, l2, l3];
 
         check_merge_distinct_array_agg(input1, input2, expected, DataType::Int32)
     }

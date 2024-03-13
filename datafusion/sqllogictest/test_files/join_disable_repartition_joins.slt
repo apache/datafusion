@@ -57,12 +57,11 @@ Limit: skip=0, fetch=5
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
 --SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
-----ProjectionExec: expr=[a@1 as a]
-------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+----CoalesceBatchesExec: target_batch_size=8192
+------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)], projection=[a@1]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort
@@ -102,7 +101,7 @@ GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
 ----ProjectionExec: expr=[a@0 as a2, b@1 as b]
 ------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
+--------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)], projection=[a@0, b@1]
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------FilterExec: d@3 = 3

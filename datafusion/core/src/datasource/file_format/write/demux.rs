@@ -32,8 +32,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::DataFusionError;
-
+use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use futures::StreamExt;
@@ -42,7 +42,6 @@ use object_store::path::Path;
 use rand::distributions::DistString;
 
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
 type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
@@ -76,15 +75,15 @@ pub(crate) fn start_demuxer_task(
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
+    let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
     let single_file_output = !base_output_path.is_collection();
-    let task: JoinHandle<std::result::Result<(), DataFusionError>> = match partition_by {
+    let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
             // bound this channel without risking a deadlock.
-            tokio::spawn(async move {
+            SpawnedTask::spawn(async move {
                 hive_style_partitions_demuxer(
                     tx,
                     input,
@@ -96,7 +95,7 @@ pub(crate) fn start_demuxer_task(
                 .await
             })
         }
-        None => tokio::spawn(async move {
+        None => SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
                 input,
@@ -319,14 +318,20 @@ fn compute_partition_keys_by_row<'a>(
 ) -> Result<Vec<Vec<&'a str>>> {
     let mut all_partition_values = vec![];
 
-    for (col, dtype) in partition_by.iter() {
+    // For the purposes of writing partitioned data, we can rely on schema inference
+    // to determine the type of the partition cols in order to provide a more ergonomic
+    // UI which does not require specifying DataTypes manually. So, we ignore the
+    // DataType within the partition_by array and infer the correct type from the
+    // batch schema instead.
+    let schema = rb.schema();
+    for (col, _) in partition_by.iter() {
         let mut partition_values = vec![];
-        let col_array =
-            rb.column_by_name(col)
-                .ok_or(DataFusionError::Execution(format!(
-                    "PartitionBy Column {} does not exist in source data!",
-                    col
-                )))?;
+
+        let dtype = schema.field_with_name(col)?.data_type();
+        let col_array = rb.column_by_name(col).ok_or(exec_datafusion_err!(
+            "PartitionBy Column {} does not exist in source data! Got schema {schema}.",
+            col
+        ))?;
 
         match dtype {
             DataType::Utf8 => {
@@ -339,12 +344,12 @@ fn compute_partition_keys_by_row<'a>(
                 downcast_dictionary_array!(
                     col_array =>  {
                         let array = col_array.downcast_dict::<StringArray>()
-                            .ok_or(DataFusionError::Execution(format!("it is not yet supported to write to hive partitions with datatype {}",
-                            dtype)))?;
+                            .ok_or(exec_datafusion_err!("it is not yet supported to write to hive partitions with datatype {}",
+                            dtype))?;
 
                         for val in array.values() {
                             partition_values.push(
-                                val.ok_or(DataFusionError::Execution(format!("Cannot partition by null value for column {}", col)))?
+                                val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?
                             );
                         }
                     },
@@ -385,21 +390,23 @@ fn remove_partition_by_columns(
     parted_batch: &RecordBatch,
     partition_by: &[(String, DataType)],
 ) -> Result<RecordBatch> {
-    let end_idx = parted_batch.num_columns() - partition_by.len();
-    let non_part_cols = &parted_batch.columns()[..end_idx];
-
     let partition_names: Vec<_> = partition_by.iter().map(|(s, _)| s).collect();
-    let non_part_schema = Schema::new(
-        parted_batch
-            .schema()
-            .fields()
-            .iter()
-            .filter(|f| !partition_names.contains(&f.name()))
-            .map(|f| (**f).clone())
-            .collect::<Vec<_>>(),
-    );
+    let (non_part_cols, non_part_fields): (Vec<_>, Vec<_>) = parted_batch
+        .columns()
+        .iter()
+        .zip(parted_batch.schema().fields())
+        .filter_map(|(a, f)| {
+            if !partition_names.contains(&f.name()) {
+                Some((a.clone(), (**f).clone()))
+            } else {
+                None
+            }
+        })
+        .unzip();
+
+    let non_part_schema = Schema::new(non_part_fields);
     let final_batch_to_send =
-        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols.into())?;
+        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols)?;
 
     Ok(final_batch_to_send)
 }
