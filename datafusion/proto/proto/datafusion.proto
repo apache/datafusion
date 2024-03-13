@@ -600,19 +600,19 @@ enum ScalarFunction {
   // 56 was ToTimestampMillis
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
-  Now = 59;
+  // 59 was Now
   Translate = 60;
   Trim = 61;
   Upper = 62;
   Coalesce = 63;
   Power = 64;
   // 65 was StructFun
-  FromUnixtime = 66;
+  // 66 was FromUnixtime
   Atan2 = 67;
   // 68 was DateBin
   // 69 was ArrowTypeof
-  CurrentDate = 70;
-  CurrentTime = 71;
+  // 70 was CurrentDate
+  // 71 was CurrentTime
   Uuid = 72;
   Cbrt = 73;
   Acosh = 74;
@@ -630,7 +630,7 @@ enum ScalarFunction {
   // 86 was ArrayAppend
   // 87 was ArrayConcat
   // 88 was ArrayDims
-  ArrayRepeat = 89;
+  // 89 was ArrayRepeat
   // 90 was ArrayLength
   // 91 was ArrayNdims
   ArrayPosition = 92;

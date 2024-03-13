@@ -623,12 +623,6 @@ scalar_expr!(
     "searches for an element in the array, returns all occurrences."
 );
 scalar_expr!(
-    ArrayRepeat,
-    array_repeat,
-    element count,
-    "returns an array containing element `count` times."
-);
-scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
@@ -788,15 +782,6 @@ scalar_expr!(
     datetime format,
     "converts a date, time, timestamp or duration to a string based on the provided format"
 );
-scalar_expr!(
-    FromUnixtime,
-    from_unixtime,
-    unixtime,
-    "returns the unix time in format"
-);
-scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
-scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
-scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
@@ -1252,13 +1237,10 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
-
         test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
         test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);

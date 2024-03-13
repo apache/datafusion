@@ -49,18 +49,18 @@ use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_
 use datafusion_expr::{
     acosh, array_element, array_except, array_intersect, array_pop_back, array_pop_front,
     array_position, array_positions, array_remove, array_remove_all, array_remove_n,
-    array_repeat, array_replace, array_replace_all, array_replace_n, array_resize,
-    array_slice, array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt,
-    ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, degrees, ends_with, exp,
+    array_replace, array_replace_all, array_replace_n, array_resize, array_slice,
+    array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, floor, from_unixtime, gcd, initcap, iszero, lcm, left,
-    levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
+    log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, nanvl, now, octet_length, overlay, pi, power, radians, random,
-    repeat, replace, reverse, right, round, rpad, rtrim, signum, sin, sinh, split_part,
-    sqrt, starts_with, strpos, substr, substr_index, substring, to_hex, translate, trim,
-    trunc, upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    lower, lpad, ltrim, nanvl, octet_length, overlay, pi, power, radians, random, repeat,
+    replace, reverse, right, round, rpad, rtrim, signum, sin, sinh, split_part, sqrt,
+    starts_with, strpos, substr, substr_index, substring, to_hex, translate, trim, trunc,
+    upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
     BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
     GroupingSet,
     GroupingSet::GroupingSets,
@@ -478,7 +478,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
-            ScalarFunction::ArrayRepeat => Self::ArrayRepeat,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
             ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
@@ -514,16 +513,12 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
             ScalarFunction::ToChar => Self::ToChar,
-            ScalarFunction::Now => Self::Now,
-            ScalarFunction::CurrentDate => Self::CurrentDate,
-            ScalarFunction::CurrentTime => Self::CurrentTime,
             ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
@@ -1412,10 +1407,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::ArrayRepeat => Ok(array_repeat(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::ArrayRemove => Ok(array_remove(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1659,7 +1650,6 @@ pub fn parse_expr(
                         args,
                     )))
                 }
-                ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1680,15 +1670,10 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::FromUnixtime => {
-                    Ok(from_unixtime(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::CurrentDate => Ok(current_date()),
-                ScalarFunction::CurrentTime => Ok(current_time()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,

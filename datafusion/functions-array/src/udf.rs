@@ -21,6 +21,7 @@ use arrow::array::{NullArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
+use arrow_schema::DataType::{LargeUtf8, List, Utf8};
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
@@ -126,7 +127,7 @@ impl ScalarUDFImpl for StringToArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match arg_types[0] {
             Utf8 | LargeUtf8 => {
@@ -140,7 +141,7 @@ impl ScalarUDFImpl for StringToArray {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let mut args = ColumnarValue::values_to_arrays(args)?;
         // Case: delimiter is NULL, needs to be handled as well.
         if args[1].as_any().is::<NullArray>() {
@@ -148,10 +149,10 @@ impl ScalarUDFImpl for StringToArray {
         };
 
         match args[0].data_type() {
-            arrow::datatypes::DataType::Utf8 => {
+            Utf8 => {
                 crate::kernels::string_to_array::<i32>(&args).map(ColumnarValue::Array)
             }
-            arrow::datatypes::DataType::LargeUtf8 => {
+            LargeUtf8 => {
                 crate::kernels::string_to_array::<i64>(&args).map(ColumnarValue::Array)
             }
             other => {
@@ -581,6 +582,58 @@ impl ScalarUDFImpl for ArrayEmpty {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::array_empty(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
+    ArrayRepeat,
+    array_repeat,
+    element count, // arg name
+    "returns an array containing element `count` times.", // doc
+    array_repeat_udf // internal function name
+);
+#[derive(Debug)]
+pub(super) struct ArrayRepeat {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayRepeat {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![String::from("array_repeat"), String::from("list_repeat")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayRepeat {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_repeat"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(List(Arc::new(Field::new(
+            "item",
+            arg_types[0].clone(),
+            true,
+        ))))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_repeat(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

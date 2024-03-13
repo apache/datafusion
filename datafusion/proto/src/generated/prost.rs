@@ -2902,19 +2902,19 @@ pub enum ScalarFunction {
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
-    Now = 59,
+    /// 59 was Now
     Translate = 60,
     Trim = 61,
     Upper = 62,
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
-    FromUnixtime = 66,
+    /// 66 was FromUnixtime
     Atan2 = 67,
     /// 68 was DateBin
     /// 69 was ArrowTypeof
-    CurrentDate = 70,
-    CurrentTime = 71,
+    /// 70 was CurrentDate
+    /// 71 was CurrentTime
     Uuid = 72,
     Cbrt = 73,
     Acosh = 74,
@@ -2932,7 +2932,7 @@ pub enum ScalarFunction {
     /// 86 was ArrayAppend
     /// 87 was ArrayConcat
     /// 88 was ArrayDims
-    ArrayRepeat = 89,
+    /// 89 was ArrayRepeat
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
     ArrayPosition = 92,
@@ -3029,16 +3029,12 @@ impl ScalarFunction {
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::ToHex => "ToHex",
-            ScalarFunction::Now => "Now",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Trim => "Trim",
             ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::FromUnixtime => "FromUnixtime",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::CurrentDate => "CurrentDate",
-            ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Acosh => "Acosh",
@@ -3052,7 +3048,6 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayPosition => "ArrayPosition",
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayRemove => "ArrayRemove",
@@ -3125,16 +3120,12 @@ impl ScalarFunction {
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "ToHex" => Some(Self::ToHex),
-            "Now" => Some(Self::Now),
             "Translate" => Some(Self::Translate),
             "Trim" => Some(Self::Trim),
             "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "FromUnixtime" => Some(Self::FromUnixtime),
             "Atan2" => Some(Self::Atan2),
-            "CurrentDate" => Some(Self::CurrentDate),
-            "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
             "Acosh" => Some(Self::Acosh),
@@ -3148,7 +3139,6 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayPosition" => Some(Self::ArrayPosition),
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayRemove" => Some(Self::ArrayRemove),
