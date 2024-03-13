@@ -251,7 +251,7 @@ select * from unnest([1,2,(select sum(column3) from unnest_table)]);
 
 ## Unnest is the sub-expression of other expression
 query II
-select unnest(column1), column3 as a from unnest_table;
+select unnest(column1) as a, column3 from unnest_table;
 ----
 1 1
 2 1
