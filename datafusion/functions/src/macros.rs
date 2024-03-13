@@ -148,8 +148,8 @@ macro_rules! downcast_arg {
 }
 
 macro_rules! make_math_unary_function {
-    ($UDF:ty, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident) => {
-        make_udf_function!(paste::paste! {$NAME::[<$UDF>]}, $GNAME, $NAME);
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident) => {
+        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
@@ -160,11 +160,9 @@ macro_rules! make_math_unary_function {
             use std::any::Any;
             use std::sync::Arc;
 
-            paste::paste! {
-                #[derive(Debug)]
-                pub struct $UDF {
-                    signature: Signature,
-                }
+            #[derive(Debug)]
+            pub struct $UDF {
+                signature: Signature,
             }
 
             impl $UDF {

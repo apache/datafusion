@@ -1257,7 +1257,6 @@ dependencies = [
  "hex",
  "itertools",
  "log",
- "paste",
  "regex",
 ]
 
