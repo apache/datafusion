@@ -1225,7 +1225,6 @@ mod test {
         test_nary_scalar_expr!(Btrim, btrim, string, characters);
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
-        test_scalar_expr!(Digest, digest, string, algorithm);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
@@ -1234,7 +1233,6 @@ mod test {
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
         test_scalar_expr!(Ltrim, ltrim, string);
-        test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
