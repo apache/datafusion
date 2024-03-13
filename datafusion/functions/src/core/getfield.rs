@@ -95,14 +95,9 @@ impl ScalarUDFImpl for GetFieldFunc {
             );
         }
 
-        let arr;
-        let array = match &args[0] {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => {
-                arr = scalar.clone().to_array()?;
-                &arr
-            }
-        };
+        let arrays = ColumnarValue::values_to_arrays(args)?;
+        let array = arrays[0].clone();
+
         let name = match &args[1] {
             ColumnarValue::Scalar(name) => name,
             _ => {
