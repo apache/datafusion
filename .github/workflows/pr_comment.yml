@@ -1,3 +1,5 @@
+# Downloads any `message` artifacts created by other jobs
+# and posts them as comments to the PR
 name: PR Comment
 
 on:
