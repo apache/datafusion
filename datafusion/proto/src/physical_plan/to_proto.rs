@@ -34,13 +34,6 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion_expr::ScalarFunctionDefinition;
 
 use crate::logical_plan::csv_writer_options_to_proto;
-use datafusion::datasource::{
-    file_format::csv::CsvSink,
-    file_format::json::JsonSink,
-    listing::{FileRange, PartitionedFile},
-    physical_plan::FileScanConfig,
-    physical_plan::FileSinkConfig,
-};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
@@ -58,6 +51,14 @@ use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
 use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
+};
+use datafusion::{
+    datasource::{
+        file_format::{csv::CsvSink, json::JsonSink},
+        listing::{FileRange, PartitionedFile},
+        physical_plan::{FileScanConfig, FileSinkConfig},
+    },
+    physical_plan::expressions::LikeExpr,
 };
 use datafusion_common::config::{
     ColumnOptions, CsvOptions, FormatOptions, JsonOptions, ParquetOptions,
@@ -562,6 +563,20 @@ pub fn serialize_expr(
                 )),
             })
         }
+    } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
+                protobuf::PhysicalLikeExprNode {
+                    negated: expr.negated(),
+                    case_insensitive: expr.case_insensitive(),
+                    expr: Some(Box::new(serialize_expr(expr.expr().to_owned(), codec)?)),
+                    pattern: Some(Box::new(serialize_expr(
+                        expr.pattern().to_owned(),
+                        codec,
+                    )?)),
+                },
+            ))),
+        })
     } else {
         internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
     }
