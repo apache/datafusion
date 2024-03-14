@@ -17,93 +17,97 @@
 
 extern crate criterion;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::rngs::ThreadRng;
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Int32Array};
+use criterion::{black_box, Criterion, criterion_group, criterion_main};
 use rand::Rng;
+use rand::rngs::ThreadRng;
 
-use datafusion_expr::{lit, Expr};
-use datafusion_functions::expr_fn::make_date;
+use datafusion_common::ScalarValue;
+use datafusion_expr::ColumnarValue;
+use datafusion_functions::datetime::make_date;
 
-fn years(rng: &mut ThreadRng) -> Vec<Expr> {
+fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];
     for _ in 0..1000 {
-        years.push(lit(rng.gen_range(1900..2050)));
+        years.push(rng.gen_range(1900..2050));
     }
 
-    years
+    Int32Array::from(years)
 }
 
-fn months(rng: &mut ThreadRng) -> Vec<Expr> {
+fn months(rng: &mut ThreadRng) -> Int32Array {
     let mut months = vec![];
     for _ in 0..1000 {
-        months.push(lit(rng.gen_range(1..13)));
+        months.push(rng.gen_range(1..13));
     }
 
-    months
+    Int32Array::from(months)
 }
 
-fn days(rng: &mut ThreadRng) -> Vec<Expr> {
+fn days(rng: &mut ThreadRng) -> Int32Array {
     let mut days = vec![];
     for _ in 0..1000 {
-        days.push(lit(rng.gen_range(1..29)));
+        days.push(rng.gen_range(1..29));
     }
 
-    days
+    Int32Array::from(days)
 }
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_date_col_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let years = years(&mut rng);
-        let months = months(&mut rng);
-        let days = days(&mut rng);
+        let years = ColumnarValue::Array(Arc::new(years(&mut rng)) as ArrayRef);
+        let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
+        let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            years.iter().enumerate().for_each(|(idx, i)| {
-                black_box(make_date(
-                    i.clone(),
-                    months.get(idx).unwrap().clone(),
-                    days.get(idx).unwrap().clone(),
-                ));
-            })
+            black_box(
+                make_date().invoke(&[years.clone(), months.clone(), days.clone()])
+                    .expect("make_date should work on valid values"),
+            )
         })
     });
 
     c.bench_function("make_date_scalar_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let year = lit(2025);
-        let months = months(&mut rng);
-        let days = days(&mut rng);
+        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
+        let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
+        let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            months.iter().enumerate().for_each(|(idx, i)| {
-                black_box(make_date(
-                    year.clone(),
-                    i.clone(),
-                    days.get(idx).unwrap().clone(),
-                ));
-            })
+            black_box(
+                make_date().invoke(&[year.clone(), months.clone(), days.clone()])
+                    .expect("make_date should work on valid values"),
+            )
         })
     });
 
     c.bench_function("make_date_scalar_scalar_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let year = lit(2025);
-        let months = lit(11);
-        let days = days(&mut rng);
+        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
+        let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
+        let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            days.iter().for_each(|i| {
-                black_box(make_date(year.clone(), months.clone(), i.clone()));
-            })
+            black_box(
+                make_date().invoke(&[year.clone(), month.clone(), days.clone()])
+                    .expect("make_date should work on valid values"),
+            )
         })
     });
 
     c.bench_function("make_date_scalar_scalar_scalar", |b| {
-        let year = lit(2025);
-        let month = lit(11);
-        let day = lit(26);
+        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
+        let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
+        let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
 
-        b.iter(|| black_box(make_date(year.clone(), month.clone(), day.clone())))
+        b.iter(|| {
+            black_box(
+                make_date().invoke(&[year.clone(), month.clone(), day.clone()])
+                    .expect("make_date should work on valid values"),
+            )
+        })
     });
 }
 

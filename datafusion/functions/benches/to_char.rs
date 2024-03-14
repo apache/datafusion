@@ -17,16 +17,20 @@
 
 extern crate criterion;
 
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Date32Array, StringArray};
 use chrono::prelude::*;
 use chrono::TimeDelta;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, Criterion, criterion_group, criterion_main};
+use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 
+use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
-use datafusion_expr::{lit, Expr};
-use datafusion_functions::expr_fn::to_char;
+use datafusion_expr::ColumnarValue;
+use datafusion_functions::datetime::to_char;
 
 fn random_date_in_range(
     rng: &mut ThreadRng,
@@ -38,8 +42,8 @@ fn random_date_in_range(
     start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
-fn data(rng: &mut ThreadRng) -> Vec<Expr> {
-    let mut data: Vec<Expr> = vec![];
+fn data(rng: &mut ThreadRng) -> Date32Array {
+    let mut data: Vec<i32> = vec![];
     let unix_days_from_ce = NaiveDate::from_ymd_opt(1970, 1, 1)
         .unwrap()
         .num_days_from_ce();
@@ -50,15 +54,16 @@ fn data(rng: &mut ThreadRng) -> Vec<Expr> {
         .parse::<NaiveDate>()
         .expect("Date should parse");
     for _ in 0..1000 {
-        data.push(lit(random_date_in_range(rng, start_date, end_date)
-            .num_days_from_ce()
-            - unix_days_from_ce));
+        data.push(
+            random_date_in_range(rng, start_date, end_date).num_days_from_ce()
+                - unix_days_from_ce,
+        );
     }
 
-    data
+    Date32Array::from(data)
 }
 
-fn patterns(rng: &mut ThreadRng) -> Vec<Expr> {
+fn patterns(rng: &mut ThreadRng) -> StringArray {
     let samples = vec![
         "%Y:%m:%d".to_string(),
         "%d-%m-%Y".to_string(),
@@ -66,36 +71,39 @@ fn patterns(rng: &mut ThreadRng) -> Vec<Expr> {
         "%Y%m%d".to_string(),
         "%Y...%m...%d".to_string(),
     ];
-    let mut data: Vec<Expr> = vec![];
+    let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
-        data.push(lit(samples.choose(rng).unwrap().to_string()));
+        data.push(samples.choose(rng).unwrap().to_string());
     }
 
-    data
+    StringArray::from(data)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_char_array_array_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = data(&mut rng);
-        let patterns = patterns(&mut rng);
+        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            data.iter().enumerate().for_each(|(idx, i)| {
-                black_box(to_char(i.clone(), patterns.get(idx).unwrap().clone()));
-            })
+            black_box(
+                to_char().invoke(&[data.clone(), patterns.clone()])
+                    .expect("to_char should work on valid values"),
+            )
         })
     });
 
     c.bench_function("to_char_array_scalar_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = data(&mut rng);
-        let patterns = lit("%Y-%m-%d");
+        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let patterns =
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
-            data.iter().for_each(|i| {
-                black_box(to_char(i.clone(), patterns.clone()));
-            })
+            black_box(
+                to_char().invoke(&[data.clone(), patterns.clone()])
+                    .expect("to_char should work on valid values"),
+            )
         })
     });
 
@@ -108,12 +116,20 @@ fn criterion_benchmark(c: &mut Criterion) {
             .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
-        let data = lit(TimestampNanosecond(Some(timestamp), None));
-        let pattern = lit("%d-%m-%Y %H:%M:%S");
+        let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
+        let pattern = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            "%d-%m-%Y %H:%M:%S".to_string(),
+        )));
 
-        b.iter(|| black_box(to_char(data.clone(), pattern.clone())))
+        b.iter(|| {
+            black_box(
+                to_char().invoke(&[data.clone(), pattern.clone()])
+                    .expect("to_char should work on valid values"),
+            )
+        })
     });
 }
 
 criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
+
