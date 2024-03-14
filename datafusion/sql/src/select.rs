@@ -24,8 +24,9 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
-use datafusion_common::Column;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{Column, UnnestOptions};
 use datafusion_expr::expr::{Alias, Unnest};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
@@ -276,36 +277,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(plan)
     }
 
-    // Try converting Expr::Unnest to LogicalPlan::Unnest if possible, otherwise do the final projection
-    fn try_process_unnest(
+    /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
+    pub(super) fn try_process_unnest(
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
-        let mut exprs_to_unnest = vec![];
+        let mut unnest_columns = vec![];
+        let mut inner_projection_exprs = vec![];
 
-        for expr in select_exprs.iter() {
-            if let Expr::Unnest(Unnest { exprs }) = expr {
-                exprs_to_unnest.push(exprs[0].clone());
-            }
-        }
+        let outer_projection_exprs = select_exprs
+            .into_iter()
+            .map(|expr| {
+                let Transformed {
+                    data: transformed_expr,
+                    transformed,
+                    tnr: _,
+                } = expr.transform_up_mut(&mut |expr: Expr| {
+                    if let Expr::Unnest(Unnest { ref exprs }) = expr {
+                        let column_name = expr.display_name()?;
+                        unnest_columns.push(column_name.clone());
+                        // Add alias for the argument expression, to avoid naming conflicts with other expressions
+                        // in the select list. For example: `select unnest(col1), col1 from t`.
+                        inner_projection_exprs
+                            .push(exprs[0].clone().alias(column_name.clone()));
+                        Ok(Transformed::yes(Expr::Column(Column::from_name(
+                            column_name,
+                        ))))
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })?;
+
+                if !transformed {
+                    if matches!(&transformed_expr, Expr::Column(_)) {
+                        inner_projection_exprs.push(transformed_expr.clone());
+                        Ok(transformed_expr)
+                    } else {
+                        // We need to evaluate the expr in the inner projection,
+                        // outer projection just select its name
+                        let column_name = transformed_expr.display_name()?;
+                        inner_projection_exprs.push(transformed_expr);
+                        Ok(Expr::Column(Column::from_name(column_name)))
+                    }
+                } else {
+                    Ok(transformed_expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Do the final projection
-        if exprs_to_unnest.is_empty() {
+        if unnest_columns.is_empty() {
             LogicalPlanBuilder::from(input)
-                .project(select_exprs)?
+                .project(inner_projection_exprs)?
                 .build()
         } else {
-            if exprs_to_unnest.len() > 1 {
+            if unnest_columns.len() > 1 {
                 return not_impl_err!("Only support single unnest expression for now");
             }
-
-            let expr = exprs_to_unnest[0].clone();
-            let column = expr.display_name()?;
-
+            let unnest_column = unnest_columns.pop().unwrap();
+            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+            let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
             LogicalPlanBuilder::from(input)
-                .project(vec![expr])?
-                .unnest_column(column)?
+                .project(inner_projection_exprs)?
+                .unnest_column_with_options(unnest_column, unnest_options)?
+                .project(outer_projection_exprs)?
                 .build()
         }
     }

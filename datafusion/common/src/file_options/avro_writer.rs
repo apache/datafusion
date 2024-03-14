@@ -17,20 +17,5 @@
 
 //! Options related to how avro files should be written
 
-use crate::{
-    config::ConfigOptions,
-    error::{DataFusionError, Result},
-};
-
-use super::StatementOptions;
-
 #[derive(Clone, Debug)]
 pub struct AvroWriterOptions {}
-
-impl TryFrom<(&ConfigOptions, &StatementOptions)> for AvroWriterOptions {
-    type Error = DataFusionError;
-
-    fn try_from(_value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
-        Ok(AvroWriterOptions {})
-    }
-}

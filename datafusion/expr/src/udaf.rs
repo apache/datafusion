@@ -23,7 +23,7 @@ use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
@@ -44,9 +44,10 @@ use std::sync::Arc;
 ///
 /// For more information, please see [the examples]:
 ///
-/// 1. For simple (less performant) use cases, use [`create_udaf`] and [`simple_udaf.rs`].
+/// 1. For simple use cases, use [`create_udaf`] (examples in [`simple_udaf.rs`]).
 ///
-/// 2. For advanced use cases, use [`AggregateUDFImpl`] and [`advanced_udaf.rs`].
+/// 2. For advanced use cases, use [`AggregateUDFImpl`] which provides full API
+/// access (examples in [`advanced_udaf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `AggregateUDFImpl` to maintain backwards
@@ -117,6 +118,14 @@ impl AggregateUDF {
         self.inner.clone()
     }
 
+    /// Adds additional names that can be used to invoke this function, in
+    /// addition to `name`
+    ///
+    /// If you implement [`AggregateUDFImpl`] directly you should return aliases directly.
+    pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
+        Self::new_from_impl(AliasedAggregateUDFImpl::new(self.inner.clone(), aliases))
+    }
+
     /// creates an [`Expr`] that calls the aggregate function.
     ///
     /// This utility allows using the UDAF without requiring access to
@@ -136,6 +145,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// Returns this function's signature (what input types are accepted)
@@ -275,6 +289,64 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+}
+
+/// AggregateUDF that adds an alias to the underlying function. It is better to
+/// implement [`AggregateUDFImpl`], which supports aliases, directly if possible.
+#[derive(Debug)]
+struct AliasedAggregateUDFImpl {
+    inner: Arc<dyn AggregateUDFImpl>,
+    aliases: Vec<String>,
+}
+
+impl AliasedAggregateUDFImpl {
+    pub fn new(
+        inner: Arc<dyn AggregateUDFImpl>,
+        new_aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        let mut aliases = inner.aliases().to_vec();
+        aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
+
+        Self { inner, aliases }
+    }
+}
+
+impl AggregateUDFImpl for AliasedAggregateUDFImpl {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(arg)
+    }
+
+    fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
+        self.inner.state_type(return_type)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, TableType};
 use log::debug;
 

@@ -16,13 +16,14 @@
 // under the License.
 
 use std::path::Path;
-use std::{path::PathBuf, time::Instant};
+use std::path::PathBuf;
 
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
 };
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::instant::Instant;
 use structopt::StructOpt;
 
 use crate::{BenchmarkRun, CommonOpt};

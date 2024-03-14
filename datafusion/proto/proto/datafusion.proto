@@ -1,4 +1,6 @@
 /*
+
+
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -88,17 +90,13 @@ message ProjectionColumns {
 }
 
 message CsvFormat {
-  bool has_header = 1;
-  string delimiter = 2;
-  string quote = 3;
-  oneof optional_escape {
-    string escape = 4;
-  }
+  CsvOptions options = 5;
 }
 
 message ParquetFormat {
   // Used to be bool enable_pruning = 1;
   reserved 1;
+  TableParquetOptions options = 2;
 }
 
 message AvroFormat {}
@@ -322,21 +320,18 @@ message DistinctOnNode {
 message CopyToNode {
     LogicalPlanNode input = 1;
     string output_url = 2;
-    oneof CopyOptions {
-        SQLOptions sql_options = 4;
-        FileTypeWriterOptions writer_options = 5;
+    oneof format_options {
+      CsvOptions csv = 8;
+      JsonOptions json = 9;
+      TableParquetOptions parquet = 10;
+      AvroOptions avro = 11;
+      ArrowOptions arrow = 12;
     }
-    string file_type = 6;
+    repeated string partition_by = 7;
 }
 
-message SQLOptions {
-  repeated SQLOption option = 1;
-}
-
-message SQLOption {
-    string key = 1;
-    string value = 2;
-}
+message AvroOptions {}
+message ArrowOptions {}
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
@@ -544,14 +539,16 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs = 0;
-  Acos = 1;
-  Asin = 2;
+  //  0 was Abs before
+  //  The first enum value must be zero for open enums
+  unknown = 0;
+  //  1 was Acos
+  //  2 was Asin
   Atan = 3;
   Ascii = 4;
   Ceil = 5;
   Cos = 6;
-  Digest = 7;
+  // 7 was Digest
   Exp = 8;
   Floor = 9;
   Ln = 10;
@@ -562,60 +559,60 @@ enum ScalarFunction {
   Signum = 15;
   Sin = 16;
   Sqrt = 17;
-  Tan = 18;
+  // Tan = 18;
   Trunc = 19;
-  Array = 20;
-  RegexpMatch = 21;
+  // 20 was Array
+  // RegexpMatch = 21;
   BitLength = 22;
   Btrim = 23;
   CharacterLength = 24;
   Chr = 25;
   Concat = 26;
   ConcatWithSeparator = 27;
-  DatePart = 28;
-  DateTrunc = 29;
+  // 28 was DatePart
+  // 29 was DateTrunc
   InitCap = 30;
   Left = 31;
   Lpad = 32;
   Lower = 33;
   Ltrim = 34;
-  MD5 = 35;
+  // 35 was MD5
   //  36 was NullIf
   OctetLength = 37;
   Random = 38;
-  RegexpReplace = 39;
+  // 39 was RegexpReplace
   Repeat = 40;
   Replace = 41;
   Reverse = 42;
   Right = 43;
   Rpad = 44;
   Rtrim = 45;
-  SHA224 = 46;
-  SHA256 = 47;
-  SHA384 = 48;
-  SHA512 = 49;
+  // 46 was SHA224
+  // 47 was SHA256
+  // 48 was SHA384
+  // 49 was SHA512
   SplitPart = 50;
   StartsWith = 51;
   Strpos = 52;
   Substr = 53;
   ToHex = 54;
-  ToTimestamp = 55;
-  ToTimestampMillis = 56;
-  ToTimestampMicros = 57;
-  ToTimestampSeconds = 58;
-  Now = 59;
+  // 55 was ToTimestamp
+  // 56 was ToTimestampMillis
+  // 57 was ToTimestampMicros
+  // 58 was ToTimestampSeconds
+  // 59 was Now
   Translate = 60;
   Trim = 61;
   Upper = 62;
   Coalesce = 63;
   Power = 64;
-  StructFun = 65;
-  FromUnixtime = 66;
+  // 65 was StructFun
+  // 66 was FromUnixtime
   Atan2 = 67;
-  DateBin = 68;
-  ArrowTypeof = 69;
-  CurrentDate = 70;
-  CurrentTime = 71;
+  // 68 was DateBin
+  // 69 was ArrowTypeof
+  // 70 was CurrentDate
+  // 71 was CurrentTime
   Uuid = 72;
   Cbrt = 73;
   Acosh = 74;
@@ -623,62 +620,64 @@ enum ScalarFunction {
   Atanh = 76;
   Sinh = 77;
   Cosh = 78;
-  Tanh = 79;
+  // Tanh = 79;
   Pi = 80;
   Degrees = 81;
   Radians = 82;
   Factorial = 83;
   Lcm = 84;
   Gcd = 85;
-  ArrayAppend = 86;
-  ArrayConcat = 87;
-  ArrayDims = 88;
-  ArrayRepeat = 89;
-  ArrayLength = 90;
-  ArrayNdims = 91;
+  // 86 was ArrayAppend
+  // 87 was ArrayConcat
+  // 88 was ArrayDims
+  // 89 was ArrayRepeat
+  // 90 was ArrayLength
+  // 91 was ArrayNdims
   ArrayPosition = 92;
   ArrayPositions = 93;
-  ArrayPrepend = 94;
+  // 94 was ArrayPrepend
   ArrayRemove = 95;
   ArrayReplace = 96;
   // 97 was ArrayToString
-  Cardinality = 98;
+  // 98 was Cardinality
   ArrayElement = 99;
   ArraySlice = 100;
   Cot = 103;
-  ArrayHas = 104;
-  ArrayHasAny = 105;
-  ArrayHasAll = 106;
+  // 104 was ArrayHas
+  // 105 was ArrayHasAny
+  // 106 was ArrayHasAll
   ArrayRemoveN = 107;
   ArrayReplaceN = 108;
   ArrayRemoveAll = 109;
   ArrayReplaceAll = 110;
   Nanvl = 111;
-  Flatten = 112;
+  // 112 was Flatten
   // 113 was IsNan
   Iszero = 114;
-  ArrayEmpty = 115;
+  // 115 was ArrayEmpty
   ArrayPopBack = 116;
-  StringToArray = 117;
-  ToTimestampNanos = 118;
+  // 117 was StringToArray
+  // 118 was ToTimestampNanos
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Range = 122;
+  /// 122 is Range
   ArrayExcept = 123;
   ArrayPopFront = 124;
   Levenshtein = 125;
   SubstrIndex = 126;
   FindInSet = 127;
-  ArraySort = 128;
-  ArrayDistinct = 129;
-  ArrayResize = 130;
+  /// 128 was ArraySort
+  /// 129 was ArrayDistinct
+  /// 130 was ArrayResize
   EndsWith = 131;
-  InStr = 132;
-  MakeDate = 133;
+  /// 132 was InStr
+  /// 133 was MakeDate
   ArrayReverse = 134;
-  RegexpLike = 135;
-  ToChar = 136;
+  /// 135 is RegexpLike
+  /// 136 was ToChar
+  /// 137 was ToDate
+  /// 138 was ToUnixtime
 }
 
 message ScalarFunctionNode {
@@ -746,6 +745,7 @@ message AggregateUDFExprNode {
 message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
 }
 
 enum BuiltInWindowFunction {
@@ -1211,22 +1211,11 @@ message PartitionColumn {
   ArrowType arrow_type = 2;
 }
 
-message FileTypeWriterOptions {
-  oneof FileType {
-    JsonWriterOptions json_options = 1;
-    ParquetWriterOptions parquet_options = 2;
-    CsvWriterOptions csv_options = 3;
-    ArrowWriterOptions arrow_options = 4;
-  }
-}
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
 }
 
-message ParquetWriterOptions {
-    WriterProperties writer_properties = 1;
-}
 
 message CsvWriterOptions {
   // Compression type
@@ -1247,16 +1236,26 @@ message CsvWriterOptions {
   string null_value = 8;
 }
 
-message ArrowWriterOptions {}
+// Options controlling CSV format
+message CsvOptions {
+  bool has_header = 1; // Indicates if the CSV has a header row
+  bytes delimiter = 2; // Delimiter character as a byte
+  bytes quote = 3; // Quote character as a byte
+  bytes escape = 4; // Optional escape character as a byte
+  CompressionTypeVariant compression = 5; // Compression type
+  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  string date_format = 7; // Optional date format
+  string datetime_format = 8; // Optional datetime format
+  string timestamp_format = 9; // Optional timestamp format
+  string timestamp_tz_format = 10; // Optional timestamp with timezone format
+  string time_format = 11; // Optional time format
+  string null_value = 12; // Optional representation of null value
+}
 
-message WriterProperties {
-  uint64 data_page_size_limit = 1;
-  uint64 dictionary_page_size_limit = 2;
-  uint64 data_page_row_count_limit = 3;
-  uint64 write_batch_size = 4;
-  uint64 max_row_group_size = 5;
-  string writer_version = 6;
-  string created_by = 7;
+// Options controlling CSV format
+message JsonOptions {
+  CompressionTypeVariant compression = 1; // Compression type
+  uint64 schema_infer_max_rec = 2; // Max records for schema inference
 }
 
 message FileSinkConfig {
@@ -1268,11 +1267,11 @@ message FileSinkConfig {
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool overwrite = 8;
-  FileTypeWriterOptions file_type_writer_options = 9;
 }
 
 message JsonSink {
   FileSinkConfig config = 1;
+  JsonWriterOptions writer_options = 2;
 }
 
 message JsonSinkExecNode {
@@ -1284,6 +1283,7 @@ message JsonSinkExecNode {
 
 message CsvSink {
   FileSinkConfig config = 1;
+  CsvWriterOptions writer_options = 2;
 }
 
 message CsvSinkExecNode {
@@ -1293,8 +1293,115 @@ message CsvSinkExecNode {
   PhysicalSortExprNodeCollection sort_order = 4;
 }
 
+message TableParquetOptions {
+  ParquetOptions global = 1;
+  repeated ColumnSpecificOptions column_specific_options = 2;
+}
+
+message ColumnSpecificOptions {
+  string column_name = 1;
+  ColumnOptions options = 2;
+}
+
+message ColumnOptions {
+  oneof bloom_filter_enabled_opt {
+    bool bloom_filter_enabled = 1;
+  }
+
+  oneof encoding_opt {
+    string encoding = 2;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 3;
+  }
+
+  oneof compression_opt {
+    string compression = 4;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 5;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 6;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 7;
+  }
+
+  oneof max_statistics_size_opt {
+    uint32 max_statistics_size = 8;
+  }
+}
+
+message ParquetOptions {
+  // Regular fields
+  bool enable_page_index = 1; // default = true
+  bool pruning = 2; // default = true
+  bool skip_metadata = 3; // default = true
+  bool pushdown_filters = 5; // default = false
+  bool reorder_filters = 6; // default = false
+  uint64 data_pagesize_limit = 7; // default = 1024 * 1024
+  uint64 write_batch_size = 8; // default = 1024
+  string writer_version = 9; // default = "1.0"
+  bool bloom_filter_enabled = 20; // default = false
+  bool allow_single_file_parallelism = 23; // default = true
+  uint64 maximum_parallel_row_group_writers = 24; // default = 1
+  uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
+
+  oneof metadata_size_hint_opt {
+    uint64 metadata_size_hint = 4;
+  }
+
+  oneof compression_opt {
+    string compression = 10;
+  }
+
+  oneof dictionary_enabled_opt {
+    bool dictionary_enabled = 11;
+  }
+
+  oneof statistics_enabled_opt {
+    string statistics_enabled = 13;
+  }
+
+  oneof max_statistics_size_opt {
+    uint64 max_statistics_size = 14;
+  }
+
+  oneof column_index_truncate_length_opt {
+    uint64 column_index_truncate_length = 17;
+  }
+
+  oneof encoding_opt {
+    string encoding = 19;
+  }
+
+  oneof bloom_filter_fpp_opt {
+    double bloom_filter_fpp = 21;
+  }
+
+  oneof bloom_filter_ndv_opt {
+    uint64 bloom_filter_ndv = 22;
+  }
+
+  uint64 dictionary_page_size_limit = 12;
+
+  uint64 data_page_row_count_limit = 18;
+
+  uint64 max_row_group_size = 15;
+
+  string created_by = 16;
+}
+
+
+
 message ParquetSink {
   FileSinkConfig config = 1;
+  TableParquetOptions parquet_options = 2;
 }
 
 message ParquetSinkExecNode {
@@ -1345,8 +1452,6 @@ message PhysicalExprNode {
     PhysicalScalarUdfNode scalar_udf = 16;
 
     PhysicalLikeExprNode like_expr = 18;
-
-    PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
 }
 
@@ -1529,6 +1634,7 @@ message HashJoinExecNode {
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
+  repeated uint32 projection = 9;
 }
 
 enum StreamPartitionMode {
@@ -1760,27 +1866,4 @@ message ColumnStats {
   Precision max_value = 2;
   Precision null_count = 3;
   Precision distinct_count = 4;
-}
-
-message NamedStructFieldExpr {
-  ScalarValue name = 1;
-}
-
-message ListIndexExpr {
-  PhysicalExprNode key = 1;
-}
-
-message ListRangeExpr {
-  PhysicalExprNode start = 1;
-  PhysicalExprNode stop = 2;
-  PhysicalExprNode stride = 3;
-}
-
-message PhysicalGetIndexedFieldExprNode {
-  PhysicalExprNode arg = 1;
-  oneof field {
-    NamedStructFieldExpr named_struct_field_expr = 2;
-    ListIndexExpr list_index_expr = 3;
-    ListRangeExpr list_range_expr = 4;
-  }
 }

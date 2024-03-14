@@ -157,6 +157,8 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 - `cargo test` to test
 - etc.
 
+Note that running `cargo test` requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running `cargo test -- --test-threads=1`. For more information see [this issue](https://github.com/apache/arrow-datafusion/issues/5347).
+
 Testing setup:
 
 - `rustup update stable` DataFusion uses the latest stable release of rust
@@ -193,7 +195,7 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 
-Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability. While we are still in the process of [migrating some old sql_integration tests](https://github.com/apache/arrow-datafusion/issues/6195), all new tests should be written using sqllogictests if possible.
+Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
 ### Rust Integration Tests
 
@@ -202,7 +204,7 @@ There are several tests of the public interface of the DataFusion library in the
 You can run these tests individually using `cargo` as normal command such as
 
 ```shell
-cargo test -p datafusion --test dataframe
+cargo test -p datafusion --test parquet_exec
 ```
 
 ## Benchmarks
@@ -247,22 +249,27 @@ These are valuable for comparative evaluation against alternative Arrow implemen
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
-- Add the actual implementation of the function:
-  - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
-  - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
-  - create a new module [here](../../../datafusion/physical-expr/src) for other functions
-- In [physical-expr/src](../../../datafusion/physical-expr/src/functions.rs), add:
-  - a new variant to `BuiltinScalarFunction`
-  - a new entry to `FromStr` with the name of the function as called by SQL
-  - a new line in `return_type` with the expected return type of the function, given an incoming type
-  - a new line in `signature` with the signature of the function (number and types of its arguments)
-  - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
-  - tests to the function.
+- Add the actual implementation of the function to a new module file within:
+  - [here](../../../datafusion/functions-array/src) for array functions
+  - [here](../../../datafusion/functions/src/crypto) for crypto functions
+  - [here](../../../datafusion/functions/src/datetime) for datetime functions
+  - [here](../../../datafusion/functions/src/encoding) for encoding functions
+  - [here](../../../datafusion/functions/src/math) for math functions
+  - [here](../../../datafusion/functions/src/regex) for regex functions
+  - [here](../../../datafusion/functions/src/string) for string functions
+  - [here](../../../datafusion/functions/src/unicode) for unicode functions
+  - create a new module [here](../../../datafusion/functions/src) for other functions.
+- New function modules - for example a `vector` module, should use a [rust feature](https://doc.rust-lang.org/cargo/reference/features.html) (for example `vector_expressions`) to allow DataFusion
+  users to enable or disable the new module as desired.
+- The implementation of the function is done via implementing `ScalarUDFImpl` trait for the function struct.
+  - See the [advanced_udf.rs](../../../datafusion-examples/examples/advanced_udf.rs) example for an example implementation
+  - Add tests for the new function
+- To connect the implementation of the function add to the mod.rs file:
+  - a `mod xyz;` where xyz is the new module file
+  - a call to `make_udf_function!(..);`
+  - an item in `export_functions!(..);`
 - In [sqllogictest/test_files](../../../datafusion/sqllogictest/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](../../../datafusion/sqllogictest/README.md)
-- In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
-  - a new entry of the `unary_scalar_expr!` macro for the new function.
 - Add SQL reference documentation [here](../../../docs/source/user-guide/sql/scalar_functions.md)
 
 ### How to add a new aggregate function
@@ -272,7 +279,7 @@ Below is a checklist of what you need to do to add a new aggregate function to D
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
   - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
   - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
+  - [here](../../../datafusion/functions/src/datetime/mod.rs) for datetime functions
   - create a new module [here](../../../datafusion/physical-expr/src) for other functions
 - In [datafusion/expr/src](../../../datafusion/expr/src/aggregate_function.rs), add:
   - a new variant to `AggregateFunction`
@@ -337,4 +344,29 @@ After you've confirmed your prettier version, you can format all the `.md` files
 
 ```bash
 prettier -w {datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
+```
+
+## How to format `.toml` files
+
+We use `taplo` to format `.toml` files.
+
+For Rust developers, you can install it via:
+
+```sh
+cargo install taplo-cli --locked
+```
+
+> Refer to the [Installation section][doc] on other ways to install it.
+>
+> [doc]: https://taplo.tamasfe.dev/cli/installation/binary.html
+
+```bash
+$ taplo --version
+taplo 0.9.0
+```
+
+After you've confirmed your `taplo` version, you can format all the `.toml` files:
+
+```bash
+taplo fmt
 ```

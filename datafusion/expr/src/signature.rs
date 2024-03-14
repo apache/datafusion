@@ -30,6 +30,11 @@ use arrow::datatypes::DataType;
 /// return results with this timezone.
 pub const TIMEZONE_WILDCARD: &str = "+TZ";
 
+/// Constant that is used as a placeholder for any valid fixed size list.
+/// This is used where a function can accept a fixed size list type with any
+/// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
+pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
+
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
@@ -39,7 +44,7 @@ pub enum Volatility {
     Immutable,
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is [super::BuiltinScalarFunction::Now]. DataFusion
+    /// this is the `Now` function. DataFusion
     /// will attempt to inline `Stable` functions during planning, when possible.
     /// For query `select col1, now() from t1`, it might take a while to execute but
     /// `now()` column will be the same for each output row, which is evaluated
@@ -123,7 +128,7 @@ pub enum TypeSignature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
-    /// The first argument should be List/LargeList, and the second argument should be non-list or list.
+    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be non-list or list.
     /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
     /// List dimension of the List/LargeList is equivalent to the number of List.
     /// List dimension of the non-list is 0.
@@ -133,9 +138,14 @@ pub enum ArrayFunctionSignature {
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
     /// Specialized Signature for Array functions of the form (List/LargeList, Index)
+    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be Int64.
     ArrayAndIndex,
     /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
     ArrayAndElementAndOptionalIndex,
+    /// Specialized Signature for ArrayEmpty and similar functions
+    /// The function takes a single argument that must be a List/LargeList/FixedSizeList
+    /// or something that can be coerced to one of those types.
+    Array,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -152,6 +162,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::ArrayAndIndex => {
                 write!(f, "array, index")
+            }
+            ArrayFunctionSignature::Array => {
+                write!(f, "array")
             }
         }
     }
@@ -322,6 +335,13 @@ impl Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::ArrayAndIndex,
             ),
+            volatility,
+        }
+    }
+    /// Specialized Signature for ArrayEmpty and similar functions
+    pub fn array(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
             volatility,
         }
     }

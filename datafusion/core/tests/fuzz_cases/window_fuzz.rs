@@ -30,6 +30,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
@@ -123,7 +124,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
         for i in 0..n {
             let idx = i % test_cases.len();
             let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
-            let job = tokio::spawn(run_window_test(
+            let job = SpawnedTask::spawn(run_window_test(
                 make_staggered_batches::<true>(1000, n_distinct, i as u64),
                 i as u64,
                 pb_cols,
@@ -133,7 +134,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
             handles.push(job);
         }
         for job in handles {
-            job.await.unwrap()?;
+            job.join().await.unwrap()?;
         }
     }
     Ok(())
@@ -281,6 +282,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &orderby_exprs,
                     Arc::new(window_frame),
                     schema.as_ref(),
+                    false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
@@ -642,6 +644,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
+                false,
             )
             .unwrap()],
             exec1,
@@ -664,6 +667,7 @@ async fn run_window_test(
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
                 schema.as_ref(),
+                false,
             )
             .unwrap()],
             exec2,

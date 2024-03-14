@@ -20,14 +20,16 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::{sync::Arc, vec};
 
+use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
+use datafusion_sql::planner::PlannerContext;
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::{
-    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
-    TableReference,
+    config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
 };
-use datafusion_common::{plan_err, ParamValues};
+use datafusion_common::{plan_err, DFSchema, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
@@ -39,6 +41,7 @@ use datafusion_sql::{
 };
 
 use rstest::rstest;
+use sqlparser::parser::Parser;
 
 #[test]
 fn parse_decimals() {
@@ -1288,16 +1291,6 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
     );
 }
 
-#[test]
-fn select_simple_aggregate_respect_nulls() {
-    let sql = "SELECT MIN(age) RESPECT NULLS FROM person";
-    let err = logical_plan(sql).expect_err("query should have failed");
-
-    assert_contains!(
-        err.strip_backtrace(),
-        "This feature is not implemented: Null treatment in aggregate functions is not supported: RESPECT NULLS"
-    );
-}
 #[test]
 fn select_from_typed_string_values() {
     quick_test(
@@ -2683,8 +2676,12 @@ fn logical_plan_with_dialect_and_options(
             "arrow_cast",
             vec![DataType::Int64, DataType::Utf8],
             DataType::Float64,
+        ))
+        .with_udf(make_udf(
+            "date_trunc",
+            vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
+            DataType::Int32,
         ));
-
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2737,8 +2734,7 @@ impl ScalarUDFImpl for DummyUDF {
 
 /// Create logical plan, write with formatter, compare to expected output
 fn quick_test(sql: &str, expected: &str) {
-    let plan = logical_plan(sql).unwrap();
-    assert_eq!(format!("{plan:?}"), expected);
+    quick_test_with_options(sql, expected, ParserOptions::default())
 }
 
 fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
@@ -2887,11 +2883,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.udfs.get(name).map(Arc::clone)
+        self.udfs.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).map(Arc::clone)
+        self.udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -2912,6 +2908,18 @@ impl ContextProvider for MockContextProvider {
         schema: SchemaRef,
     ) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(EmptyTable::new(schema)))
+    }
+
+    fn udfs_names(&self) -> Vec<String> {
+        self.udfs.keys().cloned().collect()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        self.udafs.keys().cloned().collect()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -4429,6 +4437,31 @@ fn test_field_not_found_window_function() {
     quick_test(qualified_sql, expected);
 }
 
+#[test]
+fn test_parse_escaped_string_literal_value() {
+    let sql = r"SELECT length('\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\r\n') AS len";
+    let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let expected =
+        "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+
+    let sql = r"SELECT length(E'\000') AS len";
+    assert_eq!(
+        logical_plan(sql).unwrap_err().strip_backtrace(),
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+    )
+}
+
 fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
@@ -4459,6 +4492,97 @@ impl TableSource for EmptyTable {
 
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
+    }
+}
+
+#[test]
+fn roundtrip_expr() {
+    let tests: Vec<(TableReference, &str, &str)> = vec![
+        (TableReference::bare("person"), "age > 35", "(age > 35)"),
+        (TableReference::bare("person"), "id = '10'", "(id = '10')"),
+        (
+            TableReference::bare("person"),
+            "CAST(id AS VARCHAR)",
+            "CAST(id AS VARCHAR)",
+        ),
+        (
+            TableReference::bare("person"),
+            "SUM((age * 2))",
+            "SUM((age * 2))",
+        ),
+    ];
+
+    let roundtrip = |table, sql: &str| -> Result<String> {
+        let dialect = GenericDialect {};
+        let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
+
+        let context = MockContextProvider::default();
+        let schema = context.get_table_source(table)?.schema();
+        let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
+        let sql_to_rel = SqlToRel::new(&context);
+        let expr =
+            sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
+
+        let ast = expr_to_sql(&expr)?;
+
+        Ok(format!("{}", ast))
+    };
+
+    for (table, query, expected) in tests {
+        let actual = roundtrip(table, query).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn roundtrip_statement() {
+    let tests: Vec<(&str, &str)> = vec![
+        (
+            "select ta.j1_id from j1 ta;",
+            r#"SELECT ta.j1_id FROM j1 AS ta"#,
+        ),
+        (
+            "select ta.j1_id from j1 ta order by ta.j1_id;",
+            r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST"#,
+        ),
+        (
+            "select * from j1 ta order by ta.j1_id, ta.j1_string desc;",
+            r#"SELECT ta.j1_id, ta.j1_string FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST, ta.j1_string DESC NULLS FIRST"#,
+        ),
+        (
+            "select * from j1 limit 10;",
+            r#"SELECT j1.j1_id, j1.j1_string FROM j1 LIMIT 10"#,
+        ),
+        (
+            "select ta.j1_id from j1 ta where ta.j1_id > 1;",
+            r#"SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1)"#,
+        ),
+        (
+            "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id);",
+            r#"SELECT ta.j1_id, tb.j2_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id)"#,
+        ),
+        (
+            "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
+            r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
+        ),
+    ];
+
+    let roundtrip = |sql: &str| -> Result<String> {
+        let dialect = GenericDialect {};
+        let statement = Parser::new(&dialect).try_with_sql(sql)?.parse_statement()?;
+
+        let context = MockContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        let ast = plan_to_sql(&plan)?;
+
+        Ok(format!("{}", ast))
+    };
+
+    for (query, expected) in tests {
+        let actual = roundtrip(query).unwrap();
+        assert_eq!(actual, expected);
     }
 }
 

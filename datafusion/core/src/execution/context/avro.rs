@@ -43,7 +43,8 @@ impl SessionContext {
         table_path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -60,6 +61,7 @@ impl SessionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use async_trait::async_trait;
 
     // Test for compilation error when calling read_* functions from an #[async_trait] function.

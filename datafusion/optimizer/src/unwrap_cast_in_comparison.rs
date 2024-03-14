@@ -18,24 +18,25 @@
 //! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+
+use std::cmp::Ordering;
+use std::sync::Arc;
+
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
-use std::cmp::Ordering;
-use std::sync::Arc;
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -127,13 +128,9 @@ struct UnwrapCastExprRewriter {
 }
 
 impl TreeNodeRewriter for UnwrapCastExprRewriter {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
-    }
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match &expr {
             // For case:
             // try_cast/cast(expr as data_type) op literal
@@ -161,11 +158,11 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                 try_cast_literal_to_type(left_lit_value, &expr_type)?;
                             if let Some(value) = casted_scalar_value {
                                 // unwrap the cast/try_cast for the right expr
-                                return Ok(binary_expr(
+                                return Ok(Transformed::yes(binary_expr(
                                     lit(value),
                                     *op,
                                     expr.as_ref().clone(),
-                                ));
+                                )));
                             }
                         }
                         (
@@ -180,11 +177,11 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                 try_cast_literal_to_type(right_lit_value, &expr_type)?;
                             if let Some(value) = casted_scalar_value {
                                 // unwrap the cast/try_cast for the left expr
-                                return Ok(binary_expr(
+                                return Ok(Transformed::yes(binary_expr(
                                     expr.as_ref().clone(),
                                     *op,
                                     lit(value),
-                                ));
+                                )));
                             }
                         }
                         (_, _) => {
@@ -193,7 +190,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                 }
                 // return the new binary op
-                Ok(binary_expr(left, *op, right))
+                Ok(Transformed::yes(binary_expr(left, *op, right)))
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
@@ -217,12 +214,12 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     let internal_left_type = internal_left.get_type(&self.schema);
                     if internal_left_type.is_err() {
                         // error data type
-                        return Ok(expr);
+                        return Ok(Transformed::no(expr));
                     }
                     let internal_left_type = internal_left_type?;
                     if !is_support_data_type(&internal_left_type) {
                         // not supported data type
-                        return Ok(expr);
+                        return Ok(Transformed::no(expr));
                     }
                     let right_exprs = list
                         .iter()
@@ -257,17 +254,19 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         })
                         .collect::<Result<Vec<_>>>();
                     match right_exprs {
-                        Ok(right_exprs) => {
-                            Ok(in_list(internal_left, right_exprs, *negated))
-                        }
-                        Err(_) => Ok(expr),
+                        Ok(right_exprs) => Ok(Transformed::yes(in_list(
+                            internal_left,
+                            right_exprs,
+                            *negated,
+                        ))),
+                        Err(_) => Ok(Transformed::no(expr)),
                     }
                 } else {
-                    Ok(expr)
+                    Ok(Transformed::no(expr))
                 }
             }
             // TODO: handle other expr type and dfs visit them
-            _ => Ok(expr),
+            _ => Ok(Transformed::no(expr)),
         }
     }
 }
@@ -476,15 +475,17 @@ fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
-    use arrow::compute::{cast_with_options, CastOptions};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::tree_node::TreeNode;
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    use super::*;
+    use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
+
+    use arrow::compute::{cast_with_options, CastOptions};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
 
     #[test]
     fn test_not_unwrap_cast_comparison() {
@@ -734,7 +735,7 @@ mod tests {
         let mut expr_rewriter = UnwrapCastExprRewriter {
             schema: schema.clone(),
         };
-        expr.rewrite(&mut expr_rewriter).unwrap()
+        expr.rewrite(&mut expr_rewriter).data().unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {

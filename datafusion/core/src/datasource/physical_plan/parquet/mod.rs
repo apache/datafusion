@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -30,23 +31,21 @@ use crate::datasource::physical_plan::{
     FileMeta, FileScanConfig, SchemaAdapter,
 };
 use crate::{
-    config::ConfigOptions,
+    config::{ConfigOptions, TableParquetOptions},
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
+        DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
+        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
     },
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_physical_expr::{
-    EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -64,7 +63,7 @@ use parquet::schema::types::ColumnDescriptor;
 use tokio::task::JoinSet;
 
 mod metrics;
-pub mod page_filter;
+mod page_filter;
 mod row_filter;
 mod row_groups;
 mod statistics;
@@ -74,23 +73,9 @@ pub use metrics::ParquetFileMetrics;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    /// Override for `Self::with_pushdown_filters`. If None, uses
-    /// values from base_config
-    pushdown_filters: Option<bool>,
-    /// Override for `Self::with_reorder_filters`. If None, uses
-    /// values from base_config
-    reorder_filters: Option<bool>,
-    /// Override for `Self::with_enable_page_index`. If None, uses
-    /// values from base_config
-    enable_page_index: Option<bool>,
-    /// Override for `Self::with_enable_bloom_filter`. If None, uses
-    /// values from base_config
-    enable_bloom_filter: Option<bool>,
     /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
-    projected_schema: SchemaRef,
-    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -103,6 +88,9 @@ pub struct ParquetExec {
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    cache: PlanProperties,
+    /// Parquet Options
+    parquet_options: TableParquetOptions,
 }
 
 impl ParquetExec {
@@ -111,6 +99,7 @@ impl ParquetExec {
         base_config: FileScanConfig,
         predicate: Option<Arc<dyn PhysicalExpr>>,
         metadata_size_hint: Option<usize>,
+        parquet_options: TableParquetOptions,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
@@ -150,22 +139,22 @@ impl ParquetExec {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
-
-        Self {
-            pushdown_filters: None,
-            reorder_filters: None,
-            enable_page_index: None,
-            enable_bloom_filter: None,
-            base_config,
+        let cache = Self::compute_properties(
             projected_schema,
+            &projected_output_ordering,
+            &base_config,
+        );
+        Self {
+            base_config,
             projected_statistics,
-            projected_output_ordering,
             metrics,
             predicate,
             pruning_predicate,
             page_pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
+            cache,
+            parquet_options,
         }
     }
 
@@ -207,14 +196,13 @@ impl ParquetExec {
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
-        self.pushdown_filters = Some(pushdown_filters);
+        self.parquet_options.global.pushdown_filters = pushdown_filters;
         self
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
-    fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
-        self.pushdown_filters
-            .unwrap_or(config_options.execution.parquet.pushdown_filters)
+    fn pushdown_filters(&self) -> bool {
+        self.parquet_options.global.pushdown_filters
     }
 
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
@@ -224,14 +212,13 @@ impl ParquetExec {
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
-        self.reorder_filters = Some(reorder_filters);
+        self.parquet_options.global.reorder_filters = reorder_filters;
         self
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
-    fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
-        self.reorder_filters
-            .unwrap_or(config_options.execution.parquet.reorder_filters)
+    fn reorder_filters(&self) -> bool {
+        self.parquet_options.global.reorder_filters
     }
 
     /// If enabled, the reader will read the page index
@@ -239,26 +226,52 @@ impl ParquetExec {
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
     pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
-        self.enable_page_index = Some(enable_page_index);
+        self.parquet_options.global.enable_page_index = enable_page_index;
         self
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
-    fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_page_index
-            .unwrap_or(config_options.execution.parquet.enable_page_index)
+    fn enable_page_index(&self) -> bool {
+        self.parquet_options.global.enable_page_index
     }
 
     /// If enabled, the reader will read by the bloom filter
     pub fn with_enable_bloom_filter(mut self, enable_bloom_filter: bool) -> Self {
-        self.enable_bloom_filter = Some(enable_bloom_filter);
+        self.parquet_options.global.bloom_filter_enabled = enable_bloom_filter;
         self
     }
 
     /// Return the value described in [`Self::with_enable_bloom_filter`]
-    fn enable_bloom_filter(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_bloom_filter
-            .unwrap_or(config_options.execution.parquet.bloom_filter_enabled)
+    fn enable_bloom_filter(&self) -> bool {
+        self.parquet_options.global.bloom_filter_enabled
+    }
+
+    fn output_partitioning_helper(file_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_config.file_groups.len())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_config), // Output Partitioning
+            ExecutionMode::Bounded,                        // Execution Mode
+        )
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
     }
 }
 
@@ -306,31 +319,13 @@ impl ExecutionPlan for ParquetExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.projected_schema)
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering
-            .first()
-            .map(|ordering| ordering.as_slice())
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
     }
 
     fn with_new_children(
@@ -351,12 +346,14 @@ impl ExecutionPlan for ParquetExec {
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(self.output_ordering().is_some())
+            .with_preserve_order_within_groups(
+                self.properties().output_ordering().is_some(),
+            )
             .repartition_file_groups(&self.base_config.file_groups);
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            new_plan.base_config.file_groups = repartitioned_file_groups;
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
         }
         Ok(Some(Arc::new(new_plan)))
     }
@@ -384,8 +381,6 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let config_options = ctx.session_config().options();
-
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
@@ -398,10 +393,10 @@ impl ExecutionPlan for ParquetExec {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(config_options),
-            reorder_filters: self.reorder_filters(config_options),
-            enable_page_index: self.enable_page_index(config_options),
-            enable_bloom_filter: self.enable_bloom_filter(config_options),
+            pushdown_filters: self.pushdown_filters(),
+            reorder_filters: self.reorder_filters(),
+            enable_page_index: self.enable_page_index(),
+            enable_bloom_filter: self.enable_bloom_filter(),
         };
 
         let stream =
@@ -763,6 +758,8 @@ pub(crate) fn parquet_to_arrow_decimal_type(
 #[cfg(test)]
 mod tests {
     // See also `parquet_exec` integration test
+    use std::fs::{self, File};
+    use std::io::Write;
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
@@ -780,28 +777,26 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::datatypes::Schema;
-    use arrow::record_batch::RecordBatch;
-    use arrow::{
-        array::{Int64Array, Int8Array, StringArray},
-        datatypes::{DataType, Field, SchemaBuilder},
+
+    use arrow::array::{
+        ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        StructArray,
     };
-    use arrow_array::{Date64Array, StructArray};
+
+    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder};
+    use arrow::record_batch::RecordBatch;
     use arrow_schema::Fields;
-    use chrono::{TimeZone, Utc};
-    use datafusion_common::{assert_contains, ToDFSchema};
-    use datafusion_common::{FileType, GetExt, ScalarValue};
+    use datafusion_common::{assert_contains, FileType, GetExt, ScalarValue, ToDFSchema};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::create_physical_expr;
-    use datafusion_physical_expr::execution_props::ExecutionProps;
+
+    use chrono::{TimeZone, Utc};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
     use parquet::arrow::ArrowWriter;
-    use std::fs::{self, File};
-    use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
 
@@ -904,6 +899,7 @@ mod tests {
                 },
                 predicate,
                 None,
+                Default::default(),
             );
 
             if pushdown_predicate {
@@ -1560,8 +1556,15 @@ mod tests {
                 },
                 None,
                 None,
+                Default::default(),
             );
-            assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+            assert_eq!(
+                parquet_exec
+                    .properties()
+                    .output_partitioning()
+                    .partition_count(),
+                1
+            );
             let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
 
             if let Some(expected_row_num) = expected_row_num {
@@ -1674,8 +1677,12 @@ mod tests {
             },
             None,
             None,
+            Default::default(),
         );
-        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            parquet_exec.cache.output_partitioning().partition_count(),
+            1
+        );
         assert_eq!(parquet_exec.schema().as_ref(), &expected_schema);
 
         let mut results = parquet_exec.execute(0, task_ctx)?;
@@ -1737,6 +1744,7 @@ mod tests {
             },
             None,
             None,
+            Default::default(),
         );
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
@@ -1999,7 +2007,7 @@ mod tests {
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // Configure listing options
-        let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+        let file_format = ParquetFormat::default().with_enable_pruning(true);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::PARQUET.get_ext());
 
@@ -2021,80 +2029,6 @@ mod tests {
         .unwrap();
         df.write_table("my_table", DataFrameWriteOptions::new())
             .await?;
-
-        // create a new context and verify that the results were saved to a partitioned parquet file
-        let ctx = SessionContext::new();
-
-        // get write_id
-        let mut paths = fs::read_dir(&out_dir).unwrap();
-        let path = paths.next();
-        let name = path
-            .unwrap()?
-            .path()
-            .file_name()
-            .expect("Should be a file name")
-            .to_str()
-            .expect("Should be a str")
-            .to_owned();
-        let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
-        let write_id = parsed_id.to_owned();
-
-        // register each partition as well as the top level dir
-        ctx.register_parquet(
-            "part0",
-            &format!("{out_dir}/{write_id}_0.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-
-        ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
-            .await?;
-
-        let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
-        let allparts = ctx
-            .sql("SELECT c1, c2 FROM allparts")
-            .await?
-            .collect()
-            .await?;
-
-        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
-
-        assert_eq!(part0[0].schema(), allparts[0].schema());
-
-        assert_eq!(allparts_count, 40);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn write_parquet_results() -> Result<()> {
-        // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
-        // let mut ctx = create_ctx(&tmp_dir, 4).await?;
-        let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_target_partitions(8),
-        );
-        let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
-        // register csv file with the execution context
-        ctx.register_csv(
-            "test",
-            tmp_dir.path().to_str().unwrap(),
-            CsvReadOptions::new().schema(&schema),
-        )
-        .await?;
-
-        // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-        let local_url = Url::parse("file://local").unwrap();
-        ctx.runtime_env().register_object_store(&local_url, local);
-
-        // execute a simple query and write the results to parquet
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
-        let out_dir_url = "file://local/out/";
-        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
-            .await?;
-        // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned parquet file
         let ctx = SessionContext::new();

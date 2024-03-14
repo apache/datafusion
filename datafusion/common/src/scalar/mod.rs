@@ -45,7 +45,7 @@ use arrow::{
     compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
         IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -3317,6 +3317,12 @@ impl ScalarType<i64> for TimestampNanosecondType {
     }
 }
 
+impl ScalarType<i32> for Date32Type {
+    fn scalar(r: Option<i32>) -> ScalarValue {
+        ScalarValue::Date32(r)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -4445,7 +4451,7 @@ mod tests {
         // per distinct value.
         //
         // The alignment requirements differ across architectures and
-        // thus the size of the enum appears to as as well
+        // thus the size of the enum appears to as well
 
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }
@@ -5820,6 +5826,7 @@ mod tests {
                             .unwrap()
                             .and_hms_opt(hour, minute, second)
                             .unwrap()
+                            .and_utc()
                             .timestamp(),
                     ),
                     None,
@@ -5832,6 +5839,7 @@ mod tests {
                             .unwrap()
                             .and_hms_milli_opt(hour, minute, second, millisec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_millis(),
                     ),
                     None,
@@ -5844,6 +5852,7 @@ mod tests {
                             .unwrap()
                             .and_hms_micro_opt(hour, minute, second, microsec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_micros(),
                     ),
                     None,
@@ -5856,6 +5865,7 @@ mod tests {
                             .unwrap()
                             .and_hms_nano_opt(hour, minute, second, nanosec)
                             .unwrap()
+                            .and_utc()
                             .timestamp_nanos_opt()
                             .unwrap(),
                     ),

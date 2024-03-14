@@ -15,13 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::BTreeSet;
+use std::ops::Deref;
+use std::sync::Arc;
+
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -30,10 +35,8 @@ use datafusion_expr::{
     exists, in_subquery, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
+
 use log::debug;
-use std::collections::BTreeSet;
-use std::ops::Deref;
-use std::sync::Arc;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
 #[derive(Default)]
@@ -228,7 +231,7 @@ fn build_join(
         collected_count_expr_map: Default::default(),
         pull_up_having_expr: None,
     };
-    let new_plan = subquery.clone().rewrite(&mut pull_up)?;
+    let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -321,8 +324,11 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+
     use super::*;
     use crate::test::*;
+
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
@@ -330,7 +336,6 @@ mod tests {
         logical_plan::LogicalPlanBuilder, not_exists, not_in_subquery, or, out_ref_col,
         Operator,
     };
-    use std::ops::Add;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(

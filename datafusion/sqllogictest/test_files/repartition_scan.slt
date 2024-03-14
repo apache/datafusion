@@ -158,7 +158,7 @@ DROP TABLE parquet_table_with_order;
 # create a single csv file
 statement ok
 COPY  (VALUES (1), (2), (3), (4), (5)) TO 'test_files/scratch/repartition_scan/csv_table/1.csv'
-(FORMAT csv, HEADER true);
+(FORMAT csv, 'csv.has_header' true);
 
 statement ok
 CREATE EXTERNAL TABLE csv_table(column1 int)

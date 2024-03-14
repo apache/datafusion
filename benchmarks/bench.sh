@@ -82,6 +82,7 @@ clickbench_extended:    ClickBench "inspired" queries against a single parquet (
 DATA_DIR        directory to store datasets
 CARGO_COMMAND   command that runs the benchmark binary
 DATAFUSION_DIR  directory to use (default $DATAFUSION_DIR)
+RESULTS_NAME    folder where the benchmark files are stored
 "
     exit 1
 }
@@ -166,18 +167,19 @@ main() {
             esac
             ;;
         run)
-            # Parse positional paraleters
+            # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
             BRANCH_NAME=$(cd ${DATAFUSION_DIR} && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
-            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$BRANCH_NAME"}
+            RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
+            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
 
             echo "***************************"
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
-            echo "BRACH_NAME: ${BRANCH_NAME}"
+            echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
@@ -278,7 +280,7 @@ data_tpch() {
         echo " tbl files exist ($FILE exists)."
     else
         echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s ${SCALE_FACTOR}
+        docker run -v "${TPCH_DIR}":/data --rm ghcr.io/scalytics/tpch-docker:main -vf -s ${SCALE_FACTOR}
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -288,7 +290,7 @@ data_tpch() {
     else
         echo " Copying answers to ${TPCH_DIR}/answers"
         mkdir -p "${TPCH_DIR}/answers"
-        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
+        docker run -v "${TPCH_DIR}":/data --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
     # Create 'parquet' files from tbl

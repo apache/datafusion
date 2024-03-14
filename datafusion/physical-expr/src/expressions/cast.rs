@@ -24,11 +24,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use DataType::*;
 
-use arrow::compute::{can_cast_types, kernels, CastOptions};
+use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
@@ -120,7 +120,7 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        cast_column(&value, &self.cast_type, Some(&self.cast_options))
+        value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -182,43 +182,6 @@ impl PartialEq<dyn Any> for CastExpr {
     }
 }
 
-/// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
-pub fn cast_column(
-    value: &ColumnarValue,
-    cast_type: &DataType,
-    cast_options: Option<&CastOptions<'static>>,
-) -> Result<ColumnarValue> {
-    let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
-    match value {
-        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-        )),
-        ColumnarValue::Scalar(scalar) => {
-            let scalar_array = if cast_type
-                == &DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
-            {
-                if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                    ScalarValue::Int64(
-                        Some((float_ts * 1_000_000_000_f64).trunc() as i64),
-                    )
-                    .to_array()?
-                } else {
-                    scalar.to_array()?
-                }
-            } else {
-                scalar.to_array()?
-            };
-            let cast_array = kernels::cast::cast_with_options(
-                &scalar_array,
-                cast_type,
-                &cast_options,
-            )?;
-            let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-            Ok(ColumnarValue::Scalar(cast_scalar))
-        }
-    }
-}
-
 /// Return a PhysicalExpression representing `expr` casted to
 /// `cast_type`, if any casting is needed.
 ///
@@ -232,10 +195,7 @@ pub fn cast_with_options(
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
-    } else if can_cast_types(&expr_type, &cast_type)
-        || (expr_type == DataType::Float64
-            && cast_type == DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None))
-    {
+    } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")

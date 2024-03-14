@@ -67,7 +67,7 @@ drop table IF EXISTS test1;
 statement ok
 drop table IF EXISTS test2;
 
-# two tables for join
+# tables for join
 statement ok
 CREATE TABLE IF NOT EXISTS t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
 (11, 'a', 1),
@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 (22, 'y', 1),
 (44, 'x', 3),
 (55, 'w', 3);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t3(t3_id INT, t3_name TEXT, t3_int INT) AS VALUES
+(11, 'z', 3),
+(22, ' ', 6),
+(33, 'x', 7),
+(55, 'w', 4);
 
 # batch size
 statement ok
@@ -551,6 +558,82 @@ FROM t1
 ----
 11 a 55
 
+# inner join multiple tables to one
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+----
+11 11 11
+22 22 22
+
+# inner join multiple tables to one with WHERE filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# inner join multiple tables to one with JOIN filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# subsequent inner join 
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_int = t3.t3_int
+----
+11 11 11
+44 44 11
+
+# subsequent inner join with filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# subsequent inner join with join filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause and filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+WHERE t3.t3_name = 'no such name'
+----
+
 # test create table from query with LEFT join
 statement ok
 create table left_join_test as 
@@ -602,6 +685,9 @@ drop table IF EXISTS t1;
 
 statement ok
 drop table IF EXISTS t2;
+
+statement ok
+drop table IF EXISTS t3;
 
 statement ok
 drop table IF EXISTS left_join_test;

@@ -183,7 +183,7 @@ impl<'a> MetricBuilder<'a> {
     }
 
     /// Consumes self and creates a new Timer for recording some
-    /// subset of of an operators execution time.
+    /// subset of an operators execution time.
     pub fn subset_time(
         self,
         subset_name: impl Into<Cow<'static, str>>,

@@ -15,15 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "core" DataFusion functions
+//! "math" DataFusion functions
 
+mod abs;
 mod nans;
 
-// create  UDFs
+// Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
+make_udf_function!(abs::AbsFunc, ABS, abs);
+
+make_math_unary_udf!(TanhFunc, TANH, tanh, tanh);
+make_math_unary_udf!(AcosFunc, ACOS, acos, acos);
+make_math_unary_udf!(AsinFunc, ASIN, asin, asin);
+make_math_unary_udf!(TanFunc, TAN, tan, tan);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
-    (isnan, num, "returns true if a given number is +NaN or -NaN otherwise returns false")
+    (
+        isnan,
+        num,
+        "returns true if a given number is +NaN or -NaN otherwise returns false"
+    ),
+    (abs, num, "returns the absolute value of a given number"),
+    (
+        acos,
+        num,
+        "returns the arc cosine or inverse cosine of a number"
+    ),
+    (
+        asin,
+        num,
+        "returns the arc sine or inverse sine of a number"
+    ),
+    (tan, num, "returns the tangent of a number"),
+    (tanh, num, "returns the hyperbolic tangent of a number")
 );
-
