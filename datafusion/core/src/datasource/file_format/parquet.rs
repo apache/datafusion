@@ -766,11 +766,11 @@ impl DataSink for ParquetSink {
 
 /// Consumes a stream of [ArrowLeafColumn] via a channel and serializes them using an [ArrowColumnWriter]
 /// Once the channel is exhausted, returns the ArrowColumnWriter.
-async fn column_serializer_task(
+fn column_serializer_task(
     mut rx: Receiver<ArrowLeafColumn>,
     mut writer: ArrowColumnWriter,
 ) -> Result<ArrowColumnWriter> {
-    while let Some(col) = rx.recv().await {
+    while let Some(col) = rx.blocking_recv() {
         writer.write(&col)?;
     }
     Ok(writer)
@@ -799,7 +799,8 @@ fn spawn_column_parallel_row_group_writer(
             mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
         col_array_channels.push(send_array);
 
-        let task = SpawnedTask::spawn(column_serializer_task(recieve_array, writer));
+        let task =
+            SpawnedTask::spawn_blocking(|| column_serializer_task(recieve_array, writer));
         col_writer_tasks.push(task);
     }
 
