@@ -673,13 +673,6 @@ scalar_expr!(
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
-    ArrayResize,
-    array_resize,
-    array size value,
-    "returns an array with the specified size filled with the given value."
-);
-
-scalar_expr!(
     ArrayIntersect,
     array_intersect,
     first_array second_array,
