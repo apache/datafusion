@@ -1006,10 +1006,9 @@ impl DefaultPhysicalPlanner {
                         // Remove temporary projected columns
                         let join_plan = if added_project {
                             let final_join_result = join_schema
-                                .fields()
                                 .iter()
-                                .map(|field| {
-                                    Expr::Column(field.qualified_column())
+                                .map(|(qualifier, field)| {
+                                    Expr::Column(datafusion_common::Column::new(qualifier.cloned(), field.name()))
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
@@ -1067,22 +1066,23 @@ impl DefaultPhysicalPlanner {
                             let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices.clone()
                                 .into_iter()
                                 .map(|i| (
-                                    left_df_schema.field(i).clone(),
+                                    left_df_schema.qualified_field(i),
                                     physical_left.schema().field(i).clone(),
                                 ))
                                 .chain(
                                     right_field_indices.clone()
                                         .into_iter()
                                         .map(|i| (
-                                            right_df_schema.field(i).clone(),
+                                            right_df_schema.qualified_field(i),
                                             physical_right.schema().field(i).clone(),
                                         ))
                                 )
                                 .unzip();
+                            let filter_df_fields = filter_df_fields.into_iter().map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone()))).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
-                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
+                            let filter_df_schema = DFSchema::from_qualified_fields(filter_df_fields, HashMap::new())?;
                             let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
                             let filter_expr = create_physical_expr(
                                 expr,
@@ -1979,7 +1979,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{assert_contains, TableReference};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{

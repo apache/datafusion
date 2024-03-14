@@ -38,7 +38,7 @@ use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
-use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
+use datafusion_common::{internal_err, Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -273,10 +273,10 @@ async fn prune_partitions(
     let df_schema = DFSchema::new_with_metadata(
         partition_cols
             .iter()
-            .map(|(n, d)| DFField::new_unqualified(n, d.clone(), true))
+            .map(|(n, d)| Field::new(n, d.clone(), true))
             .collect(),
         Default::default(),
-    )?;
+    );
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
 

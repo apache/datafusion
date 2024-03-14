@@ -171,11 +171,17 @@ impl DataFrame {
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
-            .map(|name| self.plan.schema().field_with_unqualified_name(name))
+            .map(|name| {
+                self.plan
+                    .schema()
+                    .field_and_qualifiers_with_unqualified_name(name)
+            })
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
             .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
+            .map(|(qualifier, field)| {
+                Expr::Column(Column::new(qualifier.clone(), field.name()))
+            })
             .collect();
         self.select(expr)
     }
@@ -1132,14 +1138,13 @@ impl DataFrame {
         let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
-            .fields()
             .iter()
-            .map(|f| {
-                if f.name() == name {
+            .map(|(qualifier, field)| {
+                if field.name() == name {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(f.qualified_column())
+                    col(Column::new(qualifier.cloned(), field.name()))
                 }
             })
             .collect();
@@ -1194,13 +1199,12 @@ impl DataFrame {
         let projection = self
             .plan
             .schema()
-            .fields()
             .iter()
-            .map(|f| {
-                if f == field_to_rename {
-                    col(f.qualified_column()).alias(new_name)
+            .map(|(qualifier, field)| {
+                if field.as_ref() == field_to_rename {
+                    col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
                 } else {
-                    col(f.qualified_column())
+                    col(Column::new(qualifier.cloned(), field.name()))
                 }
             })
             .collect::<Vec<_>>();

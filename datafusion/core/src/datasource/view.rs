@@ -21,6 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 
 use crate::{
@@ -126,9 +127,9 @@ impl TableProvider for ViewTable {
                 let fields: Vec<Expr> = projection
                     .iter()
                     .map(|i| {
-                        Expr::Column(
-                            self.logical_plan.schema().field(*i).qualified_column(),
-                        )
+                        let (qualifier, field) =
+                            self.logical_plan.schema().qualified_field(*i);
+                        Expr::Column(Column::new(qualifier.cloned(), field.name()))
                     })
                     .collect();
                 plan.project(fields)?
