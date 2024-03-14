@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use arrow_schema::Field;
 use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
     TableReference,
@@ -123,21 +124,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
-                Some((field, nested_names)) if !nested_names.is_empty() => {
+                Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
                     // TODO: remove when can support multiple nested identifiers
                     if nested_names.len() > 1 {
                         return internal_err!(
                             "Nested identifiers not yet supported for column {}",
-                            field.qualified_column().quoted_flat_name()
+                            Column::new(
+                                qualifier.map(|q| q.to_owned_reference()),
+                                field.name()
+                            )
+                            .quoted_flat_name()
                         );
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::Column(field.qualified_column()).field(nested_name))
+                    Ok(Expr::Column(Column::new(
+                        qualifier.map(|q| q.to_owned_reference()),
+                        field.name(),
+                    ))
+                    .field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
-                Some((field, _nested_names)) => {
-                    Ok(Expr::Column(field.qualified_column()))
-                }
+                Some((field, qualifier, _nested_names)) => Ok(Expr::Column(Column::new(
+                    qualifier.map(|q| q.to_owned_reference()),
+                    field.name(),
+                ))),
                 None => {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -149,21 +159,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let search_result = search_dfschema(&ids, outer);
                             match search_result {
                                 // found matching field with spare identifier(s) for nested field(s) in structure
-                                Some((field, nested_names))
+                                Some((field, qualifier, nested_names))
                                     if !nested_names.is_empty() =>
                                 {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
                                     internal_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        field.qualified_column().quoted_flat_name()
+                                        Column::new(qualifier.map(|q| q.to_owned_reference()), field.name()).quoted_flat_name()
                                     )
                                 }
                                 // found matching field with no spare identifier(s)
-                                Some((field, _nested_names)) => {
+                                Some((field, qualifier, _nested_names)) => {
                                     // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         field.data_type().clone(),
-                                        field.qualified_column(),
+                                        Column::new(
+                                            qualifier.map(|q| q.to_owned_reference()),
+                                            field.name(),
+                                        ),
                                     ))
                                 }
                                 // found no matching field, will return a default
@@ -270,10 +283,10 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
 fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
-) -> Option<(&'schema Field, &'ids [String])> {
+) -> Option<(&'schema Field, Option<TableReference<'ids>>, &'ids [String])> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
         let field = schema.field_with_name(qualifier.as_ref(), column).ok();
-        field.map(|f| (f, nested_names))
+        field.map(|f| (f, qualifier, nested_names))
     })
 }
 
