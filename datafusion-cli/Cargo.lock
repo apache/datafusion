@@ -1246,6 +1246,7 @@ version = "36.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
+ "arrow-schema",
  "base64 0.22.0",
  "blake2",
  "blake3",
@@ -1364,6 +1365,7 @@ name = "datafusion-sql"
 version = "36.0.0"
 dependencies = [
  "arrow",
+ "arrow-array",
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",

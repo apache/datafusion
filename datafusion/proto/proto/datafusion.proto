@@ -669,13 +669,13 @@ enum ScalarFunction {
   FindInSet = 127;
   /// 128 was ArraySort
   /// 129 was ArrayDistinct
-  ArrayResize = 130;
+  /// 130 was ArrayResize
   EndsWith = 131;
   /// 132 was InStr
-  MakeDate = 133;
+  /// 133 was MakeDate
   ArrayReverse = 134;
   /// 135 is RegexpLike
-  ToChar = 136;
+  /// 136 was ToChar
   /// 137 was ToDate
   /// 138 was ToUnixtime
 }

@@ -673,13 +673,6 @@ scalar_expr!(
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
-    ArrayResize,
-    array_resize,
-    array size value,
-    "returns an array with the specified size filled with the given value."
-);
-
-scalar_expr!(
     ArrayIntersect,
     array_intersect,
     first_array second_array,
@@ -775,14 +768,6 @@ nary_scalar_expr!(
     "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
 );
 
-// date functions
-scalar_expr!(
-    ToChar,
-    to_char,
-    datetime format,
-    "converts a date, time, timestamp or duration to a string based on the provided format"
-);
-scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
     Iszero,

@@ -32,8 +32,8 @@
 
 use crate::sort_properties::SortProperties;
 use crate::{
-    array_expressions, conditional_expressions, datetime_expressions, math_expressions,
-    string_expressions, PhysicalExpr, ScalarFunctionExpr,
+    array_expressions, conditional_expressions, math_expressions, string_expressions,
+    PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -300,9 +300,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_intersect)(args)
         }),
-        BuiltinScalarFunction::ArrayResize => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_resize)(args)
-        }),
         BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_union)(args)
         }),
@@ -369,8 +366,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
             make_scalar_function_inner(string_expressions::concat_ws)(args)
         }),
-        BuiltinScalarFunction::MakeDate => Arc::new(datetime_expressions::make_date),
-        BuiltinScalarFunction::ToChar => Arc::new(datetime_expressions::to_char),
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::initcap::<i32>)(args)

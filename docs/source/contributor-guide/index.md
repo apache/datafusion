@@ -279,7 +279,7 @@ Below is a checklist of what you need to do to add a new aggregate function to D
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
   - [here](../../../datafusion/physical-expr/src/string_expressions.rs) for string functions
   - [here](../../../datafusion/physical-expr/src/math_expressions.rs) for math functions
-  - [here](../../../datafusion/physical-expr/src/datetime_expressions.rs) for datetime functions
+  - [here](../../../datafusion/functions/src/datetime/mod.rs) for datetime functions
   - create a new module [here](../../../datafusion/physical-expr/src) for other functions
 - In [datafusion/expr/src](../../../datafusion/expr/src/aggregate_function.rs), add:
   - a new variant to `AggregateFunction`

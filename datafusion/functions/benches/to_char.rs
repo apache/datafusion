@@ -30,7 +30,7 @@ use rand::Rng;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::datetime_expressions::to_char;
+use datafusion_functions::datetime::to_char;
 
 fn random_date_in_range(
     rng: &mut ThreadRng,
@@ -87,7 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -101,7 +102,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -123,7 +125,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), pattern.clone()])
+                to_char()
+                    .invoke(&[data.clone(), pattern.clone()])
                     .expect("to_char should work on valid values"),
             )
         })

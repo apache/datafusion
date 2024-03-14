@@ -4493,8 +4493,18 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (TableReference::bare("person"), "age > 35", "age > 35"),
-        (TableReference::bare("person"), "id = '10'", "id = '10'"),
+        (TableReference::bare("person"), "age > 35", "(age > 35)"),
+        (TableReference::bare("person"), "id = '10'", "(id = '10')"),
+        (
+            TableReference::bare("person"),
+            "CAST(id AS VARCHAR)",
+            "CAST(id AS VARCHAR)",
+        ),
+        (
+            TableReference::bare("person"),
+            "SUM((age * 2))",
+            "SUM((age * 2))",
+        ),
     ];
 
     let roundtrip = |table, sql: &str| -> Result<String> {
@@ -4540,15 +4550,15 @@ fn roundtrip_statement() {
         ),
         (
             "select ta.j1_id from j1 ta where ta.j1_id > 1;",
-            r#"SELECT ta.j1_id FROM j1 AS ta WHERE ta.j1_id > 1"#,
+            r#"SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1)"#,
         ),
         (
-            "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on ta.j1_id = tb.j2_id;",
-            r#"SELECT ta.j1_id, tb.j2_string FROM j1 AS ta JOIN j2 AS tb ON ta.j1_id = tb.j2_id"#,
+            "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id);",
+            r#"SELECT ta.j1_id, tb.j2_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id)"#,
         ),
         (
-            "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on ta.j1_id = tb.j2_id join j3 tc on ta.j1_id = tc.j3_id;",
-            r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON ta.j1_id = tb.j2_id JOIN j3 AS tc ON ta.j1_id = tc.j3_id"#,
+            "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
+            r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
         ),
     ];
 
