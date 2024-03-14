@@ -17,8 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFField, DFSchema, DataFusionError,
-    Result, TableReference,
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -57,13 +57,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
                     if let Some(outer) = planner_context.outer_query_schema() {
-                        match outer.field_with_unqualified_name(normalize_ident.as_str())
-                        {
-                            Ok(field) => {
+                        match outer.field_and_qualifiers_with_unqualified_name(
+                            normalize_ident.as_str(),
+                        ) {
+                            Ok((qualifier, field)) => {
                                 // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                 Ok(Expr::OuterReferenceColumn(
                                     field.data_type().clone(),
-                                    field.qualified_column(),
+                                    Column::new(qualifier, field.name()),
                                 ))
                             }
                             Err(_) => Ok(Expr::Column(Column {
@@ -269,7 +270,7 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
 fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
-) -> Option<(&'schema DFField, &'ids [String])> {
+) -> Option<(&'schema Field, &'ids [String])> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
         let field = schema.field_with_name(qualifier.as_ref(), column).ok();
         field.map(|f| (f, nested_names))
