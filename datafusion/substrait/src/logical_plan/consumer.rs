@@ -18,7 +18,7 @@
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFField, DFSchema, DFSchemaRef,
+    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
 };
 
 use datafusion::execution::FunctionRegistry;
@@ -475,17 +475,23 @@ pub async fn from_substrait_rel(
                                 .collect();
                             match &t {
                                 LogicalPlan::TableScan(scan) => {
-                                    let fields: Vec<DFField> = column_indices
+                                    let fields = column_indices
                                         .iter()
-                                        .map(|i| scan.projected_schema.field(*i).clone())
+                                        .map(|i| {
+                                            scan.projected_schema.qualified_field(*i)
+                                        })
+                                        .map(|(qualifier, field)| {
+                                            (qualifier.cloned(), Arc::new(field.clone()))
+                                        })
                                         .collect();
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
-                                    scan.projected_schema =
-                                        DFSchemaRef::new(DFSchema::new_with_metadata(
+                                    scan.projected_schema = DFSchemaRef::new(
+                                        DFSchema::from_qualified_fields(
                                             fields,
                                             HashMap::new(),
-                                        )?);
+                                        )?,
+                                    );
                                     Ok(LogicalPlan::TableScan(scan))
                                 }
                                 _ => plan_err!("unexpected plan for table"),
@@ -1350,10 +1356,11 @@ fn from_substrait_field_reference(
                     "Direct reference StructField with child is not supported"
                 ),
                 None => {
-                    let column = input_schema.field(x.field as usize).qualified_column();
+                    let (qualifier, field) =
+                        input_schema.qualified_field(x.field as usize);
                     Ok(Expr::Column(Column {
-                        relation: column.relation,
-                        name: column.name,
+                        relation: qualifier.cloned(),
+                        name: field.name().to_string(),
                     }))
                 }
             },
