@@ -21,10 +21,13 @@ use std::any::Any;
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue, internal_err};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, DataFusionError, ExprSchema, Result,
+    ScalarValue,
+};
 
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
 ///
@@ -60,8 +63,6 @@ impl ArrowCastFunc {
     }
 }
 
-
-
 impl ScalarUDFImpl for ArrowCastFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -85,14 +86,18 @@ impl ScalarUDFImpl for ArrowCastFunc {
         _schema: &dyn ExprSchema,
         _arg_types: &[DataType],
     ) -> Result<DataType> {
-       data_type_from_args(args)
+        data_type_from_args(args)
     }
 
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
         internal_err!("arrow_cast should have been simplified to cast")
     }
 
-    fn simplify(&self, mut args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
         // convert this into a real cast
         let target_type = data_type_from_args(&args)?;
         // remove second (type) argument
@@ -113,9 +118,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
-
 }
-
 
 /// Returns the requested type from the arguments
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
@@ -889,5 +892,4 @@ mod test {
             }
         }
     }
-
 }

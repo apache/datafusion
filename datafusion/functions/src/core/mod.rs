@@ -37,7 +37,7 @@ make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
     (nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression."),
-    (arrow_cast, arg_1 arg_2, "returns arg_1 parsed to the `arrow_type` given the second argument. This can be used to cast to a specific `arrow_type`."),
+    (arrow_cast, arg_1 arg_2, "returns arg_1 cast to the `arrow_type` given the second argument. This can be used to cast to a specific `arrow_type`."),
     (nvl, arg_1 arg_2, "returns value2 if value1 is NULL; otherwise it returns value1"),
     (nvl2, arg_1 arg_2 arg_3, "Returns value2 if value1 is not NULL; otherwise, it returns value3."),
     (arrow_typeof, arg_1, "Returns the Arrow type of the input expression."),
