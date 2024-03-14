@@ -328,10 +328,10 @@ pub trait PruningStatistics {
 /// `x IS NULL`  | `x_null_count > 0`
 ///
 /// In addition, for a given column `x`, the `x_null_count` and `x_row_count` will
-/// be wrapped around the above rewritten predicate to form the final rewritten predicate.
-/// This step is necessary to handle the case where the column `x` is kown to be all nulls,
-/// This is different from knowing nothing about the column `x`, which confusionly is
-/// enconded by returning `NULL` for the min/max values from [`PruningStatistics::min_values`].
+/// be compared using a `CASE` statement to wrap the rewritten predicate to handle
+/// the case where the column `x` is known to be all `NULL`s. Note this
+/// is different from knowing nothing about the column `x`, which confusingly is
+/// encoded by returning `NULL` for the min/max values from [`PruningStatistics::min_values`].
 ///
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
@@ -387,7 +387,7 @@ pub trait PruningStatistics {
 /// simplified, the result is `false`:
 ///
 /// * `CASE WHEN null = null THEN false ELSE 1 <= 5 AND 5 <= 100 END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
-/// * `null = null` is `null` which is false, so the `CASE` expression will use the `ELSE` clause
+/// * `null = null` is `null` which is not true, so the `CASE` expression will use the `ELSE` clause
 /// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
 /// * `true AND true AND true AND false`
 /// * `false`
@@ -406,7 +406,7 @@ pub trait PruningStatistics {
 ///
 /// ### Example 2
 /// Given the same predicate, `x = 5 AND y = 10`, if we know that for another given container,
-/// `x_min` is NULL and `x_max` is NULL, `x_null_count` is `100` and `x_row_count` is `100`;
+/// `x_min` is NULL and `x_max` is NULL (the min/max values are unknown), `x_null_count` is `100` and `x_row_count` is `100`;
 /// we know that `y` is between `4` and `7`, but we know nothing about the null count and row
 /// count of `y`. The input statistics might look like:
 ///
