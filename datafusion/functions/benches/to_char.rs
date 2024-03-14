@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Date32Array, StringArray};
 use chrono::prelude::*;
-use chrono::Duration;
+use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
@@ -30,7 +30,7 @@ use rand::Rng;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::datetime_expressions::to_char;
+use datafusion_functions::datetime::to_char;
 
 fn random_date_in_range(
     rng: &mut ThreadRng,
@@ -39,7 +39,7 @@ fn random_date_in_range(
 ) -> NaiveDate {
     let days_in_range = (end_date - start_date).num_days();
     let random_days: i64 = rng.gen_range(0..days_in_range);
-    start_date + Duration::days(random_days)
+    start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
 fn data(rng: &mut ThreadRng) -> Date32Array {
@@ -87,7 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -101,7 +102,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -113,6 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .unwrap()
             .with_nanosecond(56789)
             .unwrap()
+            .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
         let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
@@ -122,7 +125,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char(&[data.clone(), pattern.clone()])
+                to_char()
+                    .invoke(&[data.clone(), pattern.clone()])
                     .expect("to_char should work on valid values"),
             )
         })

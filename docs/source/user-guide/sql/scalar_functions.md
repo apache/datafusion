@@ -1949,8 +1949,14 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distinct](#array_distinct)
+- [array_has](#array_has)
+- [array_has_all](#array_has_all)
+- [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_fill](#array_fill)
 - [array_indexof](#array_indexof)
 - [array_join](#array_join)
 - [array_length](#array_length)
@@ -1963,6 +1969,7 @@ from_unixtime(expression)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_repeat](#array_repeat)
+- [array_resize](#array_resize)
 - [array_remove](#array_remove)
 - [array_remove_n](#array_remove_n)
 - [array_remove_all](#array_remove_all)
@@ -1972,6 +1979,7 @@ from_unixtime(expression)
 - [array_reverse](#array_reverse)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
+- [array_union](#array_union)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -1981,6 +1989,7 @@ from_unixtime(expression)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_distinct](#list_distinct)
 - [list_element](#list_element)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
@@ -1998,6 +2007,7 @@ from_unixtime(expression)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_repeat](#list_repeat)
+- [list_resize](#list_resize)
 - [list_remove](#list_remove)
 - [list_remove_n](#list_remove_n)
 - [list_remove_all](#list_remove_all)
@@ -2073,6 +2083,36 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_resize`
+
+Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+
+```
+array_resize(array, size, value)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **size**: New size of given array.
+- **value**: Defines new elements' value or empty if value is not set.
+
+#### Example
+
+```
+❯ select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```
+
+#### Aliases
+
+- list_resize
 
 ### `array_cat`
 
@@ -2197,6 +2237,34 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distinct`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_distinct
 
 ### `array_element`
 
@@ -3035,6 +3103,10 @@ _Alias of [array_prepend](#array_prepend)._
 
 _Alias of [array_repeat](#array_repeat)._
 
+### `list_resize`
+
+_Alias of [array_resize](#array_resize)._
+
 ### `list_remove`
 
 _Alias of [array_remove](#array_remove)._
@@ -3107,6 +3179,7 @@ _Alias of [make_array](#make_array)._
 ### `string_to_array`
 
 Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+`SELECT string_to_array('abc##def', '##')` or `SELECT string_to_array('abc def', ' ', 'def')`
 
 ```
 starts_with(str, delimiter[, null_str])
@@ -3144,11 +3217,38 @@ trim_array(array, n)
 
 ### `range`
 
-Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]` or `SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);`
 
 The range start..end contains all values with start <= x < end. It is empty if start >= end.
 
 Step can not be 0 (then the range will be nonsense.).
+
+Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+For example,
+
+```
+SELECT range(3);
+SELECT range(1,5);
+SELECT range(1,5,1);
+```
+
+are allowed in number ranges
+
+but in date ranges, only
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
+```
+
+is allowed, and
+
+```
+SELECT range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+SELECT range(NULL, DATE '1993-03-01', INTERVAL '1' MONTH);
+SELECT range(DATE '1992-09-01', NULL, INTERVAL '1' MONTH);
+```
+
+are not allowed
 
 #### Arguments
 

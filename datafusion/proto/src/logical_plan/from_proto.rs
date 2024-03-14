@@ -47,26 +47,21 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array, array_append, array_concat, array_distinct, array_element, array_empty,
-    array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
-    array_pop_back, array_pop_front, array_position, array_positions, array_prepend,
-    array_remove, array_remove_all, array_remove_n, array_repeat, array_replace,
-    array_replace_all, array_replace_n, array_resize, array_slice, array_sort,
-    array_union, arrow_typeof, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt,
-    ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest,
-    ends_with, exp,
+    acosh, array_element, array_except, array_intersect, array_pop_back, array_pop_front,
+    array_position, array_positions, array_remove, array_remove_all, array_remove_n,
+    array_replace, array_replace_all, array_replace_n, array_slice, array_union, ascii,
+    asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length, chr,
+    coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, flatten, floor, from_unixtime, gcd, initcap, iszero, lcm,
-    left, levenshtein, ln, log, log10, log2,
+    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
+    log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, nanvl, now, octet_length, overlay, pi, power, radians,
-    random, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224,
-    sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
-    string_to_array, strpos, struct_fun, substr, substr_index, substring, tan, tanh,
-    to_hex, translate, trim, trunc, upper, uuid, AggregateFunction, Between, BinaryExpr,
-    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
-    GetIndexedField, GroupingSet,
+    lower, lpad, ltrim, nanvl, octet_length, overlay, pi, power, radians, random, repeat,
+    replace, reverse, right, round, rpad, rtrim, signum, sin, sinh, split_part, sqrt,
+    starts_with, strpos, substr, substr_index, substring, to_hex, translate, trim, trunc,
+    upper, uuid, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -449,12 +444,10 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
-            ScalarFunction::Tan => Self::Tan,
             ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
-            ScalarFunction::Tanh => Self::Tanh,
             ScalarFunction::Asinh => Self::Asinh,
             ScalarFunction::Acosh => Self::Acosh,
             ScalarFunction::Atanh => Self::Atanh,
@@ -478,24 +471,12 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ArrayAppend => Self::ArrayAppend,
-            ScalarFunction::ArraySort => Self::ArraySort,
-            ScalarFunction::ArrayConcat => Self::ArrayConcat,
-            ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
-            ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
-            ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
-            ScalarFunction::ArrayHas => Self::ArrayHas,
-            ScalarFunction::ArrayDistinct => Self::ArrayDistinct,
             ScalarFunction::ArrayElement => Self::ArrayElement,
-            ScalarFunction::Flatten => Self::Flatten,
-            ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
-            ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
-            ScalarFunction::ArrayRepeat => Self::ArrayRepeat,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
             ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
@@ -506,17 +487,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
-            ScalarFunction::ArrayResize => Self::ArrayResize,
-            ScalarFunction::Array => Self::MakeArray,
-            ScalarFunction::DatePart => Self::DatePart,
-            ScalarFunction::DateTrunc => Self::DateTrunc,
-            ScalarFunction::DateBin => Self::DateBin,
-            ScalarFunction::Md5 => Self::MD5,
-            ScalarFunction::Sha224 => Self::SHA224,
-            ScalarFunction::Sha256 => Self::SHA256,
-            ScalarFunction::Sha384 => Self::SHA384,
-            ScalarFunction::Sha512 => Self::SHA512,
-            ScalarFunction::Digest => Self::Digest,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -530,34 +500,24 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Left => Self::Left,
             ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::RegexpReplace => Self::RegexpReplace,
             ScalarFunction::Repeat => Self::Repeat,
             ScalarFunction::Replace => Self::Replace,
             ScalarFunction::Reverse => Self::Reverse,
             ScalarFunction::Right => Self::Right,
             ScalarFunction::Rpad => Self::Rpad,
             ScalarFunction::SplitPart => Self::SplitPart,
-            ScalarFunction::StringToArray => Self::StringToArray,
             ScalarFunction::StartsWith => Self::StartsWith,
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
-            ScalarFunction::ToChar => Self::ToChar,
-            ScalarFunction::Now => Self::Now,
-            ScalarFunction::CurrentDate => Self::CurrentDate,
-            ScalarFunction::CurrentTime => Self::CurrentTime,
-            ScalarFunction::MakeDate => Self::MakeDate,
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::StructFun => Self::Struct,
-            ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
-            ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
@@ -1186,6 +1146,7 @@ pub fn parse_expr(
                 parse_optional_expr(expr.filter.as_deref(), registry, codec)?
                     .map(Box::new),
                 parse_vec_expr(&expr.order_by, registry, codec)?,
+                None,
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
@@ -1419,50 +1380,13 @@ pub fn parse_expr(
                 ScalarFunction::Acosh => {
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Array => Ok(array(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ArrayAppend => Ok(array_append(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArraySort => Ok(array_sort(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::ArrayPopFront => {
                     Ok(array_pop_front(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::ArrayPopBack => {
                     Ok(array_pop_back(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArrayPrepend => Ok(array_prepend(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayConcat => Ok(array_concat(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
                 ScalarFunction::ArrayExcept => Ok(array_except(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayHasAll => Ok(array_has_all(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayHasAny => Ok(array_has_any(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayHas => Ok(array_has(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
@@ -1476,10 +1400,6 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry, codec)?,
                 )),
                 ScalarFunction::ArrayPositions => Ok(array_positions(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayRepeat => Ok(array_repeat(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
@@ -1521,38 +1441,21 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry, codec)?,
                     parse_expr(&args[3], registry, codec)?,
                 )),
-                ScalarFunction::ArrayLength => Ok(array_length(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayDistinct => {
-                    Ok(array_distinct(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayElement => Ok(array_element(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::ArrayEmpty => {
-                    Ok(array_empty(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayResize => Ok(array_resize(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Tanh => Ok(tanh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Atanh => {
                     Ok(atanh(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1606,36 +1509,6 @@ pub fn parse_expr(
                 ScalarFunction::Rtrim => {
                     Ok(rtrim(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::DatePart => Ok(date_part(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::DateTrunc => Ok(date_trunc(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::DateBin => Ok(date_bin(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::Sha224 => {
-                    Ok(sha224(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha256 => {
-                    Ok(sha256(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha384 => {
-                    Ok(sha384(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Sha512 => {
-                    Ok(sha512(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Digest => Ok(digest(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Ascii => {
                     Ok(ascii(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1703,12 +1576,6 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry, codec))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::RegexpReplace => Ok(regexp_replace(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
                 ScalarFunction::Btrim => Ok(btrim(
                     args.to_owned()
                         .iter()
@@ -1754,27 +1621,6 @@ pub fn parse_expr(
                 ScalarFunction::ToHex => {
                     Ok(to_hex(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::MakeDate => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::MakeDate,
-                        args,
-                    )))
-                }
-                ScalarFunction::ToChar => {
-                    let args: Vec<_> = args
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<std::result::Result<_, _>>()?;
-                    Ok(Expr::ScalarFunction(expr::ScalarFunction::new(
-                        BuiltinScalarFunction::ToChar,
-                        args,
-                    )))
-                }
-                ScalarFunction::Now => Ok(now()),
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1795,15 +1641,10 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::FromUnixtime => {
-                    Ok(from_unixtime(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::CurrentDate => Ok(current_date()),
-                ScalarFunction::CurrentTime => Ok(current_time()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Nanvl => Ok(nanvl(
                     parse_expr(&args[0], registry, codec)?,
@@ -1812,17 +1653,6 @@ pub fn parse_expr(
                 ScalarFunction::Iszero => {
                     Ok(iszero(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArrowTypeof => {
-                    Ok(arrow_typeof(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Flatten => {
-                    Ok(flatten(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::StringToArray => Ok(string_to_array(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::OverLay => Ok(overlay(
                     args.to_owned()
                         .iter()
@@ -1838,9 +1668,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::StructFun => {
-                    Ok(struct_fun(parse_expr(&args[0], registry, codec)?))
-                }
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {

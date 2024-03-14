@@ -75,11 +75,10 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
     Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
@@ -96,6 +95,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_common::config::FormatOptions;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -207,27 +207,28 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let expr = create_physical_name(expr, false)?;
-            let name = match field {
-                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
-                GetFieldAccess::ListIndex { key } => {
-                    let key = create_physical_name(key, false)?;
-                    format!("{expr}[{key}]")
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
+            match field {
+                GetFieldAccess::NamedStructField { name: _ } => {
+                    unreachable!(
+                        "NamedStructField should have been rewritten in OperatorToFunction"
+                    )
+                }
+                GetFieldAccess::ListIndex { key: _ } => {
+                    unreachable!(
+                        "ListIndex should have been rewritten in OperatorToFunction"
+                    )
                 }
                 GetFieldAccess::ListRange {
-                    start,
-                    stop,
-                    stride,
+                    start: _,
+                    stop: _,
+                    stride: _,
                 } => {
-                    let start = create_physical_name(start, false)?;
-                    let stop = create_physical_name(stop, false)?;
-                    let stride = create_physical_name(stride, false)?;
-                    format!("{expr}[{start}:{stop}:{stride}]")
+                    unreachable!(
+                        "ListRange should have been rewritten in OperatorToFunction"
+                    )
                 }
             };
-
-            Ok(name)
         }
         Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s
@@ -246,6 +247,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             filter,
             order_by,
+            null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)
@@ -567,25 +569,15 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Copy(CopyTo{
                     input,
                     output_url,
-                    file_format,
-                    copy_options,
+                    format_options,
                     partition_by,
+                    options: source_option_tuples
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
-
-                    let file_type_writer_options = match copy_options{
-                        CopyOptions::SQLOptions(statement_options) => {
-                            FileTypeWriterOptions::build(
-                                file_format,
-                                session_state.config_options(),
-                                statement_options)?
-                        },
-                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
-                    };
 
                     // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
                     // from the schema of the RecordBatch being written. This allows COPY statements to specify only
@@ -602,16 +594,30 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols,
                         overwrite: false,
-                        file_type_writer_options
                     };
-
-                    let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default()),
+                    let mut table_options = session_state.default_table_options().clone();
+                    let sink_format: Arc<dyn FileFormat> = match format_options {
+                        FormatOptions::CSV(options) => {
+                            table_options.csv = options.clone();
+                            table_options.set_file_format(FileType::CSV);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(CsvFormat::default().with_options(table_options.csv))
+                        },
+                        FormatOptions::JSON(options) => {
+                            table_options.json = options.clone();
+                            table_options.set_file_format(FileType::JSON);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(JsonFormat::default().with_options(table_options.json))
+                        },
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
-                        FileType::JSON => Arc::new(JsonFormat::default()),
-                        FileType::AVRO => Arc::new(AvroFormat {} ),
-                        FileType::ARROW => Arc::new(ArrowFormat {}),
+                        FormatOptions::PARQUET(options) => {
+                            table_options.parquet = options.clone();
+                            table_options.set_file_format(FileType::PARQUET);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+                        },
+                        FormatOptions::AVRO => Arc::new(AvroFormat {} ),
+                        FormatOptions::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await
@@ -1166,6 +1172,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_filter,
                             join_type,
+							None,
                             partition_mode,
                             null_equals_null,
                         )?))
@@ -1176,6 +1183,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_filter,
                             join_type,
+							None,
                             PartitionMode::CollectLeft,
                             null_equals_null,
                         )?))
@@ -1662,6 +1670,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             args,
             filter,
             order_by,
+            null_treatment,
         }) => {
             let args = args
                 .iter()
@@ -1689,6 +1698,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let ordering_reqs = order_by.clone().unwrap_or(vec![]);
@@ -1699,6 +1711,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         &ordering_reqs,
                         physical_input_schema,
                         name,
+                        ignore_nulls,
                     )?;
                     (agg_expr, filter, order_by)
                 }

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::array::{BooleanArray, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
+use arrow_array::Array;
 use rand::{thread_rng, Rng};
 
 use datafusion_common::ScalarValue::{Float32, Int64};
@@ -92,8 +93,9 @@ macro_rules! downcast_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "could not cast {} to {}",
+                "could not cast {} from {} to {}",
                 $NAME,
+                $ARG.data_type(),
                 type_name::<$ARRAY_TYPE>()
             ))
         })?
@@ -157,10 +159,8 @@ math_unary_function!("sqrt", sqrt);
 math_unary_function!("cbrt", cbrt);
 math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
-math_unary_function!("tan", tan);
 math_unary_function!("sinh", sinh);
 math_unary_function!("cosh", cosh);
-math_unary_function!("tanh", tanh);
 math_unary_function!("asin", asin);
 math_unary_function!("acos", acos);
 math_unary_function!("atan", atan);

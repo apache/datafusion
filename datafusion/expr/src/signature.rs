@@ -30,6 +30,11 @@ use arrow::datatypes::DataType;
 /// return results with this timezone.
 pub const TIMEZONE_WILDCARD: &str = "+TZ";
 
+/// Constant that is used as a placeholder for any valid fixed size list.
+/// This is used where a function can accept a fixed size list type with any
+/// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
+pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
+
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
@@ -39,7 +44,7 @@ pub enum Volatility {
     Immutable,
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is [super::BuiltinScalarFunction::Now]. DataFusion
+    /// this is the `Now` function. DataFusion
     /// will attempt to inline `Stable` functions during planning, when possible.
     /// For query `select col1, now() from t1`, it might take a while to execute but
     /// `now()` column will be the same for each output row, which is evaluated

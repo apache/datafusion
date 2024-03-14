@@ -30,6 +30,7 @@ use super::{
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
+    common::can_project,
     execution_mode_from_children, handle_state,
     hash_utils::create_hashes,
     joins::utils::{
@@ -58,13 +59,16 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result,
+    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
+    JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::equivalence::{
+    join_equivalence_properties, ProjectionMapping,
+};
+use datafusion_physical_expr::expressions::UnKnownColumn;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -280,8 +284,9 @@ pub struct HashJoinExec {
     pub filter: Option<JoinFilter>,
     /// How the join is performed (`OUTER`, `INNER`, etc)
     pub join_type: JoinType,
-    /// The output schema for the join
-    schema: SchemaRef,
+    /// The schema after join. Please be careful when using this schema,
+    /// if there is a projection, the schema isn't the same as the output schema.
+    join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
@@ -290,6 +295,8 @@ pub struct HashJoinExec {
     pub mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// The projection indices of the columns in the output schema of join
+    pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Null matching behavior: If `null_equals_null` is true, rows that have
@@ -306,12 +313,14 @@ impl HashJoinExec {
     ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         filter: Option<JoinFilter>,
         join_type: &JoinType,
+        projection: Option<Vec<usize>>,
         partition_mode: PartitionMode,
         null_equals_null: bool,
     ) -> Result<Self> {
@@ -323,19 +332,25 @@ impl HashJoinExec {
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
-        let (schema, column_indices) =
+        let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
+        let join_schema = Arc::new(join_schema);
+
+        //  check if the projection is valid
+        can_project(&join_schema, projection.as_ref())?;
+
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::new(schema.clone()),
+            join_schema.clone(),
             *join_type,
             &on,
             partition_mode,
-        );
+            projection.as_ref(),
+        )?;
 
         Ok(HashJoinExec {
             left,
@@ -343,11 +358,12 @@ impl HashJoinExec {
             on,
             filter,
             join_type: *join_type,
-            schema: Arc::new(schema),
+            join_schema,
             left_fut: Default::default(),
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
+            projection,
             column_indices,
             null_equals_null,
             cache,
@@ -406,6 +422,34 @@ impl HashJoinExec {
         JoinSide::Right
     }
 
+    /// Return whether the join contains a projection
+    pub fn contain_projection(&self) -> bool {
+        self.projection.is_some()
+    }
+
+    /// Return new instance of [HashJoinExec] with the given projection.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        //  check if the projection is valid
+        can_project(&self.schema(), projection.as_ref())?;
+        let projection = match projection {
+            Some(projection) => match &self.projection {
+                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
+                None => Some(projection),
+            },
+            None => None,
+        };
+        Self::try_new(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            self.filter.clone(),
+            &self.join_type,
+            projection,
+            self.mode,
+            self.null_equals_null,
+        )
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -414,13 +458,14 @@ impl HashJoinExec {
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
-    ) -> PlanProperties {
+        projection: Option<&Vec<usize>>,
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema,
+            schema.clone(),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -428,7 +473,7 @@ impl HashJoinExec {
 
         // Get output partitioning:
         let left_columns_len = left.schema().fields.len();
-        let output_partitioning = match mode {
+        let mut output_partitioning = match mode {
             PartitionMode::CollectLeft => match join_type {
                 JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
                     right.output_partitioning(),
@@ -474,7 +519,33 @@ impl HashJoinExec {
             execution_mode_from_children([left, right])
         };
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        // If contains projection, update the PlanProperties.
+        if let Some(projection) = projection {
+            let projection_exprs = project_index_to_exprs(projection, &schema);
+            // construct a map from the input expressions to the output expression of the Projection
+            let projection_mapping =
+                ProjectionMapping::try_new(&projection_exprs, &schema)?;
+            let out_schema = project_schema(&schema, Some(projection))?;
+            if let Partitioning::Hash(exprs, part) = output_partitioning {
+                let normalized_exprs = exprs
+                    .iter()
+                    .map(|expr| {
+                        eq_properties
+                            .project_expr(expr, &projection_mapping)
+                            .unwrap_or_else(|| {
+                                Arc::new(UnKnownColumn::new(&expr.to_string()))
+                            })
+                    })
+                    .collect();
+                output_partitioning = Partitioning::Hash(normalized_exprs, part);
+            }
+            eq_properties = eq_properties.project(&projection_mapping, out_schema);
+        }
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            mode,
+        ))
     }
 }
 
@@ -486,6 +557,24 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                let display_projections = if self.contain_projection() {
+                    format!(
+                        ", projection=[{}]",
+                        self.projection
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .map(|index| format!(
+                                "{}@{}",
+                                self.join_schema.fields().get(*index).unwrap().name(),
+                                index
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".to_string()
+                };
                 let on = self
                     .on
                     .iter()
@@ -494,12 +583,31 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
-                    self.mode, self.join_type, on, display_filter
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
+                    self.mode, self.join_type, on, display_filter, display_projections
                 )
             }
         }
     }
+}
+
+fn project_index_to_exprs(
+    projection_index: &[usize],
+    schema: &SchemaRef,
+) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
+    projection_index
+        .iter()
+        .map(|index| {
+            let field = schema.field(*index);
+            (
+                Arc::new(datafusion_physical_expr::expressions::Column::new(
+                    field.name(),
+                    *index,
+                )) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
@@ -566,6 +674,7 @@ impl ExecutionPlan for HashJoinExec {
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
+            self.projection.clone(),
             self.mode,
             self.null_equals_null,
         )?))
@@ -636,6 +745,15 @@ impl ExecutionPlan for HashJoinExec {
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
 
+        // update column indices to reflect the projection
+        let column_indices_after_projection = match &self.projection {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
             on_left,
@@ -643,7 +761,7 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             right: right_stream,
-            column_indices: self.column_indices.clone(),
+            column_indices: column_indices_after_projection,
             random_state: self.random_state.clone(),
             join_metrics,
             null_equals_null: self.null_equals_null,
@@ -663,13 +781,24 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        estimate_join_statistics(
+        let mut stats = estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),
             self.on.clone(),
             &self.join_type,
-            &self.schema,
-        )
+            &self.join_schema,
+        )?;
+        // Project statistics if there is a projection
+        if let Some(projection) = &self.projection {
+            stats.column_statistics = stats
+                .column_statistics
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| projection.contains(i))
+                .map(|(_, s)| s)
+                .collect();
+        }
+        Ok(stats)
     }
 }
 
@@ -1461,6 +1590,7 @@ mod tests {
             on,
             None,
             join_type,
+            None,
             PartitionMode::CollectLeft,
             null_equals_null,
         )
@@ -1480,6 +1610,7 @@ mod tests {
             on,
             Some(filter),
             join_type,
+            None,
             PartitionMode::CollectLeft,
             null_equals_null,
         )
@@ -1527,6 +1658,7 @@ mod tests {
             on,
             None,
             join_type,
+            None,
             PartitionMode::Partitioned,
             null_equals_null,
         )?;
@@ -3526,6 +3658,7 @@ mod tests {
                 on.clone(),
                 None,
                 &join_type,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )?;

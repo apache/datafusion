@@ -17,16 +17,12 @@
 
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
-
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
-use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
-use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -42,7 +38,7 @@ pub struct WindowShift {
     data_type: DataType,
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
-    default_value: Option<ScalarValue>,
+    default_value: ScalarValue,
     ignore_nulls: bool,
 }
 
@@ -53,7 +49,7 @@ impl WindowShift {
     }
 
     /// Get the default_value for window shift expression.
-    pub fn get_default_value(&self) -> Option<ScalarValue> {
+    pub fn get_default_value(&self) -> ScalarValue {
         self.default_value.clone()
     }
 }
@@ -64,7 +60,7 @@ pub fn lead(
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
+    default_value: ScalarValue,
     ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
@@ -83,7 +79,7 @@ pub fn lag(
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
+    default_value: ScalarValue,
     ignore_nulls: bool,
 ) -> WindowShift {
     WindowShift {
@@ -139,7 +135,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 #[derive(Debug)]
 pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
-    default_value: Option<ScalarValue>,
+    default_value: ScalarValue,
     ignore_nulls: bool,
     // VecDeque contains offset values that between non-null entries
     non_null_offsets: VecDeque<usize>,
@@ -152,29 +148,62 @@ impl WindowShiftEvaluator {
     }
 }
 
-fn create_empty_array(
-    value: Option<&ScalarValue>,
-    data_type: &DataType,
-    size: usize,
-) -> Result<ArrayRef> {
-    use arrow::array::new_null_array;
-    let array = value
-        .as_ref()
-        .map(|scalar| scalar.to_array_of_size(size))
-        .transpose()?
-        .unwrap_or_else(|| new_null_array(data_type, size));
-    if array.data_type() != data_type {
-        cast(&array, data_type).map_err(|e| arrow_datafusion_err!(e))
-    } else {
-        Ok(array)
-    }
-}
+// implement ignore null for evaluate_all
+fn evaluate_all_with_ignore_null(
+    array: &ArrayRef,
+    offset: i64,
+    default_value: &ScalarValue,
+    is_lag: bool,
+) -> Result<ArrayRef, DataFusionError> {
+    let valid_indices: Vec<usize> =
+        array.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+    let direction = !is_lag;
+    let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
+        .map(|id| {
+            let result_index = match valid_indices.binary_search(&id) {
+                Ok(pos) => if direction {
+                    pos.checked_add(offset as usize)
+                } else {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
+                }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+                Err(pos) => if direction {
+                    pos.checked_add(offset as usize)
+                } else if pos > 0 {
+                    pos.checked_sub(offset.unsigned_abs() as usize)
+                } else {
+                    None
+                }
+                .and_then(|new_pos| {
+                    if new_pos < valid_indices.len() {
+                        Some(valid_indices[new_pos])
+                    } else {
+                        None
+                    }
+                }),
+            };
 
+            match result_index {
+                Some(index) => ScalarValue::try_from_array(array, index),
+                None => Ok(default_value.clone()),
+            }
+        })
+        .collect();
+
+    let new_array = new_array_results?;
+    ScalarValue::iter_to_array(new_array)
+}
 // TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
 fn shift_with_default_value(
     array: &ArrayRef,
     offset: i64,
-    value: Option<&ScalarValue>,
+    default_value: &ScalarValue,
 ) -> Result<ArrayRef> {
     use arrow::compute::concat;
 
@@ -182,7 +211,7 @@ fn shift_with_default_value(
     if offset == 0 {
         Ok(array.clone())
     } else if offset == i64::MIN || offset.abs() >= value_len {
-        create_empty_array(value, array.data_type(), array.len())
+        default_value.to_array_of_size(value_len as usize)
     } else {
         let slice_offset = (-offset).clamp(0, value_len) as usize;
         let length = array.len() - offset.unsigned_abs() as usize;
@@ -190,7 +219,8 @@ fn shift_with_default_value(
 
         // Generate array with remaining `null` items
         let nulls = offset.unsigned_abs() as usize;
-        let default_values = create_empty_array(value, slice.data_type(), nulls)?;
+        let default_values = default_value.to_array_of_size(nulls)?;
+
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
             concat(&[default_values.as_ref(), slice.as_ref()])
@@ -236,19 +266,18 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         values: &[ArrayRef],
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        // TODO: try to get rid of i64 usize conversion
-        // TODO: do not recalculate default value every call
-        // TODO: support LEAD mode for IGNORE NULLS
         let array = &values[0];
-        let dtype = array.data_type();
-        let len = array.len() as i64;
+        let len = array.len();
+
         // LAG mode
-        let mut idx = if self.is_lag() {
-            range.end as i64 - self.shift_offset - 1
+        let i = if self.is_lag() {
+            (range.end as i64 - self.shift_offset - 1) as usize
         } else {
             // LEAD mode
-            range.start as i64 - self.shift_offset
+            (range.start as i64 - self.shift_offset) as usize
         };
+
+        let mut idx: Option<usize> = if i < len { Some(i) } else { None };
 
         // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
         // If current row index points to NULL value the row is NOT counted
@@ -257,9 +286,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             // Find the nonNULL row index that shifted by offset comparing to current row index
             idx = if self.non_null_offsets.len() == self.shift_offset as usize {
                 let total_offset: usize = self.non_null_offsets.iter().sum();
-                (range.end - 1 - total_offset) as i64
+                Some(range.end - 1 - total_offset)
             } else {
-                -1
+                None
             };
 
             // Keep track of offset values between non-null entries
@@ -296,7 +325,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                         break;
                     }
                 }
-            } else if range.end < len as usize && array.is_valid(range.end) {
+            } else if range.end < len && array.is_valid(range.end) {
                 // Update `non_null_offsets` with the new end data.
                 if array.is_valid(range.end) {
                     // When non-null, append a new offset.
@@ -312,9 +341,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             idx = if self.non_null_offsets.len() >= non_null_row_count {
                 let total_offset: usize =
                     self.non_null_offsets.iter().take(non_null_row_count).sum();
-                (range.start + total_offset) as i64
+                Some(range.start + total_offset)
             } else {
-                -1
+                None
             };
             // Prune `self.non_null_offsets` from the start. so that at next iteration
             // start of the `self.non_null_offsets` matches with current row.
@@ -331,10 +360,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // - index is out of window bounds
         // OR
         // - ignore nulls mode and current value is null and is within window bounds
-        if idx < 0 || idx >= len || (self.ignore_nulls && array.is_null(idx as usize)) {
-            get_default_value(self.default_value.as_ref(), dtype)
+        // .unwrap() is safe here as there is a none check in front
+        #[allow(clippy::unnecessary_unwrap)]
+        if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
+            ScalarValue::try_from_array(array, idx.unwrap())
         } else {
-            ScalarValue::try_from_array(array, idx as usize)
+            Ok(self.default_value.clone())
         }
     }
 
@@ -343,29 +374,22 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         values: &[ArrayRef],
         _num_rows: usize,
     ) -> Result<ArrayRef> {
-        if self.ignore_nulls {
-            return Err(exec_datafusion_err!(
-                "IGNORE NULLS mode for LAG and LEAD is not supported for WindowAggExec"
-            ));
-        }
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
-        shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
+        if !self.ignore_nulls {
+            shift_with_default_value(value, self.shift_offset, &self.default_value)
+        } else {
+            evaluate_all_with_ignore_null(
+                value,
+                self.shift_offset,
+                &self.default_value,
+                self.is_lag(),
+            )
+        }
     }
 
     fn supports_bounded_execution(&self) -> bool {
         true
-    }
-}
-
-fn get_default_value(
-    default_value: Option<&ScalarValue>,
-    dtype: &DataType,
-) -> Result<ScalarValue> {
-    match default_value {
-        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
-        // If None or Null datatype
-        _ => ScalarValue::try_from(dtype),
     }
 }
 
@@ -397,10 +421,10 @@ mod tests {
         test_i32_result(
             lead(
                 "lead".to_owned(),
-                DataType::Float32,
+                DataType::Int32,
                 Arc::new(Column::new("c3", 0)),
                 None,
-                None,
+                ScalarValue::Null.cast_to(&DataType::Int32)?,
                 false,
             ),
             [
@@ -420,10 +444,10 @@ mod tests {
         test_i32_result(
             lag(
                 "lead".to_owned(),
-                DataType::Float32,
+                DataType::Int32,
                 Arc::new(Column::new("c3", 0)),
                 None,
-                None,
+                ScalarValue::Null.cast_to(&DataType::Int32)?,
                 false,
             ),
             [
@@ -446,7 +470,7 @@ mod tests {
                 DataType::Int32,
                 Arc::new(Column::new("c3", 0)),
                 None,
-                Some(ScalarValue::Int32(Some(100))),
+                ScalarValue::Int32(Some(100)),
                 false,
             ),
             [

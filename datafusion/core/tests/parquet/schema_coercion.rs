@@ -72,6 +72,7 @@ async fn multi_parquet_coercion() {
         },
         None,
         None,
+        Default::default(),
     );
 
     let session_ctx = SessionContext::new();
@@ -135,6 +136,7 @@ async fn multi_parquet_coercion_projection() {
         },
         None,
         None,
+        Default::default(),
     );
 
     let session_ctx = SessionContext::new();

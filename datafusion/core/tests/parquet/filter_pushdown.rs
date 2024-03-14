@@ -34,6 +34,7 @@ use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_common::instant::Instant;
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
+
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
@@ -509,7 +510,7 @@ impl<'a> TestCase<'a> {
         let ctx = SessionContext::new_with_config(scan_options.config());
         let exec = self
             .test_parquet_file
-            .create_scan(Some(filter.clone()))
+            .create_scan(&ctx, Some(filter.clone()))
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();

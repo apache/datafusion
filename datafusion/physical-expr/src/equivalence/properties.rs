@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::CastExpr;
-use arrow_schema::SchemaRef;
-use datafusion_common::{JoinSide, JoinType, Result};
-use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -27,7 +22,7 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::Literal;
+use crate::expressions::{CastExpr, Literal};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
@@ -35,8 +30,12 @@ use crate::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinSide, JoinType, Result};
+
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
@@ -848,6 +847,7 @@ impl EquivalenceProperties {
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
     }
@@ -886,9 +886,9 @@ fn update_ordering(
         // We have a Literal, which is the other possible leaf node type:
         node.data = node.expr.get_ordering(&[]);
     } else {
-        return Transformed::No(node);
+        return Transformed::no(node);
     }
-    Transformed::Yes(node)
+    Transformed::yes(node)
 }
 
 /// This function determines whether the provided expression is constant
@@ -1293,14 +1293,16 @@ mod tests {
         create_random_schema, create_test_params, create_test_schema,
         generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
     };
-    use crate::execution_props::ExecutionProps;
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::functions::create_physical_expr;
     use crate::PhysicalSortExpr;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, SortOptions, TimeUnit};
     use datafusion_common::Result;
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{BuiltinScalarFunction, Operator};
+
     use itertools::Itertools;
 
     #[test]

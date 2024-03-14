@@ -19,19 +19,21 @@
 
 use crate::LogicalPlan;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{handle_tree_recursion, Result};
+use datafusion_common::tree_node::{
+    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
+use datafusion_common::{handle_visit_recursion, Result};
 
 impl TreeNode for LogicalPlan {
-    fn apply<F: FnMut(&Self) -> Result<VisitRecursion>>(
+    fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
         &self,
-        op: &mut F,
-    ) -> Result<VisitRecursion> {
+        f: &mut F,
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
-        handle_tree_recursion!(op(self)?);
-        self.apply_subqueries(op)?;
-        self.apply_children(&mut |node| node.apply(op))
+        handle_visit_recursion!(f(self)?, DOWN);
+        self.apply_subqueries(f)?;
+        self.apply_children(&mut |n| n.apply(f))
     }
 
     /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
@@ -54,48 +56,58 @@ impl TreeNode for LogicalPlan {
     /// visitor.post_visit(Filter)
     /// visitor.post_visit(Projection)
     /// ```
-    fn visit<V: TreeNodeVisitor<N = Self>>(
+    fn visit<V: TreeNodeVisitor<Node = Self>>(
         &self,
         visitor: &mut V,
-    ) -> Result<VisitRecursion> {
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
-        handle_tree_recursion!(visitor.pre_visit(self)?);
-        self.visit_subqueries(visitor)?;
-        handle_tree_recursion!(self.apply_children(&mut |node| node.visit(visitor))?);
-        visitor.post_visit(self)
-    }
-
-    fn apply_children<F: FnMut(&Self) -> Result<VisitRecursion>>(
-        &self,
-        op: &mut F,
-    ) -> Result<VisitRecursion> {
-        for child in self.inputs() {
-            handle_tree_recursion!(op(child)?)
+        match visitor.f_down(self)? {
+            TreeNodeRecursion::Continue => {
+                self.visit_subqueries(visitor)?;
+                handle_visit_recursion!(
+                    self.apply_children(&mut |n| n.visit(visitor))?,
+                    UP
+                );
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Jump => {
+                self.visit_subqueries(visitor)?;
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Stop => Ok(TreeNodeRecursion::Stop),
         }
-        Ok(VisitRecursion::Continue)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+        &self,
+        f: &mut F,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for child in self.inputs() {
+            tnr = f(child)?;
+            handle_visit_recursion!(tnr, DOWN)
+        }
+        Ok(tnr)
+    }
+
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let old_children = self.inputs();
-        let new_children = old_children
+        let new_children = self
+            .inputs()
             .iter()
             .map(|&c| c.clone())
-            .map(transform)
-            .collect::<Result<Vec<_>>>()?;
-
-        // if any changes made, make a new child
-        if old_children
-            .into_iter()
-            .zip(new_children.iter())
-            .any(|(c1, c2)| c1 != c2)
-        {
-            self.with_new_exprs(self.expressions(), new_children)
+            .map_until_stop_and_collect(f)?;
+        // Propagate up `new_children.transformed` and `new_children.tnr`
+        // along with the node containing transformed children.
+        if new_children.transformed {
+            new_children.map_data(|new_children| {
+                self.with_new_exprs(self.expressions(), new_children)
+            })
         } else {
-            Ok(self)
+            Ok(new_children.update_data(|_| self))
         }
     }
 }

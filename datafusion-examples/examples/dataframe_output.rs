@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::{dataframe::DataFrameWriteOptions, prelude::*};
+use datafusion_common::config::CsvOptions;
 use datafusion_common::{parsers::CompressionTypeVariant, DataFusionError};
 
 /// This example demonstrates the various methods to write out a DataFrame to local storage.
@@ -60,8 +61,8 @@ async fn main() -> Result<(), DataFusionError> {
             "./datafusion-examples/test_csv/",
             // DataFrameWriteOptions contains options which control how data is written
             // such as compression codec
-            DataFrameWriteOptions::new().with_compression(CompressionTypeVariant::GZIP),
-            None,
+            DataFrameWriteOptions::new(),
+            Some(CsvOptions::default().with_compression(CompressionTypeVariant::GZIP)),
         )
         .await?;
 
@@ -69,6 +70,7 @@ async fn main() -> Result<(), DataFusionError> {
         .write_json(
             "./datafusion-examples/test_json/",
             DataFrameWriteOptions::new(),
+            None,
         )
         .await?;
 

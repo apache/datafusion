@@ -54,7 +54,7 @@ arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-string = { workspace = true }
-base64 = { version = "0.21", optional = true }
+base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
@@ -85,15 +85,3 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 [[bench]]
 harness = false
 name = "in_list"
-
-[[bench]]
-harness = false
-name = "make_date"
-
-[[bench]]
-harness = false
-name = "regexp"
-
-[[bench]]
-harness = false
-name = "to_char"

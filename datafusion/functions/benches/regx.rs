@@ -17,17 +17,18 @@
 
 extern crate criterion;
 
-use std::sync::Arc;
-
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
+use datafusion_functions::regex::regexpreplace::regexp_replace;
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use std::iter;
+use std::sync::Arc;
 fn data(rng: &mut ThreadRng) -> StringArray {
     let mut data: Vec<String> = vec![];
     for _ in 0..1000 {
@@ -98,6 +99,42 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 regexp_match::<i32>(&[data.clone(), regex.clone(), flags.clone()])
                     .expect("regexp_match should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_match_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_match::<i32>(&[data.clone(), regex.clone(), flags.clone()])
+                    .expect("regexp_match should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_replace_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let replacement =
+            Arc::new(StringArray::from_iter_values(iter::repeat("XX").take(1000)))
+                as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_replace::<i32>(&[
+                    data.clone(),
+                    regex.clone(),
+                    replacement.clone(),
+                    flags.clone(),
+                ])
+                .expect("regexp_replace should work on valid values"),
             )
         })
     });

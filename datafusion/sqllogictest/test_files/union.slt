@@ -292,7 +292,7 @@ UnionExec
 --------------MemoryExec: partitions=1, partition_sizes=[1]
 --ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
 ----CoalesceBatchesExec: target_batch_size=2
-------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)]
+------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
 --------CoalesceBatchesExec: target_batch_size=2
 ----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
 ------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]

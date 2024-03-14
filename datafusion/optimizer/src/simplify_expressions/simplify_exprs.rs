@@ -20,13 +20,14 @@
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use super::{ExprSimplifier, SimplifyContext};
+use super::ExprSimplifier;
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -145,7 +146,6 @@ mod tests {
     };
     use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
 
-    use crate::simplify_expressions::utils::for_test::now_expr;
     use crate::test::{assert_fields_eq, test_table_scan_with_name};
     use crate::OptimizerContext;
 
@@ -441,28 +441,6 @@ mod tests {
         let expected = "Projection: Int32(0) AS Utf8(\"0\")\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn multiple_now_expr() -> Result<()> {
-        let table_scan = test_table_scan();
-        let time = Utc::now();
-        let proj = vec![now_expr(), now_expr().alias("t2")];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        // expect the same timestamp appears in both exprs
-        let actual = get_optimized_plan_formatted(&plan, &time);
-        let expected = format!(
-            "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
-            \n  TableScan: test",
-            time.timestamp_nanos_opt().unwrap(),
-            time.timestamp_nanos_opt().unwrap()
-        );
-
         assert_eq!(expected, actual);
         Ok(())
     }
