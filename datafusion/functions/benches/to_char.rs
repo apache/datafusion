@@ -22,10 +22,10 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, Date32Array, StringArray};
 use chrono::prelude::*;
 use chrono::TimeDelta;
-use criterion::{black_box, Criterion, criterion_group, criterion_main};
-use rand::Rng;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
@@ -87,7 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char().invoke(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -101,7 +102,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char().invoke(&[data.clone(), patterns.clone()])
+                to_char()
+                    .invoke(&[data.clone(), patterns.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -123,7 +125,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_char().invoke(&[data.clone(), pattern.clone()])
+                to_char()
+                    .invoke(&[data.clone(), pattern.clone()])
                     .expect("to_char should work on valid values"),
             )
         })
@@ -132,4 +135,3 @@ fn criterion_benchmark(c: &mut Criterion) {
 
 criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
-

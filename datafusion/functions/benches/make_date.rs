@@ -20,9 +20,9 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array};
-use criterion::{black_box, Criterion, criterion_group, criterion_main};
-use rand::Rng;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
+use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -63,7 +63,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date().invoke(&[years.clone(), months.clone(), days.clone()])
+                make_date()
+                    .invoke(&[years.clone(), months.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -77,7 +78,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date().invoke(&[year.clone(), months.clone(), days.clone()])
+                make_date()
+                    .invoke(&[year.clone(), months.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -91,7 +93,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date().invoke(&[year.clone(), month.clone(), days.clone()])
+                make_date()
+                    .invoke(&[year.clone(), month.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -104,7 +107,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date().invoke(&[year.clone(), month.clone(), day.clone()])
+                make_date()
+                    .invoke(&[year.clone(), month.clone(), day.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
