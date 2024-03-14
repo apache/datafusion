@@ -851,7 +851,7 @@ mod tests {
     }
 
     /// Parses sql and asserts that the expected error message was found
-    fn _expect_parse_error(sql: &str, expected_error: &str) {
+    fn expect_parse_error(sql: &str, expected_error: &str) {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
@@ -1132,6 +1132,16 @@ mod tests {
             constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
+
+        // negative case: mixed column defs and column names in `PARTITIONED BY` clause
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected a data type name, found: )");
+
+        // negative case: mixed column defs and column names in `PARTITIONED BY` clause
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
 
         // positive case: additional options (one entry) can be specified
         let sql =
