@@ -15,20 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implementation of the `arrow_cast` function that allows
-//! casting to arbitrary arrow types (rather than SQL types)
+//! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use arrow::compute::cast;
 use std::any::Any;
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue,
-};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, ExprSchema, Result, ScalarValue, internal_err};
 
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 
+/// Implements casting to arbitrary arrow types (rather than SQL types)
+///
+/// Note that the `arrow_cast` function is somewhat special in that its
+/// return depends only on the *value* of its second argument (not its type)
+///
+/// It is implemented by calling the same underlying arrow `cast` kernel as
+/// normal SQL casts.
+///
+/// For example to cast to `int` using SQL  (which is then mapped to the arrow
+/// type `Int32`)
+///
+/// ```sql
+/// select cast(column_x as int) ...
+/// ```
+///
+/// You can use the `arrow_cast` functiont to cast to a specific arrow type
+///
+/// For example
+/// ```sql
+/// select arrow_cast(column_x, 'Float64')
+/// ```
 #[derive(Debug)]
 pub(super) struct ArrowCastFunc {
     signature: Signature,
@@ -41,6 +59,8 @@ impl ArrowCastFunc {
         }
     }
 }
+
+
 
 impl ScalarUDFImpl for ArrowCastFunc {
     fn as_any(&self) -> &dyn Any {
@@ -65,84 +85,50 @@ impl ScalarUDFImpl for ArrowCastFunc {
         _schema: &dyn ExprSchema,
         _arg_types: &[DataType],
     ) -> Result<DataType> {
-        if args.len() != 2 {
-            return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
-        }
-        let arg1 = args.get(1);
-
-        match arg1 {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(arg1)))) => {
-                let data_type = parse_data_type(arg1)?;
-                Ok(data_type)
-            }
-            _ => plan_err!("arrow_cast requires its second argument to be a constant string, got {:?}",arg1.unwrap().to_string())
-        }
+       data_type_from_args(args)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        create_arrow_cast(args)
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        internal_err!("arrow_cast should have been simplified to cast")
     }
+
+    fn simplify(&self, mut args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
+        // convert this into a real cast
+        let target_type = data_type_from_args(&args)?;
+        // remove second (type) argument
+        args.pop().unwrap();
+        let arg = args.pop().unwrap();
+
+        let source_type = info.get_data_type(&arg)?;
+        let new_expr = if source_type == target_type {
+            // the argument's data type is already the correct type
+            arg
+        } else {
+            // Use an actual cast to get the correct type
+            Expr::Cast(datafusion_expr::Cast {
+                expr: Box::new(arg),
+                data_type: target_type,
+            })
+        };
+        // return the newly written argument to DataFusion
+        Ok(ExprSimplifyResult::Simplified(new_expr))
+    }
+
 }
 
-/// Create an [`Expr`] that evaluates the `arrow_cast` function
-///
-/// This function is not a [`BuiltinScalarFunction`] because the
-/// return type of [`BuiltinScalarFunction`] depends only on the
-/// *types* of the arguments. However, the type of `arrow_type` depends on
-/// the *value* of its second argument.
-///
-/// Use the `cast` function to cast to SQL type (which is then mapped
-/// to the corresponding arrow type). For example to cast to `int`
-/// (which is then mapped to the arrow type `Int32`)
-///
-/// ```sql
-/// select cast(column_x as int) ...
-/// ```
-///
-/// Use the `arrow_cast` functiont to cast to a specfic arrow type
-///
-/// For example
-/// ```sql
-/// select arrow_cast(column_x, 'Float64')
-/// ```
-/// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
-fn create_arrow_cast(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+
+/// Returns the requested type from the arguments
+fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
         return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
-    let arg1 = &args[1];
-    let arg0 = &args[0];
-
-    match (arg0, arg1) {
-        (
-            ColumnarValue::Scalar(arg0),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(arg1))),
-        ) => {
-            let data_type = parse_data_type(arg1)?;
-            match arg0.cast_to(&data_type) {
-                Ok(val0) => Ok(ColumnarValue::Scalar(val0)),
-                Err(error) => plan_err!("{:?}", error.to_string()),
-            }
-        }
-        (
-            ColumnarValue::Array(arg0),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(arg1))),
-        ) => {
-            let data_type = parse_data_type(arg1)?;
-            match cast(&arg0, &data_type) {
-                Ok(val0) => Ok(ColumnarValue::Array(val0)),
-                Err(error) => plan_err!("{:?}", error.to_string()),
-            }
-        }
-        (ColumnarValue::Scalar(_arg0), ColumnarValue::Scalar(arg1)) => plan_err!(
-            "arrow_cast requires its second argument to be a constant string, got {arg1}"
-        ),
-        _ => plan_err!(
-            "arrow_cast requires two scalar value as input. got {:?} and {:?}",
-            arg0,
-            arg1
-        ),
-    }
+    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+        return plan_err!(
+            "arrow_cast requires its second argument to be a constant string, got {:?}",
+            &args[1]
+        );
+    };
+    parse_data_type(val)
 }
 
 /// Parses `str` into a `DataType`.
@@ -704,7 +690,6 @@ impl Display for Token {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::{ArrayRef, Int64Array, Int8Array};
     use arrow_schema::{IntervalUnit, TimeUnit};
 
     use super::*;
@@ -902,37 +887,7 @@ mod test {
                     assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'"));
                 }
             }
-            println!(" Ok");
         }
     }
 
-    #[test]
-    fn test_arrow_cast_scalar() -> Result<()> {
-        let input_arg0 = ColumnarValue::Scalar(ScalarValue::Int8(Some(100i8)));
-        let input_arg1 =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("Int64".to_string())));
-        let result = create_arrow_cast(&[input_arg0, input_arg1])?;
-        let result = result.into_array(1).expect("Failed to cast values");
-        let expected = Arc::new(Int64Array::from(vec![100])) as ArrayRef;
-        assert_eq!(expected.as_ref(), result.as_ref());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_arrow_cast_array() -> Result<()> {
-        let input_arg0 =
-            ColumnarValue::Array(
-                Arc::new(Int8Array::from(vec![100, 101, 102])) as ArrayRef
-            );
-        let input_arg1 =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("Int64".to_string())));
-        let result = create_arrow_cast(&[input_arg0, input_arg1])?;
-        let result = result.into_array(1).expect("Failed to cast values");
-        let expected = Arc::new(Int64Array::from(vec![100, 101, 102])) as ArrayRef;
-
-        assert_eq!(expected.as_ref(), result.as_ref());
-
-        Ok(())
-    }
 }
