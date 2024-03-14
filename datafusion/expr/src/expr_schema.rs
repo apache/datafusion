@@ -28,7 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFField, ExprSchema, Result,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFField,
+    ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -113,7 +114,22 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(arg_data_types[0].clone())
+                let arg_data_type = arg_data_types[0].clone();
+                // Unnest's output type is the inner type of the list
+                match arg_data_type{
+                    DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) =>{
+                        Ok(field.data_type().clone())
+                    }
+                    DataType::Struct(_) => {
+                        not_impl_err!("unnest() does not support struct yet")
+                    }
+                    DataType::Null => {
+                        not_impl_err!("unnest() does not support null yet")
+                    }
+                    _ => {
+                        plan_err!("unnest() can only be applied to array, struct and null")
+                    }
+                }
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 let arg_data_types = args

@@ -2035,7 +2035,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -2083,10 +2083,6 @@ pub mod physical_expr_node {
         ScalarUdf(super::PhysicalScalarUdfNode),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
-        #[prost(message, tag = "19")]
-        GetIndexedFieldExpr(
-            ::prost::alloc::boxed::Box<super::PhysicalGetIndexedFieldExprNode>,
-        ),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2743,31 +2739,6 @@ pub struct ColumnStats {
     #[prost(message, optional, tag = "4")]
     pub distinct_count: ::core::option::Option<Precision>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct NamedStructFieldExpr {
-    #[prost(message, optional, tag = "1")]
-    pub name: ::core::option::Option<ScalarValue>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalGetIndexedFieldExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2")]
-    pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
-}
-/// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
-pub mod physical_get_indexed_field_expr_node {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Field {
-        /// 3 was list_index_expr
-        /// 4 was list_range_expr
-        #[prost(message, tag = "2")]
-        NamedStructFieldExpr(super::NamedStructFieldExpr),
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum JoinType {
@@ -2850,7 +2821,7 @@ pub enum ScalarFunction {
     Ascii = 4,
     Ceil = 5,
     Cos = 6,
-    Digest = 7,
+    /// 7 was Digest
     Exp = 8,
     Floor = 9,
     Ln = 10,
@@ -2878,7 +2849,7 @@ pub enum ScalarFunction {
     Lpad = 32,
     Lower = 33,
     Ltrim = 34,
-    Md5 = 35,
+    /// 35 was MD5
     ///   36 was NullIf
     OctetLength = 37,
     Random = 38,
@@ -2889,10 +2860,10 @@ pub enum ScalarFunction {
     Right = 43,
     Rpad = 44,
     Rtrim = 45,
-    Sha224 = 46,
-    Sha256 = 47,
-    Sha384 = 48,
-    Sha512 = 49,
+    /// 46 was SHA224
+    /// 47 was SHA256
+    /// 48 was SHA384
+    /// 49 was SHA512
     SplitPart = 50,
     StartsWith = 51,
     Strpos = 52,
@@ -2971,7 +2942,7 @@ pub enum ScalarFunction {
     FindInSet = 127,
     /// / 128 was ArraySort
     /// / 129 was ArrayDistinct
-    ArrayResize = 130,
+    /// / 130 was ArrayResize
     EndsWith = 131,
     /// / 132 was InStr
     /// / 133 was MakeDate
@@ -2994,7 +2965,6 @@ impl ScalarFunction {
             ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
-            ScalarFunction::Digest => "Digest",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
             ScalarFunction::Ln => "Ln",
@@ -3017,7 +2987,6 @@ impl ScalarFunction {
             ScalarFunction::Lpad => "Lpad",
             ScalarFunction::Lower => "Lower",
             ScalarFunction::Ltrim => "Ltrim",
-            ScalarFunction::Md5 => "MD5",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::Repeat => "Repeat",
@@ -3026,10 +2995,6 @@ impl ScalarFunction {
             ScalarFunction::Right => "Right",
             ScalarFunction::Rpad => "Rpad",
             ScalarFunction::Rtrim => "Rtrim",
-            ScalarFunction::Sha224 => "SHA224",
-            ScalarFunction::Sha256 => "SHA256",
-            ScalarFunction::Sha384 => "SHA384",
-            ScalarFunction::Sha512 => "SHA512",
             ScalarFunction::SplitPart => "SplitPart",
             ScalarFunction::StartsWith => "StartsWith",
             ScalarFunction::Strpos => "Strpos",
@@ -3076,7 +3041,6 @@ impl ScalarFunction {
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
-            ScalarFunction::ArrayResize => "ArrayResize",
             ScalarFunction::EndsWith => "EndsWith",
             ScalarFunction::ArrayReverse => "ArrayReverse",
         }
@@ -3089,7 +3053,6 @@ impl ScalarFunction {
             "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
-            "Digest" => Some(Self::Digest),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
             "Ln" => Some(Self::Ln),
@@ -3112,7 +3075,6 @@ impl ScalarFunction {
             "Lpad" => Some(Self::Lpad),
             "Lower" => Some(Self::Lower),
             "Ltrim" => Some(Self::Ltrim),
-            "MD5" => Some(Self::Md5),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "Repeat" => Some(Self::Repeat),
@@ -3121,10 +3083,6 @@ impl ScalarFunction {
             "Right" => Some(Self::Right),
             "Rpad" => Some(Self::Rpad),
             "Rtrim" => Some(Self::Rtrim),
-            "SHA224" => Some(Self::Sha224),
-            "SHA256" => Some(Self::Sha256),
-            "SHA384" => Some(Self::Sha384),
-            "SHA512" => Some(Self::Sha512),
             "SplitPart" => Some(Self::SplitPart),
             "StartsWith" => Some(Self::StartsWith),
             "Strpos" => Some(Self::Strpos),
@@ -3171,7 +3129,6 @@ impl ScalarFunction {
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
-            "ArrayResize" => Some(Self::ArrayResize),
             "EndsWith" => Some(Self::EndsWith),
             "ArrayReverse" => Some(Self::ArrayReverse),
             _ => None,

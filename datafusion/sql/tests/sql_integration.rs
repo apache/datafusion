@@ -22,12 +22,14 @@ use std::{sync::Arc, vec};
 
 use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
+use datafusion_sql::planner::PlannerContext;
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::{
     config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
 };
-use datafusion_common::{plan_err, ParamValues};
+use datafusion_common::{plan_err, DFSchema, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
@@ -39,6 +41,7 @@ use datafusion_sql::{
 };
 
 use rstest::rstest;
+use sqlparser::parser::Parser;
 
 #[test]
 fn parse_decimals() {
@@ -4484,6 +4487,97 @@ impl TableSource for EmptyTable {
 
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
+    }
+}
+
+#[test]
+fn roundtrip_expr() {
+    let tests: Vec<(TableReference, &str, &str)> = vec![
+        (TableReference::bare("person"), "age > 35", "(age > 35)"),
+        (TableReference::bare("person"), "id = '10'", "(id = '10')"),
+        (
+            TableReference::bare("person"),
+            "CAST(id AS VARCHAR)",
+            "CAST(id AS VARCHAR)",
+        ),
+        (
+            TableReference::bare("person"),
+            "SUM((age * 2))",
+            "SUM((age * 2))",
+        ),
+    ];
+
+    let roundtrip = |table, sql: &str| -> Result<String> {
+        let dialect = GenericDialect {};
+        let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
+
+        let context = MockContextProvider::default();
+        let schema = context.get_table_source(table)?.schema();
+        let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
+        let sql_to_rel = SqlToRel::new(&context);
+        let expr =
+            sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
+
+        let ast = expr_to_sql(&expr)?;
+
+        Ok(format!("{}", ast))
+    };
+
+    for (table, query, expected) in tests {
+        let actual = roundtrip(table, query).unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn roundtrip_statement() {
+    let tests: Vec<(&str, &str)> = vec![
+        (
+            "select ta.j1_id from j1 ta;",
+            r#"SELECT ta.j1_id FROM j1 AS ta"#,
+        ),
+        (
+            "select ta.j1_id from j1 ta order by ta.j1_id;",
+            r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST"#,
+        ),
+        (
+            "select * from j1 ta order by ta.j1_id, ta.j1_string desc;",
+            r#"SELECT ta.j1_id, ta.j1_string FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST, ta.j1_string DESC NULLS FIRST"#,
+        ),
+        (
+            "select * from j1 limit 10;",
+            r#"SELECT j1.j1_id, j1.j1_string FROM j1 LIMIT 10"#,
+        ),
+        (
+            "select ta.j1_id from j1 ta where ta.j1_id > 1;",
+            r#"SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1)"#,
+        ),
+        (
+            "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id);",
+            r#"SELECT ta.j1_id, tb.j2_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id)"#,
+        ),
+        (
+            "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
+            r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
+        ),
+    ];
+
+    let roundtrip = |sql: &str| -> Result<String> {
+        let dialect = GenericDialect {};
+        let statement = Parser::new(&dialect).try_with_sql(sql)?.parse_statement()?;
+
+        let context = MockContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        let ast = plan_to_sql(&plan)?;
+
+        Ok(format!("{}", ast))
+    };
+
+    for (query, expected) in tests {
+        let actual = roundtrip(query).unwrap();
+        assert_eq!(actual, expected);
     }
 }
 

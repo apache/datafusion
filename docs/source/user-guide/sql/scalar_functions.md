@@ -1969,6 +1969,7 @@ from_unixtime(expression)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_repeat](#array_repeat)
+- [array_resize](#array_resize)
 - [array_remove](#array_remove)
 - [array_remove_n](#array_remove_n)
 - [array_remove_all](#array_remove_all)
@@ -2006,6 +2007,7 @@ from_unixtime(expression)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_repeat](#list_repeat)
+- [list_resize](#list_resize)
 - [list_remove](#list_remove)
 - [list_remove_n](#list_remove_n)
 - [list_remove_all](#list_remove_all)
@@ -2081,6 +2083,36 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_resize`
+
+Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+
+```
+array_resize(array, size, value)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **size**: New size of given array.
+- **value**: Defines new elements' value or empty if value is not set.
+
+#### Example
+
+```
+❯ select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```
+
+#### Aliases
+
+- list_resize
 
 ### `array_cat`
 
@@ -3070,6 +3102,10 @@ _Alias of [array_prepend](#array_prepend)._
 ### `list_repeat`
 
 _Alias of [array_repeat](#array_repeat)._
+
+### `list_resize`
+
+_Alias of [array_resize](#array_resize)._
 
 ### `list_remove`
 

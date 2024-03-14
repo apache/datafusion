@@ -207,10 +207,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let expr = create_physical_name(expr, false)?;
-            let name = match field {
-                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
+            match field {
+                GetFieldAccess::NamedStructField { name: _ } => {
+                    unreachable!(
+                        "NamedStructField should have been rewritten in OperatorToFunction"
+                    )
+                }
                 GetFieldAccess::ListIndex { key: _ } => {
                     unreachable!(
                         "ListIndex should have been rewritten in OperatorToFunction"
@@ -222,12 +225,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     stride: _,
                 } => {
                     unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
+                        "ListRange should have been rewritten in OperatorToFunction"
                     )
                 }
             };
-
-            Ok(name)
         }
         Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s

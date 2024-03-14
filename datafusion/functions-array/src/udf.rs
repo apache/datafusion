@@ -428,6 +428,62 @@ impl ScalarUDFImpl for ArraySort {
 }
 
 make_udf_function!(
+    ArrayResize,
+    array_resize,
+    array size value,
+    "returns an array with the specified size filled with the given value.",
+    array_resize_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayResize {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayResize {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec!["array_resize".to_string(), "list_resize".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayResize {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_resize"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        match &arg_types[0] {
+            List(field) | FixedSizeList(field, _) => Ok(List(field.clone())),
+            LargeList(field) => Ok(LargeList(field.clone())),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_resize(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+make_udf_function!(
     Cardinality,
     cardinality,
     array,

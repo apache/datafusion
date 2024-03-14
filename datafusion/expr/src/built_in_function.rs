@@ -59,8 +59,6 @@ pub enum BuiltinScalarFunction {
     Cosh,
     /// degrees
     Degrees,
-    /// Digest
-    Digest,
     /// exp
     Exp,
     /// factorial
@@ -137,8 +135,6 @@ pub enum BuiltinScalarFunction {
     ArrayUnion,
     /// array_except
     ArrayExcept,
-    /// array_resize
-    ArrayResize,
 
     // string functions
     /// ascii
@@ -167,8 +163,6 @@ pub enum BuiltinScalarFunction {
     Lower,
     /// ltrim
     Ltrim,
-    /// md5
-    MD5,
     /// octet_length
     OctetLength,
     /// random
@@ -185,14 +179,6 @@ pub enum BuiltinScalarFunction {
     Rpad,
     /// rtrim
     Rtrim,
-    /// sha224
-    SHA224,
-    /// sha256
-    SHA256,
-    /// sha384
-    SHA384,
-    /// Sha512
-    SHA512,
     /// split_part
     SplitPart,
     /// starts_with
@@ -318,7 +304,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayResize => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -332,7 +317,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Lower => Volatility::Immutable,
             BuiltinScalarFunction::Ltrim => Volatility::Immutable,
-            BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
@@ -341,11 +325,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Right => Volatility::Immutable,
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
             BuiltinScalarFunction::Rtrim => Volatility::Immutable,
-            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
-            BuiltinScalarFunction::Digest => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
@@ -404,7 +383,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReverse => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayResize => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayIntersect => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, DataType::Null) | (DataType::Null, _) => {
@@ -460,7 +438,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Ltrim => {
                 utf8_to_str_type(&input_expr_types[0], "ltrim")
             }
-            BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
             BuiltinScalarFunction::OctetLength => {
                 utf8_to_int_type(&input_expr_types[0], "octet_length")
             }
@@ -482,21 +459,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
                 utf8_to_str_type(&input_expr_types[0], "rtrim")
-            }
-            BuiltinScalarFunction::SHA224 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
-            }
-            BuiltinScalarFunction::SHA256 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha256")
-            }
-            BuiltinScalarFunction::SHA384 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha384")
-            }
-            BuiltinScalarFunction::SHA512 => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
-            }
-            BuiltinScalarFunction::Digest => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
             }
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
@@ -632,9 +594,6 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayResize => {
-                Signature::variadic_any(self.volatility())
-            }
 
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
@@ -643,15 +602,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::SHA224
-            | BuiltinScalarFunction::SHA256
-            | BuiltinScalarFunction::SHA384
-            | BuiltinScalarFunction::SHA512
-            | BuiltinScalarFunction::MD5 => Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Ascii
             | BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
@@ -689,15 +639,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Repeat
             | BuiltinScalarFunction::Right => Signature::one_of(
                 vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::Digest => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
                 self.volatility(),
             ),
             BuiltinScalarFunction::SplitPart => Signature::one_of(
@@ -953,12 +894,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // hashing functions
-            BuiltinScalarFunction::Digest => &["digest"],
-            BuiltinScalarFunction::MD5 => &["md5"],
-            BuiltinScalarFunction::SHA224 => &["sha224"],
-            BuiltinScalarFunction::SHA256 => &["sha256"],
-            BuiltinScalarFunction::SHA384 => &["sha384"],
-            BuiltinScalarFunction::SHA512 => &["sha512"],
             BuiltinScalarFunction::ArrayElement => &[
                 "array_element",
                 "array_extract",
@@ -994,7 +929,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
             BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
-            BuiltinScalarFunction::ArrayResize => &["array_resize", "list_resize"],
             BuiltinScalarFunction::ArrayIntersect => {
                 &["array_intersect", "list_intersect"]
             }
@@ -1065,21 +999,6 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
-
-fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
-    Ok(match arg_type {
-        DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Binary
-        | DataType::LargeBinary => DataType::Binary,
-        DataType::Null => DataType::Null,
-        _ => {
-            return plan_err!(
-                "The {name:?} function can only accept strings or binary arrays."
-            );
-        }
-    })
-}
 
 #[cfg(test)]
 mod tests {
