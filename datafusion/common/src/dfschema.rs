@@ -192,16 +192,12 @@ impl DFSchema {
     // TODO Add tests
     pub fn from_qualified_fields(
         qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
-        metadata: Option<HashMap<String, String>>,
+        metadata: HashMap<String, String>,
     ) -> Result<Self> {
         let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
 
-        let schema = if let Some(metadata) = metadata {
-            Arc::new(Schema::new_with_metadata(fields, metadata))
-        } else {
-            Arc::new(Schema::new(fields))
-        };
+        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
 
         let dfschema = Self {
             inner: schema,
@@ -1059,7 +1055,7 @@ impl SchemaExt for Schema {
     }
 }
 
-fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
+pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
         Some(q) => format!("{}.{}", q, name),
         None => name.to_string(),

@@ -357,7 +357,7 @@ mod tests {
         schema_builder.extend(
             names
                 .iter()
-                .map(|f| Field::new(f.clone(), DataType::Boolean, true)),
+                .map(|f| Field::new(*f, DataType::Boolean, true)),
         );
         let schema = Arc::new(schema_builder.finish());
         DFSchema::try_from_qualified_schema(qualifier, &schema)

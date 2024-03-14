@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_err, qualified_name, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{is_volatile, Alias};
 use datafusion_expr::logical_plan::{
@@ -278,8 +278,10 @@ impl CommonSubexprEliminate {
                     } else {
                         let id =
                             ExprIdentifierVisitor::<'static>::desc_expr(&expr_rewritten);
-                        let out_name =
-                            expr_rewritten.to_field(&new_input_schema)?.qualified_name();
+                        let (qualifier, field) =
+                            expr_rewritten.to_field(&new_input_schema)?;
+                        let out_name = qualified_name(qualifier.as_ref(), field.name());
+
                         agg_exprs.push(expr_rewritten.alias(&id));
                         proj_exprs
                             .push(Expr::Column(Column::from_name(id)).alias(out_name));
@@ -442,7 +444,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
-                let field = DFField::new_unqualified(&id, data_type.clone(), true);
+                let field = Field::new(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
             }
@@ -452,9 +454,10 @@ fn build_common_expr_project_plan(
         }
     }
 
-    for field in input.schema().fields() {
-        if fields_set.insert(field.qualified_name()) {
-            project_exprs.push(Expr::Column(field.qualified_column()));
+    for (qualifier, field) in input.schema().iter() {
+        if fields_set.insert(qualified_name(qualifier, field.name())) {
+            project_exprs
+                .push(Expr::Column(Column::new(qualifier.cloned(), field.name())));
         }
     }
 
@@ -473,9 +476,10 @@ fn build_recover_project_plan(
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
     let col_exprs = schema
-        .fields()
         .iter()
-        .map(|field| Expr::Column(field.qualified_column()))
+        .map(|(qualifier, field)| {
+            Expr::Column(Column::new(qualifier.cloned(), field.name()))
+        })
         .collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
@@ -490,10 +494,14 @@ fn extract_expressions(
 ) -> Result<()> {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
-            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+            let (qualifier, field) = e.to_field(schema)?;
+            let col = Column::new(qualifier, field.name());
+            result.push(Expr::Column(col))
         }
     } else {
-        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+        let (qualifier, field) = expr.to_field(schema)?;
+        let col = Column::new(qualifier, field.name());
+        result.push(Expr::Column(col));
     }
 
     Ok(())

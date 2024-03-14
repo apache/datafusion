@@ -1545,7 +1545,7 @@ pub fn unnest_with_options(
         .collect::<Vec<_>>();
 
     let metadata = input_schema.metadata().clone();
-    let df_schema = DFSchema::from_qualified_fields(fields, Some(metadata))?;
+    let df_schema = DFSchema::from_qualified_fields(fields, metadata)?;
     // let df_schema = DFSchema::new_with_metadata(fields, metadata);
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();

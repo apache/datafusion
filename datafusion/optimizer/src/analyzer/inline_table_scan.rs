@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::Result;
+use datafusion_common::{Column, Result};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr::InSubquery;
 use datafusion_expr::{
@@ -121,9 +121,8 @@ fn generate_projection_expr(
     let mut exprs = vec![];
     if let Some(projection) = projection {
         for i in projection {
-            exprs.push(Expr::Column(
-                sub_plan.schema().fields()[*i].qualified_column(),
-            ));
+            let (qualifier, field) = sub_plan.schema().qualified_field(*i);
+            exprs.push(Expr::Column(Column::new(qualifier.cloned(), field.name())));
         }
     } else {
         exprs.push(Expr::Wildcard { qualifier: None });

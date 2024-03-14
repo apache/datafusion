@@ -1794,7 +1794,7 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
     // let mut schema = DFSchema::from_qualified_fields
     let mut schema = DFSchema::from_qualified_fields(
         exprlist_to_fields(exprs, input)?,
-        Some(input.schema().metadata().clone()),
+        input.schema().metadata().clone(),
     )?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
@@ -2025,7 +2025,7 @@ impl Window {
             input,
             window_expr,
             schema: Arc::new(
-                DFSchema::from_qualified_fields(window_fields, Some(metadata))?
+                DFSchema::from_qualified_fields(window_fields, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
         })

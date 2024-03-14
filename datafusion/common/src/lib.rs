@@ -45,7 +45,9 @@ pub mod utils;
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
-pub use dfschema::{DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema};
+pub use dfschema::{
+    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
