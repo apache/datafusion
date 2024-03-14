@@ -58,6 +58,7 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
@@ -85,3 +86,11 @@ name = "to_timestamp"
 [[bench]]
 harness = false
 name = "regx"
+
+[[bench]]
+harness = false
+name = "make_date"
+
+[[bench]]
+harness = false
+name = "to_char"

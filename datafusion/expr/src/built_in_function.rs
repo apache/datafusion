@@ -22,11 +22,10 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
@@ -190,8 +189,6 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// to_hex
     ToHex,
-    /// make_date
-    MakeDate,
     /// translate
     Translate,
     /// trim
@@ -208,8 +205,6 @@ pub enum BuiltinScalarFunction {
     SubstrIndex,
     /// find_in_set
     FindInSet,
-    /// to_char
-    ToChar,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -335,8 +330,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::ToHex => Volatility::Immutable,
-            BuiltinScalarFunction::ToChar => Volatility::Immutable,
-            BuiltinScalarFunction::MakeDate => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
@@ -490,8 +483,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => {
                 utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
-            BuiltinScalarFunction::ToChar => Ok(Utf8),
-            BuiltinScalarFunction::MakeDate => Ok(Date32),
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
             }
@@ -567,7 +558,6 @@ impl BuiltinScalarFunction {
     /// Return the argument [`Signature`] supported by this function
     pub fn signature(&self) -> Signature {
         use DataType::*;
-        use TimeUnit::*;
         use TypeSignature::*;
         // note: the physical expression must accept the type returned by this function or the execution panics.
 
@@ -649,41 +639,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Repeat
             | BuiltinScalarFunction::Right => Signature::one_of(
                 vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::ToChar => Signature::one_of(
-                vec![
-                    Exact(vec![Date32, Utf8]),
-                    Exact(vec![Date64, Utf8]),
-                    Exact(vec![Time32(Millisecond), Utf8]),
-                    Exact(vec![Time32(Second), Utf8]),
-                    Exact(vec![Time64(Microsecond), Utf8]),
-                    Exact(vec![Time64(Nanosecond), Utf8]),
-                    Exact(vec![Timestamp(Second, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Duration(Second), Utf8]),
-                    Exact(vec![Duration(Millisecond), Utf8]),
-                    Exact(vec![Duration(Microsecond), Utf8]),
-                    Exact(vec![Duration(Nanosecond), Utf8]),
-                ],
                 self.volatility(),
             ),
             BuiltinScalarFunction::SplitPart => Signature::one_of(
@@ -821,11 +776,6 @@ impl BuiltinScalarFunction {
                 // will be as good as the number of digits in the number
                 Signature::uniform(1, vec![Float64, Float32], self.volatility())
             }
-            BuiltinScalarFunction::MakeDate => Signature::uniform(
-                3,
-                vec![Int32, Int64, UInt32, UInt64, Utf8],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Iszero => Signature::one_of(
                 vec![Exact(vec![Float32]), Exact(vec![Float64])],
                 self.volatility(),
@@ -942,10 +892,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-
-            // time/date functions
-            BuiltinScalarFunction::MakeDate => &["make_date"],
-            BuiltinScalarFunction::ToChar => &["to_char", "date_format"],
 
             // hashing functions
             BuiltinScalarFunction::ArrayElement => &[

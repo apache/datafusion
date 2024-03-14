@@ -20,7 +20,6 @@ pub mod analysis;
 pub mod array_expressions;
 pub mod binary_map;
 pub mod conditional_expressions;
-pub mod datetime_expressions;
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;

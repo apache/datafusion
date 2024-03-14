@@ -28,7 +28,9 @@ mod date_bin;
 mod date_part;
 mod date_trunc;
 mod from_unixtime;
+mod make_date;
 mod now;
+mod to_char;
 mod to_date;
 mod to_timestamp;
 mod to_unixtime;
@@ -39,12 +41,14 @@ make_udf_function!(current_time::CurrentTimeFunc, CURRENT_TIME, current_time);
 make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
 make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
+make_udf_function!(make_date::MakeDateFunc, MAKE_DATE, make_date);
 make_udf_function!(
     from_unixtime::FromUnixtimeFunc,
     FROM_UNIXTIME,
     from_unixtime
 );
 make_udf_function!(now::NowFunc, NOW, now);
+make_udf_function!(to_char::ToCharFunc, TO_CHAR, to_char);
 make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, TO_UNIXTIME, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
@@ -105,9 +109,93 @@ pub mod expr_fn {
         super::from_unixtime().call(vec![unixtime])
     }
 
+    #[doc = "make a date from year, month and day component parts"]
+    pub fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
+        super::make_date().call(vec![year, month, day])
+    }
+
     #[doc = "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement"]
     pub fn now() -> Expr {
         super::now().call(vec![])
+    }
+
+    /// Returns a string representation of a date, time, timestamp or duration based
+    /// on a Chrono pattern.
+    ///
+    /// The syntax for the patterns can be found at
+    /// <https://docs.rs/chrono/latest/chrono/format/strftime/index.html>
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use chrono::prelude::*;
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue::TimestampNanosecond;
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Date32Array, RecordBatch, StringArray};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("values", DataType::Date32, false),
+    ///     Field::new("patterns", DataType::Utf8, false),
+    /// ]));
+    ///
+    /// let batch = RecordBatch::try_new(
+    ///     schema,
+    ///     vec![
+    ///         Arc::new(Date32Array::from(vec![
+    ///             18506,
+    ///             18507,
+    ///             18508,
+    ///             18509,
+    ///         ])),
+    ///         Arc::new(StringArray::from(vec![
+    ///             "%Y-%m-%d",
+    ///             "%Y:%m:%d",
+    ///             "%Y%m%d",
+    ///             "%d-%m-%Y",
+    ///         ])),
+    ///     ],
+    /// )?;
+    ///
+    /// let ctx = SessionContext::new();
+    /// ctx.register_batch("t", batch)?;
+    /// let df = ctx.table("t").await?;
+    ///
+    /// // use the to_char function to convert col 'values',
+    /// // to strings using patterns in col 'patterns'
+    /// let df = df.with_column(
+    ///     "date_str",
+    ///     to_char(col("values"), col("patterns"))
+    /// )?;
+    /// // Note that providing a scalar value for the pattern
+    /// // is more performant
+    /// let df = df.with_column(
+    ///     "date_str2",
+    ///     to_char(col("values"), lit("%d-%m-%Y"))
+    /// )?;
+    /// // literals can be used as well with dataframe calls
+    /// let timestamp = "2026-07-08T09:10:11"
+    ///     .parse::<NaiveDateTime>()
+    ///     .unwrap()
+    ///     .with_nanosecond(56789)
+    ///     .unwrap()
+    ///     .timestamp_nanos_opt()
+    ///     .unwrap();
+    /// let df = df.with_column(
+    ///     "timestamp_str",
+    ///     to_char(lit(TimestampNanosecond(Some(timestamp), None)), lit("%d-%m-%Y %H:%M:%S"))
+    /// )?;
+    ///
+    /// df.show().await?;
+    ///
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn to_char(datetime: Expr, format: Expr) -> Expr {
+        super::to_char().call(vec![datetime, format])
     }
 
     /// ```ignore
@@ -200,7 +288,9 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_part(),
         date_trunc(),
         from_unixtime(),
+        make_date(),
         now(),
+        to_char(),
         to_date(),
         to_unixtime(),
         to_timestamp(),
