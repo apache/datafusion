@@ -1650,7 +1650,11 @@ impl ScalarValue {
             | DataType::Duration(_)
             | DataType::Union(_, _)
             | DataType::Map(_, _)
-            | DataType::RunEndEncoded(_, _) => {
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 return _internal_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
@@ -5769,7 +5773,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
 
         #[rustfmt::skip]
-        let expected = [
+            let expected = [
             "+---+",
             "| s |",
             "+---+",
@@ -5803,7 +5807,7 @@ mod tests {
             &DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
-                true
+                true,
             )))
         );
     }

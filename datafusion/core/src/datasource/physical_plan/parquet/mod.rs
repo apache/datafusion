@@ -704,7 +704,6 @@ pub async fn plan_to_parquet(
             let mut writer = AsyncArrowWriter::try_new(
                 multipart_writer,
                 plan.schema(),
-                10485760,
                 propclone,
             )?;
             while let Some(next_batch) = stream.next().await {
