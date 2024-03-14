@@ -80,7 +80,7 @@ impl Constraints {
                             let idx = df_schema
                                 .field_names()
                                 .iter()
-                                .position(|item| item == &pk.value.clone())
+                                .position(|item| *item == pk.value.clone())
                                 .ok_or_else(|| {
                                     DataFusionError::Execution(
                                         "Primary key doesn't exist".to_string(),

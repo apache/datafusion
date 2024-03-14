@@ -1203,11 +1203,8 @@ fn add_group_by_exprs_from_dependencies(
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
-            let field = schema.qualified_field(idx);
-            let expr = Expr::Column(Column::new(
-                field.0.map(|r| r.to_owned_reference()),
-                field.1.name(),
-            ));
+            let (qualifier, field) = schema.qualified_field(idx);
+            let expr = Expr::Column(Column::new(qualifier.cloned(), field.name()));
             let expr_name = expr.display_name()?;
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
@@ -1283,28 +1280,30 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         Vec<Option<OwnedTableReference>>,
         Vec<Arc<Field>>,
     ) = zip(left_plan.schema().iter(), right_plan.schema().iter())
-        .map(|(left_field, right_field)| {
-            let nullable = left_field.1.is_nullable() || right_field.1.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.1.data_type(), right_field.1.data_type())
-                    .ok_or_else(|| {
-                        plan_datafusion_err!(
+        .map(
+            |((left_qualifier, left_field), (_right_qualifier, right_field))| {
+                let nullable = left_field.is_nullable() || right_field.is_nullable();
+                let data_type =
+                    comparison_coercion(left_field.data_type(), right_field.data_type())
+                        .ok_or_else(|| {
+                            plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                right_field.1.name(),
-                right_field.1.data_type(),
-                left_field.1.name(),
-                left_field.1.data_type()
+                right_field.name(),
+                right_field.data_type(),
+                left_field.name(),
+                left_field.data_type()
             )
-                    })?;
+                        })?;
 
-            Ok((
-                left_field.0,
-                Arc::new(Field::new(left_field.1.name(), data_type, nullable)),
-            ))
-        })
+                Ok((
+                    left_qualifier,
+                    Arc::new(Field::new(left_field.name(), data_type, nullable)),
+                ))
+            },
+        )
         .collect::<Result<Vec<_>>>()?
         .iter()
-        .map(|(q, f)| (q.map(|r| r.to_owned()), f.clone()))
+        .map(|(q, f)| (q.cloned(), f.clone()))
         .unzip();
     let union_schema: Schema = Schema::new_with_metadata(union_fields, HashMap::new());
 
@@ -1514,16 +1513,16 @@ pub fn unnest_with_options(
     if maybe_unnest_field.is_none() {
         return Ok(input);
     }
-    let unnest_field = maybe_unnest_field.unwrap();
+    let (unnest_qualifier, unnest_field) = maybe_unnest_field.unwrap();
 
     // Extract the type of the nested field in the list.
-    let unnested_field = match unnest_field.1.data_type() {
+    let unnested_field = match unnest_field.data_type() {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => Arc::new(Field::new(
-            unnest_field.1.name(),
+            unnest_field.name(),
             field.data_type().clone(),
-            unnest_field.1.is_nullable(),
+            unnest_field.is_nullable(),
         )),
         _ => {
             // If the unnest field is not a list type return the input plan.
@@ -1536,7 +1535,7 @@ pub fn unnest_with_options(
     let fields = input_schema
         .iter()
         .map(|(q, f)| {
-            if f == &unnest_field.1 {
+            if f == &unnest_field && q == unnest_qualifier.as_ref() {
                 (q.cloned(), unnested_field.clone())
             } else {
                 (q.cloned(), f.clone())
@@ -1546,11 +1545,10 @@ pub fn unnest_with_options(
 
     let metadata = input_schema.metadata().clone();
     let df_schema = DFSchema::from_qualified_fields(fields, metadata)?;
-    // let df_schema = DFSchema::new_with_metadata(fields, metadata);
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    let column = Column::new(unnest_field.0, unnested_field.name());
+    let column = Column::new(unnest_qualifier, unnested_field.name());
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),

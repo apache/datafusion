@@ -509,7 +509,7 @@ impl DFSchema {
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
-            .map(|(_, f)| Column::from_name(f.name()))
+            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
             .collect()
     }
 

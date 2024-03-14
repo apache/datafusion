@@ -404,12 +404,9 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
             )?)
         }
         _ => {
-            let qualified_field = plan.schema().qualified_field(0);
-            let cast_expr = Expr::Column(Column::new(
-                qualified_field.0.map(|r| r.to_owned_reference()),
-                qualified_field.1.name(),
-            ))
-            .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let (qualifier, field) = plan.schema().qualified_field(0);
+            let cast_expr = Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,
