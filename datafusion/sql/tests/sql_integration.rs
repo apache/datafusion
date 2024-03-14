@@ -4560,6 +4560,26 @@ fn roundtrip_statement() {
             "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
             r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
         ),
+        (
+            "select * from (select id, first_name from person)",
+            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM person)"
+        ),
+        (
+            "select * from (select id, first_name from (select * from person))",
+            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀 FROM person))"
+        ),
+        (
+            "select id, count(*) as cnt from (select id from person) group by id",
+            "SELECT person.id, COUNT(*) AS cnt FROM (SELECT person.id FROM person) GROUP BY person.id"
+        ),
+        (
+            "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
+            "SELECT p1.id, COUNT(*) AS cnt FROM (SELECT p1.id FROM person AS p1 JOIN person AS p2 ON (p1.id = p2.id)) GROUP BY p1.id"
+        ),
+        (
+            "select id, count(*), first_name from person group by first_name, id",
+            "SELECT person.id, COUNT(*), person.first_name FROM person GROUP BY person.first_name, person.id"
+        ),
     ];
 
     let roundtrip = |sql: &str| -> Result<String> {
@@ -4570,7 +4590,11 @@ fn roundtrip_statement() {
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 
+        println!("{}", plan.display_indent());
+
         let ast = plan_to_sql(&plan)?;
+
+        println!("{ast}");
 
         Ok(format!("{}", ast))
     };
