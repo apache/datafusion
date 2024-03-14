@@ -1791,7 +1791,6 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    // let mut schema = DFSchema::from_qualified_fields
     let mut schema = DFSchema::from_qualified_fields(
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
@@ -2096,9 +2095,14 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                let df_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &table_source.schema(),
+
+                let df_schema = DFSchema::from_qualified_fields(
+                    p.iter()
+                        .map(|i| {
+                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                        })
+                        .collect(),
+                    schema.metadata.clone(),
                 )?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
             })
