@@ -23,7 +23,7 @@ use arrow_schema::{
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use sqlparser::ast::Ident;
 
-use datafusion_common::{exec_err, internal_err, plan_err};
+use datafusion_common::{exec_err, internal_err, plan_err, Column};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
 use datafusion_expr::expr_vec_fmt;
@@ -36,8 +36,17 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone().transform_up(&|nested_expr| {
         match nested_expr {
             Expr::Column(col) => {
-                let field = plan.schema().field_from_column(&col)?;
-                Ok(Transformed::Yes(Expr::Column(field.qualified_column())))
+                let field = plan.schema().qualifier_and_field_from_column(&col);
+                match field {
+                    Some((qualifier, field)) => Ok(Transformed::Yes(Expr::Column(
+                        Column::new(qualifier, field.name()),
+                    ))),
+                    None => plan_err!(
+                        "Column {:?} not found in schema: {:?}",
+                        col,
+                        plan.schema()
+                    ),
+                }
             }
             _ => {
                 // keep recursing

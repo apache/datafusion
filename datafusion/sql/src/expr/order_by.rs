@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+    plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
@@ -62,8 +62,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         );
                     }
 
-                    let field = schema.field(field_index - 1);
-                    Expr::Column(field.qualified_column())
+                    let (qualifier, field) = schema.qualified_field(field_index - 1);
+                    Expr::Column(Column::new(qualifier.cloned(), field.name()))
                 }
                 e => self.sql_expr_to_logical_expr(e.clone(), schema, planner_context)?,
             };
