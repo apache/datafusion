@@ -17,13 +17,14 @@
 
 use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{expr::Alias, Expr, JoinConstraint, JoinType, LogicalPlan};
-use sqlparser::ast::{self, Ident, SelectItem};
+use sqlparser::ast;
 
 use super::{
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
-    },  Unparser
+    },
+    Unparser,
 };
 
 /// Convert a DataFusion [`LogicalPlan`] to `sqlparser::ast::Statement`
@@ -130,7 +131,6 @@ impl Unparser<'_> {
             LogicalPlan::Projection(p) => {
                 // A second projection implies a derived tablefactor
                 if !select.already_projected() {
-
                     let items = p
                         .expr
                         .iter()
@@ -143,7 +143,6 @@ impl Unparser<'_> {
                         select,
                         relation,
                     )
-
                 } else {
                     let mut derived_builder = DerivedRelationBuilder::default();
                     derived_builder.lateral(false).alias(None).subquery({
@@ -163,11 +162,11 @@ impl Unparser<'_> {
             LogicalPlan::Filter(filter) => {
                 let filter_expr = self.expr_to_sql(&filter.predicate)?;
 
-                if let LogicalPlan::Aggregate(_) = filter.input.as_ref(){
+                if let LogicalPlan::Aggregate(_) = filter.input.as_ref() {
                     select.having(Some(filter_expr));
                 } else {
                     select.selection(Some(filter_expr));
-                }               
+                }
 
                 self.select_to_sql_recursively(
                     filter.input.as_ref(),
@@ -203,11 +202,11 @@ impl Unparser<'_> {
             }
             LogicalPlan::Aggregate(agg) => {
                 select.group_by(ast::GroupByExpr::Expressions(
-                            agg.group_expr
-                                .iter()
-                                .map(|expr| self.expr_to_sql(expr))
-                                .collect::<Result<Vec<_>>>()?,
-                        ));
+                    agg.group_expr
+                        .iter()
+                        .map(|expr| self.expr_to_sql(expr))
+                        .collect::<Result<Vec<_>>>()?,
+                ));
                 self.select_to_sql_recursively(
                     agg.input.as_ref(),
                     query,

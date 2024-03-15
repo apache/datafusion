@@ -4590,7 +4590,7 @@ fn roundtrip_statement() {
         group by first_name, id 
         having count(*)>5 and count(*)<10
         order by count(*)",
-        "SELECT person.id, COUNT(*), person.first_name FROM person WHERE ((person.id <> 3) AND (person.first_name = 'test')) GROUP BY person.first_name, person.id HAVING ((COUNT(*) > 5) AND (COUNT(*) < 10)) ORDER BY COUNT(*) ASC NULLS LAST"
+        " person.id, COUNT(*), person.first_name FROM person WHERE ((person.id <> 3) AND (person.first_name = 'test')) GROUP BY person.first_name, person.id HAVING ((COUNT(*) > 5) AND (COUNT(*) < 10)) ORDER BY COUNT(*) ASC NULLS LAST"
     )
     ];
 
