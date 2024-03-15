@@ -3211,6 +3211,15 @@ mod tests {
             ],
         );
 
+        // pruning result is still the same if we only know row counts
+        prune_with_expr(
+            // i < 0, with only row counts statistics
+            col("i").lt(lit(0)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
         // provide null counts for each column
         let statistics = statistics.with_null_counts(
             "i",
