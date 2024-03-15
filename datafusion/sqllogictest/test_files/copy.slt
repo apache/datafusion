@@ -152,7 +152,7 @@ FileSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
-query error DataFusion error: SQL error: ParserError\("Missing STORED AS clause in COPY statement"\)
+query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
 EXPLAIN COPY source_table to 'test_files/scratch/copy/table/'
 
 query TT
@@ -299,7 +299,7 @@ select * from validate_parquet_with_options;
 
 # Copy from table to single file
 query IT
-COPY source_table to 'test_files/scratch/copy/table.parquet' STORED AS PARQUET;
+COPY source_table to 'test_files/scratch/copy/table.parquet';
 ----
 2
 
@@ -347,7 +347,7 @@ select * from validate_csv;
 
 # Copy from table to single csv
 query IT
-COPY source_table  to 'test_files/scratch/copy/table.csv' STORED AS CSV ;
+COPY source_table  to 'test_files/scratch/copy/table.csv';
 ----
 2
 

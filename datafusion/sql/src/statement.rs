@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -856,13 +857,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options.insert(key.to_lowercase(), value_string.to_lowercase());
         }
 
-        let file_type =
-            FileType::from_str(statement.file_type.as_str()).map_err(|_| {
-                DataFusionError::Execution(format!(
-                    "Unknown FileType {}",
-                    statement.file_type
+        let file_type = if let Some(file_type) = statement.stored_as {
+            FileType::from_str(&file_type).map_err(|_| {
+                DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
+            })?
+        } else {
+            let e = || {
+                DataFusionError::Configuration(
+                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                    .to_string(),
+            )
+            };
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(&statement.target)
+                .extension()
+                .ok_or_else(e)?
+                .to_str()
+                .ok_or_else(e)?
+                .to_lowercase();
+
+            FileType::from_str(extension).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "{}. Use STORED AS to define file format.",
+                    e
                 ))
-            })?;
+            })?
+        };
+
         let partition_by = statement
             .partitioned_by
             .iter()

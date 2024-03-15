@@ -107,7 +107,7 @@ pub struct CopyToStatement {
     /// CSV Header row?
     pub has_header: bool,
     /// File type (Parquet, NDJSON, CSV, etc)
-    pub file_type: String,
+    pub stored_as: Option<String>,
     /// Target specific options
     pub options: Vec<(String, Value)>,
 }
@@ -118,12 +118,15 @@ impl fmt::Display for CopyToStatement {
             source,
             target,
             partitioned_by,
-            file_type,
+            stored_as,
             options,
             ..
         } = self;
 
-        write!(f, "COPY {source} TO {target} STORED AS {}", file_type)?;
+        write!(f, "COPY {source} TO {target}")?;
+        if let Some(file_type) = stored_as {
+            write!(f, " STORED AS {}", file_type)?;
+        }
         if !partitioned_by.is_empty() {
             write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;
         }
@@ -397,7 +400,7 @@ impl<'a> DFParser<'a> {
 
         #[derive(Default)]
         struct Builder {
-            file_type: Option<String>,
+            stored_as: Option<String>,
             target: Option<String>,
             partitioned_by: Option<Vec<String>>,
             has_header: Option<bool>,
@@ -417,8 +420,8 @@ impl<'a> DFParser<'a> {
                 match keyword {
                     Keyword::STORED => {
                         self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(&builder.file_type, "STORED AS")?;
-                        builder.file_type = Some(self.parse_file_format()?);
+                        ensure_not_set(&builder.stored_as, "STORED AS")?;
+                        builder.stored_as = Some(self.parse_file_format()?);
                     }
                     Keyword::TO => {
                         ensure_not_set(&builder.target, "TO")?;
@@ -455,24 +458,20 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        // Validations: location and file_type are required
-        if builder.file_type.is_none() {
-            return Err(ParserError::ParserError(
-                "Missing STORED AS clause in COPY statement".into(),
-            ));
-        }
         if builder.target.is_none() {
             return Err(ParserError::ParserError(
                 "Missing TO clause in COPY statement".into(),
             ));
         }
 
+        let target = builder.target.unwrap();
+
         Ok(Statement::CopyTo(CopyToStatement {
             source,
-            target: builder.target.unwrap(),
+            target,
             partitioned_by: builder.partitioned_by.unwrap_or(vec![]),
             has_header: builder.has_header.unwrap_or(false),
-            file_type: builder.file_type.unwrap(),
+            stored_as: builder.stored_as,
             options: builder.options.unwrap_or(vec![]),
         }))
     }
@@ -1407,7 +1406,7 @@ mod tests {
             target: "bar".to_string(),
             partitioned_by: vec![],
             has_header: false,
-            file_type: "CSV".to_string(),
+            stored_as: Some("CSV".to_owned()),
             options: vec![],
         });
 
@@ -1443,7 +1442,7 @@ mod tests {
                 target: "bar".to_string(),
                 partitioned_by: vec![],
                 has_header: false,
-                file_type: "PARQUET".to_string(),
+                stored_as: Some("PARQUET".to_owned()),
                 options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
@@ -1479,7 +1478,7 @@ mod tests {
             target: "bar".to_string(),
             partitioned_by: vec![],
             has_header: true,
-            file_type: "CSV".to_string(),
+            stored_as: Some("CSV".to_owned()),
             options: vec![],
         });
         assert_eq!(verified_stmt(sql), expected);
@@ -1494,7 +1493,7 @@ mod tests {
             target: "bar".to_string(),
             partitioned_by: vec![],
             has_header: false,
-            file_type: "CSV".to_string(),
+            stored_as: Some("CSV".to_owned()),
             options: vec![(
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
@@ -1512,7 +1511,7 @@ mod tests {
             target: "bar".to_string(),
             partitioned_by: vec!["a".to_string()],
             has_header: false,
-            file_type: "CSV".to_string(),
+            stored_as: Some("CSV".to_owned()),
             options: vec![(
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),

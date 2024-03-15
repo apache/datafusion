@@ -397,7 +397,7 @@ CopyTo: format=csv output_url=output.csv options: ()
 
 #[test]
 fn plan_explain_copy_to() {
-    let sql = "EXPLAIN COPY test_decimal to 'output.csv' STORED AS CSV";
+    let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
     let plan = r#"
 Explain
   CopyTo: format=csv output_url=output.csv options: ()
@@ -408,8 +408,20 @@ Explain
 }
 
 #[test]
+fn plan_explain_copy_to_format() {
+    let sql = "EXPLAIN COPY test_decimal to 'output.tbl' STORED AS CSV";
+    let plan = r#"
+Explain
+  CopyTo: format=csv output_url=output.tbl options: ()
+    TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_copy_to_query() {
-    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv' STORED AS CSV";
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
     let plan = r#"
 CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
