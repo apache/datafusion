@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{expr::Alias, Expr, JoinConstraint, JoinType, LogicalPlan};
-use sqlparser::ast;
+use sqlparser::ast::{self, Ident, SelectItem};
 
 use super::{
     ast::{
-        BuilderError, QueryBuilder, RelationBuilder, SelectBuilder, TableRelationBuilder,
-        TableWithJoinsBuilder,
+        BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
+        SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     Unparser,
 };
@@ -129,14 +129,88 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Projection(p) => {
-                let items = p
-                    .expr
-                    .iter()
-                    .map(|e| self.select_item_to_sql(e))
-                    .collect::<Result<Vec<_>>>()?;
-                select.projection(items);
+                // A second projection implies a derived tablefactor
+                if !select.already_projected() {
+                    // Special handling when projecting an agregation plan
+                    if let LogicalPlan::Aggregate(agg) = p.input.as_ref() {
+                        let mut items = p
+                            .expr
+                            .iter()
+                            .filter(|e| !matches!(e, Expr::AggregateFunction(_)))
+                            .map(|e| self.select_item_to_sql(e))
+                            .collect::<Result<Vec<_>>>()?;
 
-                self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
+                        let proj_aggs = p
+                            .expr
+                            .iter()
+                            .filter(|e| matches!(e, Expr::AggregateFunction(_)))
+                            .zip(agg.aggr_expr.iter())
+                            .map(|(proj, agg_exp)| {
+                                let sql_agg_expr = self.select_item_to_sql(agg_exp)?;
+                                let maybe_aliased =
+                                    if let Expr::Alias(Alias { name, .. }) = proj {
+                                        if let SelectItem::UnnamedExpr(aggregation_fun) =
+                                            sql_agg_expr
+                                        {
+                                            SelectItem::ExprWithAlias {
+                                                expr: aggregation_fun,
+                                                alias: Ident {
+                                                    value: name.to_string(),
+                                                    quote_style: None,
+                                                },
+                                            }
+                                        } else {
+                                            sql_agg_expr
+                                        }
+                                    } else {
+                                        sql_agg_expr
+                                    };
+                                Ok(maybe_aliased)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        items.extend(proj_aggs);
+                        select.projection(items);
+                        select.group_by(ast::GroupByExpr::Expressions(
+                            agg.group_expr
+                                .iter()
+                                .map(|expr| self.expr_to_sql(expr))
+                                .collect::<Result<Vec<_>>>()?,
+                        ));
+                        self.select_to_sql_recursively(
+                            agg.input.as_ref(),
+                            query,
+                            select,
+                            relation,
+                        )
+                    } else {
+                        let items = p
+                            .expr
+                            .iter()
+                            .map(|e| self.select_item_to_sql(e))
+                            .collect::<Result<Vec<_>>>()?;
+                        select.projection(items);
+                        self.select_to_sql_recursively(
+                            p.input.as_ref(),
+                            query,
+                            select,
+                            relation,
+                        )
+                    }
+                } else {
+                    let mut derived_builder = DerivedRelationBuilder::default();
+                    derived_builder.lateral(false).alias(None).subquery({
+                        let inner_statment = self.plan_to_sql(plan)?;
+                        if let ast::Statement::Query(inner_query) = inner_statment {
+                            inner_query
+                        } else {
+                            return internal_err!(
+                                "Subquery must be a Query, but found {inner_statment:?}"
+                            );
+                        }
+                    });
+                    relation.derived(derived_builder);
+                    Ok(())
+                }
             }
             LogicalPlan::Filter(filter) => {
                 let filter_expr = self.expr_to_sql(&filter.predicate)?;
@@ -176,7 +250,9 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Aggregate(_agg) => {
-                not_impl_err!("Unsupported operator: {plan:?}")
+                not_impl_err!(
+                    "Unsupported aggregation plan not following a projection: {plan:?}"
+                )
             }
             LogicalPlan::Distinct(_distinct) => {
                 not_impl_err!("Unsupported operator: {plan:?}")
