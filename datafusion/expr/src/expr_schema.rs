@@ -314,24 +314,39 @@ impl ExprSchemable for Expr {
         input_schema: &DFSchema,
     ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
         match self {
-            Expr::Column(c) => {
-                let field = input_schema.field_from_column(c)?;
-                Ok((c.relation.clone(), Arc::new(field.clone())))
-            }
-            Expr::Alias(Alias { relation, name, .. }) => {
-                if let Some(rel) = relation {
-                    let field = input_schema.field_with_qualified_name(rel, name)?;
-                    Ok((Some(rel.to_owned_reference()), Arc::new(field.clone())))
-                } else {
-                    let field = input_schema.field_with_unqualified_name(name)?;
-                    Ok((None, Arc::new(field.clone())))
-                }
-            }
-            _ => {
-                let field =
-                    input_schema.field_with_unqualified_name(&self.display_name()?)?;
-                Ok((None, Arc::new(field.clone())))
-            }
+            Expr::Column(c) => Ok((
+                c.relation.clone(),
+                Arc::new(
+                    Field::new(
+                        &c.name,
+                        self.get_type(input_schema)?,
+                        self.nullable(input_schema)?,
+                    )
+                    .with_metadata(self.metadata(input_schema)?),
+                ),
+            )),
+            Expr::Alias(Alias { relation, name, .. }) => Ok((
+                relation.clone(),
+                Arc::new(
+                    Field::new(
+                        name,
+                        self.get_type(input_schema)?,
+                        self.nullable(input_schema)?,
+                    )
+                    .with_metadata(self.metadata(input_schema)?),
+                ),
+            )),
+            _ => Ok((
+                None,
+                Arc::new(
+                    Field::new(
+                        self.display_name()?,
+                        self.get_type(input_schema)?,
+                        self.nullable(input_schema)?,
+                    )
+                    .with_metadata(self.metadata(input_schema)?),
+                ),
+            )),
         }
     }
 
