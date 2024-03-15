@@ -628,14 +628,27 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (partitioned_file_lists, statistics) =
+        let (mut partitioned_file_lists, statistics) =
             self.list_files_for_scan(state, filters, limit).await?;
+
+        let projected_schema = project_schema(&self.schema(), projection)?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let schema = self.schema();
-            let projected_schema = project_schema(&schema, projection)?;
             return Ok(Arc::new(EmptyExec::new(projected_schema)));
+        }
+
+        let output_ordering = self.try_create_output_ordering()?;
+        if let Some(new_groups) = output_ordering.first().and_then(|output_ordering| {
+            FileScanConfig::sort_file_groups(
+                &self.table_schema,
+                &projected_schema,
+                &partitioned_file_lists,
+                output_ordering,
+            )
+            .ok()
+        }) {
+            partitioned_file_lists = new_groups;
         }
 
         // extract types of partition columns
@@ -661,6 +674,7 @@ impl TableProvider for ListingTable {
         } else {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
+
         // create the execution plan
         self.options
             .format
@@ -673,7 +687,7 @@ impl TableProvider for ListingTable {
                     statistics,
                     projection: projection.cloned(),
                     limit,
-                    output_ordering: self.try_create_output_ordering()?,
+                    output_ordering,
                     table_partition_cols,
                 },
                 filters.as_ref(),
