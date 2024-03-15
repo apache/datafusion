@@ -112,32 +112,6 @@ impl TreeNodeRewriter for InListSimplifier {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::InList(InList {
-            expr,
-            mut list,
-            negated,
-        }) = expr.clone()
-        {
-            // expr IN () --> false
-            // expr NOT IN () --> true
-            if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
-                return Ok(Transformed::yes(lit(negated)));
-            // null in (x, y, z) --> null
-            // null not in (x, y, z) --> null
-            } else if is_null(&expr) {
-                return Ok(Transformed::yes(lit_bool_null()));
-            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            } else if list.len() == 1
-                && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
-            {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
-                    unreachable!()
-                };
-                return Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    expr, subquery, negated,
-                ))));
-            }
-        }
         // Combine multiple OR expressions into a single IN list expression if possible
         //
         // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`

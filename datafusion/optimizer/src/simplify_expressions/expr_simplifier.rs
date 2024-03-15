@@ -38,10 +38,10 @@ use datafusion_common::{
 use datafusion_common::{
     internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
-    ScalarFunctionDefinition, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like, ScalarFunctionDefinition, Volatility
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -1403,6 +1403,38 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // a is null/unknown --> false (if a is not nullable)
             Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
                 Transformed::yes(lit(false))
+            }
+
+            // expr IN () --> false
+            // expr NOT IN () --> true
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => Transformed::yes(lit(negated)),
+
+            // null in (x, y, z) --> null
+            // null not in (x, y, z) --> null
+            Expr::InList(InList {
+                expr,
+                list: _,
+                negated: _,
+            }) if is_null(expr.as_ref()) => Transformed::yes(lit_bool_null()),
+            
+
+            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            Expr::InList(InList {
+                expr,
+                mut list,
+                negated,
+            }) if list.len() == 1 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) => {
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
+
+                Transformed::yes(Expr::InSubquery(InSubquery::new(
+                    expr, subquery, negated,
+                )))
             }
 
             // no additional rewrites possible
