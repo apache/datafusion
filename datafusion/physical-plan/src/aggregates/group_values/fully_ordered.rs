@@ -135,10 +135,7 @@ impl GroupValues for FullOrderedGroupValues {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        // println!("self group values: {:?}", self.group_values);
-        // println!("emit to :{:?}", emit_to);
-
-        let group_values = match self.group_values.take() {
+        let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
             None => vec![],
         };
@@ -152,15 +149,14 @@ impl GroupValues for FullOrderedGroupValues {
                     .collect::<Result<Vec<_>>>()?
             }
             EmitTo::First(n) => {
-                let first_n_section = group_values[0..n].to_vec();
-                self.group_values = Some(group_values[n..].to_vec());
+                let first_n_section = group_values.drain(0..n).collect();
+                self.group_values = Some(group_values);
                 let res = transpose(first_n_section);
                 res.into_iter()
                     .map(ScalarValue::iter_to_array)
                     .collect::<Result<Vec<_>>>()?
             }
         };
-        // println!("output: {:?}", output);
 
         // TODO: Materialize dictionaries in group keys (#7647)
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
