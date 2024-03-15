@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
+use crate::common::transpose;
 use ahash::RandomState;
 use arrow::compute::{cast, SortColumn};
 use arrow::record_batch::RecordBatch;
@@ -86,7 +87,11 @@ impl GroupValues for FullOrderedGroupValues {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
+        assert!(cols.len() > 0);
         let n_rows = cols[0].len();
+        if n_rows == 0 {
+            return Ok(());
+        }
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -148,16 +153,26 @@ impl GroupValues for FullOrderedGroupValues {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        // println!("self group values: {:?}", self.group_values);
+        // println!("emit to :{:?}", emit_to);
         let mut output: Vec<ArrayRef> = match emit_to {
             EmitTo::All => {
+                let res = transpose(self.group_values.clone());
                 self.group_values.clear();
-                vec![]
+                res.into_iter()
+                    .map(|items| ScalarValue::iter_to_array(items))
+                    .collect::<Result<Vec<_>>>()?
             }
             EmitTo::First(n) => {
+                let first_n_section = self.group_values[0..n].to_vec();
                 self.group_values = self.group_values[n..].to_vec();
-                vec![]
+                let res = transpose(first_n_section);
+                res.into_iter()
+                    .map(|items| ScalarValue::iter_to_array(items))
+                    .collect::<Result<Vec<_>>>()?
             }
         };
+        // println!("output: {:?}", output);
 
         // TODO: Materialize dictionaries in group keys (#7647)
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
