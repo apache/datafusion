@@ -845,48 +845,67 @@ mod tests {
         struct File {
             name: &'static str,
             date: &'static str,
-            value: Option<(f64, f64)>,
+            statistics: Vec<Option<(f64, f64)>>,
         }
         impl File {
             fn new(
                 name: &'static str,
                 date: &'static str,
-                value: Option<(f64, f64)>,
+                statistics: Vec<Option<(f64, f64)>>,
             ) -> Self {
-                Self { name, date, value }
+                Self {
+                    name,
+                    date,
+                    statistics,
+                }
             }
         }
 
         struct TestCase {
-            schema: SchemaRef,
+            #[allow(unused)]
+            file_schema: SchemaRef,
             files: Vec<File>,
-            expected_file_groups: Vec<Vec<usize>>,
+            expected_result: Result<Vec<Vec<usize>>, String>,
             sort: Vec<datafusion_expr::Expr>,
         }
 
         use datafusion_expr::col;
         let cases = vec![TestCase {
-            schema: Arc::new(Schema::new(vec![
-                Field::new("value".to_string(), DataType::Float64, false),
-                Field::new("date".to_string(), DataType::Utf8, false),
-            ])),
+            file_schema: Arc::new(Schema::new(vec![Field::new(
+                "value".to_string(),
+                DataType::Float64,
+                false,
+            )])),
             files: vec![
-                File::new("0", "2023-01-01", Some((0.00, 0.49))),
-                File::new("1", "2023-01-01", Some((0.50, 1.00))),
-                File::new("2", "2023-01-02", Some((0.00, 1.00))),
+                File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
             ],
-            expected_file_groups: vec![vec![0, 1], vec![2]],
+            expected_result: Ok(vec![vec![0, 1], vec![2]]),
             sort: vec![col("value").sort(true, false)],
         }];
 
         for case in cases {
+            let table_schema = Arc::new(Schema::new(
+                case.file_schema
+                    .fields()
+                    .clone()
+                    .into_iter()
+                    .cloned()
+                    .chain(Some(Arc::new(Field::new(
+                        "date".to_string(),
+                        DataType::Utf8,
+                        false,
+                    ))))
+                    .collect::<Vec<_>>(),
+            ));
             let sort_order = case
                 .sort
                 .into_iter()
                 .map(|expr| {
                     crate::physical_planner::create_physical_sort_expr(
                         &expr,
-                        &DFSchema::try_from(case.schema.as_ref().clone())?,
+                        &DFSchema::try_from(table_schema.as_ref().clone())?,
                         &ExecutionProps::default(),
                     )
                 })
@@ -895,28 +914,30 @@ mod tests {
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
             let results = FileScanConfig::sort_file_groups(
-                &case.schema,
-                &case.schema,
+                &table_schema,
+                &table_schema,
                 &[partitioned_files.clone()],
                 &sort_order,
-            )?;
+            )
+            .map(|file_groups| {
+                file_groups
+                    .into_iter()
+                    .map(|file_group| {
+                        file_group
+                            .iter()
+                            .map(|file| {
+                                partitioned_files
+                                    .iter()
+                                    .position(|f| f.object_meta == file.object_meta)
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| e.to_string());
 
-            let file_groups = results
-                .into_iter()
-                .map(|file_group| {
-                    file_group
-                        .iter()
-                        .map(|file| {
-                            partitioned_files
-                                .iter()
-                                .position(|f| f.object_meta == file.object_meta)
-                                .unwrap()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-
-            assert_eq!(file_groups, case.expected_file_groups);
+            assert_eq!(results, case.expected_result);
         }
 
         return Ok(());
@@ -939,15 +960,23 @@ mod tests {
                     statistics: Some(Statistics {
                         num_rows: Precision::Absent,
                         total_byte_size: Precision::Absent,
-                        column_statistics: vec![ColumnStatistics {
-                            min_value: Precision::Exact(ScalarValue::from(
-                                file.value.map(|v| v.0),
-                            )),
-                            max_value: Precision::Exact(ScalarValue::from(
-                                file.value.map(|v| v.1),
-                            )),
-                            ..Default::default()
-                        }],
+                        column_statistics: file
+                            .statistics
+                            .into_iter()
+                            .map(|stats| {
+                                stats
+                                    .map(|(min, max)| ColumnStatistics {
+                                        min_value: Precision::Exact(ScalarValue::from(
+                                            min,
+                                        )),
+                                        max_value: Precision::Exact(ScalarValue::from(
+                                            max,
+                                        )),
+                                        ..Default::default()
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .collect::<Vec<_>>(),
                     }),
                     extensions: None,
                 }
