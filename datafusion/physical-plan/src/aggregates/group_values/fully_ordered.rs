@@ -58,12 +58,6 @@ pub struct FullOrderedGroupValues {
     ///
     /// [`Row`]: arrow::row::Row
     group_values: Vec<Vec<ScalarValue>>,
-
-    // buffer to be reused to store hashes
-    hashes_buffer: Vec<u64>,
-
-    /// Random state for creating hashes
-    random_state: RandomState,
     sort_exprs: LexOrdering,
 }
 
@@ -76,8 +70,6 @@ impl FullOrderedGroupValues {
             map,
             map_size: 0,
             group_values: vec![],
-            hashes_buffer: Default::default(),
-            random_state: Default::default(),
             sort_exprs,
         })
     }
@@ -141,7 +133,7 @@ impl GroupValues for FullOrderedGroupValues {
             .iter()
             .map(|row| ScalarValue::size_of_vec(row))
             .sum();
-        group_values_size + self.map_size + self.hashes_buffer.allocated_size()
+        group_values_size + self.map_size
     }
 
     fn is_empty(&self) -> bool {
@@ -197,7 +189,5 @@ impl GroupValues for FullOrderedGroupValues {
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
-        self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(count);
     }
 }
