@@ -103,10 +103,6 @@ pub enum BuiltinScalarFunction {
     Cot,
 
     // array functions
-    /// array_pop_front
-    ArrayPopFront,
-    /// array_pop_back
-    ArrayPopBack,
     /// array_position
     ArrayPosition,
     /// array_positions
@@ -125,8 +121,6 @@ pub enum BuiltinScalarFunction {
     ArrayReplaceAll,
     /// array_reverse
     ArrayReverse,
-    /// array_slice
-    ArraySlice,
     /// array_intersect
     ArrayIntersect,
     /// array_union
@@ -287,8 +281,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
@@ -298,7 +290,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReverse => Volatility::Immutable,
-            BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -358,8 +349,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
@@ -371,7 +360,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReverse => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayIntersect => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
                     (DataType::Null, DataType::Null) | (DataType::Null, _) => {
@@ -550,8 +538,6 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayPopFront => Signature::array(self.volatility()),
-            BuiltinScalarFunction::ArrayPopBack => Signature::array(self.volatility()),
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPosition => {
                 Signature::array_and_element_and_optional_index(self.volatility())
@@ -572,10 +558,6 @@ impl BuiltinScalarFunction {
                 Signature::any(3, self.volatility())
             }
             BuiltinScalarFunction::ArrayReverse => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArraySlice => {
-                Signature::variadic_any(self.volatility())
-            }
-
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
 
@@ -879,10 +861,6 @@ impl BuiltinScalarFunction {
 
             // hashing functions
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-            BuiltinScalarFunction::ArrayPopFront => {
-                &["array_pop_front", "list_pop_front"]
-            }
-            BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
             BuiltinScalarFunction::ArrayPosition => &[
                 "array_position",
                 "list_position",
@@ -905,7 +883,6 @@ impl BuiltinScalarFunction {
                 &["array_replace_all", "list_replace_all"]
             }
             BuiltinScalarFunction::ArrayReverse => &["array_reverse", "list_reverse"],
-            BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
             BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
             BuiltinScalarFunction::ArrayIntersect => {
                 &["array_intersect", "list_intersect"]

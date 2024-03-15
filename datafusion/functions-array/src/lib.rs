@@ -52,6 +52,9 @@ pub mod expr_fn {
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
     pub use super::extract::array_element;
+    pub use super::extract::array_pop_back;
+    pub use super::extract::array_pop_front;
+    pub use super::extract::array_slice;
     pub use super::make_array::make_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_distinct;
@@ -82,6 +85,10 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         concat::array_append_udf(),
         concat::array_prepend_udf(),
         concat::array_concat_udf(),
+        extract::array_element_udf(),
+        extract::array_pop_back_udf(),
+        extract::array_pop_front_udf(),
+        extract::array_slice_udf(),
         make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
@@ -93,7 +100,6 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_distinct_udf(),
         udf::array_repeat_udf(),
         udf::array_resize_udf(),
-        extract::array_element_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

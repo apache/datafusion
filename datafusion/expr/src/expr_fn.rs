@@ -585,20 +585,6 @@ scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(
-    ArrayPopBack,
-    array_pop_back,
-    array,
-    "returns the array without the last element."
-);
-
-scalar_expr!(
-    ArrayPopFront,
-    array_pop_front,
-    array,
-    "returns the array without the first element."
-);
-
-scalar_expr!(
     ArrayExcept,
     array_except,
     first_array second_array,
@@ -657,12 +643,6 @@ scalar_expr!(
     array_reverse,
     array,
     "reverses the order of elements in the array."
-);
-scalar_expr!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array."
 );
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
@@ -1216,8 +1196,6 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
-        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);

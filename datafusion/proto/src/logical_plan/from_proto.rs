@@ -47,11 +47,11 @@ use datafusion_common::{
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array_element, array_except, array_intersect, array_pop_back, array_pop_front,
-    array_position, array_positions, array_remove, array_remove_all, array_remove_n,
-    array_replace, array_replace_all, array_replace_n, array_slice, array_union, ascii,
-    asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length, chr,
-    coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
+    acosh, array_except, array_intersect, array_position, array_positions, array_remove,
+    array_remove_all, array_remove_n, array_replace, array_replace_all, array_replace_n,
+    array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
@@ -472,8 +472,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
-            ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
-            ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
@@ -483,7 +481,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             ScalarFunction::ArrayReverse => Self::ArrayReverse,
-            ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::Log2 => Self::Log2,
@@ -1379,12 +1376,6 @@ pub fn parse_expr(
                 ScalarFunction::Acosh => {
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArrayPopFront => {
-                    Ok(array_pop_front(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::ArrayPopBack => {
-                    Ok(array_pop_back(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayExcept => Ok(array_except(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1434,12 +1425,6 @@ pub fn parse_expr(
                 ScalarFunction::ArrayReverse => {
                     Ok(array_reverse(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArraySlice => Ok(array_slice(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                    parse_expr(&args[3], registry, codec)?,
-                )),
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
