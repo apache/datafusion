@@ -80,13 +80,14 @@ impl GroupValues for FullOrderedGroupValues {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
         assert!(cols.len() > 0);
+
+        // tracks to which group each of the input rows belongs
+        groups.clear();
+
         let n_rows = cols[0].len();
         if n_rows == 0 {
             return Ok(());
         }
-
-        // tracks to which group each of the input rows belongs
-        groups.clear();
 
         assert_eq!(cols.len(), self.sort_exprs.len());
         // TODO: May need to change iteration order
@@ -123,6 +124,7 @@ impl GroupValues for FullOrderedGroupValues {
             self.group_values.push(row);
             groups.extend(vec![self.group_values.len() - 1; range.end - range.start]);
         }
+        assert_eq!(groups.len(), n_rows);
 
         Ok(())
     }
