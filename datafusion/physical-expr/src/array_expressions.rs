@@ -34,7 +34,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err, DataFusionError, Result,
+    exec_err, internal_datafusion_err, internal_err, plan_err, Result,
 };
 use itertools::Itertools;
 

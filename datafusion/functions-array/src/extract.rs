@@ -1,4 +1,3 @@
-t
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,7 +15,7 @@ t
 // specific language governing permissions and limitations
 // under the License.
 
-//! Array Element and Array Slice
+// Array Element and Array Slice
 
 use arrow::array::ArrayRef;
 use arrow::array::Capacities;
@@ -25,7 +24,6 @@ use arrow::array::Int64Array;
 use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
 use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -34,17 +32,17 @@ use datafusion_common::plan_err;
 use datafusion_common::DataFusionError;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+
+use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_function!(
     ArrayElement,
     array_element,
     array element,
-    "extracts the element with the index n from the array."
+    "extracts the element with the index n from the array.",
     array_element_udf // internal function name
 );
 
@@ -93,8 +91,7 @@ impl ScalarUDFImpl for ArrayElement {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_element(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_element_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -109,7 +106,7 @@ impl ScalarUDFImpl for ArrayElement {
 ///
 /// For example:
 /// > array_element(\[1, 2, 3], 2) -> 2
-fn array_element(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+fn array_element_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_element needs two arguments");
     }
@@ -147,7 +144,10 @@ where
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
-    fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> datafusion_common::Result<Option<O>>
+    fn adjusted_array_index<O: OffsetSizeTrait>(
+        index: i64,
+        len: O,
+    ) -> datafusion_common::Result<Option<O>>
     where
         i64: TryInto<O>,
     {

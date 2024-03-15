@@ -489,8 +489,6 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
-
-
             BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),

@@ -17,8 +17,9 @@
 
 //! Rewrites for using Array Functions
 
-use crate::concat::{array_append, array_concat};
-use crate::expr_fn::{array_has_all, array_prepend};
+use crate::array_has::array_has_all;
+use crate::concat::{array_append, array_concat, array_prepend};
+use crate::extract::array_element;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::list_ndims;
@@ -161,13 +162,7 @@ impl FunctionRewrite for ArrayFunctionRewriter {
             Expr::GetIndexedField(GetIndexedField {
                 expr,
                 field: GetFieldAccess::ListIndex { key },
-            }) => {
-                let args = vec![*expr, *key];
-                Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::ArrayElement,
-                    args,
-                )))
-            }
+            }) => Transformed::yes(array_element(*expr, *key)),
 
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
             Expr::GetIndexedField(GetIndexedField {

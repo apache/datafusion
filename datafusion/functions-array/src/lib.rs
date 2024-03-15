@@ -30,12 +30,12 @@ pub mod macros;
 
 mod array_has;
 mod concat;
+mod extract;
 mod kernels;
 mod make_array;
 mod rewrite;
 mod udf;
 mod utils;
-mod extract;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
@@ -51,6 +51,7 @@ pub mod expr_fn {
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
+    pub use super::extract::array_element;
     pub use super::make_array::make_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_distinct;
@@ -92,6 +93,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_distinct_udf(),
         udf::array_repeat_udf(),
         udf::array_resize_udf(),
+        extract::array_element_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
