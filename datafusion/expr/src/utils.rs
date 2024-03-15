@@ -370,7 +370,7 @@ fn get_exprs_except_skipped(
             .iter()
             .filter_map(|c| {
                 if !columns_to_skip.contains(c) {
-                    Some(Expr::Column(c.name.clone().into()))
+                    Some(Expr::Column(c.clone()))
                 } else {
                     None
                 }
@@ -818,7 +818,9 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         _ => match e.display_name() {
             Ok(name) => {
                 match input_schema.field_and_qualifiers_with_unqualified_name(&name) {
-                    Ok(field) => Expr::Column(Column::new(field.0, field.1.name())),
+                    Ok((qualifier, field)) => {
+                        Expr::Column(Column::new(qualifier, field.name()))
+                    }
                     // expression not provided as input, do not convert to a column reference
                     Err(_) => e,
                 }
