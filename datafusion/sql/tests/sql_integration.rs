@@ -4580,6 +4580,18 @@ fn roundtrip_statement() {
             "select id, count(*), first_name from person group by first_name, id",
             "SELECT person.id, COUNT(*), person.first_name FROM person GROUP BY person.first_name, person.id"
         ),
+        (
+            "select id, sum(age), first_name from person group by first_name, id",
+            "SELECT person.id, SUM(person.age), person.first_name FROM person GROUP BY person.first_name, person.id"
+        ),
+        ("select id, count(*), first_name 
+        from person 
+        where id!=3 and first_name=='test'
+        group by first_name, id 
+        having count(*)>5 and count(*)<10
+        order by count(*)",
+        "SELECT person.id, COUNT(*), person.first_name FROM person WHERE ((person.id <> 3) AND (person.first_name = 'test')) GROUP BY person.first_name, person.id HAVING ((COUNT(*) > 5) AND (COUNT(*) < 10)) ORDER BY COUNT(*) ASC NULLS LAST"
+    )
     ];
 
     let roundtrip = |sql: &str| -> Result<String> {
