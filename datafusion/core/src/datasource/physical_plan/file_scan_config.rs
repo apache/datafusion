@@ -842,11 +842,6 @@ mod tests {
         use datafusion_expr::execution_props::ExecutionProps;
         use object_store::{path::Path, ObjectMeta};
 
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("value".to_string(), DataType::Float64, false),
-            Field::new("date".to_string(), DataType::Utf8, false),
-        ]));
-
         struct File {
             name: &'static str,
             date: &'static str,
@@ -863,6 +858,7 @@ mod tests {
         }
 
         struct TestCase {
+            schema: SchemaRef,
             files: Vec<File>,
             expected_file_groups: Vec<Vec<usize>>,
             sort: Vec<datafusion_expr::Expr>,
@@ -870,6 +866,10 @@ mod tests {
 
         use datafusion_expr::col;
         let cases = vec![TestCase {
+            schema: Arc::new(Schema::new(vec![
+                Field::new("value".to_string(), DataType::Float64, false),
+                Field::new("date".to_string(), DataType::Utf8, false),
+            ])),
             files: vec![
                 File::new("0", "2023-01-01", Some((0.00, 0.49))),
                 File::new("1", "2023-01-01", Some((0.50, 1.00))),
@@ -886,7 +886,7 @@ mod tests {
                 .map(|expr| {
                     crate::physical_planner::create_physical_sort_expr(
                         &expr,
-                        &DFSchema::try_from(table_schema.as_ref().clone())?,
+                        &DFSchema::try_from(case.schema.as_ref().clone())?,
                         &ExecutionProps::default(),
                     )
                 })
@@ -895,8 +895,8 @@ mod tests {
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
             let results = FileScanConfig::sort_file_groups(
-                &table_schema,
-                &table_schema,
+                &case.schema,
+                &case.schema,
                 &[partitioned_files.clone()],
                 &sort_order,
             )?;
