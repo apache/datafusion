@@ -39,7 +39,7 @@ pub struct FullOrderedGroupValues {
     /// important for multi-column group keys.
     ///
     /// [`Row`]: arrow::row::Row
-    group_values: Vec<Vec<ScalarValue>>,
+    group_values: Option<Vec<Vec<ScalarValue>>>,
     sort_exprs: LexOrdering,
 }
 
@@ -47,7 +47,7 @@ impl FullOrderedGroupValues {
     pub fn try_new(schema: SchemaRef, sort_exprs: LexOrdering) -> Result<Self> {
         Ok(Self {
             schema,
-            group_values: vec![],
+            group_values: None,
             sort_exprs,
         })
     }
@@ -67,6 +67,11 @@ impl GroupValues for FullOrderedGroupValues {
             return Ok(());
         }
 
+        let mut group_values = match self.group_values.take() {
+            Some(group_values) => group_values,
+            None => vec![],
+        };
+
         assert_eq!(cols.len(), self.sort_exprs.len());
         // TODO: May need to change iteration order
         let sort_columns = cols
@@ -82,7 +87,7 @@ impl GroupValues for FullOrderedGroupValues {
         let first_section = &ranges[0];
         let row = get_row_at_idx(cols, first_section.start)?;
         let mut should_insert = false;
-        if let Some(last_group) = self.group_values.last() {
+        if let Some(last_group) = group_values.last() {
             if !row.eq(last_group) {
                 // Group by value changed
                 should_insert = true;
@@ -91,25 +96,30 @@ impl GroupValues for FullOrderedGroupValues {
             should_insert = true;
         }
         if should_insert {
-            self.group_values.push(row);
+            group_values.push(row);
         }
         groups.extend(vec![
-            self.group_values.len() - 1;
+            group_values.len() - 1;
             first_section.end - first_section.start
         ]);
         for range in ranges[1..].iter() {
             let row = get_row_at_idx(cols, range.start)?;
-            self.group_values.push(row);
-            groups.extend(vec![self.group_values.len() - 1; range.end - range.start]);
+            group_values.push(row);
+            groups.extend(vec![group_values.len() - 1; range.end - range.start]);
         }
         assert_eq!(groups.len(), n_rows);
+
+        self.group_values = Some(group_values);
 
         Ok(())
     }
 
     fn size(&self) -> usize {
-        let group_values_size: usize =
-            self.group_values.iter().map(ScalarValue::size_of_vec).sum();
+        let group_values_size: usize = self
+            .group_values
+            .as_ref()
+            .map(|items| items.iter().map(ScalarValue::size_of_vec).sum())
+            .unwrap_or(0);
         group_values_size
     }
 
@@ -118,23 +128,32 @@ impl GroupValues for FullOrderedGroupValues {
     }
 
     fn len(&self) -> usize {
-        self.group_values.len()
+        self.group_values
+            .as_ref()
+            .map(|items| items.len())
+            .unwrap_or(0)
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // println!("self group values: {:?}", self.group_values);
         // println!("emit to :{:?}", emit_to);
+
+        let group_values = match self.group_values.take() {
+            Some(group_values) => group_values,
+            None => vec![],
+        };
+
         let mut output: Vec<ArrayRef> = match emit_to {
             EmitTo::All => {
-                let res = transpose(self.group_values.clone());
-                self.group_values.clear();
+                let res = transpose(group_values);
+                self.group_values = None;
                 res.into_iter()
                     .map(ScalarValue::iter_to_array)
                     .collect::<Result<Vec<_>>>()?
             }
             EmitTo::First(n) => {
-                let first_n_section = self.group_values[0..n].to_vec();
-                self.group_values = self.group_values[n..].to_vec();
+                let first_n_section = group_values[0..n].to_vec();
+                self.group_values = Some(group_values[n..].to_vec());
                 let res = transpose(first_n_section);
                 res.into_iter()
                     .map(ScalarValue::iter_to_array)
@@ -161,6 +180,8 @@ impl GroupValues for FullOrderedGroupValues {
     }
 
     fn clear_shrink(&mut self, _batch: &RecordBatch) {
-        self.group_values.clear();
+        if let Some(group_values) = &mut self.group_values {
+            group_values.clear();
+        }
     }
 }
