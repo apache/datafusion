@@ -49,10 +49,6 @@ impl ReservedBatches {
             reservation,
         }
     }
-
-    fn take_batches(&mut self) -> Vec<RecordBatch> {
-        std::mem::take(&mut self.batches)
-    }
 }
 
 /// The name is from PostgreSQL's terminology.
@@ -73,17 +69,15 @@ impl WorkTable {
 
     /// Take the previously written batches from the work table.
     /// This will be called by the [`WorkTableExec`] when it is executed.
-    fn take(&self) -> Result<Vec<RecordBatch>> {
+    fn take(&self) -> Result<ReservedBatches> {
         self.batches
             .lock()
             .unwrap()
-            .as_mut()
-            .map(|b| b.take_batches())
+            .take()
             .ok_or_else(|| internal_datafusion_err!("Unexpected empty work table"))
     }
 
     /// Update the results of a recursive query iteration to the work table.
-    /// The previous memory reservation will be freed.
     pub(super) fn update(
         &self,
         batches: Vec<RecordBatch>,
@@ -207,13 +201,11 @@ impl ExecutionPlan for WorkTableExec {
                 "WorkTableExec got an invalid partition {partition} (expected 0)"
             );
         }
-
-        let batches = self.work_table.take()?;
-        Ok(Box::pin(MemoryStream::try_new(
-            batches,
-            self.schema.clone(),
-            None,
-        )?))
+        let batch = self.work_table.take()?;
+        Ok(Box::pin(
+            MemoryStream::try_new(batch.batches, self.schema.clone(), None)?
+                .with_reservation(batch.reservation),
+        ))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -235,34 +227,32 @@ mod tests {
     #[test]
     fn test_work_table() {
         let work_table = WorkTable::new();
-        // take from empty work_table
+        // cann't take from empty work_table
         assert!(work_table.take().is_err());
 
         let pool = Arc::new(UnboundedMemoryPool::default()) as _;
-        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
+        let mut reservation = MemoryConsumer::new("test_work_table").register(&pool);
 
         // update batch to work_table
         let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
-        let batch1 = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-        let mut reservation1 = reservation.new_empty();
-        reservation1.try_grow(100).unwrap();
-        work_table.update(vec![batch1.clone()], reservation1);
+        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
+        reservation.try_grow(100).unwrap();
+        work_table.update(vec![batch.clone()], reservation);
         // take from work_table
-        assert_eq!(work_table.take().unwrap(), vec![batch1]);
+        let reserved_batches = work_table.take().unwrap();
+        assert_eq!(reserved_batches.batches, vec![batch.clone()]);
+
+        // consume the batch by the MemoryStream
+        let memory_stream =
+            MemoryStream::try_new(reserved_batches.batches, batch.schema(), None)
+                .unwrap()
+                .with_reservation(reserved_batches.reservation);
+
+        // should still be reserved
         assert_eq!(pool.reserved(), 100);
 
-        // update another batch to work_table
-        let array: ArrayRef = Arc::new((5..10).collect::<Int32Array>());
-        let batch2 = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-        let mut reservation2 = reservation.new_empty();
-        reservation2.try_grow(200).unwrap();
-        work_table.update(vec![batch2.clone()], reservation2);
-        // reservation1 should be freed after update
-        assert_eq!(pool.reserved(), 200);
-        assert_eq!(work_table.take().unwrap(), vec![batch2]);
-
-        drop(work_table);
-        // all reservations should be freed after dropped
+        // the reservation should be freed after drop the memory_stream
+        drop(memory_stream);
         assert_eq!(pool.reserved(), 0);
     }
 }

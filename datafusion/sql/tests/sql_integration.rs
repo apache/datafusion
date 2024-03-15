@@ -1401,6 +1401,33 @@ fn recursive_ctes() {
 }
 
 #[test]
+fn recursive_ctes_disabled() {
+    let sql = "
+        WITH RECURSIVE numbers AS (
+              select 1 as n
+            UNION ALL
+              select n + 1 FROM numbers WHERE N < 10
+        )
+        select * from numbers;";
+
+    // manually setting up test here so that we can disable recursive ctes
+    let mut context = MockContextProvider::default();
+    context.options_mut().execution.enable_recursive_ctes = false;
+
+    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
+    let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
+    let mut ast = result.unwrap();
+
+    let err = planner
+        .statement_to_plan(ast.pop_front().unwrap())
+        .expect_err("query should have failed");
+    assert_eq!(
+        "This feature is not implemented: Recursive CTEs are not enabled",
+        err.strip_backtrace()
+    );
+}
+
+#[test]
 fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby() {
     quick_test(
         "SELECT MAX(first_name) FROM person GROUP BY first_name",
@@ -2748,6 +2775,10 @@ struct MockContextProvider {
 }
 
 impl MockContextProvider {
+    fn options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.options
+    }
+
     fn with_udf(mut self, udf: ScalarUDF) -> Self {
         self.udfs.insert(udf.name().to_string(), Arc::new(udf));
         self
