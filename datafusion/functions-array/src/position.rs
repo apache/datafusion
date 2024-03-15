@@ -53,7 +53,9 @@ pub(super) struct ArrayPosition {
 impl ArrayPosition {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::array_and_element_and_optional_index(
+                Volatility::Immutable,
+            ),
             aliases: vec![
                 String::from("array_position"),
                 String::from("list_position"),
@@ -301,7 +303,7 @@ pub(super) struct ArrayPositions {
 impl ArrayPositions {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
                 String::from("array_positions"),
                 String::from("list_positions"),
