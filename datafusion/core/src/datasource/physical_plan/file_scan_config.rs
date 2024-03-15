@@ -863,27 +863,43 @@ mod tests {
 
         struct TestCase {
             #[allow(unused)]
-            file_schema: SchemaRef,
+            file_schema: Schema,
             files: Vec<File>,
-            expected_result: Result<Vec<Vec<usize>>, String>,
             sort: Vec<datafusion_expr::Expr>,
+            expected_result: Result<Vec<Vec<usize>>, &'static str>,
         }
 
         use datafusion_expr::col;
-        let cases = vec![TestCase {
-            file_schema: Arc::new(Schema::new(vec![Field::new(
-                "value".to_string(),
-                DataType::Float64,
-                false,
-            )])),
-            files: vec![
-                File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
-                File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
-                File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
-            ],
-            expected_result: Ok(vec![vec![0, 1], vec![2]]),
-            sort: vec![col("value").sort(true, false)],
-        }];
+        let cases = vec![
+            TestCase {
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec![0, 1], vec![2]]),
+            },
+            TestCase {
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    true, // should fail because nullable
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Err(""),
+            },
+        ];
 
         for case in cases {
             let table_schema = Arc::new(Schema::new(
@@ -935,7 +951,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>()
             })
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string().leak() as &'static str);
 
             assert_eq!(results, case.expected_result);
         }
