@@ -17,16 +17,16 @@
 
 // Array Element and Array Slice
 
+use arrow::array::Array;
 use arrow::array::ArrayRef;
+use arrow::array::ArrowNativeTypeOp;
 use arrow::array::Capacities;
 use arrow::array::GenericListArray;
 use arrow::array::Int64Array;
 use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_array::Array;
-use arrow_array::ArrowNativeTypeOp;
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
@@ -50,7 +50,31 @@ make_udf_function!(
     array_element,
     array element,
     "extracts the element with the index n from the array.",
-    array_element_udf // internal function name
+    array_element_udf
+);
+
+make_udf_function!(
+    ArraySlice,
+    array_slice,
+    array begin end stride,
+    "returns a slice of the array.",
+    array_slice_udf
+);
+
+make_udf_function!(
+    ArrayPopFront,
+    array_pop_front,
+    array,
+    "returns the array without the first element.",
+    array_pop_front_udf
+);
+
+make_udf_function!(
+    ArrayPopBack,
+    array_pop_back,
+    array,
+    "returns the array without the last element.",
+    array_pop_back_udf
 );
 
 #[derive(Debug)]
@@ -204,14 +228,6 @@ where
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
 }
-
-make_udf_function!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array.",
-    array_slice_udf
-);
 
 #[derive(Debug)]
 pub(super) struct ArraySlice {
@@ -482,14 +498,6 @@ where
     )?))
 }
 
-make_udf_function!(
-    ArrayPopFront,
-    array_pop_front,
-    array,
-    "returns the array without the first element.",
-    array_pop_front_udf
-);
-
 #[derive(Debug)]
 pub(super) struct ArrayPopFront {
     signature: Signature,
@@ -567,14 +575,6 @@ where
     );
     general_array_slice::<O>(array, &from_array, &to_array, None)
 }
-
-make_udf_function!(
-    ArrayPopBack,
-    array_pop_back,
-    array,
-    "returns the array without the last element.",
-    array_pop_back_udf
-);
 
 #[derive(Debug)]
 pub(super) struct ArrayPopBack {
