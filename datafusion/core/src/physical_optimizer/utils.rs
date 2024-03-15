@@ -52,6 +52,25 @@ pub fn add_sort_above<T: Clone + Default>(
     PlanContext::new(Arc::new(new_sort), T::default(), vec![node])
 }
 
+/// This utility function adds a `SortExec` above an operator according to the
+/// given ordering requirements while preserving the original partitioning. If
+/// requirement is already satisfied no `SortExec` is added.
+pub fn add_sort_above_with_check<T: Clone + Default>(
+    node: PlanContext<T>,
+    sort_requirements: LexRequirement,
+    fetch: Option<usize>,
+) -> PlanContext<T> {
+    if !node
+        .plan
+        .equivalence_properties()
+        .ordering_satisfy_requirement(&sort_requirements)
+    {
+        add_sort_above(node, sort_requirements, fetch)
+    } else {
+        node
+    }
+}
+
 /// Checks whether the given operator is a limit;
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {

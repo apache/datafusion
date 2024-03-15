@@ -28,7 +28,8 @@ use super::output_requirements::OutputRequirementExec;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_coalesce_partitions, is_repartition, is_sort_preserving_merge,
+    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -1159,8 +1160,11 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        child =
-                            add_sort_above(child, required_input_ordering.to_vec(), None);
+                        child = add_sort_above_with_check(
+                            child,
+                            required_input_ordering.to_vec(),
+                            None,
+                        );
                     }
                 }
                 // Stop tracking distribution changing operators
