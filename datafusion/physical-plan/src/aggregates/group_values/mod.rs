@@ -61,6 +61,7 @@ pub fn new_group_values(
     ordering: Option<Vec<PhysicalSortExpr>>,
 ) -> Result<Box<dyn GroupValues>> {
     if let Some(ordering) = ordering {
+        // println!("creating fully ordered mode");
         return Ok(Box::new(FullOrderedGroupValues::try_new(schema, ordering)?));
     }
     if schema.fields.len() == 1 {

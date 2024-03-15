@@ -25,25 +25,11 @@ use datafusion_common::utils::{evaluate_partition_ranges, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::LexOrdering;
-use hashbrown::raw::RawTable;
 
 /// A [`GroupValues`] making use of order
 pub struct FullOrderedGroupValues {
     /// The output schema
     schema: SchemaRef,
-
-    /// Logically maps group values to a group_index in
-    /// [`Self::group_values`] and in each accumulator
-    ///
-    /// Uses the raw API of hashbrown to avoid actually storing the
-    /// keys (group values) in the table
-    ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, group_index)
-    map: RawTable<(u64, usize)>,
-
-    /// The size of `map` in bytes
-    map_size: usize,
 
     /// The actual group by values, stored in arrow [`Row`] format.
     /// `group_values[i]` holds the group value for group_index `i`.
@@ -59,12 +45,8 @@ pub struct FullOrderedGroupValues {
 
 impl FullOrderedGroupValues {
     pub fn try_new(schema: SchemaRef, sort_exprs: LexOrdering) -> Result<Self> {
-        let map = RawTable::with_capacity(0);
-
         Ok(Self {
             schema,
-            map,
-            map_size: 0,
             group_values: vec![],
             sort_exprs,
         })
@@ -128,7 +110,7 @@ impl GroupValues for FullOrderedGroupValues {
     fn size(&self) -> usize {
         let group_values_size: usize =
             self.group_values.iter().map(ScalarValue::size_of_vec).sum();
-        group_values_size + self.map_size
+        group_values_size
     }
 
     fn is_empty(&self) -> bool {
@@ -178,11 +160,7 @@ impl GroupValues for FullOrderedGroupValues {
         Ok(output)
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, _batch: &RecordBatch) {
         self.group_values.clear();
-        self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
     }
 }
