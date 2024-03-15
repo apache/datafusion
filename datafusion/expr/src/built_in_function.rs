@@ -103,10 +103,6 @@ pub enum BuiltinScalarFunction {
     Cot,
 
     // array functions
-    /// array_position
-    ArrayPosition,
-    /// array_positions
-    ArrayPositions,
     /// array_remove
     ArrayRemove,
     /// array_remove_n
@@ -275,8 +271,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
@@ -340,10 +334,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
-            BuiltinScalarFunction::ArrayPositions => {
-                Ok(List(Arc::new(Field::new("item", UInt64, true))))
-            }
             BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
@@ -511,12 +501,6 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayPosition => {
-                Signature::array_and_element_and_optional_index(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayPositions => {
-                Signature::array_and_element(self.volatility())
-            }
             BuiltinScalarFunction::ArrayRemove => {
                 Signature::array_and_element(self.volatility())
             }
@@ -829,15 +813,6 @@ impl BuiltinScalarFunction {
 
             // hashing functions
             BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-            BuiltinScalarFunction::ArrayPosition => &[
-                "array_position",
-                "list_position",
-                "array_indexof",
-                "list_indexof",
-            ],
-            BuiltinScalarFunction::ArrayPositions => {
-                &["array_positions", "list_positions"]
-            }
             BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
             BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
             BuiltinScalarFunction::ArrayRemoveAll => {

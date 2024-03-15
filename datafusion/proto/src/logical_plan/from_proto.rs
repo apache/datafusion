@@ -48,7 +48,7 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array_except, array_position, array_positions, array_remove, array_remove_all,
+    acosh, array_except, array_remove, array_remove_all,
     array_remove_n, array_replace, array_replace_all, array_replace_n, ascii, asinh,
     atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length, chr, coalesce,
     concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
@@ -468,8 +468,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ArrayExcept => Self::ArrayExcept,
-            ScalarFunction::ArrayPosition => Self::ArrayPosition,
-            ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
             ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
@@ -1370,15 +1368,6 @@ pub fn parse_expr(
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::ArrayExcept => Ok(array_except(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::ArrayPosition => Ok(array_position(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::ArrayPositions => Ok(array_positions(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
