@@ -17,7 +17,7 @@
 
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::{DataType, SchemaRef, SortOptions};
 use datafusion_common::Result;
 
 pub(crate) mod primitive;
@@ -28,8 +28,12 @@ mod row;
 use row::GroupValuesRows;
 
 mod bytes;
+mod fully_ordered;
+
+use crate::aggregates::group_values::fully_ordered::FullOrderedGroupValues;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
+use datafusion_physical_expr::PhysicalSortExpr;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
@@ -52,7 +56,13 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
-pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+pub fn new_group_values(
+    schema: SchemaRef,
+    ordering: Option<Vec<PhysicalSortExpr>>,
+) -> Result<Box<dyn GroupValues>> {
+    if let Some(ordering) = ordering {
+        return Ok(Box::new(FullOrderedGroupValues::try_new(schema, ordering)?));
+    }
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
