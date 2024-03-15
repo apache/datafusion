@@ -73,7 +73,6 @@ impl WorkTable {
 
     /// Take the previously written batches from the work table.
     /// This will be called by the [`WorkTableExec`] when it is executed.
-    /// The reservation will be freed when the next `update()` is called.
     fn take(&self) -> Result<Vec<RecordBatch>> {
         self.batches
             .lock()
@@ -84,6 +83,7 @@ impl WorkTable {
     }
 
     /// Update the results of a recursive query iteration to the work table.
+    /// The previous memory reservation will be freed.
     pub(super) fn update(
         &self,
         batches: Vec<RecordBatch>,

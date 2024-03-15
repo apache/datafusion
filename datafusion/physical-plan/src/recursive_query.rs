@@ -298,6 +298,10 @@ impl RecursiveQueryStream {
             return Poll::Ready(None);
         }
 
+        // Drop the previous recursive stream to free up resources, so that we can safely
+        // free the work table's memory reservation created by the previous iteration.
+        self.recursive_stream = None;
+
         // Update the work table with the current buffer
         let batches = std::mem::take(&mut self.buffer);
         let reservation = self.reservation.take();
