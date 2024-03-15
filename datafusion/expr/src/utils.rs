@@ -360,9 +360,10 @@ fn get_exprs_except_skipped(
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema
-            .field_names()
             .iter()
-            .map(|f| Expr::Column(f.into()))
+            .map(|(qualifier, field)| {
+                Expr::Column(Column::new(qualifier.cloned(), field.name()))
+            })
             .collect::<Vec<Expr>>()
     } else {
         schema

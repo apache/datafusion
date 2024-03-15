@@ -510,12 +510,20 @@ impl LogicalPlan {
                     cross.left.head_output_expr()
                 }
             }
-            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
-                union.schema.field_names()[0].clone().into(),
-            ))),
-            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
-                table.projected_schema.field_names()[0].clone().into(),
-            ))),
+            LogicalPlan::Union(union) => {
+                let (qualifier, field) = union.schema.qualified_field(0);
+                Ok(Some(Expr::Column(Column::new(
+                    qualifier.cloned(),
+                    field.name(),
+                ))))
+            }
+            LogicalPlan::TableScan(table) => {
+                let (qualifier, field) = table.projected_schema.qualified_field(0);
+                Ok(Some(Expr::Column(Column::new(
+                    qualifier.cloned(),
+                    field.name(),
+                ))))
+            }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
                 expr_opt
