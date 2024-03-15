@@ -453,8 +453,8 @@ fn get_projected_output_ordering(
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
         // Check if all file groups are sorted
-        if base_config.file_groups.iter().all(|group| {
-            if group.len() <= 1 {
+        if base_config.file_groups.iter().any(|group| {
+            if group.len() > 1 {
                 return true;
             }
 
@@ -466,12 +466,12 @@ fn get_projected_output_ordering(
             ) {
                 Ok(statistics) => statistics,
                 Err(e) => {
-                    log::debug!("Error fetching statistics for file group: {e}");
+                    log::trace!("Error fetching statistics for file group: {e}");
                     return false;
                 }
             };
 
-            statistics.is_sorted()
+            !statistics.is_sorted()
         }) {
             debug!(
                 "Skipping specified output ordering {:?}. \
