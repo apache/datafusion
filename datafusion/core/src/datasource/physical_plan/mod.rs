@@ -475,7 +475,7 @@ fn get_projected_output_ordering(
         }) {
             debug!(
                 "Skipping specified output ordering {:?}. \
-                Some file group couldn't be determined to be sorted: {:?}",
+                Some file groups couldn't be determined to be sorted: {:?}",
                 base_config.output_ordering[0], base_config.file_groups
             );
             return vec![];
