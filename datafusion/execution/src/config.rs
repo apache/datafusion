@@ -447,18 +447,6 @@ impl SessionConfig {
         map
     }
 
-    /// Return a handle to the configuration options.
-    #[deprecated(since = "21.0.0", note = "use options() instead")]
-    pub fn config_options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    /// Return a mutable handle to the configuration options.
-    #[deprecated(since = "21.0.0", note = "use options_mut() instead")]
-    pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
-    }
-
     /// Add extensions.
     ///
     /// Extensions can be used to attach extra data to the session config -- e.g. tracing information or caches.

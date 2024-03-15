@@ -1181,49 +1181,6 @@ impl SessionContext {
         }
     }
 
-    /// Returns the set of available tables in the default catalog and
-    /// schema.
-    ///
-    /// Use [`table`] to get a specific table.
-    ///
-    /// [`table`]: SessionContext::table
-    #[deprecated(
-        since = "23.0.0",
-        note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
-    )]
-    pub fn tables(&self) -> Result<HashSet<String>> {
-        Ok(self
-            .state
-            .read()
-            // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "".into() })?
-            .table_names()
-            .iter()
-            .cloned()
-            .collect())
-    }
-
-    /// Optimizes the logical plan by applying optimizer rules.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
-    )]
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.read().optimize(plan)
-    }
-
-    /// Creates a physical plan from a logical plan.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
-    )]
-    pub async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.state().create_physical_plan(logical_plan).await
-    }
-
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))

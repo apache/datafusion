@@ -1001,16 +1001,6 @@ impl DataFrame {
         Arc::new(DataFrameTableProvider { plan: self.plan })
     }
 
-    /// Return the optimized logical plan represented by this DataFrame.
-    ///
-    /// Note: This method should not be used outside testing, as it loses the snapshot
-    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
-    /// operations may take place against a different state
-    #[deprecated(since = "23.0.0", note = "Use DataFrame::into_optimized_plan")]
-    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
-        self.into_optimized_plan()
-    }
-
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
