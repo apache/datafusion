@@ -1536,7 +1536,7 @@ pub fn unnest_with_options(
         .iter()
         .map(|(q, f)| {
             if f == &unnest_field && q == unnest_qualifier.as_ref() {
-                (q.cloned(), unnested_field.clone())
+                (unnest_qualifier.clone(), unnested_field.clone())
             } else {
                 (q.cloned(), f.clone())
             }

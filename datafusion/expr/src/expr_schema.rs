@@ -439,7 +439,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::{DataType, Fields, SchemaBuilder};
-    use datafusion_common::{Column, ScalarValue, TableReference};
+    use datafusion_common::{Column, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -563,21 +563,20 @@ mod tests {
                 .metadata(&schema)
                 .unwrap()
         );
-        let mut builder = SchemaBuilder::new();
-        builder.push(Field::new("foo", DataType::Int32, true));
-        let schema = builder.finish();
 
-        let dfschema = DFSchema::from_unqualified_schema(&Arc::new(schema)).unwrap();
-
-        // let schema = DFSchema::new_with_metadata(
-        //     vec![DFField::new_unqualified("foo", DataType::Int32, true)
-        //         .with_metadata(meta.clone())],
-        //     HashMap::new(),
-        // )
-        // .unwrap();
+        let schema = DFSchema::from_qualified_fields(
+            vec![(
+                None,
+                Field::new("foo", DataType::Int32, true)
+                    .with_metadata(meta.clone())
+                    .into(),
+            )],
+            HashMap::new(),
+        )
+        .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&dfschema).unwrap().1.metadata());
+        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
     }
 
     #[test]
@@ -600,22 +599,6 @@ mod tests {
             &Arc::new(schema),
         )
         .unwrap();
-
-        // schema.push(Field::new("foo", DataType::Int32, true));
-        // let fields = DFField::new(
-        //     Some(TableReference::Bare {
-        //         table: "table_name".into(),
-        //     }),
-        //     "parent",
-        //     DataType::Struct(Fields::from(vec![Field::new(
-        //         "child",
-        //         DataType::Int64,
-        //         false,
-        //     )])),
-        //     true,
-        // );
-
-        // let schema = DFSchema::new_with_metadata(vec![fields], HashMap::new()).unwrap();
 
         let expr = col("parent").field("child");
         assert!(expr.nullable(&dfschema).unwrap());

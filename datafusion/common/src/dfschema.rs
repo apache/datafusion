@@ -94,12 +94,14 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, DFField};
+/// use datafusion_common::DFSchema;
 /// use arrow_schema::Schema;
+/// use arrow::datatypes::Field;
+/// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::new(vec![
-///    DFField::new_unqualified("c1", arrow::datatypes::DataType::Int32, false),
-/// ]).unwrap();
+/// let df_schema = DFSchema::new_with_metadata(vec![
+///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
+/// ],HashMap::new());
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
