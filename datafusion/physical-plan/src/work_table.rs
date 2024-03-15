@@ -29,16 +29,38 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProp
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+
+/// A vector of record batches with a memory reservation.
+#[derive(Debug)]
+struct ReservedBatches {
+    batches: Vec<RecordBatch>,
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
+}
+
+impl ReservedBatches {
+    fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
+        ReservedBatches {
+            batches,
+            reservation,
+        }
+    }
+
+    fn take_batches(&mut self) -> Vec<RecordBatch> {
+        std::mem::take(&mut self.batches)
+    }
+}
 
 /// The name is from PostgreSQL's terminology.
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
 pub(super) struct WorkTable {
-    batches: Mutex<Option<Vec<RecordBatch>>>,
+    batches: Mutex<Option<ReservedBatches>>,
 }
 
 impl WorkTable {
@@ -51,14 +73,24 @@ impl WorkTable {
 
     /// Take the previously written batches from the work table.
     /// This will be called by the [`WorkTableExec`] when it is executed.
-    fn take(&self) -> Vec<RecordBatch> {
-        let batches = self.batches.lock().unwrap().take().unwrap_or_default();
-        batches
+    /// The reservation will be freed when the next `update()` is called.
+    fn take(&self) -> Result<Vec<RecordBatch>> {
+        self.batches
+            .lock()
+            .unwrap()
+            .as_mut()
+            .map(|b| b.take_batches())
+            .ok_or_else(|| internal_datafusion_err!("Unexpected empty work table"))
     }
 
-    /// Write the results of a recursive query iteration to the work table.
-    pub(super) fn write(&self, input: Vec<RecordBatch>) {
-        self.batches.lock().unwrap().replace(input);
+    /// Update the results of a recursive query iteration to the work table.
+    pub(super) fn update(
+        &self,
+        batches: Vec<RecordBatch>,
+        reservation: MemoryReservation,
+    ) {
+        let reserved_batches = ReservedBatches::new(batches, reservation);
+        self.batches.lock().unwrap().replace(reserved_batches);
     }
 }
 
@@ -176,7 +208,7 @@ impl ExecutionPlan for WorkTableExec {
             );
         }
 
-        let batches = self.work_table.take();
+        let batches = self.work_table.take()?;
         Ok(Box::pin(MemoryStream::try_new(
             batches,
             self.schema.clone(),
@@ -194,4 +226,43 @@ impl ExecutionPlan for WorkTableExec {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_work_table() {
+        let work_table = WorkTable::new();
+        // take from empty work_table
+        assert!(work_table.take().is_err());
+
+        let pool = Arc::new(UnboundedMemoryPool::default()) as _;
+        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
+
+        // update batch to work_table
+        let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
+        let batch1 = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
+        let mut reservation1 = reservation.new_empty();
+        reservation1.try_grow(100).unwrap();
+        work_table.update(vec![batch1.clone()], reservation1);
+        // take from work_table
+        assert_eq!(work_table.take().unwrap(), vec![batch1]);
+        assert_eq!(pool.reserved(), 100);
+
+        // update another batch to work_table
+        let array: ArrayRef = Arc::new((5..10).collect::<Int32Array>());
+        let batch2 = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
+        let mut reservation2 = reservation.new_empty();
+        reservation2.try_grow(200).unwrap();
+        work_table.update(vec![batch2.clone()], reservation2);
+        // reservation1 should be freed after update
+        assert_eq!(pool.reserved(), 200);
+        assert_eq!(work_table.take().unwrap(), vec![batch2]);
+
+        drop(work_table);
+        // all reservations should be freed after dropped
+        assert_eq!(pool.reserved(), 0);
+    }
+}
