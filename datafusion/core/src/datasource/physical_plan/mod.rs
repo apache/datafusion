@@ -452,10 +452,11 @@ fn get_projected_output_ordering(
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        // Check if all file groups are sorted
-        if base_config.file_groups.iter().all(|group| {
+        // Check if any file groups are not sorted
+        if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
-                return true;
+                // File groups with <= 1 files are always sorted
+                return false;
             }
 
             let statistics = match MinMaxStatistics::new_from_files(
@@ -471,7 +472,7 @@ fn get_projected_output_ordering(
                 }
             };
 
-            statistics.is_sorted()
+            !statistics.is_sorted()
         }) {
             debug!(
                 "Skipping specified output ordering {:?}. \
