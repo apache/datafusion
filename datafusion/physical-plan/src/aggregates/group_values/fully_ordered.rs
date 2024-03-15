@@ -17,16 +17,12 @@
 
 use crate::aggregates::group_values::GroupValues;
 use crate::common::transpose;
-use ahash::RandomState;
 use arrow::compute::{cast, SortColumn};
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, SchemaRef, SortOptions};
-use datafusion_common::hash_utils::create_hashes;
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::utils::{evaluate_partition_ranges, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::LexOrdering;
 use hashbrown::raw::RawTable;
@@ -79,7 +75,7 @@ impl GroupValues for FullOrderedGroupValues {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
-        assert!(cols.len() > 0);
+        assert!(!cols.is_empty());
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -130,11 +126,8 @@ impl GroupValues for FullOrderedGroupValues {
     }
 
     fn size(&self) -> usize {
-        let group_values_size: usize = self
-            .group_values
-            .iter()
-            .map(|row| ScalarValue::size_of_vec(row))
-            .sum();
+        let group_values_size: usize =
+            self.group_values.iter().map(ScalarValue::size_of_vec).sum();
         group_values_size + self.map_size
     }
 
@@ -154,7 +147,7 @@ impl GroupValues for FullOrderedGroupValues {
                 let res = transpose(self.group_values.clone());
                 self.group_values.clear();
                 res.into_iter()
-                    .map(|items| ScalarValue::iter_to_array(items))
+                    .map(ScalarValue::iter_to_array)
                     .collect::<Result<Vec<_>>>()?
             }
             EmitTo::First(n) => {
@@ -162,7 +155,7 @@ impl GroupValues for FullOrderedGroupValues {
                 self.group_values = self.group_values[n..].to_vec();
                 let res = transpose(first_n_section);
                 res.into_iter()
-                    .map(|items| ScalarValue::iter_to_array(items))
+                    .map(ScalarValue::iter_to_array)
                     .collect::<Result<Vec<_>>>()?
             }
         };

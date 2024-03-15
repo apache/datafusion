@@ -17,7 +17,7 @@
 
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
-use arrow_schema::{DataType, SchemaRef, SortOptions};
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 
 pub(crate) mod primitive;
