@@ -62,7 +62,7 @@ use crate::{
 
 use arrow::{
     array::new_null_array,
-    compute::{can_cast_types, cast},
+    compute::{can_cast_types, cast, SortColumn},
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -600,7 +600,32 @@ impl MinMaxStatistics {
         let [min, max] = [min_values, max_values].map(|values| {
             let sorting_columns = sort_order
                 .iter()
-                .map(|expr| expr.evaluate_to_sort_column(&values))
+                .map(|sort_expr| {
+                    let column = sort_expr
+                        .expr
+                        .as_any()
+                        .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+                        .ok_or(DataFusionError::Plan(
+                            "sort expression must be on column".to_string(),
+                        ))?;
+
+                    let schema = values.schema();
+
+                    let idx = schema.index_of(column.name())?;
+                    let field = schema.field(idx);
+
+                    // check that sort columns are non-nullable
+                    if field.is_nullable() {
+                        return Err(DataFusionError::Plan(
+                            "cannot sort by nullable column".to_string(),
+                        ));
+                    }
+
+                    Ok(SortColumn {
+                        values: Arc::clone(values.column(idx)),
+                        options: Some(sort_expr.options),
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?;
             converter.convert_columns(
                 &sorting_columns
