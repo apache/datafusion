@@ -897,7 +897,9 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err(""),
+                expected_result: Err(
+                    "Error during planning: cannot sort by nullable column",
+                ),
             },
         ];
 

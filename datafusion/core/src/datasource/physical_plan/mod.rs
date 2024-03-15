@@ -453,8 +453,8 @@ fn get_projected_output_ordering(
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
         // Check if all file groups are sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() > 1 {
+        if base_config.file_groups.iter().all(|group| {
+            if group.len() <= 1 {
                 return true;
             }
 
@@ -471,7 +471,7 @@ fn get_projected_output_ordering(
                 }
             };
 
-            !statistics.is_sorted()
+            statistics.is_sorted()
         }) {
             debug!(
                 "Skipping specified output ordering {:?}. \
@@ -565,8 +565,8 @@ impl MinMaxStatistics {
             .map(|field| {
                 let (min, max) = get_min_max(table_schema.index_of(field.name())?);
                 Ok((
-                    (field.name(), ScalarValue::iter_to_array(min)?),
-                    (field.name(), ScalarValue::iter_to_array(max)?),
+                    ScalarValue::iter_to_array(min)?,
+                    ScalarValue::iter_to_array(max)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?
@@ -575,8 +575,8 @@ impl MinMaxStatistics {
 
         Self::new(
             sort_order,
-            RecordBatch::try_from_iter(min_values)?,
-            RecordBatch::try_from_iter(max_values)?,
+            RecordBatch::try_new(Arc::clone(projected_schema), min_values)?,
+            RecordBatch::try_new(Arc::clone(projected_schema), max_values)?,
         )
     }
 
@@ -627,12 +627,16 @@ impl MinMaxStatistics {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            converter.convert_columns(
-                &sorting_columns
-                    .into_iter()
-                    .map(|c| c.values)
-                    .collect::<Vec<_>>(),
-            )
+            converter
+                .convert_columns(
+                    &sorting_columns
+                        .into_iter()
+                        .map(|c| c.values)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|e| {
+                    DataFusionError::ArrowError(e, Some("convert columns".to_string()))
+                })
         });
 
         Ok(Self {
