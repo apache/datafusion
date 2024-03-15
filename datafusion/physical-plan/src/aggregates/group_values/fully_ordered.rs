@@ -27,7 +27,7 @@ use datafusion_expr::EmitTo;
 use datafusion_physical_expr::LexOrdering;
 use hashbrown::raw::RawTable;
 
-/// A [`GroupValues`] making use of [`Rows`]
+/// A [`GroupValues`] making use of order
 pub struct FullOrderedGroupValues {
     /// The output schema
     schema: SchemaRef,
