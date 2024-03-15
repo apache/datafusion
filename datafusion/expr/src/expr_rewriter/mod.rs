@@ -405,10 +405,6 @@ mod test {
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()
     }
 
-    fn make_field(relation: &str, column: &str) -> DFField {
-        DFField::new(Some(relation.to_string()), column, DataType::Int8, false)
-    }
-
     #[test]
     fn rewriter_visit() {
         let mut rewriter = RecordingRewriter::default();

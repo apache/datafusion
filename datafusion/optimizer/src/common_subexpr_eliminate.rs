@@ -813,11 +813,11 @@ mod test {
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![
-                DFField::new_unqualified("a", DataType::Int64, false),
-                DFField::new_unqualified("c", DataType::Int64, false),
+                Field::new("a", DataType::Int64, false),
+                Field::new("c", DataType::Int64, false),
             ],
             Default::default(),
-        )?);
+        ));
 
         // skip aggregates
         let mut id_array = vec![];
@@ -1143,8 +1143,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1192,8 +1192,8 @@ mod test {
             build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
-        for field in project_2.schema().fields() {
-            assert!(field_set.insert(field.qualified_name()));
+        for name in project_2.schema().field_names() {
+            assert!(field_set.insert(name));
         }
     }
 
@@ -1271,12 +1271,12 @@ mod test {
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
         let schema = DFSchema::new_with_metadata(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("c", DataType::Int32, false),
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
             ],
             HashMap::default(),
-        )?;
+        );
         extract_expressions(&grouping, &schema, &mut result)?;
 
         assert!(result.len() == 3);
@@ -1289,11 +1289,11 @@ mod test {
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
         let schema = DFSchema::new_with_metadata(
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
             ],
             HashMap::default(),
-        )?;
+        );
         extract_expressions(&grouping, &schema, &mut result)?;
 
         assert!(result.len() == 2);
@@ -1304,9 +1304,9 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+            vec![Field::new("a", DataType::Int32, false)],
             HashMap::default(),
-        )?;
+        );
         extract_expressions(&col("a"), &schema, &mut result)?;
 
         assert!(result.len() == 1);

@@ -2506,13 +2506,10 @@ mod tests {
     impl Default for NoOpExtensionNode {
         fn default() -> Self {
             Self {
-                schema: DFSchemaRef::new(
-                    DFSchema::new_with_metadata(
-                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
-                        HashMap::new(),
-                    )
-                    .unwrap(),
-                ),
+                schema: DFSchemaRef::new(DFSchema::new_with_metadata(
+                    vec![Field::new("a", DataType::Int32, false)],
+                    HashMap::new(),
+                )),
             }
         }
     }

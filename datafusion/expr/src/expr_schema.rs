@@ -565,10 +565,9 @@ mod tests {
         );
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new("foo", DataType::Int32, true));
-        builder.finish();
         let schema = builder.finish();
 
-        let dfschema = DFSchema::from_unqualified_schema(schema);
+        let dfschema = DFSchema::from_unqualified_schema(&Arc::new(schema)).unwrap();
 
         // let schema = DFSchema::new_with_metadata(
         //     vec![DFField::new_unqualified("foo", DataType::Int32, true)
@@ -578,7 +577,7 @@ mod tests {
         // .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&dfschema).unwrap().metadata());
+        assert_eq!(&meta, expr.to_field(&dfschema).unwrap().1.metadata());
     }
 
     #[test]
@@ -598,8 +597,9 @@ mod tests {
 
         let dfschema = DFSchema::from_field_specific_qualified_schema(
             vec![Some("table_name"), None],
-            schema,
-        );
+            &Arc::new(schema),
+        )
+        .unwrap();
 
         // schema.push(Field::new("foo", DataType::Int32, true));
         // let fields = DFField::new(

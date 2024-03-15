@@ -3189,7 +3189,7 @@ digraph {
             filters: vec![],
             fetch: None,
         }));
-        let col = schema.field_names()[0];
+        let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
             Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
@@ -3219,7 +3219,7 @@ digraph {
             filters: vec![],
             fetch: None,
         }));
-        let col = schema.field_names()[0];
+        let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
             Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),

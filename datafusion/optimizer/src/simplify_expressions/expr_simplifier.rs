@@ -1318,7 +1318,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use datafusion_common::{
-        assert_contains, cast::as_int32_array, plan_datafusion_err, DFField, ToDFSchema,
+        assert_contains, cast::as_int32_array, plan_datafusion_err, ToDFSchema,
     };
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
@@ -2806,22 +2806,19 @@ mod tests {
     }
 
     fn expr_test_schema() -> DFSchemaRef {
-        Arc::new(
-            DFSchema::new_with_metadata(
-                vec![
-                    DFField::new_unqualified("c1", DataType::Utf8, true),
-                    DFField::new_unqualified("c2", DataType::Boolean, true),
-                    DFField::new_unqualified("c3", DataType::Int64, true),
-                    DFField::new_unqualified("c4", DataType::UInt32, true),
-                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
-                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
-                    DFField::new_unqualified("c3_non_null", DataType::Int64, false),
-                    DFField::new_unqualified("c4_non_null", DataType::UInt32, false),
-                ],
-                HashMap::new(),
-            )
-            .unwrap(),
-        )
+        Arc::new(DFSchema::new_with_metadata(
+            vec![
+                Field::new("c1", DataType::Utf8, true),
+                Field::new("c2", DataType::Boolean, true),
+                Field::new("c3", DataType::Int64, true),
+                Field::new("c4", DataType::UInt32, true),
+                Field::new("c1_non_null", DataType::Utf8, false),
+                Field::new("c2_non_null", DataType::Boolean, false),
+                Field::new("c3_non_null", DataType::Int64, false),
+                Field::new("c4_non_null", DataType::UInt32, false),
+            ],
+            HashMap::new(),
+        ))
     }
 
     #[test]
