@@ -90,20 +90,26 @@ impl RowGroupPruningTest {
             .await;
 
         println!("{}", output.description());
-        assert_eq!(output.predicate_evaluation_errors(), self.expected_errors);
+        assert_eq!(
+            output.predicate_evaluation_errors(),
+            self.expected_errors,
+            "mismatched predicate_evaluation"
+        );
         assert_eq!(
             output.row_groups_pruned_statistics(),
-            self.expected_row_group_pruned_by_statistics
+            self.expected_row_group_pruned_by_statistics,
+            "mismatched row_groups_pruned_statistics",
         );
         assert_eq!(
             output.row_groups_pruned_bloom_filter(),
-            self.expected_row_group_pruned_by_bloom_filter
+            self.expected_row_group_pruned_by_bloom_filter,
+            "mismatched row_groups_pruned_bloom_filter",
         );
         assert_eq!(
             output.result_rows,
             self.expected_results,
-            "{}",
-            output.description()
+            "mismatched expected rows: {}",
+            output.description(),
         );
     }
 }
