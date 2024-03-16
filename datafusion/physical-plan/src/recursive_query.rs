@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    work_table::{WorkTable, WorkTableExec},
+    work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
@@ -32,6 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
@@ -236,6 +237,8 @@ struct RecursiveQueryStream {
     /// In-memory buffer for storing a copy of the current results. Will be
     /// cleared after each iteration.
     buffer: Vec<RecordBatch>,
+    /// Tracks the memory used by the buffer
+    reservation: MemoryReservation,
     // /// Metrics.
     _baseline_metrics: BaselineMetrics,
 }
@@ -250,6 +253,8 @@ impl RecursiveQueryStream {
         baseline_metrics: BaselineMetrics,
     ) -> Self {
         let schema = static_stream.schema();
+        let reservation =
+            MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
         Self {
             task_context,
             work_table,
@@ -258,6 +263,7 @@ impl RecursiveQueryStream {
             recursive_stream: None,
             schema,
             buffer: vec![],
+            reservation,
             _baseline_metrics: baseline_metrics,
         }
     }
@@ -268,6 +274,10 @@ impl RecursiveQueryStream {
         mut self: std::pin::Pin<&mut Self>,
         batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
+        if let Err(e) = self.reservation.try_grow(batch.get_array_memory_size()) {
+            return Poll::Ready(Some(Err(e)));
+        }
+
         self.buffer.push(batch.clone());
         Poll::Ready(Some(Ok(batch)))
     }
@@ -289,8 +299,11 @@ impl RecursiveQueryStream {
         }
 
         // Update the work table with the current buffer
-        let batches = self.buffer.drain(..).collect();
-        self.work_table.write(batches);
+        let reserved_batches = ReservedBatches::new(
+            std::mem::take(&mut self.buffer),
+            self.reservation.take(),
+        );
+        self.work_table.update(reserved_batches);
 
         // We always execute (and re-execute iteratively) the first partition.
         // Downstream plans should not expect any partitioning.
