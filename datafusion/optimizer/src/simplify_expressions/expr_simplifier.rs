@@ -17,6 +17,8 @@
 
 //! Expression simplification API
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::Not;
 
 use super::inlist_simplifier::{InListSimplifier, ShortenInListSimplifier};
@@ -41,7 +43,8 @@ use datafusion_common::{
 use datafusion_expr::expr::{InList, InSubquery};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like, ScalarFunctionDefinition, Volatility
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
+    Operator, ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -189,14 +192,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .data()?
             .rewrite(&mut inlist_simplifier)
             .data()?
-            .rewrite(&mut shorten_in_list_simplifier)
-            .data()?
             .rewrite(&mut guarantee_rewriter)
             .data()?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)
             .data()?
             .rewrite(&mut simplifier)
+            .data()?
+            .rewrite(&mut shorten_in_list_simplifier)
             .data()
     }
 
@@ -1411,7 +1414,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 expr,
                 list,
                 negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => Transformed::yes(lit(negated)),
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+                Transformed::yes(lit(negated))
+            }
 
             // null in (x, y, z) --> null
             // null not in (x, y, z) --> null
@@ -1420,14 +1425,15 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 list: _,
                 negated: _,
             }) if is_null(expr.as_ref()) => Transformed::yes(lit_bool_null()),
-            
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             Expr::InList(InList {
                 expr,
                 mut list,
                 negated,
-            }) if list.len() == 1 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) => {
+            }) if list.len() == 1
+                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
+            {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else {
                     unreachable!()
                 };
@@ -1437,9 +1443,69 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 )))
             }
 
+            // Combine multiple OR expressions into a single IN list expression if possible
+            //
+            // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if op == Operator::Or
+                    && as_inlist(left.as_ref()).is_some_and(|lhs| {
+                        lhs.expr.try_into_col().is_ok() && !lhs.negated
+                    })
+                    && as_inlist(right.as_ref()).is_some_and(|rhs| {
+                        rhs.expr.try_into_col().is_ok() && !rhs.negated
+                    })
+                    && as_inlist(left.as_ref()).unwrap().expr
+                        == as_inlist(right.as_ref()).unwrap().expr =>
+            {
+                let left = as_inlist(left.as_ref());
+                let right = as_inlist(right.as_ref());
+
+                let lhs = left.unwrap();
+                let rhs = right.unwrap();
+                let lhs = lhs.into_owned();
+                let rhs = rhs.into_owned();
+                let mut seen: HashSet<Expr> = HashSet::new();
+                let list = lhs
+                    .list
+                    .into_iter()
+                    .chain(rhs.list)
+                    .filter(|e| seen.insert(e.to_owned()))
+                    .collect::<Vec<_>>();
+
+                let merged_inlist = InList {
+                    expr: lhs.expr,
+                    list,
+                    negated: false,
+                };
+                return Ok(Transformed::yes(Expr::InList(merged_inlist)));
+            }
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+/// Try to convert an expression to an in-list expression
+fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
+    match expr {
+        Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(_), Expr::Literal(_)) => Some(Cow::Owned(InList {
+                    expr: left.clone(),
+                    list: vec![*right.clone()],
+                    negated: false,
+                })),
+                (Expr::Literal(_), Expr::Column(_)) => Some(Cow::Owned(InList {
+                    expr: right.clone(),
+                    list: vec![*left.clone()],
+                    negated: false,
+                })),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

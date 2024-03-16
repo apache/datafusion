@@ -112,40 +112,6 @@ impl TreeNodeRewriter for InListSimplifier {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        // Combine multiple OR expressions into a single IN list expression if possible
-        //
-        // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
-        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-            if *op == Operator::Or {
-                let left = as_inlist(left);
-                let right = as_inlist(right);
-                if let (Some(lhs), Some(rhs)) = (left, right) {
-                    if lhs.expr.try_into_col().is_ok()
-                        && rhs.expr.try_into_col().is_ok()
-                        && lhs.expr == rhs.expr
-                        && !lhs.negated
-                        && !rhs.negated
-                    {
-                        let lhs = lhs.into_owned();
-                        let rhs = rhs.into_owned();
-                        let mut seen: HashSet<Expr> = HashSet::new();
-                        let list = lhs
-                            .list
-                            .into_iter()
-                            .chain(rhs.list)
-                            .filter(|e| seen.insert(e.to_owned()))
-                            .collect::<Vec<_>>();
-
-                        let merged_inlist = InList {
-                            expr: lhs.expr,
-                            list,
-                            negated: false,
-                        };
-                        return Ok(Transformed::yes(Expr::InList(merged_inlist)));
-                    }
-                }
-            }
-        }
         // Simplify expressions that is guaranteed to be true or false to a literal boolean expression
         //
         // Rules:
@@ -201,29 +167,6 @@ impl TreeNodeRewriter for InListSimplifier {
         }
 
         Ok(Transformed::no(expr))
-    }
-}
-
-/// Try to convert an expression to an in-list expression
-fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
-    match expr {
-        Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_), Expr::Literal(_)) => Some(Cow::Owned(InList {
-                    expr: left.clone(),
-                    list: vec![*right.clone()],
-                    negated: false,
-                })),
-                (Expr::Literal(_), Expr::Column(_)) => Some(Cow::Owned(InList {
-                    expr: right.clone(),
-                    list: vec![*left.clone()],
-                    negated: false,
-                })),
-                _ => None,
-            }
-        }
-        _ => None,
     }
 }
 
