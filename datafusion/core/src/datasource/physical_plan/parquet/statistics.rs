@@ -109,15 +109,22 @@ macro_rules! get_statistic {
                     }
                 }
             }
-            // type not supported yet
+            // type not fully supported yet
             ParquetStatistics::FixedLenByteArray(s) => {
                 match $target_arrow_type {
-                    // just support the decimal data type
+                    // just support specific logical data types, there are others each
+                    // with their own ordering
                     Some(DataType::Decimal128(precision, scale)) => {
                         Some(ScalarValue::Decimal128(
                             Some(from_bytes_to_i128(s.$bytes_func())),
                             *precision,
                             *scale,
+                        ))
+                    }
+                    Some(DataType::FixedSizeBinary(size)) => {
+                        Some(ScalarValue::FixedSizeBinary(
+                            *size,
+                            Some(s.$bytes_func().to_vec()),
                         ))
                     }
                     _ => None,
