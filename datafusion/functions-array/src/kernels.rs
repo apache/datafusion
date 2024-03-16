@@ -38,8 +38,8 @@ use datafusion_common::cast::{
     as_string_array,
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_datafusion_err,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_datafusion_err, not_impl_datafusion_err, DataFusionError, Result,
+    ScalarValue,
 };
 
 use std::any::type_name;

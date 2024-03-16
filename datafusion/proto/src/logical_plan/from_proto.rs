@@ -48,11 +48,10 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array_except, array_intersect, array_position, array_positions, array_remove,
-    array_remove_all, array_remove_n, array_replace, array_replace_all, array_replace_n,
-    array_union, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    degrees, ends_with, exp,
+    acosh, array_except, array_position, array_positions, array_remove, array_remove_all,
+    array_remove_n, array_replace, array_replace_all, array_replace_n, ascii, asinh,
+    atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length, chr, coalesce,
+    concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
