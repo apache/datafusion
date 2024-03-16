@@ -17,21 +17,20 @@
 
 //! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
 
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::str::FromStr;
+
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{OrderByExpr, Query, Value};
-use sqlparser::tokenizer::Word;
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
-        TableConstraint,
+        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
+        Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, TokenWithLocation, Tokenizer},
+    tokenizer::{Token, TokenWithLocation, Tokenizer, Word},
 };
-use std::collections::VecDeque;
-use std::fmt;
-use std::{collections::HashMap, str::FromStr};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -102,11 +101,11 @@ pub struct CopyToStatement {
     pub source: CopyToSource,
     /// The URL to where the data is heading
     pub target: String,
-    /// Partitioned BY
+    /// Partition keys
     pub partitioned_by: Vec<String>,
-    /// CSV Header row?
+    /// Indicates whether there is a header row (e.g. CSV)
     pub has_header: bool,
-    /// File type (Parquet, NDJSON, CSV, etc)
+    /// File type (Parquet, NDJSON, CSV etc.)
     pub stored_as: Option<String>,
     /// Target specific options
     pub options: Vec<(String, Value)>,
@@ -458,13 +457,11 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        if builder.target.is_none() {
+        let Some(target) = builder.target else {
             return Err(ParserError::ParserError(
                 "Missing TO clause in COPY statement".into(),
             ));
-        }
-
-        let target = builder.target.unwrap();
+        };
 
         Ok(Statement::CopyTo(CopyToStatement {
             source,

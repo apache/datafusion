@@ -22,12 +22,10 @@ use std::{sync::Arc, vec};
 
 use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
+    plan_err, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
 };
-use datafusion_common::{plan_err, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
@@ -37,6 +35,7 @@ use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, ParserOptions, SqlToRel},
 };
+use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use rstest::rstest;
 

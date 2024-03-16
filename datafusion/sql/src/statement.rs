@@ -815,16 +815,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let copy_source = statement.source;
         let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
-                let table_ref =
-                    self.object_name_to_table_reference(object_name.clone())?;
+                let table_name = object_name_to_string(&object_name);
+                let table_ref = self.object_name_to_table_reference(object_name)?;
                 let table_source =
                     self.context_provider.get_table_source(table_ref.clone())?;
-                let plan = LogicalPlanBuilder::scan(
-                    object_name_to_string(&object_name),
-                    table_source,
-                    None,
-                )?
-                .build()?;
+                let plan =
+                    LogicalPlanBuilder::scan(table_name, table_source, None)?.build()?;
                 let input_schema = plan.schema().clone();
                 (plan, input_schema, Some(table_ref))
             }

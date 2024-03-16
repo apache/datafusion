@@ -1131,9 +1131,7 @@ impl ConfigField for TableOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
-        let format = if let Some(format) = &self.current_format {
-            format
-        } else {
+        let Some(format) = &self.current_format else {
             return _config_err!("Specify a format for TableOptions");
         };
         match key {
