@@ -1451,14 +1451,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Operator::Or,
                 right,
-            }) if as_inlist(left.as_ref())
-                .is_some_and(|lhs| lhs.expr.try_into_col().is_ok() && !lhs.negated)
-                && as_inlist(right.as_ref()).is_some_and(|rhs| {
-                    rhs.expr.try_into_col().is_ok() && !rhs.negated
-                })
-                && as_inlist(left.as_ref()).unwrap().expr
-                    == as_inlist(right.as_ref()).unwrap().expr =>
-            {
+            }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let left = as_inlist(left.as_ref());
                 let right = as_inlist(right.as_ref());
 
@@ -1486,6 +1479,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
+    let left = as_inlist(left);
+    let right = as_inlist(right);
+    if let (Some(lhs), Some(rhs)) = (left, right) {
+        lhs.expr.try_into_col().is_ok()
+            && rhs.expr.try_into_col().is_ok()
+            && lhs.expr == rhs.expr
+            && !lhs.negated
+            && !rhs.negated
+    } else {
+        false
     }
 }
 
