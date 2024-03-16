@@ -301,6 +301,28 @@ async fn sort_spill_reservation() {
     test.with_config(config).with_expected_success().run().await;
 }
 
+#[tokio::test]
+async fn oom_recursive_cte() {
+    TestCase::new()
+        .with_query(
+            "WITH RECURSIVE nodes AS (
+            SELECT 1 as id
+            UNION ALL
+            SELECT UNNEST(RANGE(id+1, id+1000)) as id
+            FROM nodes
+            WHERE id < 10
+        )
+        SELECT * FROM nodes;",
+        )
+        .with_expected_errors(vec![
+            "Resources exhausted: Failed to allocate additional",
+            "RecursiveQuery",
+        ])
+        .with_memory_limit(2_000)
+        .run()
+        .await
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]

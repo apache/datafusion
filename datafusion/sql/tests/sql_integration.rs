@@ -1387,15 +1387,21 @@ fn recursive_ctes() {
               select n + 1 FROM numbers WHERE N < 10
         )
         select * from numbers;";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not enabled",
-        err.strip_backtrace()
-    );
+    quick_test(
+        sql,
+        "Projection: numbers.n\
+    \n  SubqueryAlias: numbers\
+    \n    RecursiveQuery: is_distinct=false\
+    \n      Projection: Int64(1) AS n\
+    \n        EmptyRelation\
+    \n      Projection: numbers.n + Int64(1)\
+    \n        Filter: numbers.n < Int64(10)\
+    \n          TableScan: numbers",
+    )
 }
 
 #[test]
-fn recursive_ctes_enabled() {
+fn recursive_ctes_disabled() {
     let sql = "
         WITH RECURSIVE numbers AS (
               select 1 as n
@@ -1404,28 +1410,20 @@ fn recursive_ctes_enabled() {
         )
         select * from numbers;";
 
-    // manually setting up test here so that we can enable recursive ctes
+    // manually setting up test here so that we can disable recursive ctes
     let mut context = MockContextProvider::default();
-    context.options_mut().execution.enable_recursive_ctes = true;
+    context.options_mut().execution.enable_recursive_ctes = false;
 
     let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
     let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
     let mut ast = result.unwrap();
 
-    let plan = planner
+    let err = planner
         .statement_to_plan(ast.pop_front().unwrap())
-        .expect("recursive cte plan creation failed");
-
+        .expect_err("query should have failed");
     assert_eq!(
-        format!("{plan:?}"),
-        "Projection: numbers.n\
-        \n  SubqueryAlias: numbers\
-        \n    RecursiveQuery: is_distinct=false\
-        \n      Projection: Int64(1) AS n\
-        \n        EmptyRelation\
-        \n      Projection: numbers.n + Int64(1)\
-        \n        Filter: numbers.n < Int64(10)\
-        \n          TableScan: numbers"
+        "This feature is not implemented: Recursive CTEs are not enabled",
+        err.strip_backtrace()
     );
 }
 
