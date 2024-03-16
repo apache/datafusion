@@ -33,11 +33,13 @@ name = "datafusion_sql"
 path = "src/lib.rs"
 
 [features]
-default = ["unicode_expressions"]
+default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
+unparser = []
 
 [dependencies]
 arrow = { workspace = true }
+arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }

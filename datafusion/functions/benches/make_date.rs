@@ -26,7 +26,7 @@ use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::datetime_expressions::make_date;
+use datafusion_functions::datetime::make_date;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];
@@ -63,7 +63,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date(&[years.clone(), months.clone(), days.clone()])
+                make_date()
+                    .invoke(&[years.clone(), months.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -77,7 +78,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date(&[year.clone(), months.clone(), days.clone()])
+                make_date()
+                    .invoke(&[year.clone(), months.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -91,7 +93,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date(&[year.clone(), month.clone(), days.clone()])
+                make_date()
+                    .invoke(&[year.clone(), month.clone(), days.clone()])
                     .expect("make_date should work on valid values"),
             )
         })
@@ -104,7 +107,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                make_date(&[year.clone(), month.clone(), day.clone()])
+                make_date()
+                    .invoke(&[year.clone(), month.clone(), day.clone()])
                     .expect("make_date should work on valid values"),
             )
         })

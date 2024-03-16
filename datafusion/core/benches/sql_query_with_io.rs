@@ -123,7 +123,7 @@ async fn setup_context(object_store: Arc<dyn ObjectStore>) -> SessionContext {
 
     for table_id in 0..TABLES {
         let table_name = table_name(table_id);
-        let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+        let file_format = ParquetFormat::default().with_enable_pruning(true);
         let options = ListingOptions::new(Arc::new(file_format))
             .with_table_partition_cols(vec![(String::from("partition"), DataType::UInt8)])
             .with_target_partitions(THREADS);

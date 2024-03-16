@@ -166,6 +166,7 @@ pub trait TableProvider: Sync + Send {
 
     /// Tests whether the table provider can make use of any or all filter expressions
     /// to optimise data retrieval.
+    /// Note:  the returned vector much have the same size as the filters argument.
     #[allow(deprecated)]
     fn supports_filters_pushdown(
         &self,

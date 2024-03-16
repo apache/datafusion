@@ -1537,15 +1537,19 @@ mod tests {
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
         let col_a = col("a", &schema)?;
         let nth_value_func1 =
-            NthValue::nth("nth_value(-1)", col_a.clone(), DataType::Int32, 1)?
+            NthValue::nth("nth_value(-1)", col_a.clone(), DataType::Int32, 1, false)?
                 .reverse_expr()
                 .unwrap();
         let nth_value_func2 =
-            NthValue::nth("nth_value(-2)", col_a.clone(), DataType::Int32, 2)?
+            NthValue::nth("nth_value(-2)", col_a.clone(), DataType::Int32, 2, false)?
                 .reverse_expr()
                 .unwrap();
-        let last_value_func =
-            Arc::new(NthValue::last("last", col_a.clone(), DataType::Int32)) as _;
+        let last_value_func = Arc::new(NthValue::last(
+            "last",
+            col_a.clone(),
+            DataType::Int32,
+            false,
+        )) as _;
         let window_exprs = vec![
             // LAST_VALUE(a)
             Arc::new(BuiltInWindowExpr::new(
@@ -1592,7 +1596,7 @@ mod tests {
         let batches = collect(physical_plan.execute(0, task_ctx)?).await?;
 
         let expected = vec![
-            "BoundedWindowAggExec: wdw=[last: Ok(Field { name: \"last\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }, nth_value(-1): Ok(Field { name: \"nth_value(-1)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }, nth_value(-2): Ok(Field { name: \"nth_value(-2)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[last: Ok(Field { name: \"last\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-1): Ok(Field { name: \"nth_value(-1)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-2): Ok(Field { name: \"nth_value(-2)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }], mode=[Sorted]",
             "  MemoryExec: partitions=1, partition_sizes=[3]",
         ];
         // Get string representation of the plan
