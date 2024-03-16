@@ -2934,24 +2934,24 @@ pub enum ScalarFunction {
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
-    /// / 122 is Range
+    /// 122 is Range
     ArrayExcept = 123,
     /// 124 was ArrayPopFront
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
-    /// / 128 was ArraySort
-    /// / 129 was ArrayDistinct
-    /// / 130 was ArrayResize
-    EndsWith = 131,
-    /// / 132 was InStr
-    /// / 133 was MakeDate
+    /// 128 was ArraySort
+    /// 129 was ArrayDistinct
+    /// 130 was ArrayResize
     ///
-    /// / 135 is RegexpLike
-    /// / 136 was ToChar
-    /// / 137 was ToDate
-    /// / 138 was ToUnixtime
-    ArrayReverse = 134,
+    /// 132 was InStr
+    /// 133 was MakeDate
+    /// 134 was ArrayReverse
+    /// 135 is RegexpLike
+    /// 136 was ToChar
+    /// 137 was ToDate
+    /// 138 was ToUnixtime
+    EndsWith = 131,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3038,7 +3038,6 @@ impl ScalarFunction {
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::ArrayReverse => "ArrayReverse",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3122,7 +3121,6 @@ impl ScalarFunction {
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
-            "ArrayReverse" => Some(Self::ArrayReverse),
             _ => None,
         }
     }

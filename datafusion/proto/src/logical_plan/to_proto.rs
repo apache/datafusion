@@ -1462,7 +1462,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
             BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
-            BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
             BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
             BuiltinScalarFunction::Log2 => Self::Log2,

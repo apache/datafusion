@@ -63,6 +63,7 @@ pub mod expr_fn {
     pub use super::udf::array_ndims;
     pub use super::udf::array_repeat;
     pub use super::udf::array_resize;
+    pub use super::udf::array_reverse;
     pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
@@ -100,6 +101,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_distinct_udf(),
         udf::array_repeat_udf(),
         udf::array_resize_udf(),
+        udf::array_reverse_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

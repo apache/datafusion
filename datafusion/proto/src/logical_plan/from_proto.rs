@@ -45,6 +45,7 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     acosh, array_except, array_intersect, array_position, array_positions, array_remove,
@@ -65,10 +66,6 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
-};
-use datafusion_expr::{
-    array_reverse,
-    expr::{Alias, Placeholder},
 };
 
 use super::LogicalExtensionCodec;
@@ -480,7 +477,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
-            ScalarFunction::ArrayReverse => Self::ArrayReverse,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::Log2 => Self::Log2,
@@ -1422,9 +1418,6 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                     parse_expr(&args[2], registry, codec)?,
                 )),
-                ScalarFunction::ArrayReverse => {
-                    Ok(array_reverse(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
