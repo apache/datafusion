@@ -133,12 +133,11 @@ impl DFSchema {
     ) -> Self {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-        let schema = Self {
+        Self {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
-        };
-        schema
+        }
     }
 
     // TODO Check this vs `try_from_qualified_schema`

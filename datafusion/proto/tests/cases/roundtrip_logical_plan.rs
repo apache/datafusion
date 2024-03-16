@@ -19,6 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
+use std::vec;
 
 use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::csv::WriterBuilder;
@@ -42,7 +43,7 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, FileTypeWriterOptions};
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_common::{FileType, Result};
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
@@ -1232,11 +1233,17 @@ fn roundtrip_schema() {
 
 #[test]
 fn roundtrip_dfschema() {
-    let dfschema = DFSchema::new_with_metadata(
+    let dfschema = DFSchema::from_qualified_fields(
         vec![
-            DFField::new_unqualified("a", DataType::Int64, false),
-            DFField::new(Some("t"), "b", DataType::Decimal128(15, 2), true)
-                .with_metadata(HashMap::from([(String::from("k1"), String::from("v1"))])),
+            (None, Arc::new(Field::new("a", DataType::Int64, false))),
+            (
+                Some("t".into()),
+                Arc::new(
+                    Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                        HashMap::from([(String::from("k1"), String::from("v1"))]),
+                    ),
+                ),
+            ),
         ],
         HashMap::from([
             (String::from("k2"), String::from("v2")),
