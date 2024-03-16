@@ -115,7 +115,7 @@ impl ScalarUDFImpl for MakeDateFunc {
             let mut builder: PrimitiveBuilder<Date32Type> =
                 PrimitiveArray::builder(array_size);
             for i in 0..array_size {
-                process_date(
+                make_date_inner(
                     years.value(i),
                     months.value(i),
                     days.value(i),
@@ -130,7 +130,7 @@ impl ScalarUDFImpl for MakeDateFunc {
             // For scalar only columns the operation is faster without using the PrimitiveArray.
             // Also, keep the output as scalar since all inputs are scalar.
             let mut value = 0;
-            process_date(
+            make_date_inner(
                 scalar_value_fn(&years)?,
                 scalar_value_fn(&months)?,
                 scalar_value_fn(&days)?,
@@ -144,11 +144,13 @@ impl ScalarUDFImpl for MakeDateFunc {
     }
 }
 
-fn process_date(
+/// Converts the year/month/day fields to an `i32` representing the days from
+/// the unix epoch and invokes `date_consumer_fn` with the value
+fn make_date_inner<F: FnMut(i32)>(
     year: i32,
     month: i32,
     day: i32,
-    mut date_consumer_fn: impl FnMut(i32),
+    mut date_consumer_fn: F,
 ) -> Result<()> {
     let Ok(m) = u32::try_from(month) else {
         return exec_err!("Month value '{month:?}' is out of range");
