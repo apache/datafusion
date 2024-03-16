@@ -1991,6 +1991,7 @@ from_unixtime(expression)
 - [list_dims](#list_dims)
 - [list_distinct](#list_distinct)
 - [list_element](#list_element)
+- [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
@@ -3035,9 +3036,17 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distinct`
+
+_Alias of [array_dims](#array_distinct)._
+
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_except`
+
+_Alias of [array_element](#array_except)._
 
 ### `list_extract`
 
