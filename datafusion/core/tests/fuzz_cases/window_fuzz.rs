@@ -27,7 +27,8 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
+use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
+use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
@@ -43,8 +44,6 @@ use test_utils::add_empty_batches;
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-
-use datafusion_physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {
@@ -568,47 +567,44 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             window_frame
         }
     };
-    window_frame.start_bound =
-        convert_bound_to_current_row_if_applicable(rng, &window_frame.start_bound);
-    window_frame.end_bound =
-        convert_bound_to_current_row_if_applicable(rng, &window_frame.end_bound);
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.start_bound);
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.end_bound);
     window_frame
 }
 
-// This util converts `PRECEDING(0)` or `FOLLOWING(0)` in the window frame bounds
-// to `CURRENT ROW` with 50% probability. This enables us to test behaviour of the system
-// in the `CURRENT ROW` mode.
+/// This utility converts `PRECEDING(0)` or `FOLLOWING(0)` specifiers in window
+/// frame bounds to `CURRENT ROW` with 50% probability. This enables us to test
+/// behaviour of the system in the `CURRENT ROW` mode.
 fn convert_bound_to_current_row_if_applicable(
     rng: &mut StdRng,
-    bound: &WindowFrameBound,
-) -> WindowFrameBound {
-    if *bound == WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0)))
-        || *bound == WindowFrameBound::Preceding(ScalarValue::Int32(Some(0)))
-        || *bound == WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
-        || *bound == WindowFrameBound::Following(ScalarValue::UInt64(Some(0)))
-    {
-        // With 50% convert preceding(0) to current row
-        if rng.gen_range(0..2) == 0 {
-            return WindowFrameBound::CurrentRow;
+    bound: &mut WindowFrameBound,
+) {
+    match bound {
+        WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
+            if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
+                if value == &zero && rng.gen_range(0..2) == 0 {
+                    *bound = WindowFrameBound::CurrentRow;
+                }
+            }
         }
+        _ => {}
     }
-    bound.clone()
 }
 
-fn includes_preceding_following_with_arg(bound: &WindowFrameBound) -> bool {
-    !bound.is_unbounded() && bound != &WindowFrameBound::CurrentRow
-}
-
-/// This util determines whether window_frame given can be executed with multiple order by expressions
-/// As an example, Range queries with offset (such as `RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`) cannot have more
-/// order by clauses in the form `\[ORDER BY a ASC, b ASC, ...]`
+/// This utility determines whether a given window frame can be executed with
+/// multiple ORDER BY expressions. As an example, range frames with offset (such
+/// as `RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`) cannot have ORDER BY clauses
+/// of the form `\[ORDER BY a ASC, b ASC, ...]`
 fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
     match window_frame.units {
         WindowFrameUnits::Rows => true,
         WindowFrameUnits::Range => {
-            // Range can only accept multi order by clause when bounds are CURRENT ROW or UNBOUNDED PRECEDING/FOLLOWING
-            !includes_preceding_following_with_arg(&window_frame.start_bound)
-                && !includes_preceding_following_with_arg(&window_frame.end_bound)
+            // Range can only accept multi ORDER BY clauses when bounds are
+            // CURRENT ROW or UNBOUNDED PRECEDING/FOLLOWING:
+            (window_frame.start_bound.is_unbounded()
+                || window_frame.start_bound == WindowFrameBound::CurrentRow)
+                && (window_frame.end_bound.is_unbounded()
+                    || window_frame.end_bound == WindowFrameBound::CurrentRow)
         }
         WindowFrameUnits::Groups => true,
     }
@@ -633,16 +629,16 @@ async fn run_window_test(
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
-            expr: col(column, &schema).unwrap(),
+            expr: col(column, &schema)?,
             options: SortOptions::default(),
         })
     }
-    if !can_accept_multi_orderby(&window_frame) && orderby_exprs.len() > 1 {
+    if orderby_exprs.len() > 1 && !can_accept_multi_orderby(&window_frame) {
         orderby_exprs = orderby_exprs[0..1].to_vec();
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
-        partitionby_exprs.push(col(column, &schema).unwrap());
+        partitionby_exprs.push(col(column, &schema)?);
     }
     let mut sort_keys = vec![];
     for partition_by_expr in &partitionby_exprs {
@@ -657,7 +653,7 @@ async fn run_window_test(
         }
     }
 
-    let concat_input_record = concat_batches(&schema, &input1).unwrap();
+    let concat_input_record = concat_batches(&schema, &input1)?;
     let source_sort_keys = vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
@@ -672,73 +668,59 @@ async fn run_window_test(
             options: Default::default(),
         },
     ];
-    let memory_exec =
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
-    let memory_exec = memory_exec.with_sort_information(vec![source_sort_keys.clone()]);
-    let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
+    let mut exec1 = Arc::new(
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
+            .with_sort_information(vec![source_sort_keys.clone()]),
+    ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
+        exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let usual_window_exec = Arc::new(
-        WindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name.clone(),
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec1,
-            vec![],
-        )
-        .unwrap(),
-    ) as _;
+    let usual_window_exec = Arc::new(WindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name.clone(),
+            &args,
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            schema.as_ref(),
+            false,
+        )?],
+        exec1,
+        vec![],
+    )?) as _;
     let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
-            .unwrap()
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
             .with_sort_information(vec![source_sort_keys.clone()]),
     );
-    let running_window_exec = Arc::new(
-        BoundedWindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name,
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec2,
-            vec![],
-            search_mode.clone(),
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name,
+            &args,
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            schema.as_ref(),
+            false,
+        )?],
+        exec2,
+        vec![],
+        search_mode.clone(),
+    )?) as _;
     let task_ctx = ctx.task_ctx();
-    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await.unwrap();
-
-    let collected_running = collect(running_window_exec, task_ctx.clone())
-        .await
-        .unwrap();
+    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;
+    let collected_running = collect(running_window_exec, task_ctx).await?;
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
     assert!(collected_running.len() > collected_usual.len());
     // compare
-    let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
-    let running_formatted = pretty_format_batches(&collected_running)
-        .unwrap()
-        .to_string();
+    let usual_formatted = pretty_format_batches(&collected_usual)?.to_string();
+    let running_formatted = pretty_format_batches(&collected_running)?.to_string();
 
     let mut usual_formatted_sorted: Vec<&str> = usual_formatted.trim().lines().collect();
     usual_formatted_sorted.sort_unstable();

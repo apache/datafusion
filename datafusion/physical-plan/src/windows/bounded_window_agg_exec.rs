@@ -386,25 +386,30 @@ trait PartitionSearcher: Send {
         for (partition_row, partition_batch) in partition_batches {
             let partition_batch_state = partition_buffers
                 .entry(partition_row)
-                // Use input_schema, for the buffer schema.
-                // record_batch.schema may not have necessary schema, in terms of
-                // nullability constraints of the output.
-                // See issue: https://github.com/apache/arrow-datafusion/issues/9320
+                // Use input_schema for the buffer schema, not `record_batch.schema()`
+                // as it may not have the "correct" schema in terms of output
+                // nullability constraints. For details, see the following issue:
+                // https://github.com/apache/arrow-datafusion/issues/9320
                 .or_insert_with(|| PartitionBatchState::new(self.input_schema().clone()));
             partition_batch_state.extend(&partition_batch)?;
         }
 
         if self.is_mode_linear() {
-            // In Linear mode, it is guaranteed that first order by column is ordered across partitions.
-            // Please note that, it is only guaranteed that first order by column is ordered. As a counter example
-            // Consider the case, `PARTITION BY b, ORDER BY a, c`, when input is ordered by `[a,b,c]`. In this case,
-            // `BoundedWindowAggExec` mode will be `Linear`. However, we cannot guarantee that, last row of the input data
-            // will be most ahead data in terms of ordering requirement `[a, c]` (It is the most ahead data in terms of `[a, b, c]`).
-            // Hence, only column `a` should be used as a guarantee of the most ahead data across partitions.
-            // For other modes (`Sorted`, `PartiallySorted`), we do not need to keep track of most recent row guarantee across partitions.
-            //  The reason is that, since leading ordering separates partitions, guarantee by the most recent row, already prune the previous partitions completely.
+            // In `Linear` mode, it is guaranteed that the first ORDER BY column
+            // is sorted across partitions. Note that only the first ORDER BY
+            // column is guaranteed to be ordered. As a counter example, consider
+            // the case, `PARTITION BY b, ORDER BY a, c` when the input is sorted
+            // by `[a, b, c]`. In this case, `BoundedWindowAggExec` mode will be
+            // `Linear`. However, we cannot guarantee that the last row of the
+            // input data will be the "last" data in terms of the ordering requirement
+            // `[a, c]` -- it will be the "last" data in terms of `[a, b, c]`.
+            // Hence, only column `a` should be used as a guarantee of the "last"
+            // data across partitions. For other modes (`Sorted`, `PartiallySorted`),
+            // we do not need to keep track of the most recent row guarantee across
+            // partitions. Since leading ordering separates partitions, guaranteed
+            // by the most recent row, already prune the previous partitions completely.
             let last_row = get_last_row_batch(&record_batch)?;
-            for (_partition_row, partition_batch) in partition_buffers.iter_mut() {
+            for (_, partition_batch) in partition_buffers.iter_mut() {
                 partition_batch.set_most_recent_row(last_row.clone());
             }
         }
@@ -1167,7 +1172,9 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use crate::common::collect;
     use crate::memory::MemoryExec;
+    use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
@@ -1191,13 +1198,11 @@ mod tests {
         BuiltInWindowExpr, BuiltInWindowFunctionExpr,
     };
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
-    use tokio::time::timeout;
-
-    use crate::common::collect;
-    use crate::projection::ProjectionExec;
     use itertools::Itertools;
+    use tokio::time::timeout;
 
     #[derive(Debug, Clone)]
     struct TestStreamPartition {
