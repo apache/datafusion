@@ -199,6 +199,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .data()?
             .rewrite(&mut simplifier)
             .data()?
+            // shorten inlist should be started after other inlist rules are applied
             .rewrite(&mut shorten_in_list_simplifier)
             .data()
     }
@@ -1446,16 +1447,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // Combine multiple OR expressions into a single IN list expression if possible
             //
             // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if op == Operator::Or
-                    && as_inlist(left.as_ref()).is_some_and(|lhs| {
-                        lhs.expr.try_into_col().is_ok() && !lhs.negated
-                    })
-                    && as_inlist(right.as_ref()).is_some_and(|rhs| {
-                        rhs.expr.try_into_col().is_ok() && !rhs.negated
-                    })
-                    && as_inlist(left.as_ref()).unwrap().expr
-                        == as_inlist(right.as_ref()).unwrap().expr =>
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) if as_inlist(left.as_ref())
+                .is_some_and(|lhs| lhs.expr.try_into_col().is_ok() && !lhs.negated)
+                && as_inlist(right.as_ref()).is_some_and(|rhs| {
+                    rhs.expr.try_into_col().is_ok() && !rhs.negated
+                })
+                && as_inlist(left.as_ref()).unwrap().expr
+                    == as_inlist(right.as_ref()).unwrap().expr =>
             {
                 let left = as_inlist(left.as_ref());
                 let right = as_inlist(right.as_ref());
@@ -1477,6 +1479,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     list,
                     negated: false,
                 };
+
                 return Ok(Transformed::yes(Expr::InList(merged_inlist)));
             }
 
