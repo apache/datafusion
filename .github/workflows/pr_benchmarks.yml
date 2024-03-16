@@ -44,6 +44,12 @@ jobs:
           cd benchmarks
 
           ./bench.sh run tpch
+          
+          # For some reason this step doesn't seem to propagate the env var down into the script
+          if [ -d "results/HEAD" ]; then
+            echo "Moving results into ${{ env.HEAD_SHORT_SHA }}"
+            mv results/HEAD results/${{ env.HEAD_SHORT_SHA }}
+          fi
 
       - name: Checkout base commit
         uses: actions/checkout@v4
