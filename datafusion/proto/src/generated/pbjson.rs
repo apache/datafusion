@@ -22970,7 +22970,6 @@ impl serde::Serialize for ScalarFunction {
             Self::SubstrIndex => "SubstrIndex",
             Self::FindInSet => "FindInSet",
             Self::EndsWith => "EndsWith",
-            Self::ArrayReverse => "ArrayReverse",
         };
         serializer.serialize_str(variant)
     }
@@ -23060,7 +23059,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "SubstrIndex",
             "FindInSet",
             "EndsWith",
-            "ArrayReverse",
         ];
 
         struct GeneratedVisitor;
@@ -23179,7 +23177,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
                     "FindInSet" => Ok(ScalarFunction::FindInSet),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
-                    "ArrayReverse" => Ok(ScalarFunction::ArrayReverse),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
