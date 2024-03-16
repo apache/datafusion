@@ -22,6 +22,8 @@ jobs:
           ref: refs/pull/${{ github.event.issue.number }}/head
 
       - name: Setup data and generate unique result names
+        # Workaround for `the input device is not a TTY`, appropriated from https://github.com/actions/runner/issues/241
+        shell: 'script -q -e -c "bash -e {0}"'
         run: |
           cd benchmarks
           mkdir data
