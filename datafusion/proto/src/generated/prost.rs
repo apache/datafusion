@@ -2913,8 +2913,8 @@ pub enum ScalarFunction {
     ArrayReplace = 96,
     /// 97 was ArrayToString
     /// 98 was Cardinality
-    ArrayElement = 99,
-    ArraySlice = 100,
+    /// 99 was ArrayElement
+    /// 100 was ArraySlice
     Cot = 103,
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
@@ -2928,7 +2928,7 @@ pub enum ScalarFunction {
     /// 113 was IsNan
     Iszero = 114,
     /// 115 was ArrayEmpty
-    ArrayPopBack = 116,
+    /// 116 was ArrayPopBack
     /// 117 was StringToArray
     /// 118 was ToTimestampNanos
     ArrayIntersect = 119,
@@ -2936,7 +2936,7 @@ pub enum ScalarFunction {
     OverLay = 121,
     /// / 122 is Range
     ArrayExcept = 123,
-    ArrayPopFront = 124,
+    /// 124 was ArrayPopFront
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
@@ -3023,8 +3023,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::ArrayElement => "ArrayElement",
-            ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
             ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
@@ -3032,12 +3030,10 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
             ScalarFunction::ArrayExcept => "ArrayExcept",
-            ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
@@ -3111,8 +3107,6 @@ impl ScalarFunction {
             "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
-            "ArrayElement" => Some(Self::ArrayElement),
-            "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
             "ArrayRemoveN" => Some(Self::ArrayRemoveN),
             "ArrayReplaceN" => Some(Self::ArrayReplaceN),
@@ -3120,12 +3114,10 @@ impl ScalarFunction {
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "ArrayPopBack" => Some(Self::ArrayPopBack),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
             "ArrayExcept" => Some(Self::ArrayExcept),
-            "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
