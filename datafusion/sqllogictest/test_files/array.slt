@@ -6025,11 +6025,24 @@ select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 [[1, 2]]
 [[3, 4]]
 
+query T
+select arrow_typeof(make_array(arrow_cast(f0, 'List(Int64)'))) from fixed_size_list_array
+----
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
 query ?
 select make_array(f0) from fixed_size_list_array
 ----
 [[1, 2]]
 [[3, 4]]
+
+query T
+select arrow_typeof(make_array(f0)) from fixed_size_list_array
+----
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
 
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;
