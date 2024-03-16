@@ -45,6 +45,7 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
     acosh, array_except, array_intersect, array_position, array_positions, array_remove,
@@ -65,10 +66,6 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
-};
-use datafusion_expr::{
-    array_reverse,
-    expr::{Alias, Placeholder},
 };
 
 use super::LogicalExtensionCodec;

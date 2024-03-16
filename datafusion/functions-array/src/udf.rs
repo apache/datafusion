@@ -919,7 +919,7 @@ impl ScalarUDFImpl for crate::udf::ArrayReverse {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return Ok(arg_types[0].clone());
+        Ok(arg_types[0].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
