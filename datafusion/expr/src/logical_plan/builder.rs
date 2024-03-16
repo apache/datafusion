@@ -1509,11 +1509,8 @@ pub fn unnest_with_options(
     column: Column,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let maybe_unnest_field = input.schema().qualifier_and_field_from_column(&column);
-    if maybe_unnest_field.is_none() {
-        return Ok(input);
-    }
-    let (unnest_qualifier, unnest_field) = maybe_unnest_field.unwrap();
+    let (unnest_qualifier, unnest_field) =
+        input.schema().qualifier_and_field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
     let unnested_field = match unnest_field.data_type() {

@@ -818,7 +818,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => {
-                match input_schema.field_and_qualifiers_with_unqualified_name(&name) {
+                match input_schema.field_and_qualifier_with_unqualified_name(&name) {
                     Ok((qualifier, field)) => {
                         Expr::Column(Column::new(qualifier, field.name()))
                     }

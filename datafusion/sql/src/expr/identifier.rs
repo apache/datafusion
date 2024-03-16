@@ -58,7 +58,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
                     if let Some(outer) = planner_context.outer_query_schema() {
-                        match outer.field_and_qualifiers_with_unqualified_name(
+                        match outer.field_and_qualifier_with_unqualified_name(
                             normalize_ident.as_str(),
                         ) {
                             Ok((qualifier, field)) => {

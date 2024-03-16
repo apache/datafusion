@@ -174,7 +174,7 @@ impl DataFrame {
             .map(|name| {
                 self.plan
                     .schema()
-                    .field_and_qualifiers_with_unqualified_name(name)
+                    .field_and_qualifier_with_unqualified_name(name)
             })
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
