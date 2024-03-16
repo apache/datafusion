@@ -28,7 +28,8 @@ use super::output_requirements::OutputRequirementExec;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    is_coalesce_partitions, is_repartition, is_sort_preserving_merge,
+    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -50,10 +51,8 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    physical_exprs_equal, EquivalenceProperties, LexRequirementRef, PhysicalExpr,
-    PhysicalExprRef, PhysicalSortRequirement,
+    physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -1030,30 +1029,6 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
-/// This utility function adds a [`SortExec`] above an operator according to the
-/// given ordering requirements while preserving the original partitioning.
-fn add_sort_preserving_partitions(
-    node: DistributionContext,
-    sort_requirement: LexRequirementRef,
-    fetch: Option<usize>,
-) -> DistributionContext {
-    // If the ordering requirement is already satisfied, do not add a sort.
-    if !node
-        .plan
-        .equivalence_properties()
-        .ordering_satisfy_requirement(sort_requirement)
-    {
-        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
-        if node.plan.output_partitioning().partition_count() > 1 {
-            new_sort = new_sort.with_preserve_partitioning(true);
-        }
-        DistributionContext::new(Arc::new(new_sort), false, vec![node])
-    } else {
-        node
-    }
-}
-
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1185,9 +1160,9 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        child = add_sort_preserving_partitions(
+                        child = add_sort_above_with_check(
                             child,
-                            required_input_ordering,
+                            required_input_ordering.to_vec(),
                             None,
                         );
                     }

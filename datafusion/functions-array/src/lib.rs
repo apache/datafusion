@@ -30,8 +30,10 @@ pub mod macros;
 
 mod array_has;
 mod concat;
+mod extract;
 mod kernels;
 mod make_array;
+mod rewrite;
 mod udf;
 mod utils;
 
@@ -49,6 +51,10 @@ pub mod expr_fn {
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
+    pub use super::extract::array_element;
+    pub use super::extract::array_pop_back;
+    pub use super::extract::array_pop_front;
+    pub use super::extract::array_slice;
     pub use super::make_array::make_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_distinct;
@@ -56,6 +62,7 @@ pub mod expr_fn {
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
     pub use super::udf::array_repeat;
+    pub use super::udf::array_resize;
     pub use super::udf::array_sort;
     pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
@@ -78,6 +85,10 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         concat::array_append_udf(),
         concat::array_prepend_udf(),
         concat::array_concat_udf(),
+        extract::array_element_udf(),
+        extract::array_pop_back_udf(),
+        extract::array_pop_front_udf(),
+        extract::array_slice_udf(),
         make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
@@ -88,6 +99,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_sort_udf(),
         udf::array_distinct_udf(),
         udf::array_repeat_udf(),
+        udf::array_resize_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
@@ -96,5 +108,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+    registry.register_function_rewrite(Arc::new(rewrite::ArrayFunctionRewriter {}))?;
+
     Ok(())
 }

@@ -22,7 +22,7 @@ use std::vec;
 use arrow::csv::WriterBuilder;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -46,8 +46,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
-    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr,
-    StringAgg, Sum,
+    NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::functions;
@@ -709,36 +708,6 @@ fn roundtrip_like() -> Result<()> {
         vec![(like_expr, "result".to_string())],
         input,
     )?);
-    roundtrip_test(plan)
-}
-
-#[test]
-fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
-    let fields = vec![
-        Field::new("id", DataType::Int64, true),
-        Field::new_struct(
-            "arg",
-            Fields::from(vec![Field::new("name", DataType::Float64, true)]),
-            true,
-        ),
-    ];
-
-    let schema = Schema::new(fields);
-    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
-
-    let col_arg = col("arg", &schema)?;
-    let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
-        col_arg,
-        GetFieldAccessExpr::NamedStructField {
-            name: ScalarValue::from("name"),
-        },
-    ));
-
-    let plan = Arc::new(ProjectionExec::try_new(
-        vec![(get_indexed_field_expr, "result".to_string())],
-        input,
-    )?);
-
     roundtrip_test(plan)
 }
 
