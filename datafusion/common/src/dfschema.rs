@@ -297,6 +297,7 @@ impl DFSchema {
             return;
         }
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
+        let mut qualifiers = Vec::new();
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
@@ -306,7 +307,8 @@ impl DFSchema {
             };
             if !duplicated_field {
                 // self.inner.fields.push(field.clone());
-                schema_builder.push(field.clone())
+                schema_builder.push(field.clone());
+                qualifiers.push(qualifier.cloned());
             }
         }
         let mut metadata = self.inner.metadata.clone();
@@ -315,6 +317,7 @@ impl DFSchema {
         let finished = schema_builder.finish();
         let finished_with_metadata = finished.with_metadata(metadata);
         self.inner = finished_with_metadata.into();
+        self.field_qualifiers.extend(qualifiers);
     }
 
     /// Get a list of fields
