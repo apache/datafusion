@@ -29,7 +29,9 @@ struct RowGroupPruningTest {
     scenario: Scenario,
     query: String,
     expected_errors: Option<usize>,
+    expected_row_group_matched_by_statistics: Option<usize>,
     expected_row_group_pruned_by_statistics: Option<usize>,
+    expected_row_group_matched_by_bloom_filter: Option<usize>,
     expected_row_group_pruned_by_bloom_filter: Option<usize>,
     expected_results: usize,
 }
@@ -40,7 +42,9 @@ impl RowGroupPruningTest {
             scenario: Scenario::Timestamps, // or another default
             query: String::new(),
             expected_errors: None,
+            expected_row_group_matched_by_statistics: None,
             expected_row_group_pruned_by_statistics: None,
+            expected_row_group_matched_by_bloom_filter: None,
             expected_row_group_pruned_by_bloom_filter: None,
             expected_results: 0,
         }
@@ -64,9 +68,21 @@ impl RowGroupPruningTest {
         self
     }
 
+    // Set the expected matched row groups by statistics
+    fn with_matched_by_stats(mut self, matched_by_stats: Option<usize>) -> Self {
+        self.expected_row_group_matched_by_statistics = matched_by_stats;
+        self
+    }
+
     // Set the expected pruned row groups by statistics
     fn with_pruned_by_stats(mut self, pruned_by_stats: Option<usize>) -> Self {
         self.expected_row_group_pruned_by_statistics = pruned_by_stats;
+        self
+    }
+
+    // Set the expected matched row groups by bloom filter
+    fn with_matched_by_bloom_filter(mut self, matched_by_bf: Option<usize>) -> Self {
+        self.expected_row_group_matched_by_bloom_filter = matched_by_bf;
         self
     }
 
@@ -96,9 +112,19 @@ impl RowGroupPruningTest {
             "mismatched predicate_evaluation"
         );
         assert_eq!(
+            output.row_groups_matched_statistics(),
+            self.expected_row_group_matched_by_statistics,
+            "mismatched row_groups_matched_statistics",
+        );
+        assert_eq!(
             output.row_groups_pruned_statistics(),
             self.expected_row_group_pruned_by_statistics,
             "mismatched row_groups_pruned_statistics",
+        );
+        assert_eq!(
+            output.row_groups_matched_bloom_filter(),
+            self.expected_row_group_matched_by_bloom_filter,
+            "mismatched row_groups_matched_bloom_filter",
         );
         assert_eq!(
             output.row_groups_pruned_bloom_filter(),
@@ -120,7 +146,9 @@ async fn prune_timestamps_nanos() {
         .with_scenario(Scenario::Timestamps)
         .with_query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -135,7 +163,9 @@ async fn prune_timestamps_micros() {
             "SELECT * FROM t where micros < to_timestamp_micros('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -150,7 +180,9 @@ async fn prune_timestamps_millis() {
             "SELECT * FROM t where micros < to_timestamp_millis('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -165,7 +197,9 @@ async fn prune_timestamps_seconds() {
             "SELECT * FROM t where seconds < to_timestamp_seconds('2020-01-02 01:01:11Z')",
         )
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -178,7 +212,9 @@ async fn prune_date32() {
         .with_scenario(Scenario::Dates)
         .with_query("SELECT * FROM t where date32 < cast('2020-01-02' as date)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -207,6 +243,7 @@ async fn prune_date64() {
     println!("{}", output.description());
     // This should prune out groups  without error
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_matched(), Some(1));
     assert_eq!(output.row_groups_pruned(), Some(3));
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
@@ -217,7 +254,9 @@ async fn prune_disabled() {
         .with_scenario(Scenario::Timestamps)
         .with_query("SELECT * FROM t where nanos < to_timestamp('2020-01-02 01:01:11Z')")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(10)
         .test_row_group_prune()
@@ -236,6 +275,7 @@ async fn prune_disabled() {
 
     // This should not prune any
     assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_matched(), Some(0));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(
         output.result_rows,
@@ -251,7 +291,9 @@ async fn prune_int32_lt() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i < 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -263,7 +305,9 @@ async fn prune_int32_lt() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where -i > -1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -276,7 +320,9 @@ async fn prune_int32_eq() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i = 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -288,7 +334,9 @@ async fn prune_int32_scalar_fun_and_eq() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i = 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -301,7 +349,9 @@ async fn prune_int32_scalar_fun() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where abs(i) = 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(3)
         .test_row_group_prune()
@@ -314,7 +364,9 @@ async fn prune_int32_complex_expr() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i+1 = 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -327,7 +379,9 @@ async fn prune_int32_complex_expr_subtract() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where 1-i > 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -340,7 +394,9 @@ async fn prune_f64_lt() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where f < 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -349,7 +405,9 @@ async fn prune_f64_lt() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where -f > -1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(11)
         .test_row_group_prune()
@@ -364,7 +422,9 @@ async fn prune_f64_scalar_fun_and_gt() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -378,7 +438,9 @@ async fn prune_f64_scalar_fun() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where abs(f-1) <= 0.000001")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -392,7 +454,9 @@ async fn prune_f64_complex_expr() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where f+1 > 1.1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -406,7 +470,9 @@ async fn prune_f64_complex_expr_subtract() {
         .with_scenario(Scenario::Float64)
         .with_query("SELECT * FROM t where 1-f > 1")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(9)
         .test_row_group_prune()
@@ -420,7 +486,9 @@ async fn prune_int32_eq_in_list() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i in (1)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(3))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -435,7 +503,9 @@ async fn prune_int32_eq_in_list_2() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i in (1000)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(0))
         .with_pruned_by_stats(Some(4))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(0)
         .test_row_group_prune()
@@ -455,7 +525,9 @@ async fn prune_int32_eq_large_in_list() {
             .as_str(),
         )
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(1))
         .with_expected_rows(0)
         .test_row_group_prune()
@@ -469,7 +541,9 @@ async fn prune_int32_eq_in_list_negated() {
         .with_scenario(Scenario::Int32)
         .with_query("SELECT * FROM t where i not in (1)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(4))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(4))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(19)
         .test_row_group_prune()
@@ -485,7 +559,9 @@ async fn prune_decimal_lt() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col < 4")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -494,7 +570,9 @@ async fn prune_decimal_lt() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -503,7 +581,9 @@ async fn prune_decimal_lt() {
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col < 4")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -512,7 +592,9 @@ async fn prune_decimal_lt() {
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col < cast(4.55 as decimal(20,2))")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(8)
         .test_row_group_prune()
@@ -528,7 +610,9 @@ async fn prune_decimal_eq() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col = 4")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -537,7 +621,9 @@ async fn prune_decimal_eq() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -547,7 +633,9 @@ async fn prune_decimal_eq() {
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -556,7 +644,9 @@ async fn prune_decimal_eq() {
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col = 4.00")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
@@ -573,7 +663,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col in (4,3,2,123456789123)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -582,7 +674,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -591,7 +685,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::Decimal)
         .with_query("SELECT * FROM t where decimal_col in (4,3,2,123456789123)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -600,7 +696,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::DecimalLargePrecision)
         .with_query("SELECT * FROM t where decimal_col in (4.00,3.00,11.2345,1)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(6)
         .test_row_group_prune()
@@ -611,7 +709,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::DecimalBloomFilterInt32)
         .with_query("SELECT * FROM t where decimal_col in (5)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -622,7 +722,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::DecimalBloomFilterInt64)
         .with_query("SELECT * FROM t where decimal_col in (5)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -633,7 +735,9 @@ async fn prune_decimal_in_list() {
         .with_scenario(Scenario::DecimalLargePrecisionBloomFilter)
         .with_query("SELECT * FROM t where decimal_col in (5)")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
         .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(2))
         .with_expected_rows(1)
         .test_row_group_prune()
@@ -650,7 +754,9 @@ async fn prune_periods_in_column_names() {
         .with_scenario(Scenario::PeriodsInColumnNames)
         .with_query(  "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend'")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
         .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(2))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(7)
         .test_row_group_prune()
@@ -659,7 +765,9 @@ async fn prune_periods_in_column_names() {
         .with_scenario(Scenario::PeriodsInColumnNames)
         .with_query(  "SELECT \"name\", \"service.name\" FROM t WHERE \"name\" != 'HTTP GET / DISPATCH'")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(5)
         .test_row_group_prune()
@@ -668,7 +776,9 @@ async fn prune_periods_in_column_names() {
         .with_scenario(Scenario::PeriodsInColumnNames)
         .with_query(  "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend' AND \"name\" != 'HTTP GET / DISPATCH'")
         .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
         .with_pruned_by_stats(Some(2))
+        .with_matched_by_bloom_filter(Some(1))
         .with_pruned_by_bloom_filter(Some(0))
         .with_expected_rows(2)
         .test_row_group_prune()
