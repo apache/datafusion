@@ -36,14 +36,14 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
-struct ReservedBatches {
+pub(super) struct ReservedBatches {
     batches: Vec<RecordBatch>,
     #[allow(dead_code)]
     reservation: MemoryReservation,
 }
 
 impl ReservedBatches {
-    fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
+    pub(super) fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
         ReservedBatches {
             batches,
             reservation,
@@ -78,13 +78,8 @@ impl WorkTable {
     }
 
     /// Update the results of a recursive query iteration to the work table.
-    pub(super) fn update(
-        &self,
-        batches: Vec<RecordBatch>,
-        reservation: MemoryReservation,
-    ) {
-        let reserved_batches = ReservedBatches::new(batches, reservation);
-        self.batches.lock().unwrap().replace(reserved_batches);
+    pub(super) fn update(&self, batches: ReservedBatches) {
+        self.batches.lock().unwrap().replace(batches);
     }
 }
 
@@ -237,7 +232,7 @@ mod tests {
         let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
         let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
         reservation.try_grow(100).unwrap();
-        work_table.update(vec![batch.clone()], reservation);
+        work_table.update(ReservedBatches::new(vec![batch.clone()], reservation));
         // take from work_table
         let reserved_batches = work_table.take().unwrap();
         assert_eq!(reserved_batches.batches, vec![batch.clone()]);

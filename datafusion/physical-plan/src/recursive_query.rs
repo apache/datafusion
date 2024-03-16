@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    work_table::{WorkTable, WorkTableExec},
+    work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
@@ -299,9 +299,11 @@ impl RecursiveQueryStream {
         }
 
         // Update the work table with the current buffer
-        let batches = std::mem::take(&mut self.buffer);
-        let reservation = self.reservation.take();
-        self.work_table.update(batches, reservation);
+        let reserved_batches = ReservedBatches::new(
+            std::mem::take(&mut self.buffer),
+            self.reservation.take(),
+        );
+        self.work_table.update(reserved_batches);
 
         // We always execute (and re-execute iteratively) the first partition.
         // Downstream plans should not expect any partitioning.
