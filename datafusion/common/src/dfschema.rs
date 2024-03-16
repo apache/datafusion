@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -133,11 +133,12 @@ impl DFSchema {
     ) -> Self {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-        Self {
+        let schema = Self {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
-        }
+        };
+        schema
     }
 
     // TODO Check this vs `try_from_qualified_schema`
@@ -203,14 +204,31 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
+        dfschema.check_names()?;
         Ok(dfschema)
     }
 
     fn check_names(&self) -> Result<()> {
-        // let mut qualified_names = HashSet::new();
-        // let mut unqualified_names = HashSet::new();
-        // for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
-        // }
+        let mut qualified_names = BTreeSet::new();
+        let mut unqualified_names = BTreeSet::new();
+
+        for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
+            if let Some(qualifier) = qualifier {
+                qualified_names.insert((qualifier, field.name()));
+            } else if !unqualified_names.insert(field.name()) {
+                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string()
+                });
+            }
+        }
+
+        for (qualifier, name) in qualified_names {
+            if unqualified_names.contains(name) {
+                return _schema_err!(SchemaError::AmbiguousReference {
+                    field: Column::new(Some(qualifier.to_owned_reference()), name)
+                });
+            }
+        }
         Ok(())
     }
 
@@ -229,6 +247,7 @@ impl DFSchema {
             field_qualifiers: vec![Some(owned_qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
+        schema.check_names()?;
         Ok(schema)
     }
 
@@ -512,7 +531,11 @@ impl DFSchema {
         });
         match qualifier_and_field {
             Some((_, f)) => Ok(f),
-            None => Err(DataFusionError::Internal("Field not found".to_string())),
+            None => Err(field_not_found(
+                Some(qualifier.to_owned_reference()),
+                name,
+                self,
+            )),
         }
     }
 
@@ -1140,7 +1163,8 @@ mod tests {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let expected_help = "Valid fields are t1.c0, t1.c1.";
         // Pertinent message parts
-        let expected_err_msg = "Fully qualified field name 't1.c0'";
+        let expected_err_msg =
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1.";
         assert_contains!(
             schema
                 .field_with_qualified_name(&TableReference::bare("x"), "y")
@@ -1160,7 +1184,7 @@ mod tests {
             schema.index_of_column(&y_col).unwrap_err().to_string(),
             expected_help
         );
-        let c0_column = Column::new(Some("t1"), "c0");
+        let c0_column = Column::new_unqualified("t1.c0");
         assert_contains!(
             schema.index_of_column(&c0_column).unwrap_err().to_string(),
             expected_err_msg
