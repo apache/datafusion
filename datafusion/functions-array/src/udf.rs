@@ -882,3 +882,52 @@ impl ScalarUDFImpl for crate::udf::ArrayDistinct {
         &self.aliases
     }
 }
+
+make_udf_function!(
+    ArrayReverse,
+    array_reverse,
+    array,
+    "reverses the order of elements in the array.",
+    array_reverse_udf
+);
+
+#[derive(Debug)]
+pub(super) struct ArrayReverse {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl crate::udf::ArrayReverse {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+            aliases: vec!["array_reverse".to_string(), "list_reverse".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for crate::udf::ArrayReverse {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_reserse"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        return Ok(arg_types[0].clone());
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        crate::kernels::array_reverse(&args).map(ColumnarValue::Array)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}

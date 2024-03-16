@@ -638,12 +638,6 @@ scalar_expr!(
     array from to,
     "replaces all occurrences of the specified element with another specified element."
 );
-scalar_expr!(
-    ArrayReverse,
-    array_reverse,
-    array,
-    "reverses the order of elements in the array."
-);
 scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(

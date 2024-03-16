@@ -480,7 +480,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
-            ScalarFunction::ArrayReverse => Self::ArrayReverse,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::Log2 => Self::Log2,
@@ -1422,9 +1421,6 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                     parse_expr(&args[2], registry, codec)?,
                 )),
-                ScalarFunction::ArrayReverse => {
-                    Ok(array_reverse(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::ArrayUnion => Ok(array_union(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
