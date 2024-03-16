@@ -3035,6 +3035,10 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distinct`
+
+_Alias of [array_dims](#array_distinct)._
+
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
