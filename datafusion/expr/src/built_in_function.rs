@@ -115,8 +115,6 @@ pub enum BuiltinScalarFunction {
     ArrayReplaceN,
     /// array_replace_all
     ArrayReplaceAll,
-    /// array_except
-    ArrayExcept,
 
     // string functions
     /// ascii
@@ -270,7 +268,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
@@ -340,14 +337,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayExcept => {
-                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, _) | (_, DataType::Null) => {
-                        Ok(input_expr_types[0].clone())
-                    }
-                    (dt, _) => Ok(dt),
-                }
-            }
             BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -500,7 +489,6 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => {
                 Signature::array_and_element(self.volatility())
             }
@@ -812,7 +800,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
             // hashing functions
-            BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
             BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
             BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
             BuiltinScalarFunction::ArrayRemoveAll => {
