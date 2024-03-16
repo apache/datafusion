@@ -1188,8 +1188,12 @@ impl DataFrame {
             Column::from_qualified_name_ignore_case(old_name)
         };
 
-        let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
-            Ok(field) => field,
+        let (qualifier_rename, field_rename) = match self
+            .plan
+            .schema()
+            .qualifier_and_field_from_column(&old_column)
+        {
+            Ok(qualifier_and_field) => qualifier_and_field,
             // no-op if field not found
             Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
                 return Ok(self)
@@ -1201,7 +1205,7 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if field.as_ref() == field_to_rename {
+                if qualifier.eq(&qualifier_rename.as_ref()) && field == &field_rename {
                     col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
                 } else {
                     col(Column::new(qualifier.cloned(), field.name()))
