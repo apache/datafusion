@@ -374,24 +374,6 @@ mod test {
     }
 
     #[test]
-    #[ignore = "investigate if this test is needed"]
-    fn normalize_cols_priority() {
-        let expr = col("a") + col("b");
-        // Schemas with multiple matches for column a, first takes priority
-        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
-        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
-        let schema_a2 = make_schema_with_empty_metadata(vec![make_field("tableA2", "a")]);
-
-        let schemas = vec![schema_a2, schema_b, schema_a];
-        let schemas = schemas.iter().collect::<Vec<_>>();
-
-        let normalized_expr =
-            normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
-                .unwrap();
-        assert_eq!(normalized_expr, col("tableA2.a") + col("tableB.b"));
-    }
-
-    #[test]
     fn normalize_cols_non_exist() {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
