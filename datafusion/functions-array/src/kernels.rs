@@ -27,7 +27,6 @@ use arrow::compute;
 use arrow::datatypes::{
     DataType, Date32Type, Field, IntervalMonthDayNanoType, UInt64Type,
 };
-use arrow::row::{RowConverter, SortField};
 use arrow_array::new_null_array;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::FieldRef;
@@ -39,10 +38,9 @@ use datafusion_common::cast::{
     as_string_array,
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_datafusion_err,
+    exec_err, internal_datafusion_err, not_impl_datafusion_err,
     DataFusionError, Result, ScalarValue,
 };
-use itertools::Itertools;
 
 use std::any::type_name;
 use std::sync::Arc;
@@ -1139,68 +1137,6 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
             exec_err!("flatten does not support type '{array_type:?}'")
         }
     }
-}
-
-/// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
-pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_distinct needs one argument");
-    }
-
-    // handle null
-    if args[0].data_type() == &DataType::Null {
-        return Ok(args[0].clone());
-    }
-
-    // handle for list & largelist
-    match args[0].data_type() {
-        DataType::List(field) => {
-            let array = as_list_array(&args[0])?;
-            general_array_distinct(array, field)
-        }
-        DataType::LargeList(field) => {
-            let array = as_large_list_array(&args[0])?;
-            general_array_distinct(array, field)
-        }
-        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
-    }
-}
-
-pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
-    array: &GenericListArray<OffsetSize>,
-    field: &FieldRef,
-) -> Result<ArrayRef> {
-    let dt = array.value_type();
-    let mut offsets = Vec::with_capacity(array.len());
-    offsets.push(OffsetSize::usize_as(0));
-    let mut new_arrays = Vec::with_capacity(array.len());
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
-    // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
-        let values = converter.convert_columns(&[arr])?;
-        // sort elements in list and remove duplicates
-        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
-        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-        let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.first() {
-            Some(array) => array.clone(),
-            None => {
-                return internal_err!("array_distinct: failed to get array from rows")
-            }
-        };
-        new_arrays.push(array);
-    }
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        field.clone(),
-        offsets,
-        values,
-        None,
-    )?))
 }
 
 /// array_reverse SQL function

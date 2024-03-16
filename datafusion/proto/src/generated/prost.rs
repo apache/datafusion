@@ -2931,8 +2931,8 @@ pub enum ScalarFunction {
     /// 116 was ArrayPopBack
     /// 117 was StringToArray
     /// 118 was ToTimestampNanos
-    ArrayIntersect = 119,
-    ArrayUnion = 120,
+    /// 119 was ArrayIntersect
+    /// 120 was ArrayUnion
     OverLay = 121,
     /// 122 is Range
     ArrayExcept = 123,
@@ -3030,8 +3030,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayIntersect => "ArrayIntersect",
-            ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
             ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::Levenshtein => "Levenshtein",
@@ -3113,8 +3111,6 @@ impl ScalarFunction {
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "ArrayIntersect" => Some(Self::ArrayIntersect),
-            "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
             "ArrayExcept" => Some(Self::ArrayExcept),
             "Levenshtein" => Some(Self::Levenshtein),

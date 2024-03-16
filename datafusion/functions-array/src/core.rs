@@ -105,7 +105,8 @@ impl ScalarUDFImpl for MakeArray {
     }
 }
 
-/// `make_array` SQL function
+/// `make_array_inner` is the implementation of the `make_array` function.
+/// Can be used if the expected input and output are ArrayRef
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let mut data_type = DataType::Null;
     for arg in arrays {
