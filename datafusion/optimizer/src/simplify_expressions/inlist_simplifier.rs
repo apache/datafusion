@@ -17,15 +17,13 @@
 
 //! This module implements a rule that simplifies the values for `InList`s
 
-use super::utils::{is_null, lit_bool_null};
 use super::THRESHOLD_INLINE_INLIST;
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery};
+use datafusion_common::Result;
+use datafusion_expr::expr::InList;
 use datafusion_expr::{lit, BinaryExpr, Expr, Operator};
 
 pub(super) struct ShortenInListSimplifier {}
@@ -112,66 +110,6 @@ impl TreeNodeRewriter for InListSimplifier {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::InList(InList {
-            expr,
-            mut list,
-            negated,
-        }) = expr.clone()
-        {
-            // expr IN () --> false
-            // expr NOT IN () --> true
-            if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) {
-                return Ok(Transformed::yes(lit(negated)));
-            // null in (x, y, z) --> null
-            // null not in (x, y, z) --> null
-            } else if is_null(&expr) {
-                return Ok(Transformed::yes(lit_bool_null()));
-            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            } else if list.len() == 1
-                && matches!(list.first(), Some(Expr::ScalarSubquery { .. }))
-            {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
-                    unreachable!()
-                };
-                return Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
-                    expr, subquery, negated,
-                ))));
-            }
-        }
-        // Combine multiple OR expressions into a single IN list expression if possible
-        //
-        // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
-        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-            if *op == Operator::Or {
-                let left = as_inlist(left);
-                let right = as_inlist(right);
-                if let (Some(lhs), Some(rhs)) = (left, right) {
-                    if lhs.expr.try_into_col().is_ok()
-                        && rhs.expr.try_into_col().is_ok()
-                        && lhs.expr == rhs.expr
-                        && !lhs.negated
-                        && !rhs.negated
-                    {
-                        let lhs = lhs.into_owned();
-                        let rhs = rhs.into_owned();
-                        let mut seen: HashSet<Expr> = HashSet::new();
-                        let list = lhs
-                            .list
-                            .into_iter()
-                            .chain(rhs.list)
-                            .filter(|e| seen.insert(e.to_owned()))
-                            .collect::<Vec<_>>();
-
-                        let merged_inlist = InList {
-                            expr: lhs.expr,
-                            list,
-                            negated: false,
-                        };
-                        return Ok(Transformed::yes(Expr::InList(merged_inlist)));
-                    }
-                }
-            }
-        }
         // Simplify expressions that is guaranteed to be true or false to a literal boolean expression
         //
         // Rules:
@@ -227,29 +165,6 @@ impl TreeNodeRewriter for InListSimplifier {
         }
 
         Ok(Transformed::no(expr))
-    }
-}
-
-/// Try to convert an expression to an in-list expression
-fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
-    match expr {
-        Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_), Expr::Literal(_)) => Some(Cow::Owned(InList {
-                    expr: left.clone(),
-                    list: vec![*right.clone()],
-                    negated: false,
-                })),
-                (Expr::Literal(_), Expr::Column(_)) => Some(Cow::Owned(InList {
-                    expr: right.clone(),
-                    list: vec![*left.clone()],
-                    negated: false,
-                })),
-                _ => None,
-            }
-        }
-        _ => None,
     }
 }
 
