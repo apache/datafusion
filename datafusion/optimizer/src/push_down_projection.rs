@@ -337,7 +337,7 @@ mod tests {
                     ),
                     (
                         Some("test2".into()),
-                        Arc::new(Field::new("c1", DataType::UInt32, true))
+                        Arc::new(Field::new("a", DataType::UInt32, true))
                     ),
                 ],
                 HashMap::new()
