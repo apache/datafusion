@@ -188,7 +188,7 @@ impl ScalarUDFImpl for ArrayReplaceAll {
 ///
 /// The type of each **element** in `list_array` must be the same as the type of
 /// `from_array` and `to_array`. This function also handles nested arrays
-/// ([`ListArray`] of [`ListArray`]s)
+/// (\[`ListArray`\] of \[`ListArray`\]s)
 ///
 /// For example, when called to replace a list array (where each element is a
 /// list of int32s, the second and third argument are int32 arrays, and the
