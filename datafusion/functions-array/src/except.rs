@@ -22,8 +22,7 @@ use arrow::row::{RowConverter, SortField};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{exec_err, internal_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
@@ -68,21 +67,9 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            DataType::Null => Ok(arg_types[0].clone()),
-            _ => exec_err!(
-                "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
+        match (&arg_types[0].clone(), &arg_types[1].clone()) {
+            (DataType::Null, _) | (_, DataType::Null) => Ok(arg_types[0].clone()),
+            (dt, _) => Ok(dt.clone()),
         }
     }
 

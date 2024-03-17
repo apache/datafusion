@@ -17,19 +17,17 @@
 
 //! Array expressions
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::array_into_list_array;
-use datafusion_common::{exec_err, internal_err, plan_err, Result};
+use datafusion_common::{exec_err, plan_err, Result};
 
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///
@@ -130,19 +128,6 @@ fn compare_element_to_list(
     };
 
     Ok(res)
-}
-
-fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
-    let data_type = args[0].data_type();
-    if !args.iter().all(|arg| {
-        arg.data_type().equals_datatype(data_type)
-            || arg.data_type().equals_datatype(&DataType::Null)
-    }) {
-        let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-        return plan_err!("{name} received incompatible types: '{types:?}'.");
-    }
-
-    Ok(())
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
