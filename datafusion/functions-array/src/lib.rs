@@ -29,6 +29,7 @@
 pub mod macros;
 
 mod array_has;
+mod array_replace;
 mod concat;
 mod core;
 mod except;
@@ -52,6 +53,9 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::array_replace::array_replace;
+    pub use super::array_replace::array_replace_all;
+    pub use super::array_replace::array_replace_n;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
@@ -119,9 +123,6 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         set_ops::array_union_udf(),
         position::array_position_udf(),
         position::array_positions_udf(),
-        remove::array_remove_udf(),
-        remove::array_remove_n_udf(),
-        remove::array_remove_all_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;
