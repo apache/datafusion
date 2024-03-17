@@ -488,6 +488,19 @@ impl DFSchema {
         })
     }
 
+    pub fn equivalent_names_and_types_v2(&self, fields: &Vec<DFField>) -> bool {
+        if self.fields().len() != fields.len() {
+            return false;
+        }
+        let self_fields = self.fields().iter();
+        let other_fields = fields.iter();
+        self_fields.zip(other_fields).all(|(f1, f2)| {
+            f1.qualifier() == f2.qualifier()
+                && f1.name() == f2.name()
+                && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
+        })
+    }
+
     /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
     /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
     /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
