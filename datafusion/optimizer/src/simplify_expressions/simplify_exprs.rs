@@ -19,11 +19,12 @@
 
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::{tree_node::Transformed, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
+use datafusion_expr::{Expr, Projection};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -58,6 +59,18 @@ impl OptimizerRule for SimplifyExpressions {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
         Ok(Some(Self::optimize_internal(plan, &execution_props)?))
+    }
+
+    fn supports_owned(&self) -> bool {
+        true
+    }
+
+    fn try_optimize_owned(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        todo!("todo")
     }
 }
 
@@ -121,6 +134,113 @@ impl SimplifyExpressions {
             .collect::<Result<Vec<_>>>()?;
 
         plan.with_new_exprs(exprs, new_inputs)
+    }
+
+    fn optimize_internal_owned(
+        plan: LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
+        let schema = if !plan.inputs().is_empty() {
+            DFSchemaRef::new(merge_schema(plan.inputs()))
+        } else if let LogicalPlan::TableScan(scan) = &plan {
+            // When predicates are pushed into a table scan, there is no input
+            // schema to resolve predicates against, so it must be handled specially
+            //
+            // Note that this is not `plan.schema()` which is the *output*
+            // schema, and reflects any pushed down projection. The output schema
+            // will not contain columns that *only* appear in pushed down predicates
+            // (and no where else) in the plan.
+            //
+            // Thus, use the full schema of the inner provider without any
+            // projection applied for simplification
+            Arc::new(DFSchema::try_from_qualified_schema(
+                &scan.table_name,
+                &scan.source.schema(),
+            )?)
+        } else {
+            Arc::new(DFSchema::empty())
+        };
+        let info = SimplifyContext::new(execution_props).with_schema(schema);
+
+        // let new_inputs = plan
+        //     .inputs()
+        //     .iter()
+        //     .map(|input| Self::optimize_internal(input, execution_props))
+        //     .collect::<Result<Vec<_>>>()?;
+
+        let simplifier = ExprSimplifier::new(info);
+
+        // The left and right expressions in a Join on clause are not
+        // commutative, for reasons that are not entirely clear. Thus, do not
+        // reorder expressions in Join while simplifying.
+        //
+        // This is likely related to the fact that order of the columns must
+        // match the order of the children. see
+        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
+        let simplifier = if matches!(plan, LogicalPlan::Join(_)) {
+            simplifier.with_canonicalize(false)
+        } else {
+            simplifier
+        };
+
+        fn simplify_expr(
+            simplifier: ExprSimplifier<SimplifyContext<'_>>,
+            exprs: Vec<Expr>,
+        ) -> Result<Vec<Expr>> {
+            exprs
+                .into_iter()
+                .map(|e| {
+                    // TODO: unify with `rewrite_preserving_name`
+                    let original_name = e.name_for_alias()?;
+                    let new_e = simplifier.simplify(e)?;
+                    new_e.alias_if_changed(original_name)
+                })
+                .collect::<Result<Vec<_>>>()
+        }
+
+        match plan {
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                ..
+            }) => {
+                // fails if more than one arc is created
+                let input = Arc::into_inner(input).unwrap();
+                let new_input = Self::optimize_internal_owned(input, execution_props)?;
+                let new_expr = simplify_expr(simplifier, expr)?;
+                Projection::try_new(new_expr, Arc::new(new_input))
+                    .map(LogicalPlan::Projection)
+            }
+            _ => {
+                let new_inputs = plan
+                    .inputs()
+                    .iter()
+                    .map(|input| Self::optimize_internal(input, execution_props))
+                    .collect::<Result<Vec<_>>>()?;
+                let exprs = plan
+                    .expressions()
+                    .into_iter()
+                    .map(|e| {
+                        // TODO: unify with `rewrite_preserving_name`
+                        let original_name = e.name_for_alias()?;
+                        let new_e = simplifier.simplify(e)?;
+                        new_e.alias_if_changed(original_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                plan.with_new_exprs(exprs, new_inputs)
+            }
+        }
+        // let new_inputs = plan.owned_inputs().into_iter().map(|input| {
+        //     Self::optimize_internal_owned(input, execution_props)
+        // }).collect::<Result<Vec<_>>>()?;
+
+        // let exprs = plan.rewrite_expressions(|e| {
+        //     // TODO: unify with `rewrite_preserving_name`
+        //     let original_name = e.name_for_alias()?;
+        //     let new_e = simplifier.simplify(e)?;
+        //     new_e.alias_if_changed(original_name)
+        // })?;
     }
 }
 

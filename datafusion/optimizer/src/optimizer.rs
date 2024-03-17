@@ -48,7 +48,8 @@ use crate::utils::log_plan;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
@@ -84,6 +85,20 @@ pub trait OptimizerRule {
     /// If a rule use default None, it should traverse recursively plan inside itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
+    }
+
+    /// does this rule support rewriting owned plans?
+    fn supports_owned(&self) -> bool {
+        return false;
+    }
+
+    /// if supports_owned returns true, calls try_optimize_owned
+    fn try_optimize_owned(
+        &self,
+        _plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        not_impl_err!("try_optimized_owned is not implemented for this rule")
     }
 }
 

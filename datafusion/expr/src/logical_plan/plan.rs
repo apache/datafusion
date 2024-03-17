@@ -369,6 +369,97 @@ impl LogicalPlan {
         }
     }
 
+    pub fn rewrite_expressions<F>(self, mut f: F) -> Result<Vec<Expr>>
+    where
+        F: FnMut(Expr) -> Result<Expr>,
+    {
+        match self {
+            LogicalPlan::Projection(Projection { expr, .. }) => {
+                let rewrited_expr =
+                    expr.into_iter().map(|e| f(e)).collect::<Result<Vec<_>>>()?;
+                Ok(rewrited_expr)
+                // projection.expr = rewrited_expr;
+                // let input = projection.input
+                // Ok(LogicalPlan::Projection(projection))
+            }
+            _ => unimplemented!(""),
+            // LogicalPlan::Values(Values { values, .. }) => {
+            //     values.iter().flatten().try_for_each(f)
+            // }
+            // LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
+            // LogicalPlan::Repartition(Repartition {
+            //     partitioning_scheme,
+            //     ..
+            // }) => match partitioning_scheme {
+            //     Partitioning::Hash(expr, _) => expr.iter().try_for_each(f),
+            //     Partitioning::DistributeBy(expr) => expr.iter().try_for_each(f),
+            //     Partitioning::RoundRobinBatch(_) => Ok(()),
+            // },
+            // LogicalPlan::Window(Window { window_expr, .. }) => {
+            //     window_expr.iter().try_for_each(f)
+            // }
+            // LogicalPlan::Aggregate(Aggregate {
+            //     group_expr,
+            //     aggr_expr,
+            //     ..
+            // }) => group_expr.iter().chain(aggr_expr.iter()).try_for_each(f),
+            // // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // // 2. the second part is non-equijoin(filter).
+            // LogicalPlan::Join(Join { on, filter, .. }) => {
+            //     on.iter()
+            //         // it not ideal to create an expr here to analyze them, but could cache it on the Join itself
+            //         .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
+            //         .try_for_each(|e| f(&e))?;
+
+            //     if let Some(filter) = filter.as_ref() {
+            //         f(filter)
+            //     } else {
+            //         Ok(())
+            //     }
+            // }
+            // LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().try_for_each(f),
+            // LogicalPlan::Extension(extension) => {
+            //     // would be nice to avoid this copy -- maybe can
+            //     // update extension to just observer Exprs
+            //     extension.node.expressions().iter().try_for_each(f)
+            // }
+            // LogicalPlan::TableScan(TableScan { filters, .. }) => {
+            //     filters.iter().try_for_each(f)
+            // }
+            // LogicalPlan::Unnest(Unnest { column, .. }) => {
+            //     f(&Expr::Column(column.clone()))
+            // }
+            // LogicalPlan::Distinct(Distinct::On(DistinctOn {
+            //     on_expr,
+            //     select_expr,
+            //     sort_expr,
+            //     ..
+            // })) => on_expr
+            //     .iter()
+            //     .chain(select_expr.iter())
+            //     .chain(sort_expr.clone().unwrap_or(vec![]).iter())
+            //     .try_for_each(f),
+            // // plans without expressions
+            // LogicalPlan::EmptyRelation(_)
+            // | LogicalPlan::RecursiveQuery(_)
+            // | LogicalPlan::Subquery(_)
+            // | LogicalPlan::SubqueryAlias(_)
+            // | LogicalPlan::Limit(_)
+            // | LogicalPlan::Statement(_)
+            // | LogicalPlan::CrossJoin(_)
+            // | LogicalPlan::Analyze(_)
+            // | LogicalPlan::Explain(_)
+            // | LogicalPlan::Union(_)
+            // | LogicalPlan::Distinct(Distinct::All(_))
+            // | LogicalPlan::Dml(_)
+            // | LogicalPlan::Ddl(_)
+            // | LogicalPlan::Copy(_)
+            // | LogicalPlan::DescribeTable(_)
+            // | LogicalPlan::Prepare(_) => Ok(()),
+        }
+    }
+
     /// returns all inputs of this `LogicalPlan` node. Does not
     /// include inputs to inputs, or subqueries.
     pub fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -403,6 +494,72 @@ impl LogicalPlan {
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            // plans without inputs
+            LogicalPlan::TableScan { .. }
+            | LogicalPlan::Statement { .. }
+            | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
+            | LogicalPlan::DescribeTable(_) => vec![],
+        }
+    }
+
+    /// returns all inputs of this `LogicalPlan` node. Does not
+    /// include inputs to inputs, or subqueries.
+    pub fn owned_inputs(self) -> Vec<LogicalPlan> {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Aggregate(Aggregate { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            )
+            | LogicalPlan::Unnest(Unnest { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+                vec![Arc::into_inner(input).unwrap()]
+            }
+            LogicalPlan::Join(Join { left, right, .. })
+            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![
+                Arc::into_inner(left).unwrap(),
+                Arc::into_inner(right).unwrap(),
+            ],
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
+                vec![Arc::into_inner(subquery).unwrap()]
+            }
+            LogicalPlan::Extension(extension) => {
+                let inputs = extension.node.inputs();
+                inputs.into_iter().map(|p| p.clone()).collect()
+            }
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .map(|arc| {
+                    let p = Arc::into_inner(arc.to_owned()).unwrap();
+                    p
+                })
+                .collect(),
+            LogicalPlan::Explain(explain) => vec![Arc::into_inner(explain.plan).unwrap()],
+            LogicalPlan::Analyze(analyze) => {
+                vec![Arc::into_inner(analyze.input).unwrap()]
+            }
+            LogicalPlan::Dml(write) => vec![Arc::into_inner(write.input).unwrap()],
+            LogicalPlan::Copy(copy) => vec![Arc::into_inner(copy.input).unwrap()],
+            LogicalPlan::Ddl(ddl) => {
+                let inputs = ddl.inputs();
+                inputs.into_iter().map(|p| p.clone()).collect()
+            }
+
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => vec![
+                Arc::into_inner(static_term).unwrap(),
+                Arc::into_inner(recursive_term).unwrap(),
+            ],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::Statement { .. }
