@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use datafusion_common::optimize_node::{Optimized, OptimizedState};
 use datafusion_common::{tree_node::Transformed, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;

@@ -637,7 +637,7 @@ impl Optimizer {
                     let Transformed {
                         data: node,
                         transformed,
-                        tnr,
+                        tnr: _,
                     } = self.optimize_owned_node(rule, inputs, config)?;
                     if transformed {
                         is_transformed = true;
