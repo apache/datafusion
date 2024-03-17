@@ -26,7 +26,7 @@ use datafusion::functions_array::expr_fn::{array_replace_all, make_array};
 use datafusion_expr::lit;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Construct large arrays for benchxmarking
+    // Construct large arrays for benchmarking
 
     let array_len = 100000000;
 
