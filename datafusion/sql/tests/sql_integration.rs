@@ -4584,8 +4584,8 @@ fn roundtrip_statement() -> Result<()> {
             order by count_first_name, "Last Name""#,
             r#"select p.id, count("First Name") as count_first_name,
             "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person) 
-            from person_quoted_cols qp
-            inner join person p
+            from (select id, "First Name", "Last Name" from person_quoted_cols) qp
+            inner join (select * from person) p
             on p.id = qp.id
             where p.id!=3 and "First Name"=='test' and qp.id in 
             (select id from (select id, count(*) from person group by id having count(*) > 0))
@@ -4608,6 +4608,7 @@ fn roundtrip_statement() -> Result<()> {
 
         let actual = format!("{}", &roundtrip_statement);
         println!("roundtrip sql: {actual}");
+        println!("plan {}", plan.display_indent());
 
         let plan_roundtrip = sql_to_rel
             .sql_statement_to_plan(roundtrip_statement.clone())
