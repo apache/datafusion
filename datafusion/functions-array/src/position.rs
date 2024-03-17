@@ -264,9 +264,9 @@ fn compare_element_to_list(
             let element_arr = Scalar::new(element_array_row);
             // use not_distinct so we can compare NULL
             if eq {
-                arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
+                arrow::compute::kernels::cmp::not_distinct(&list_array_row, &element_arr)?
             } else {
-                arrow_ord::cmp::distinct(&list_array_row, &element_arr)?
+                arrow::compute::kernels::cmp::distinct(&list_array_row, &element_arr)?
             }
         }
     };

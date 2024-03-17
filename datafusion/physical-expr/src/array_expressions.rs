@@ -30,7 +30,6 @@ use arrow_schema::FieldRef;
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{exec_err, internal_err, plan_err, Result};
-use itertools::Itertools;
 
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///

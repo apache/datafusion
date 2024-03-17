@@ -58,11 +58,11 @@ pub mod expr_fn {
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
+    pub use super::position::array_position;
+    pub use super::position::array_positions;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
-    pub use super::position::array_position;
-    pub use super::position::array_positions;
     pub use super::udf::array_dims;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
