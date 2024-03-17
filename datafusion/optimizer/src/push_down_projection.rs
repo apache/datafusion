@@ -572,6 +572,7 @@ mod tests {
             false,
             Some(Box::new(col("c").gt(lit(42)))),
             None,
+            None,
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -613,7 +614,8 @@ mod tests {
             vec![col("test.a")],
             vec![col("test.b")],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
@@ -621,7 +623,8 @@ mod tests {
             vec![col("test.b")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let col1 = col(max1.display_name()?);
         let col2 = col(max2.display_name()?);

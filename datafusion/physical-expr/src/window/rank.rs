@@ -28,7 +28,7 @@ use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 
 use std::any::Any;
@@ -41,6 +41,8 @@ use std::sync::Arc;
 pub struct Rank {
     name: String,
     rank_type: RankType,
+    /// Output data type
+    data_type: DataType,
 }
 
 impl Rank {
@@ -58,26 +60,29 @@ pub enum RankType {
 }
 
 /// Create a rank window function
-pub fn rank(name: String) -> Rank {
+pub fn rank(name: String, data_type: &DataType) -> Rank {
     Rank {
         name,
         rank_type: RankType::Basic,
+        data_type: data_type.clone(),
     }
 }
 
 /// Create a dense rank window function
-pub fn dense_rank(name: String) -> Rank {
+pub fn dense_rank(name: String, data_type: &DataType) -> Rank {
     Rank {
         name,
         rank_type: RankType::Dense,
+        data_type: data_type.clone(),
     }
 }
 
 /// Create a percent rank window function
-pub fn percent_rank(name: String) -> Rank {
+pub fn percent_rank(name: String, data_type: &DataType) -> Rank {
     Rank {
         name,
         rank_type: RankType::Percent,
+        data_type: data_type.clone(),
     }
 }
 
@@ -89,11 +94,7 @@ impl BuiltInWindowFunctionExpr for Rank {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        let data_type = match self.rank_type {
-            RankType::Basic | RankType::Dense => DataType::UInt64,
-            RankType::Percent => DataType::Float64,
-        };
-        Ok(Field::new(self.name(), data_type, nullable))
+        Ok(Field::new(self.name(), self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -131,6 +132,10 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
+    fn is_causal(&self) -> bool {
+        matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
     /// Evaluates the window function inside the given range.
     fn evaluate(
         &mut self,
@@ -268,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_dense_rank() -> Result<()> {
-        let r = dense_rank("arr".into());
+        let r = dense_rank("arr".into(), &DataType::UInt64);
         test_without_rank(&r, vec![1; 8])?;
         test_with_rank(&r, vec![1, 1, 2, 3, 3, 3, 4, 5])?;
         Ok(())
@@ -276,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_rank() -> Result<()> {
-        let r = rank("arr".into());
+        let r = rank("arr".into(), &DataType::UInt64);
         test_without_rank(&r, vec![1; 8])?;
         test_with_rank(&r, vec![1, 1, 3, 4, 4, 4, 7, 8])?;
         Ok(())
@@ -285,7 +290,7 @@ mod tests {
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
     fn test_percent_rank() -> Result<()> {
-        let r = percent_rank("arr".into());
+        let r = percent_rank("arr".into(), &DataType::Float64);
 
         // empty case
         let expected = vec![0.0; 0];

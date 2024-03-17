@@ -67,7 +67,7 @@ drop table IF EXISTS test1;
 statement ok
 drop table IF EXISTS test2;
 
-# two tables for join
+# tables for join
 statement ok
 CREATE TABLE IF NOT EXISTS t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
 (11, 'a', 1),
@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 (22, 'y', 1),
 (44, 'x', 3),
 (55, 'w', 3);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t3(t3_id INT, t3_name TEXT, t3_int INT) AS VALUES
+(11, 'z', 3),
+(22, ' ', 6),
+(33, 'x', 7),
+(55, 'w', 4);
 
 # batch size
 statement ok
@@ -237,6 +244,27 @@ SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <
 4 3 44
 NULL 3 11
 NULL 3 55
+
+# equijoin_full
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# equijoin_full_and_condition_from_both
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+11 a 1 NULL NULL NULL
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 11 z 3
+NULL NULL NULL 55 w 3
 
 # left_join
 query ITT rowsort
@@ -530,6 +558,82 @@ FROM t1
 ----
 11 a 55
 
+# inner join multiple tables to one
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+----
+11 11 11
+22 22 22
+
+# inner join multiple tables to one with WHERE filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# inner join multiple tables to one with JOIN filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# subsequent inner join 
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_int = t3.t3_int
+----
+11 11 11
+44 44 11
+
+# subsequent inner join with filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# subsequent inner join with join filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause and filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+WHERE t3.t3_name = 'no such name'
+----
+
 # test create table from query with LEFT join
 statement ok
 create table left_join_test as 
@@ -583,6 +687,9 @@ statement ok
 drop table IF EXISTS t2;
 
 statement ok
+drop table IF EXISTS t3;
+
+statement ok
 drop table IF EXISTS left_join_test;
 
 statement ok
@@ -602,20 +709,21 @@ CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
 statement ok
 CREATE TABLE t2(a text, b int) AS VALUES ('Alice', 2), ('Alice', 1);
 
-# the current query results are incorrect, becuase the query was incorrectly rewritten as:
-# SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
-# the difference is ORDER BY clause rewrite from t2.b to t1.b, it is incorrect.
-# after https://github.com/apache/arrow-datafusion/issues/8374 fixed, the correct result should be:
-# Alice 50
-# Alice 100
-# Alice 50
-# Alice 100
+# test 'ORDER BY' joined result with same column name
 query TI
-SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
 ----
 Alice 50
 Alice 50
 Alice 100
+Alice 100
+
+query TI
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50
+Alice 100
+Alice 50
 Alice 100
 
 query TITI
@@ -663,3 +771,25 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# sort by company name and then by lead name
+statement ok
+CREATE TABLE companies(name VARCHAR, employees INT) AS VALUES ('Jeyork', 150),('Shalk', 350),('ShuttlP', 75)
+
+statement ok
+CREATE TABLE leads(name VARCHAR, company VARCHAR) AS VALUES ('Alex F', 'Jeyork'),('John B', 'Shalk'),('Samanta J', 'ShuttlP'),('Trevor R', 'Jeyork'),('Alice B', 'ShuttlP')
+
+query TT
+SELECT l.* FROM leads l LEFT JOIN companies c ON c."name" = l."company" ORDER BY c."name", l."name"
+----
+Alex F Jeyork
+Trevor R Jeyork
+John B Shalk
+Alice B ShuttlP
+Samanta J ShuttlP
+
+statement ok
+DROP TABLE companies
+
+statement ok
+DROP TABLE leads

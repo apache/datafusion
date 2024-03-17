@@ -20,18 +20,22 @@
 use crate::expr::{
     AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
     Cast, GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder,
-    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
+    ScalarFunction, ScalarFunctionDefinition, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
-use std::borrow::Cow;
 
-use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::tree_node::{
+    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{handle_visit_recursion, internal_err, Result};
 
 impl TreeNode for Expr {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        match self {
-            Expr::Alias(Alias { expr, .. })
+    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+        &self,
+        f: &mut F,
+    ) -> Result<TreeNodeRecursion> {
+        let children = match self {
+            Expr::Alias(Alias{expr,..})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -45,79 +49,68 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => vec![Cow::Borrowed(expr)],
+            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let expr = Cow::Borrowed(expr.as_ref());
+                let expr = expr.as_ref();
                 match field {
-                    GetFieldAccess::ListIndex { key } => {
-                        vec![Cow::Borrowed(key.as_ref()), expr]
+                    GetFieldAccess::ListIndex {key} => vec![key.as_ref(), expr],
+                    GetFieldAccess::ListRange {start, stop, stride} => {
+                        vec![start.as_ref(), stop.as_ref(),stride.as_ref(), expr]
                     }
-                    GetFieldAccess::ListRange { start, stop } => {
-                        vec![Cow::Borrowed(start), Cow::Borrowed(stop), expr]
-                    }
-                    GetFieldAccess::NamedStructField { name: _name } => {
-                        vec![expr]
-                    }
+                    GetFieldAccess::NamedStructField { .. } => vec![expr],
                 }
             }
+            Expr::Unnest(Unnest { exprs }) |
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().map(Cow::Borrowed).collect(),
-            Expr::ScalarFunction(ScalarFunction { args, .. }) => args.iter().map(Cow::Borrowed).collect(),
+            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
+                args.iter().collect()
+            }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                lists_of_exprs.iter().flatten().map(Cow::Borrowed).collect()
+                lists_of_exprs.iter().flatten().collect()
             }
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Exists { .. }
+            | Expr::Exists {..}
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => vec![],
+            | Expr::Wildcard {..}
+            | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                vec![Cow::Borrowed(left), Cow::Borrowed(right)]
+                vec![left.as_ref(), right.as_ref()]
             }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                vec![Cow::Borrowed(expr), Cow::Borrowed(pattern)]
+                vec![expr.as_ref(), pattern.as_ref()]
             }
             Expr::Between(Between {
                 expr, low, high, ..
-            }) => vec![
-                Cow::Borrowed(expr),
-                Cow::Borrowed(low),
-                Cow::Borrowed(high),
-            ],
+            }) => vec![expr.as_ref(), low.as_ref(), high.as_ref()],
             Expr::Case(case) => {
                 let mut expr_vec = vec![];
                 if let Some(expr) = case.expr.as_ref() {
-                    expr_vec.push(Cow::Borrowed(expr.as_ref()));
+                    expr_vec.push(expr.as_ref());
                 };
                 for (when, then) in case.when_then_expr.iter() {
-                    expr_vec.push(Cow::Borrowed(when));
-                    expr_vec.push(Cow::Borrowed(then));
+                    expr_vec.push(when.as_ref());
+                    expr_vec.push(then.as_ref());
                 }
                 if let Some(else_expr) = case.else_expr.as_ref() {
-                    expr_vec.push(Cow::Borrowed(else_expr));
+                    expr_vec.push(else_expr.as_ref());
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction {
-                args,
-                filter,
-                order_by,
-                ..
-            }) => {
-                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
-
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
+             => {
+                let mut expr_vec = args.iter().collect::<Vec<_>>();
                 if let Some(f) = filter {
-                    expr_vec.push(Cow::Borrowed(f));
+                    expr_vec.push(f.as_ref());
                 }
-                if let Some(o) = order_by {
-                    expr_vec.extend(o.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                if let Some(order_by) = order_by {
+                    expr_vec.extend(order_by);
                 }
-
                 expr_vec
             }
             Expr::WindowFunction(WindowFunction {
@@ -126,52 +119,63 @@ impl TreeNode for Expr {
                 order_by,
                 ..
             }) => {
-                let mut expr_vec: Vec<_> = args.iter().map(Cow::Borrowed).collect();
-                expr_vec.extend(partition_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
-                expr_vec.extend(order_by.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                let mut expr_vec = args.iter().collect::<Vec<_>>();
+                expr_vec.extend(partition_by);
+                expr_vec.extend(order_by);
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
-                let mut expr_vec = vec![Cow::Borrowed(expr.as_ref())];
-                expr_vec.extend(list.iter().map(Cow::Borrowed).collect::<Vec<_>>());
+                let mut expr_vec = vec![expr.as_ref()];
+                expr_vec.extend(list);
                 expr_vec
             }
+        };
+
+        let mut tnr = TreeNodeRecursion::Continue;
+        for child in children {
+            tnr = f(child)?;
+            handle_visit_recursion!(tnr, DOWN);
         }
+
+        Ok(tnr)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn map_children<F>(self, mut f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let mut transform = transform;
-
         Ok(match self {
+            Expr::Column(_)
+            | Expr::Wildcard { .. }
+            | Expr::Placeholder(Placeholder { .. })
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Unnest(_)
+            | Expr::Literal(_) => Transformed::no(self),
             Expr::Alias(Alias {
                 expr,
                 relation,
                 name,
-            }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
-            Expr::Column(_) => self,
-            Expr::OuterReferenceColumn(_, _) => self,
-            Expr::Exists { .. } => self,
+            }) => f(*expr)?.update_data(|e| Expr::Alias(Alias::new(e, relation, name))),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            }) => Expr::InSubquery(InSubquery::new(
-                transform_boxed(expr, &mut transform)?,
-                subquery,
-                negated,
-            )),
-            Expr::ScalarSubquery(_) => self,
-            Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
-            Expr::Literal(value) => Expr::Literal(value),
+            }) => transform_box(expr, &mut f)?.update_data(|be| {
+                Expr::InSubquery(InSubquery::new(be, subquery, negated))
+            }),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                Expr::BinaryExpr(BinaryExpr::new(
-                    transform_boxed(left, &mut transform)?,
-                    op,
-                    transform_boxed(right, &mut transform)?,
-                ))
+                transform_box(left, &mut f)?
+                    .update_data(|new_left| (new_left, right))
+                    .try_transform_node(|(new_left, right)| {
+                        Ok(transform_box(right, &mut f)?
+                            .update_data(|new_right| (new_left, new_right)))
+                    })?
+                    .update_data(|(new_left, new_right)| {
+                        Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
+                    })
             }
             Expr::Like(Like {
                 negated,
@@ -179,236 +183,278 @@ impl TreeNode for Expr {
                 pattern,
                 escape_char,
                 case_insensitive,
-            }) => Expr::Like(Like::new(
-                negated,
-                transform_boxed(expr, &mut transform)?,
-                transform_boxed(pattern, &mut transform)?,
-                escape_char,
-                case_insensitive,
-            )),
+            }) => transform_box(expr, &mut f)?
+                .update_data(|new_expr| (new_expr, pattern))
+                .try_transform_node(|(new_expr, pattern)| {
+                    Ok(transform_box(pattern, &mut f)?
+                        .update_data(|new_pattern| (new_expr, new_pattern)))
+                })?
+                .update_data(|(new_expr, new_pattern)| {
+                    Expr::Like(Like::new(
+                        negated,
+                        new_expr,
+                        new_pattern,
+                        escape_char,
+                        case_insensitive,
+                    ))
+                }),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
                 case_insensitive,
-            }) => Expr::SimilarTo(Like::new(
-                negated,
-                transform_boxed(expr, &mut transform)?,
-                transform_boxed(pattern, &mut transform)?,
-                escape_char,
-                case_insensitive,
-            )),
-            Expr::Not(expr) => Expr::Not(transform_boxed(expr, &mut transform)?),
+            }) => transform_box(expr, &mut f)?
+                .update_data(|new_expr| (new_expr, pattern))
+                .try_transform_node(|(new_expr, pattern)| {
+                    Ok(transform_box(pattern, &mut f)?
+                        .update_data(|new_pattern| (new_expr, new_pattern)))
+                })?
+                .update_data(|(new_expr, new_pattern)| {
+                    Expr::SimilarTo(Like::new(
+                        negated,
+                        new_expr,
+                        new_pattern,
+                        escape_char,
+                        case_insensitive,
+                    ))
+                }),
+            Expr::Not(expr) => transform_box(expr, &mut f)?.update_data(Expr::Not),
             Expr::IsNotNull(expr) => {
-                Expr::IsNotNull(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotNull)
             }
-            Expr::IsNull(expr) => Expr::IsNull(transform_boxed(expr, &mut transform)?),
-            Expr::IsTrue(expr) => Expr::IsTrue(transform_boxed(expr, &mut transform)?),
-            Expr::IsFalse(expr) => Expr::IsFalse(transform_boxed(expr, &mut transform)?),
+            Expr::IsNull(expr) => transform_box(expr, &mut f)?.update_data(Expr::IsNull),
+            Expr::IsTrue(expr) => transform_box(expr, &mut f)?.update_data(Expr::IsTrue),
+            Expr::IsFalse(expr) => {
+                transform_box(expr, &mut f)?.update_data(Expr::IsFalse)
+            }
             Expr::IsUnknown(expr) => {
-                Expr::IsUnknown(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::IsUnknown)
             }
             Expr::IsNotTrue(expr) => {
-                Expr::IsNotTrue(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotTrue)
             }
             Expr::IsNotFalse(expr) => {
-                Expr::IsNotFalse(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotFalse)
             }
             Expr::IsNotUnknown(expr) => {
-                Expr::IsNotUnknown(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::IsNotUnknown)
             }
             Expr::Negative(expr) => {
-                Expr::Negative(transform_boxed(expr, &mut transform)?)
+                transform_box(expr, &mut f)?.update_data(Expr::Negative)
             }
             Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            }) => Expr::Between(Between::new(
-                transform_boxed(expr, &mut transform)?,
-                negated,
-                transform_boxed(low, &mut transform)?,
-                transform_boxed(high, &mut transform)?,
-            )),
-            Expr::Case(case) => {
-                let expr = transform_option_box(case.expr, &mut transform)?;
-                let when_then_expr = case
-                    .when_then_expr
-                    .into_iter()
-                    .map(|(when, then)| {
-                        Ok((
-                            transform_boxed(when, &mut transform)?,
-                            transform_boxed(then, &mut transform)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let else_expr = transform_option_box(case.else_expr, &mut transform)?;
-
-                Expr::Case(Case::new(expr, when_then_expr, else_expr))
-            }
-            Expr::Cast(Cast { expr, data_type }) => {
-                Expr::Cast(Cast::new(transform_boxed(expr, &mut transform)?, data_type))
-            }
-            Expr::TryCast(TryCast { expr, data_type }) => Expr::TryCast(TryCast::new(
-                transform_boxed(expr, &mut transform)?,
-                data_type,
-            )),
+            }) => transform_box(expr, &mut f)?
+                .update_data(|new_expr| (new_expr, low, high))
+                .try_transform_node(|(new_expr, low, high)| {
+                    Ok(transform_box(low, &mut f)?
+                        .update_data(|new_low| (new_expr, new_low, high)))
+                })?
+                .try_transform_node(|(new_expr, new_low, high)| {
+                    Ok(transform_box(high, &mut f)?
+                        .update_data(|new_high| (new_expr, new_low, new_high)))
+                })?
+                .update_data(|(new_expr, new_low, new_high)| {
+                    Expr::Between(Between::new(new_expr, negated, new_low, new_high))
+                }),
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => transform_option_box(expr, &mut f)?
+                .update_data(|new_expr| (new_expr, when_then_expr, else_expr))
+                .try_transform_node(|(new_expr, when_then_expr, else_expr)| {
+                    Ok(when_then_expr
+                        .into_iter()
+                        .map_until_stop_and_collect(|(when, then)| {
+                            transform_box(when, &mut f)?
+                                .update_data(|new_when| (new_when, then))
+                                .try_transform_node(|(new_when, then)| {
+                                    Ok(transform_box(then, &mut f)?
+                                        .update_data(|new_then| (new_when, new_then)))
+                                })
+                        })?
+                        .update_data(|new_when_then_expr| {
+                            (new_expr, new_when_then_expr, else_expr)
+                        }))
+                })?
+                .try_transform_node(|(new_expr, new_when_then_expr, else_expr)| {
+                    Ok(transform_option_box(else_expr, &mut f)?.update_data(
+                        |new_else_expr| (new_expr, new_when_then_expr, new_else_expr),
+                    ))
+                })?
+                .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
+                    Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
+                }),
+            Expr::Cast(Cast { expr, data_type }) => transform_box(expr, &mut f)?
+                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
+            Expr::TryCast(TryCast { expr, data_type }) => transform_box(expr, &mut f)?
+                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
             Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            }) => Expr::Sort(Sort::new(
-                transform_boxed(expr, &mut transform)?,
-                asc,
-                nulls_first,
-            )),
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
-                    ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
-                ),
-                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
-                    ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
-                ),
-                ScalarFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
-                }
-            },
+            }) => transform_box(expr, &mut f)?
+                .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                transform_vec(args, &mut f)?.map_data(|new_args| match func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+                    }
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, new_args)))
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
+                    }
+                })?
+            }
             Expr::WindowFunction(WindowFunction {
                 args,
                 fun,
                 partition_by,
                 order_by,
                 window_frame,
-            }) => Expr::WindowFunction(WindowFunction::new(
-                fun,
-                transform_vec(args, &mut transform)?,
-                transform_vec(partition_by, &mut transform)?,
-                transform_vec(order_by, &mut transform)?,
-                window_frame,
-            )),
+                null_treatment,
+            }) => transform_vec(args, &mut f)?
+                .update_data(|new_args| (new_args, partition_by, order_by))
+                .try_transform_node(|(new_args, partition_by, order_by)| {
+                    Ok(transform_vec(partition_by, &mut f)?.update_data(
+                        |new_partition_by| (new_args, new_partition_by, order_by),
+                    ))
+                })?
+                .try_transform_node(|(new_args, new_partition_by, order_by)| {
+                    Ok(
+                        transform_vec(order_by, &mut f)?.update_data(|new_order_by| {
+                            (new_args, new_partition_by, new_order_by)
+                        }),
+                    )
+                })?
+                .update_data(|(new_args, new_partition_by, new_order_by)| {
+                    Expr::WindowFunction(WindowFunction::new(
+                        fun,
+                        new_args,
+                        new_partition_by,
+                        new_order_by,
+                        window_frame,
+                        null_treatment,
+                    ))
+                }),
             Expr::AggregateFunction(AggregateFunction {
                 args,
                 func_def,
                 distinct,
                 filter,
                 order_by,
-            }) => match func_def {
-                AggregateFunctionDefinition::BuiltIn(fun) => {
-                    Expr::AggregateFunction(AggregateFunction::new(
-                        fun,
-                        transform_vec(args, &mut transform)?,
-                        distinct,
-                        transform_option_box(filter, &mut transform)?,
-                        transform_option_vec(order_by, &mut transform)?,
-                    ))
-                }
-                AggregateFunctionDefinition::UDF(fun) => {
-                    let order_by = if let Some(order_by) = order_by {
-                        Some(transform_vec(order_by, &mut transform)?)
-                    } else {
-                        None
-                    };
-                    Expr::AggregateFunction(AggregateFunction::new_udf(
-                        fun,
-                        transform_vec(args, &mut transform)?,
-                        false,
-                        transform_option_box(filter, &mut transform)?,
-                        transform_option_vec(order_by, &mut transform)?,
-                    ))
-                }
-                AggregateFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
-                }
-            },
+                null_treatment,
+            }) => transform_vec(args, &mut f)?
+                .update_data(|new_args| (new_args, filter, order_by))
+                .try_transform_node(|(new_args, filter, order_by)| {
+                    Ok(transform_option_box(filter, &mut f)?
+                        .update_data(|new_filter| (new_args, new_filter, order_by)))
+                })?
+                .try_transform_node(|(new_args, new_filter, order_by)| {
+                    Ok(transform_option_vec(order_by, &mut f)?
+                        .update_data(|new_order_by| (new_args, new_filter, new_order_by)))
+                })?
+                .map_data(|(new_args, new_filter, new_order_by)| match func_def {
+                    AggregateFunctionDefinition::BuiltIn(fun) => {
+                        Ok(Expr::AggregateFunction(AggregateFunction::new(
+                            fun,
+                            new_args,
+                            distinct,
+                            new_filter,
+                            new_order_by,
+                            null_treatment,
+                        )))
+                    }
+                    AggregateFunctionDefinition::UDF(fun) => {
+                        Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                            fun,
+                            new_args,
+                            false,
+                            new_filter,
+                            new_order_by,
+                        )))
+                    }
+                    AggregateFunctionDefinition::Name(_) => {
+                        internal_err!("Function `Expr` with name should be resolved.")
+                    }
+                })?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
-                GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
-                    transform_vec(exprs, &mut transform)?,
-                )),
-                GroupingSet::Cube(exprs) => Expr::GroupingSet(GroupingSet::Cube(
-                    transform_vec(exprs, &mut transform)?,
-                )),
-                GroupingSet::GroupingSets(lists_of_exprs) => {
-                    Expr::GroupingSet(GroupingSet::GroupingSets(
-                        lists_of_exprs
-                            .iter()
-                            .map(|exprs| transform_vec(exprs.clone(), &mut transform))
-                            .collect::<Result<Vec<_>>>()?,
-                    ))
-                }
+                GroupingSet::Rollup(exprs) => transform_vec(exprs, &mut f)?
+                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Rollup(ve))),
+                GroupingSet::Cube(exprs) => transform_vec(exprs, &mut f)?
+                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Cube(ve))),
+                GroupingSet::GroupingSets(lists_of_exprs) => lists_of_exprs
+                    .into_iter()
+                    .map_until_stop_and_collect(|exprs| transform_vec(exprs, &mut f))?
+                    .update_data(|new_lists_of_exprs| {
+                        Expr::GroupingSet(GroupingSet::GroupingSets(new_lists_of_exprs))
+                    }),
             },
-
             Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            }) => Expr::InList(InList::new(
-                transform_boxed(expr, &mut transform)?,
-                transform_vec(list, &mut transform)?,
-                negated,
-            )),
-            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
+            }) => transform_box(expr, &mut f)?
+                .update_data(|new_expr| (new_expr, list))
+                .try_transform_node(|(new_expr, list)| {
+                    Ok(transform_vec(list, &mut f)?
+                        .update_data(|new_list| (new_expr, new_list)))
+                })?
+                .update_data(|(new_expr, new_list)| {
+                    Expr::InList(InList::new(new_expr, new_list, negated))
+                }),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                Expr::GetIndexedField(GetIndexedField::new(
-                    transform_boxed(expr, &mut transform)?,
-                    field,
-                ))
-            }
-            Expr::Placeholder(Placeholder { id, data_type }) => {
-                Expr::Placeholder(Placeholder { id, data_type })
+                transform_box(expr, &mut f)?.update_data(|be| {
+                    Expr::GetIndexedField(GetIndexedField::new(be, field))
+                })
             }
         })
     }
 }
 
-fn transform_boxed<F>(boxed_expr: Box<Expr>, transform: &mut F) -> Result<Box<Expr>>
+fn transform_box<F>(be: Box<Expr>, f: &mut F) -> Result<Transformed<Box<Expr>>>
 where
-    F: FnMut(Expr) -> Result<Expr>,
+    F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    // TODO:
-    // It might be possible to avoid an allocation (the Box::new) below by reusing the box.
-    let expr: Expr = *boxed_expr;
-    let rewritten_expr = transform(expr)?;
-    Ok(Box::new(rewritten_expr))
+    Ok(f(*be)?.update_data(Box::new))
 }
 
 fn transform_option_box<F>(
-    option_box: Option<Box<Expr>>,
-    transform: &mut F,
-) -> Result<Option<Box<Expr>>>
+    obe: Option<Box<Expr>>,
+    f: &mut F,
+) -> Result<Transformed<Option<Box<Expr>>>>
 where
-    F: FnMut(Expr) -> Result<Expr>,
+    F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    option_box
-        .map(|expr| transform_boxed(expr, transform))
-        .transpose()
+    obe.map_or(Ok(Transformed::no(None)), |be| {
+        Ok(transform_box(be, f)?.update_data(Some))
+    })
 }
 
 /// &mut transform a Option<`Vec` of `Expr`s>
 fn transform_option_vec<F>(
-    option_box: Option<Vec<Expr>>,
-    transform: &mut F,
-) -> Result<Option<Vec<Expr>>>
+    ove: Option<Vec<Expr>>,
+    f: &mut F,
+) -> Result<Transformed<Option<Vec<Expr>>>>
 where
-    F: FnMut(Expr) -> Result<Expr>,
+    F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    Ok(if let Some(exprs) = option_box {
-        Some(transform_vec(exprs, transform)?)
-    } else {
-        None
+    ove.map_or(Ok(Transformed::no(None)), |ve| {
+        Ok(transform_vec(ve, f)?.update_data(Some))
     })
 }
 
 /// &mut transform a `Vec` of `Expr`s
-fn transform_vec<F>(v: Vec<Expr>, transform: &mut F) -> Result<Vec<Expr>>
+fn transform_vec<F>(ve: Vec<Expr>, f: &mut F) -> Result<Transformed<Vec<Expr>>>
 where
-    F: FnMut(Expr) -> Result<Expr>,
+    F: FnMut(Expr) -> Result<Transformed<Expr>>,
 {
-    v.into_iter().map(transform).collect()
+    ve.into_iter().map_until_stop_and_collect(f)
 }

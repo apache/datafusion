@@ -18,14 +18,16 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt::Debug;
 
-/// Describes an aggregate functions's state.
+/// Tracks an aggregate function's state.
 ///
-/// `Accumulator`s are stateful objects that live throughout the
-/// evaluation of multiple rows and aggregate multiple values together
-/// into a final output aggregate.
+/// `Accumulator`s are stateful objects that implement a single group. They
+/// aggregate values from multiple rows together into a final output aggregate.
+///
+/// [`GroupsAccumulator]` is an additional more performant (but also complex) API
+/// that manages state for multiple groups at once.
 ///
 /// An accumulator knows how to:
 /// * update its state from inputs via [`update_batch`]
@@ -40,6 +42,7 @@ use std::fmt::Debug;
 /// [`state`] and combine the state from multiple accumulators'
 /// via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
+/// [`GroupsAccumulator`]: crate::GroupsAccumulator
 /// [`update_batch`]: Self::update_batch
 /// [`retract_batch`]: Self::retract_batch
 /// [`state`]: Self::state
@@ -56,11 +59,18 @@ pub trait Accumulator: Send + Sync + Debug {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Returns the final aggregate value.
+    /// Returns the final aggregate value, consuming the internal state.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
-    fn evaluate(&self) -> Result<ScalarValue>;
+    ///
+    /// After this call, the accumulator's internal state should be
+    /// equivalent to when it was first created.
+    ///
+    /// This function gets `&mut self` to allow for the accumulator to build
+    /// arrow compatible internal state that can be returned without copying
+    /// when possible (for example distinct strings)
+    fn evaluate(&mut self) -> Result<ScalarValue>;
 
     /// Returns the allocated size required for this accumulator, in
     /// bytes, including `Self`.
@@ -72,7 +82,15 @@ pub trait Accumulator: Send + Sync + Debug {
     /// the `capacity` should be used not the `len`.
     fn size(&self) -> usize;
 
-    /// Returns the intermediate state of the accumulator.
+    /// Returns the intermediate state of the accumulator, consuming the
+    /// intermediate state.
+    ///
+    /// After this call, the accumulator's internal state should be
+    /// equivalent to when it was first created.
+    ///
+    /// This function gets `&mut self` to allow for the accumulator to build
+    /// arrow compatible internal state that can be returned without copying
+    /// when possible (for example distinct strings).
     ///
     /// Intermediate state is used for "multi-phase" grouping in
     /// DataFusion, where an aggregate is computed in parallel with
@@ -129,7 +147,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
     /// planning time (e.g. for `MEDIAN`)
-    fn state(&self) -> Result<Vec<ScalarValue>>;
+    fn state(&mut self) -> Result<Vec<ScalarValue>>;
 
     /// Updates the accumulator's state from an `Array` containing one
     /// or more intermediate values.

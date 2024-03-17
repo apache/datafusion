@@ -44,9 +44,10 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
+use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter, PhysicalSortExpr,
+    AggregateExpr, GroupsAccumulatorAdapter, PhysicalSortExpr,
 };
 
 use futures::ready;
@@ -340,6 +341,7 @@ impl GroupedHashAggregateStream {
             .with_can_spill(true)
             .register(context.memory_pool());
         let (ordering, _) = agg
+            .properties()
             .equivalence_properties()
             .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(

@@ -53,7 +53,7 @@ jobs:
           rust-version: stable
 
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -76,6 +76,24 @@ jobs:
 
       - name: Check workspace with all features
         run: cargo check --workspace --benches --features avro,json
+
+      # Ensure that the datafusion crate can be built with only a subset of the function
+      # packages enabled.
+      - name: Check function packages (array_expressions)
+        run: cargo check --no-default-features --features=array_expressions -p datafusion
+
+      - name: Check function packages (datetime_expressions)
+        run: cargo check --no-default-features --features=datetime_expressions -p datafusion
+
+      - name: Check function packages (encoding_expressions)
+        run: cargo check --no-default-features --features=encoding_expressions -p datafusion
+
+      - name: Check function packages (math_expressions)
+        run: cargo check --no-default-features --features=math_expressions -p datafusion
+
+      - name: Check function packages (regex_expressions)
+        run: cargo check --no-default-features --features=regex_expressions -p datafusion
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
@@ -302,6 +320,22 @@ jobs:
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features  
 
+  macos-aarch64:
+    name: cargo test (macos-aarch64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-macos-aarch64-builder
+      - name: Run tests (excluding doctests)
+        shell: bash
+        run: |
+          cargo test --lib --tests --bins --features avro,json,backtrace
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
+
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: [ linux-build-lib ]
@@ -383,7 +417,7 @@ jobs:
   #         rustup default stable
   #         rustup component add rustfmt clippy
   #     - name: Cache Cargo
-  #       uses: actions/cache@v3
+  #       uses: actions/cache@v4
   #       with:
   #         path: /home/runner/.cargo
   #         # this key is not equal because the user is different than on a container (runner vs github)
@@ -452,16 +486,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install cargo-tomlfmt
-        run: which cargo-tomlfmt || cargo install cargo-tomlfmt
-
+      - name: Install taplo
+        run: cargo +stable install taplo-cli --version ^0.9 --locked
+      # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
-        run: |
-          # if you encounter an error, try running 'cargo tomlfmt -p path/to/Cargo.toml' to fix the formatting automatically.
-          # If the error still persists, you need to manually edit the Cargo.toml file, which introduces formatting violation.
-          #
-          # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
-          ci/scripts/rust_toml_fmt.sh
+        run: taplo format --check
 
   config-docs-check:
     name: check configs.md is up-to-date
@@ -486,9 +515,13 @@ jobs:
           ./dev/update_config_docs.sh
           git diff --exit-code
 
-  # Verify MSRV for the crates which are directly used by other projects.
+  # Verify MSRV for the crates which are directly used by other projects:
+  # - datafusion
+  # - datafusion-substrait
+  # - datafusion-proto
+  # - datafusion-cli
   msrv:
-    name: Verify MSRV
+    name: Verify MSRV (Min Supported Rust Version)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -500,7 +533,13 @@ jobs:
         run: cargo install cargo-msrv
       - name: Check datafusion
         working-directory: datafusion/core
-        run: cargo msrv verify
+        run: |
+          # If you encounter an error with any of the commands below
+          # it means some crate in your dependency tree has a higher 
+          # MSRV (Min Supported Rust Version) than the one specified 
+          # in the `rust-version` key of `Cargo.toml`. Check your 
+          # dependencies or update the version in `Cargo.toml`
+          cargo msrv verify
       - name: Check datafusion-substrait
         working-directory: datafusion/substrait
         run: cargo msrv verify

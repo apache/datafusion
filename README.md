@@ -19,7 +19,26 @@
 
 # DataFusion
 
-<img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
+[![Crates.io][crates-badge]][crates-url]
+[![Apache licensed][license-badge]][license-url]
+[![Build Status][actions-badge]][actions-url]
+[![Discord chat][discord-badge]][discord-url]
+
+[crates-badge]: https://img.shields.io/crates/v/datafusion.svg
+[crates-url]: https://crates.io/crates/datafusion
+[license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
+[license-url]: https://github.com/apache/arrow-datafusion/blob/main/LICENSE.txt
+[actions-badge]: https://github.com/apache/arrow-datafusion/actions/workflows/rust.yml/badge.svg
+[actions-url]: https://github.com/apache/arrow-datafusion/actions?query=branch%3Amain
+[discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
+[discord-url]: https://discord.com/invite/Qw5gKqHxUM
+
+[Website](https://github.com/apache/arrow-datafusion) |
+[Guides](https://github.com/apache/arrow-datafusion/tree/main/docs) |
+[API Docs](https://docs.rs/datafusion/latest/datafusion/) |
+[Chat](https://discord.com/channels/885562378132000778/885562378132000781)
+
+<img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
@@ -43,9 +62,9 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 ## Contributing to DataFusion
 
-Please see the [developer’s guide] for contributing and [communication] for getting in touch with us.
+Please see the [contributor guide] and [communication] pages for more information.
 
-[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
+[contributor guide]: https://arrow.apache.org/datafusion/contributor-guide
 [communication]: https://arrow.apache.org/datafusion/contributor-guide/communication.html
 
 ## Crate features
@@ -56,12 +75,15 @@ This crate has several [features] which can be specified in your `Cargo.toml`.
 
 Default features:
 
+- `array_expressions`: functions for working with arrays such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
+- `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
+- `unparser` : enables support to reverse LogicalPlans back into SQL
 
 Optional features:
 
@@ -69,11 +91,10 @@ Optional features:
 - `backtrace`: include backtrace information in error messages
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
-- `simd`: enable arrow-rs's manual `SIMD` kernels (requires Rust `nightly`)
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
 
 ## Rust Version Compatibility
 
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+Datafusion crate is tested with the [minimum required stable Rust version](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

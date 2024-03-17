@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::Operator;
 use sqlparser::ast::BinaryOperator;
 
@@ -40,6 +40,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
+            BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
+            BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
+            BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
             BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),

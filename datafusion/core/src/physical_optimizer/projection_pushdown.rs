@@ -39,15 +39,18 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::{Distribution, ExecutionPlan};
+use crate::physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::JoinSide;
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{DataFusionError, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -72,7 +75,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&remove_unnecessary_projections)
+        plan.transform_down(&remove_unnecessary_projections).data()
     }
 
     fn name(&self) -> &str {
@@ -97,7 +100,7 @@ pub fn remove_unnecessary_projections(
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
-            return Ok(Transformed::Yes(projection.input().clone()));
+            return Ok(Transformed::yes(projection.input().clone()));
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
@@ -110,8 +113,10 @@ pub fn remove_unnecessary_projections(
             return if let Some(new_plan) = maybe_unified {
                 // To unify 3 or more sequential projections:
                 remove_unnecessary_projections(new_plan)
+                    .data()
+                    .map(Transformed::yes)
             } else {
-                Ok(Transformed::No(plan))
+                Ok(Transformed::no(plan))
             };
         } else if let Some(output_req) = input.downcast_ref::<OutputRequirementExec>() {
             try_swapping_with_output_req(projection, output_req)?
@@ -128,7 +133,10 @@ pub fn remove_unnecessary_projections(
         } else if let Some(union) = input.downcast_ref::<UnionExec>() {
             try_pushdown_through_union(projection, union)?
         } else if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
-            try_pushdown_through_hash_join(projection, hash_join)?
+            try_pushdown_through_hash_join(projection, hash_join)?.map_or_else(
+                || try_embed_to_hash_join(projection, hash_join),
+                |e| Ok(Some(e)),
+            )?
         } else if let Some(cross_join) = input.downcast_ref::<CrossJoinExec>() {
             try_swapping_with_cross_join(projection, cross_join)?
         } else if let Some(nl_join) = input.downcast_ref::<NestedLoopJoinExec>() {
@@ -147,10 +155,10 @@ pub fn remove_unnecessary_projections(
             None
         }
     } else {
-        return Ok(Transformed::No(plan));
+        return Ok(Transformed::no(plan));
     };
 
-    Ok(maybe_modified.map_or(Transformed::No(plan), Transformed::Yes))
+    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
 }
 
 /// Tries to embed `projection` to its input (`csv`). If possible, returns
@@ -163,8 +171,12 @@ fn try_swapping_with_csv(
     // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
         let mut file_scan = csv.base_config().clone();
-        let new_projections =
-            new_projections_for_columns(projection, &file_scan.projection);
+        let new_projections = new_projections_for_columns(
+            projection,
+            &file_scan
+                .projection
+                .unwrap_or((0..csv.schema().fields().len()).collect()),
+        );
         file_scan.projection = Some(new_projections);
 
         Arc::new(CsvExec::new(
@@ -188,8 +200,11 @@ fn try_swapping_with_memory(
     // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr())
         .then(|| {
-            let new_projections =
-                new_projections_for_columns(projection, memory.projection());
+            let all_projections = (0..memory.schema().fields().len()).collect();
+            let new_projections = new_projections_for_columns(
+                projection,
+                memory.projection().as_ref().unwrap_or(&all_projections),
+            );
 
             MemoryExec::try_new(
                 memory.partitions(),
@@ -216,8 +231,11 @@ fn try_swapping_with_streaming_table(
         .projection()
         .as_ref()
         .map(|i| i.as_ref().to_vec());
-    let new_projections =
-        new_projections_for_columns(projection, &streaming_table_projections);
+    let new_projections = new_projections_for_columns(
+        projection,
+        &streaming_table_projections
+            .unwrap_or((0..streaming_table.schema().fields().len()).collect()),
+    );
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
@@ -238,7 +256,7 @@ fn try_swapping_with_streaming_table(
     StreamingTableExec::try_new(
         streaming_table.partition_schema().clone(),
         streaming_table.partitions().clone(),
-        Some(&new_projections),
+        Some(new_projections.as_ref()),
         lex_orderings,
         streaming_table.is_infinite(),
     )
@@ -260,7 +278,7 @@ fn try_unifying_projections(
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     *column_ref_map.entry(column.clone()).or_default() += 1;
                 }
-                VisitRecursion::Continue
+                TreeNodeRecursion::Continue
             })
         })
         .unwrap();
@@ -466,7 +484,7 @@ fn try_swapping_with_sort_preserving_merge(
     projection: &ProjectionExec,
     spm: &SortPreservingMergeExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -513,6 +531,77 @@ fn try_pushdown_through_union(
     Ok(Some(Arc::new(UnionExec::new(new_children))))
 }
 
+/// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
+/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
+fn try_embed_to_hash_join(
+    projection: &ProjectionExec,
+    hash_join: &HashJoinExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // Collect all column indices from the given projection expressions.
+    let projection_index = collect_column_indices(projection.expr());
+
+    if projection_index.is_empty() {
+        return Ok(None);
+    };
+
+    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
+    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of hash_join schema fields.
+    if projection_index.len() == projection_index.last().unwrap() + 1
+        && projection_index.len() == hash_join.schema().fields().len()
+    {
+        return Ok(None);
+    }
+
+    let new_hash_join =
+        Arc::new(hash_join.with_projection(Some(projection_index.to_vec()))?);
+
+    // Build projection expressions for update_expr. Zip the projection_index with the new_hash_join output schema fields.
+    let embed_project_exprs = projection_index
+        .iter()
+        .zip(new_hash_join.schema().fields())
+        .map(|(index, field)| {
+            (
+                Arc::new(Column::new(field.name(), *index)) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut new_projection_exprs = Vec::with_capacity(projection.expr().len());
+
+    for (expr, alias) in projection.expr() {
+        // update column index for projection expression since the input schema has been changed.
+        let Some(expr) = update_expr(expr, embed_project_exprs.as_slice(), false)? else {
+            return Ok(None);
+        };
+        new_projection_exprs.push((expr, alias.clone()));
+    }
+    // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
+    let new_projection = Arc::new(ProjectionExec::try_new(
+        new_projection_exprs,
+        new_hash_join.clone(),
+    )?);
+    if is_projection_removable(&new_projection) {
+        Ok(Some(new_hash_join))
+    } else {
+        Ok(Some(new_projection))
+    }
+}
+
+/// Collect all column indices from the given projection expressions.
+fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
+    // Collect indices and remove duplicates.
+    let mut indexs = exprs
+        .iter()
+        .flat_map(|(expr, _)| collect_columns(expr))
+        .map(|x| x.index())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    indexs.sort();
+    indexs
+}
+
 /// Tries to push `projection` down through `hash_join`. If possible, performs the
 /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
 /// as its children. Otherwise, returns `None`.
@@ -520,6 +609,11 @@ fn try_pushdown_through_hash_join(
     projection: &ProjectionExec,
     hash_join: &HashJoinExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+    if hash_join.contain_projection() {
+        return Ok(None);
+    }
+
     // Convert projected expressions to columns. We can not proceed if this is
     // not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
@@ -577,6 +671,7 @@ fn try_pushdown_through_hash_join(
         new_on,
         new_filter,
         hash_join.join_type(),
+        hash_join.projection.clone(),
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
     )?)))
@@ -725,6 +820,7 @@ fn try_swapping_with_sort_merge_join(
         Arc::new(new_left),
         Arc::new(new_right),
         new_on,
+        sm_join.filter.clone(),
         sm_join.join_type,
         sm_join.sort_options.clone(),
         sm_join.null_equals_null,
@@ -801,20 +897,18 @@ fn try_swapping_with_sym_hash_join(
     )?)))
 }
 
-/// Compare the inputs and outputs of the projection. If the projection causes
-/// any change in the fields, it returns `false`.
+/// Compare the inputs and outputs of the projection. All expressions must be
+/// columns without alias, and projection does not change the order of fields.
+/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
+/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
-    all_alias_free_columns(projection.expr()) && {
-        let schema = projection.schema();
-        let input_schema = projection.input().schema();
-        let fields = schema.fields();
-        let input_fields = input_schema.fields();
-        fields.len() == input_fields.len()
-            && fields
-                .iter()
-                .zip(input_fields.iter())
-                .all(|(out, input)| out.eq(input))
-    }
+    let exprs = projection.expr();
+    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
+        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        col.name() == alias && col.index() == idx
+    }) && exprs.len() == projection.input().schema().fields().len()
 }
 
 /// Given the expression set of a projection, checks if the projection causes
@@ -833,7 +927,7 @@ fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
 /// ensure that all expressions are `Column` expressions without aliases.
 fn new_projections_for_columns(
     projection: &ProjectionExec,
-    source: &Option<Vec<usize>>,
+    source: &[usize],
 ) -> Vec<usize> {
     projection
         .expr()
@@ -841,7 +935,7 @@ fn new_projections_for_columns(
         .filter_map(|(expr, _)| {
             expr.as_any()
                 .downcast_ref::<Column>()
-                .and_then(|expr| source.as_ref().map(|proj| proj[expr.index()]))
+                .map(|expr| source[expr.index()])
         })
         .collect()
 }
@@ -885,16 +979,16 @@ fn update_expr(
         .clone()
         .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
-                return Ok(Transformed::No(expr));
+                return Ok(Transformed::no(expr));
             }
 
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
-                return Ok(Transformed::No(expr));
+                return Ok(Transformed::no(expr));
             };
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
+                Ok(Transformed::yes(projected_exprs[column.index()].0.clone()))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
@@ -905,7 +999,9 @@ fn update_expr(
                     .find_map(|(index, (projected_expr, alias))| {
                         projected_expr.as_any().downcast_ref::<Column>().and_then(
                             |projected_column| {
-                                column.name().eq(projected_column.name()).then(|| {
+                                (column.name().eq(projected_column.name())
+                                    && column.index() == projected_column.index())
+                                .then(|| {
                                     state = RewriteState::RewrittenValid;
                                     Arc::new(Column::new(alias, index)) as _
                                 })
@@ -913,11 +1009,12 @@ fn update_expr(
                         )
                     })
                     .map_or_else(
-                        || Ok(Transformed::No(expr)),
-                        |c| Ok(Transformed::Yes(c)),
+                        || Ok(Transformed::no(expr)),
+                        |c| Ok(Transformed::yes(c)),
                     )
             }
-        });
+        })
+        .data();
 
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
@@ -990,8 +1087,8 @@ fn join_table_borders(
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
-    hash_join_on: &[(Column, Column)],
-) -> Option<Vec<(Column, Column)>> {
+    hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
     // TODO: Clippy wants the "map" call removed, but doing so generates
     //       a compilation error. Remove the clippy directive once this
     //       issue is fixed.
@@ -1014,17 +1111,42 @@ fn update_join_on(
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
 fn new_columns_for_join_on(
-    hash_join_on: &[&Column],
+    hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
-) -> Option<Vec<Column>> {
+) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
         .filter_map(|on| {
-            projection_exprs
-                .iter()
-                .enumerate()
-                .find(|(_, (proj_column, _))| on.name() == proj_column.name())
-                .map(|(index, (_, alias))| Column::new(alias, index))
+            // Rewrite all columns in `on`
+            (*on)
+                .clone()
+                .transform(&|expr| {
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        // Find the column in the projection expressions
+                        let new_column = projection_exprs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (proj_column, _))| {
+                                column.name() == proj_column.name()
+                            })
+                            .map(|(index, (_, alias))| Column::new(alias, index));
+                        if let Some(new_column) = new_column {
+                            Ok(Transformed::yes(Arc::new(new_column)))
+                        } else {
+                            // If the column is not found in the projection expressions,
+                            // it means that the column is not projected. In this case,
+                            // we cannot push the projection down.
+                            Err(DataFusionError::Internal(format!(
+                                "Column {:?} not found in projection expressions",
+                                column
+                            )))
+                        }
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })
+                .data()
+                .ok()
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
@@ -1164,6 +1286,7 @@ fn new_join_children(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::Arc;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -1198,7 +1321,9 @@ mod tests {
         Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
         PhysicalSortRequirement, ScalarFunctionExpr,
     };
-    use datafusion_physical_plan::joins::SymmetricHashJoinExec;
+    use datafusion_physical_plan::joins::{
+        HashJoinExec, PartitionMode, SymmetricHashJoinExec,
+    };
     use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion_physical_plan::union::UnionExec;
 
@@ -1235,6 +1360,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1301,6 +1427,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 3))),
@@ -1370,6 +1497,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d", 2))),
@@ -1399,12 +1527,12 @@ mod tests {
             )?),
         ];
         let projected_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
-            (Arc::new(Column::new("a", 0)), "a".to_owned()),
+            (Arc::new(Column::new("a", 3)), "a".to_owned()),
             (Arc::new(Column::new("b", 1)), "b_new".to_owned()),
-            (Arc::new(Column::new("c", 2)), "c".to_owned()),
-            (Arc::new(Column::new("d", 3)), "d_new".to_owned()),
-            (Arc::new(Column::new("e", 4)), "e".to_owned()),
-            (Arc::new(Column::new("f", 5)), "f_new".to_owned()),
+            (Arc::new(Column::new("c", 0)), "c".to_owned()),
+            (Arc::new(Column::new("d", 2)), "d_new".to_owned()),
+            (Arc::new(Column::new("e", 5)), "e".to_owned()),
+            (Arc::new(Column::new("f", 4)), "f_new".to_owned()),
         ];
 
         let expected_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -1436,6 +1564,7 @@ mod tests {
                 ],
                 DataType::Int32,
                 None,
+                false,
             )),
             Arc::new(CaseExpr::try_new(
                 Some(Arc::new(Column::new("d_new", 3))),
@@ -2008,7 +2137,7 @@ mod tests {
         let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
             left_csv,
             right_csv,
-            vec![(Column::new("b", 1), Column::new("c", 2))],
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
             // b_left-(1+a_right)<=a_right+c_left
             Some(JoinFilter::new(
                 Arc::new(BinaryExpr::new(
@@ -2110,6 +2239,210 @@ mod tests {
                 .unwrap()
                 .column_indices()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_after_required_projection() -> Result<()> {
+        let left_csv = create_simple_csv_exec();
+        let right_csv = create_simple_csv_exec();
+
+        let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
+            left_csv,
+            right_csv,
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
+            // b_left-(1+a_right)<=a_right+c_left
+            Some(JoinFilter::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b_left_inter", 0)),
+                        Operator::Minus,
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                            Operator::Plus,
+                            Arc::new(Column::new("a_right_inter", 1)),
+                        )),
+                    )),
+                    Operator::LtEq,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a_right_inter", 1)),
+                        Operator::Plus,
+                        Arc::new(Column::new("c_left_inter", 2)),
+                    )),
+                )),
+                vec![
+                    ColumnIndex {
+                        index: 1,
+                        side: JoinSide::Left,
+                    },
+                    ColumnIndex {
+                        index: 0,
+                        side: JoinSide::Right,
+                    },
+                    ColumnIndex {
+                        index: 2,
+                        side: JoinSide::Left,
+                    },
+                ],
+                Schema::new(vec![
+                    Field::new("b_left_inter", DataType::Int32, true),
+                    Field::new("a_right_inter", DataType::Int32, true),
+                    Field::new("c_left_inter", DataType::Int32, true),
+                ]),
+            )),
+            &JoinType::Inner,
+            true,
+            None,
+            None,
+            StreamJoinPartitionMode::SinglePartition,
+        )?);
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![
+                (Arc::new(Column::new("a", 5)), "a".to_string()),
+                (Arc::new(Column::new("b", 6)), "b".to_string()),
+                (Arc::new(Column::new("c", 7)), "c".to_string()),
+                (Arc::new(Column::new("d", 8)), "d".to_string()),
+                (Arc::new(Column::new("e", 9)), "e".to_string()),
+                (Arc::new(Column::new("a", 0)), "a".to_string()),
+                (Arc::new(Column::new("b", 1)), "b".to_string()),
+                (Arc::new(Column::new("c", 2)), "c".to_string()),
+                (Arc::new(Column::new("d", 3)), "d".to_string()),
+                (Arc::new(Column::new("e", 4)), "e".to_string()),
+            ],
+            join,
+        )?);
+        let initial = get_plan_string(&projection);
+        let expected_initial = [
+            "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]", 
+            "  SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", 
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", 
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+        let expected = [
+            "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]", 
+            "  SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", 
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", 
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_column_indices() -> Result<()> {
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 7)),
+            Operator::Minus,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Operator::Plus,
+                Arc::new(Column::new("a", 1)),
+            )),
+        ));
+        let column_indices = collect_column_indices(&[(expr, "b-(1+a)".to_string())]);
+        assert_eq!(column_indices, vec![1, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_after_projection() -> Result<()> {
+        // sql like
+        // SELECT t1.c as c_from_left, t1.b as b_from_left, t1.a as a_from_left, t2.c as c_from_right FROM t1 JOIN t2 ON t1.b = t2.c WHERE t1.b - (1 + t2.a) <= t2.a + t1.c
+        let left_csv = create_simple_csv_exec();
+        let right_csv = create_simple_csv_exec();
+
+        let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+            left_csv,
+            right_csv,
+            vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
+            // b_left-(1+a_right)<=a_right+c_left
+            Some(JoinFilter::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b_left_inter", 0)),
+                        Operator::Minus,
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                            Operator::Plus,
+                            Arc::new(Column::new("a_right_inter", 1)),
+                        )),
+                    )),
+                    Operator::LtEq,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a_right_inter", 1)),
+                        Operator::Plus,
+                        Arc::new(Column::new("c_left_inter", 2)),
+                    )),
+                )),
+                vec![
+                    ColumnIndex {
+                        index: 1,
+                        side: JoinSide::Left,
+                    },
+                    ColumnIndex {
+                        index: 0,
+                        side: JoinSide::Right,
+                    },
+                    ColumnIndex {
+                        index: 2,
+                        side: JoinSide::Left,
+                    },
+                ],
+                Schema::new(vec![
+                    Field::new("b_left_inter", DataType::Int32, true),
+                    Field::new("a_right_inter", DataType::Int32, true),
+                    Field::new("c_left_inter", DataType::Int32, true),
+                ]),
+            )),
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            true,
+        )?);
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![
+                (Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
+                (Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
+                (Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
+                (Arc::new(Column::new("c", 7)), "c_from_right".to_string()),
+            ],
+            join.clone(),
+        )?);
+        let initial = get_plan_string(&projection);
+        let expected_initial = [
+			"ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@7 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+        // HashJoinExec only returns result after projection. Because there are some alias columns in the projection, the ProjectionExec is not removed.
+        let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![
+                (Arc::new(Column::new("a", 0)), "a".to_string()),
+                (Arc::new(Column::new("b", 1)), "b".to_string()),
+                (Arc::new(Column::new("c", 2)), "c".to_string()),
+                (Arc::new(Column::new("c", 7)), "c".to_string()),
+            ],
+            join.clone(),
+        )?);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+        // Comparing to the previous result, this projection don't have alias columns either change the order of output fields. So the ProjectionExec is removed.
+        let expected = ["HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
+        assert_eq!(get_plan_string(&after_optimize), expected);
 
         Ok(())
     }

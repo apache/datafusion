@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
-use std::ops::IndexMut;
+use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
@@ -35,17 +35,20 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::merge_vectors;
+use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -136,6 +139,53 @@ impl JoinHashMap {
     }
 }
 
+// Type of offsets for obtaining indices from JoinHashMap.
+pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
+
+// Macro for traversing chained values with limit.
+// Early returns in case of reacing output tuples limit.
+macro_rules! chain_traverse {
+    (
+        $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
+        $input_idx:ident, $chain_idx:ident, $deleted_offset:ident, $remaining_output:ident
+    ) => {
+        let mut i = $chain_idx - 1;
+        loop {
+            let match_row_idx = if let Some(offset) = $deleted_offset {
+                // This arguments means that we prune the next index way before here.
+                if i < offset as u64 {
+                    // End of the list due to pruning
+                    break;
+                }
+                i - offset as u64
+            } else {
+                i
+            };
+            $match_indices.append(match_row_idx);
+            $input_indices.append($input_idx as u32);
+            $remaining_output -= 1;
+            // Follow the chain to get the next index value
+            let next = $next_chain[match_row_idx as usize];
+
+            if $remaining_output == 0 {
+                // In case current input index is the last, and no more chain values left
+                // returning None as whole input has been scanned
+                let next_offset = if $input_idx == $hash_values.len() - 1 && next == 0 {
+                    None
+                } else {
+                    Some(($input_idx, Some(next)))
+                };
+                return ($input_indices, $match_indices, next_offset);
+            }
+            if next == 0 {
+                // end of list
+                break;
+            }
+            i = next - 1;
+        }
+    };
+}
+
 // Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
     /// The type of list used to store the next list
@@ -224,6 +274,78 @@ pub trait JoinHashMapType {
 
         (input_indices, match_indices)
     }
+
+    /// Matches hashes with taking limit and offset into account.
+    /// Returns pairs of matched indices along with the starting point for next
+    /// matching iteration (`None` if limit has not been reached).
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        deleted_offset: Option<usize>,
+        limit: usize,
+        offset: JoinHashMapOffset,
+    ) -> (
+        UInt32BufferBuilder,
+        UInt64BufferBuilder,
+        Option<JoinHashMapOffset>,
+    ) {
+        let mut input_indices = UInt32BufferBuilder::new(0);
+        let mut match_indices = UInt64BufferBuilder::new(0);
+
+        let mut remaining_output = limit;
+
+        let hash_map: &RawTable<(u64, u64)> = self.get_map();
+        let next_chain = self.get_list();
+
+        // Calculate initial `hash_values` index before iterating
+        let to_skip = match offset {
+            // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
+            (initial_idx, None) => initial_idx,
+            // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
+            // previous iteration, and it should be skipped
+            (initial_idx, Some(0)) => initial_idx + 1,
+            // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+            // to start with the next index
+            (initial_idx, Some(initial_next_idx)) => {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    initial_idx,
+                    initial_next_idx,
+                    deleted_offset,
+                    remaining_output
+                );
+
+                initial_idx + 1
+            }
+        };
+
+        let mut row_idx = to_skip;
+        for hash_value in &hash_values[to_skip..] {
+            if let Some((_, index)) =
+                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                chain_traverse!(
+                    input_indices,
+                    match_indices,
+                    hash_values,
+                    next_chain,
+                    row_idx,
+                    index,
+                    deleted_offset,
+                    remaining_output
+                );
+            }
+            row_idx += 1;
+        }
+
+        (input_indices, match_indices, None)
+    }
 }
 
 /// Implementation of `JoinHashMapType` for `JoinHashMap`.
@@ -256,9 +378,9 @@ impl fmt::Debug for JoinHashMap {
 }
 
 /// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(Column, Column)>;
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(Column, Column)];
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -284,12 +406,18 @@ pub fn check_join_is_valid(left: &Schema, right: &Schema, on: JoinOnRef) -> Resu
 fn check_join_set_is_valid(
     left: &HashSet<Column>,
     right: &HashSet<Column>,
-    on: &[(Column, Column)],
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
 ) -> Result<()> {
-    let on_left = &on.iter().map(|on| on.0.clone()).collect::<HashSet<_>>();
+    let on_left = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.0))
+        .collect::<HashSet<_>>();
     let left_missing = on_left.difference(left).collect::<HashSet<_>>();
 
-    let on_right = &on.iter().map(|on| on.1.clone()).collect::<HashSet<_>>();
+    let on_right = &on
+        .iter()
+        .flat_map(|on| collect_columns(&on.1))
+        .collect::<HashSet<_>>();
     let right_missing = on_right.difference(right).collect::<HashSet<_>>();
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
@@ -304,15 +432,15 @@ fn check_join_set_is_valid(
 /// Calculate the OutputPartitioning for Partitioned Join
 pub fn partitioned_join_output_partitioning(
     join_type: JoinType,
-    left_partitioning: Partitioning,
-    right_partitioning: Partitioning,
+    left_partitioning: &Partitioning,
+    right_partitioning: &Partitioning,
     left_columns_len: usize,
 ) -> Partitioning {
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            left_partitioning
+            left_partitioning.clone()
         }
-        JoinType::RightSemi | JoinType::RightAnti => right_partitioning,
+        JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
         JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)
         }
@@ -324,41 +452,62 @@ pub fn partitioned_join_output_partitioning(
 
 /// Adjust the right out partitioning to new Column Index
 pub fn adjust_right_output_partitioning(
-    right_partitioning: Partitioning,
+    right_partitioning: &Partitioning,
     left_columns_len: usize,
 ) -> Partitioning {
     match right_partitioning {
-        Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(size),
-        Partitioning::UnknownPartitioning(size) => {
-            Partitioning::UnknownPartitioning(size)
-        }
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
-                .into_iter()
-                .map(|expr| add_offset_to_expr(expr, left_columns_len))
+                .iter()
+                .map(|expr| add_offset_to_expr(expr.clone(), left_columns_len))
                 .collect();
-            Partitioning::Hash(new_exprs, size)
+            Partitioning::Hash(new_exprs, *size)
         }
+        result => result.clone(),
     }
 }
 
 /// Replaces the right column (first index in the `on_column` tuple) with
 /// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     right_ordering: &mut [PhysicalSortExpr],
-    left_columns_len: usize,
-) {
+) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        let right_col =
-            Column::new(right_col.name(), right_col.index() + left_columns_len);
         for item in right_ordering.iter_mut() {
-            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
-                if right_col.eq(col) {
-                    item.expr = Arc::new(left_col.clone()) as _;
-                }
-            }
+            let new_expr = item
+                .expr
+                .clone()
+                .transform(&|e| {
+                    if e.eq(right_col) {
+                        Ok(Transformed::yes(left_col.clone()))
+                    } else {
+                        Ok(Transformed::no(e))
+                    }
+                })
+                .data()?;
+            item.expr = new_expr;
         }
+    }
+    Ok(())
+}
+
+fn offset_ordering(
+    ordering: LexOrderingRef,
+    join_type: &JoinType,
+    offset: usize,
+) -> Vec<PhysicalSortExpr> {
+    match join_type {
+        // In the case below, right ordering should be offseted with the left
+        // side length, since we append the right table to the left table.
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
+            .iter()
+            .map(|sort_expr| PhysicalSortExpr {
+                expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
+                options: sort_expr.options,
+            })
+            .collect(),
+        _ => ordering.to_vec(),
     }
 }
 
@@ -367,35 +516,24 @@ pub fn calculate_join_output_ordering(
     left_ordering: LexOrderingRef,
     right_ordering: LexOrderingRef,
     join_type: JoinType,
-    on_columns: &[(Column, Column)],
+    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Option<LexOrdering> {
-    let mut right_ordering = match join_type {
-        // In the case below, right ordering should be offseted with the left
-        // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            right_ordering
-                .iter()
-                .map(|sort_expr| PhysicalSortExpr {
-                    expr: add_offset_to_expr(sort_expr.expr.clone(), left_columns_len),
-                    options: sort_expr.options,
-                })
-                .collect()
-        }
-        _ => right_ordering.to_vec(),
-    };
     let output_ordering = match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(left_ordering, &right_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    left_ordering,
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                )
             } else {
                 left_ordering.to_vec()
             }
@@ -405,12 +543,15 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering,
-                    left_columns_len,
-                );
-                merge_vectors(&right_ordering, left_ordering)
+                    &mut right_ordering.to_vec(),
+                )
+                .ok()?;
+                merge_vectors(
+                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    left_ordering,
+                )
             } else {
-                right_ordering.to_vec()
+                offset_ordering(right_ordering, &join_type, left_columns_len)
             }
         }
         // Doesn't maintain ordering, output ordering is None.
@@ -689,10 +830,19 @@ fn estimate_join_cardinality(
             let (left_col_stats, right_col_stats) = on
                 .iter()
                 .map(|(left, right)| {
-                    (
-                        left_stats.column_statistics[left.index()].clone(),
-                        right_stats.column_statistics[right.index()].clone(),
-                    )
+                    match (
+                        left.as_any().downcast_ref::<Column>(),
+                        right.as_any().downcast_ref::<Column>(),
+                    ) {
+                        (Some(left), Some(right)) => (
+                            left_stats.column_statistics[left.index()].clone(),
+                            right_stats.column_statistics[right.index()].clone(),
+                        ),
+                        _ => (
+                            ColumnStatistics::new_unknown(),
+                            ColumnStatistics::new_unknown(),
+                        ),
+                    }
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
@@ -834,7 +984,12 @@ fn max_distinct_count(
             let result = match num_rows {
                 Precision::Absent => Precision::Absent,
                 Precision::Inexact(count) => {
-                    Precision::Inexact(count - stats.null_count.get_value().unwrap_or(&0))
+                    // To safeguard against inexact number of rows (e.g. 0) being smaller than
+                    // an exact null count we need to do a checked subtraction.
+                    match count.checked_sub(*stats.null_count.get_value().unwrap_or(&0)) {
+                        None => Precision::Inexact(0),
+                        Some(non_null_count) => Precision::Inexact(non_null_count),
+                    }
                 }
                 Precision::Exact(count) => {
                     let count = count - stats.null_count.get_value().unwrap_or(&0);
@@ -1079,7 +1234,7 @@ pub(crate) fn build_batch_from_indices(
 pub(crate) fn adjust_indices_by_join_type(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    count_right_batch: usize,
+    adjust_range: Range<usize>,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
@@ -1095,21 +1250,20 @@ pub(crate) fn adjust_indices_by_join_type(
         JoinType::Right | JoinType::Full => {
             // matched
             // unmatched right row will be produced in this batch
-            let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
+            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
             (left_indices, right_indices)
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
             (left_indices, right_indices)
         }
@@ -1151,72 +1305,62 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns `range` indices which are not present in `input_indices`
+pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
+
+    let offset = range.start;
 
     // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
+    (range)
+        .filter_map(|idx| {
+            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+/// Returns intersection of `range` and `input_indices` omitting duplicates
+pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
+    range: Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
 
-    // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_indices(
-    row_count: usize,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+    let offset = range.start;
 
     // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_u64_indices(
-    row_count: usize,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
-
-    // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
-        .collect::<UInt64Array>()
+    (range)
+        .filter_map(|idx| {
+            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
 /// Metrics for build & probe joins
@@ -1358,9 +1502,14 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_schema::SortOptions;
 
+    use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
-    fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
+    fn check(
+        left: &[Column],
+        right: &[Column],
+        on: &[(PhysicalExprRef, PhysicalExprRef)],
+    ) -> Result<()> {
         let left = left
             .iter()
             .map(|x| x.to_owned())
@@ -1376,7 +1525,10 @@ mod tests {
     fn check_valid() -> Result<()> {
         let left = vec![Column::new("a", 0), Column::new("b1", 1)];
         let right = vec![Column::new("a", 0), Column::new("b2", 1)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         check(&left, &right, on)?;
         Ok(())
@@ -1386,7 +1538,10 @@ mod tests {
     fn check_not_in_right() {
         let left = vec![Column::new("a", 0), Column::new("b", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1428,7 +1583,10 @@ mod tests {
     fn check_not_in_left() {
         let left = vec![Column::new("b", 0)];
         let right = vec![Column::new("a", 0)];
-        let on = &[(Column::new("a", 0), Column::new("a", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("a", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_err());
     }
@@ -1438,7 +1596,10 @@ mod tests {
         // column "a" would appear both in left and right
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("a", 0), Column::new("b", 1)];
-        let on = &[(Column::new("a", 0), Column::new("b", 1))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 1)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1447,7 +1608,10 @@ mod tests {
     fn check_in_right() {
         let left = vec![Column::new("a", 0), Column::new("c", 1)];
         let right = vec![Column::new("b", 0)];
-        let on = &[(Column::new("a", 0), Column::new("b", 0))];
+        let on = &[(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("b", 0)) as _,
+        )];
 
         assert!(check(&left, &right, on).is_ok());
     }
@@ -1525,25 +1689,26 @@ mod tests {
     }
 
     fn create_column_stats(
-        min: Option<i64>,
-        max: Option<i64>,
-        distinct_count: Option<usize>,
+        min: Precision<i64>,
+        max: Precision<i64>,
+        distinct_count: Precision<usize>,
+        null_count: Precision<usize>,
     ) -> ColumnStatistics {
         ColumnStatistics {
-            distinct_count: distinct_count
-                .map(Precision::Inexact)
-                .unwrap_or(Precision::Absent),
-            min_value: min
-                .map(|size| Precision::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Precision::Absent),
-            max_value: max
-                .map(|size| Precision::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Precision::Absent),
-            ..Default::default()
+            distinct_count,
+            min_value: min.map(ScalarValue::from),
+            max_value: max.map(ScalarValue::from),
+            null_count,
         }
     }
 
-    type PartialStats = (usize, Option<i64>, Option<i64>, Option<usize>);
+    type PartialStats = (
+        usize,
+        Precision<i64>,
+        Precision<i64>,
+        Precision<usize>,
+        Precision<usize>,
+    );
 
     // This is mainly for validating the all edge cases of the estimation, but
     // more advanced (and real world test cases) are below where we need some control
@@ -1560,133 +1725,156 @@ mod tests {
             //
             // distinct(left) == NaN, distinct(right) == NaN
             (
-                (10, Some(1), Some(10), None),
-                (10, Some(1), Some(10), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // range(left) > range(right)
             (
-                (10, Some(6), Some(10), None),
-                (10, Some(8), Some(10), None),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(6), Inexact(10), Absent, Absent),
+                (10, Inexact(8), Inexact(10), Absent, Absent),
+                Some(Inexact(20)),
             ),
             // range(right) > range(left)
             (
-                (10, Some(8), Some(10), None),
-                (10, Some(6), Some(10), None),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(8), Inexact(10), Absent, Absent),
+                (10, Inexact(6), Inexact(10), Absent, Absent),
+                Some(Inexact(20)),
             ),
             // range(left) > len(left), range(right) > len(right)
             (
-                (10, Some(1), Some(15), None),
-                (20, Some(1), Some(40), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(15), Absent, Absent),
+                (20, Inexact(1), Inexact(40), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // When we have distinct count.
             (
-                (10, Some(1), Some(10), Some(10)),
-                (10, Some(1), Some(10), Some(10)),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
-                (10, Some(1), Some(10), Some(5)),
-                (10, Some(1), Some(10), Some(2)),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                Some(Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
-                (10, Some(1), Some(10), Some(2)),
-                (10, Some(1), Some(10), Some(5)),
-                Some(Precision::Inexact(20)),
+                (10, Inexact(1), Inexact(10), Inexact(2), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(5), Absent),
+                Some(Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
             (
-                (10, Some(-5), Some(5), None),
-                (10, Some(1), Some(5), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-5), Inexact(5), Absent, Absent),
+                (10, Inexact(1), Inexact(5), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // min(right) < 0, max(right) < 0 (range(right) > range(left))
             (
-                (10, Some(-25), Some(-20), None),
-                (10, Some(-25), Some(-15), None),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-25), Inexact(-20), Absent, Absent),
+                (10, Inexact(-25), Inexact(-15), Absent, Absent),
+                Some(Inexact(10)),
             ),
             // range(left) < 0, range(right) >= 0
             // (there isn't a case where both left and right ranges are negative
             //  so one of them is always going to work, this just proves negative
             //  ranges with bigger absolute values are not are not accidentally used).
             (
-                (10, Some(-10), Some(0), None),
-                (10, Some(0), Some(10), Some(5)),
-                Some(Precision::Inexact(10)),
+                (10, Inexact(-10), Inexact(0), Absent, Absent),
+                (10, Inexact(0), Inexact(10), Inexact(5), Absent),
+                Some(Inexact(10)),
             ),
             // range(left) = 1, range(right) = 1
             (
-                (10, Some(1), Some(1), None),
-                (10, Some(1), Some(1), None),
-                Some(Precision::Inexact(100)),
+                (10, Inexact(1), Inexact(1), Absent, Absent),
+                (10, Inexact(1), Inexact(1), Absent, Absent),
+                Some(Inexact(100)),
             ),
             //
             // Edge cases
             // ==========
             //
             // No column level stats.
-            ((10, None, None, None), (10, None, None, None), None),
+            (
+                (10, Absent, Absent, Absent, Absent),
+                (10, Absent, Absent, Absent, Absent),
+                None,
+            ),
             // No min or max (or both).
-            ((10, None, None, Some(3)), (10, None, None, Some(3)), None),
             (
-                (10, Some(2), None, Some(3)),
-                (10, None, Some(5), Some(3)),
+                (10, Absent, Absent, Inexact(3), Absent),
+                (10, Absent, Absent, Inexact(3), Absent),
                 None,
             ),
             (
-                (10, None, Some(3), Some(3)),
-                (10, Some(1), None, Some(3)),
+                (10, Inexact(2), Absent, Inexact(3), Absent),
+                (10, Absent, Inexact(5), Inexact(3), Absent),
                 None,
             ),
-            ((10, None, Some(3), None), (10, Some(1), None, None), None),
+            (
+                (10, Absent, Inexact(3), Inexact(3), Absent),
+                (10, Inexact(1), Absent, Inexact(3), Absent),
+                None,
+            ),
+            (
+                (10, Absent, Inexact(3), Absent, Absent),
+                (10, Inexact(1), Absent, Absent, Absent),
+                None,
+            ),
             // Non overlapping min/max (when exact=False).
             (
-                (10, Some(0), Some(10), None),
-                (10, Some(11), Some(20), None),
-                Some(Precision::Inexact(0)),
+                (10, Inexact(0), Inexact(10), Absent, Absent),
+                (10, Inexact(11), Inexact(20), Absent, Absent),
+                Some(Inexact(0)),
             ),
             (
-                (10, Some(11), Some(20), None),
-                (10, Some(0), Some(10), None),
-                Some(Precision::Inexact(0)),
+                (10, Inexact(11), Inexact(20), Absent, Absent),
+                (10, Inexact(0), Inexact(10), Absent, Absent),
+                Some(Inexact(0)),
             ),
             // distinct(left) = 0, distinct(right) = 0
             (
-                (10, Some(1), Some(10), Some(0)),
-                (10, Some(1), Some(10), Some(0)),
+                (10, Inexact(1), Inexact(10), Inexact(0), Absent),
+                (10, Inexact(1), Inexact(10), Inexact(0), Absent),
                 None,
+            ),
+            // Inexact row count < exact null count with absent distinct count
+            (
+                (0, Inexact(1), Inexact(10), Absent, Exact(5)),
+                (10, Inexact(1), Inexact(10), Absent, Absent),
+                Some(Inexact(0)),
             ),
         ];
 
         for (left_info, right_info, expected_cardinality) in cases {
             let left_num_rows = left_info.0;
-            let left_col_stats =
-                vec![create_column_stats(left_info.1, left_info.2, left_info.3)];
+            let left_col_stats = vec![create_column_stats(
+                left_info.1,
+                left_info.2,
+                left_info.3,
+                left_info.4,
+            )];
 
             let right_num_rows = right_info.0;
             let right_col_stats = vec![create_column_stats(
                 right_info.1,
                 right_info.2,
                 right_info.3,
+                right_info.4,
             )];
 
             assert_eq!(
                 estimate_inner_join_cardinality(
                     Statistics {
-                        num_rows: Precision::Inexact(left_num_rows),
-                        total_byte_size: Precision::Absent,
+                        num_rows: Inexact(left_num_rows),
+                        total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
                     },
                     Statistics {
-                        num_rows: Precision::Inexact(right_num_rows),
-                        total_byte_size: Precision::Absent,
+                        num_rows: Inexact(right_num_rows),
+                        total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
                     },
                 ),
@@ -1695,7 +1883,10 @@ mod tests {
 
             // We should also be able to use join_cardinality to get the same results
             let join_type = JoinType::Inner;
-            let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
+            let join_on = vec![(
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            )];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
@@ -1704,9 +1895,7 @@ mod tests {
             );
 
             assert_eq!(
-                partial_join_stats
-                    .clone()
-                    .map(|s| Precision::Inexact(s.num_rows)),
+                partial_join_stats.clone().map(|s| Inexact(s.num_rows)),
                 expected_cardinality.clone()
             );
             assert_eq!(
@@ -1722,13 +1911,13 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_multiple_column() -> Result<()> {
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(100), Some(500), Some(150)),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(150), Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(100), Some(500), Some(200)),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(200), Absent),
         ];
 
         // We have statistics about 4 columns, where the highest distinct
@@ -1806,21 +1995,27 @@ mod tests {
         ];
 
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(0), Some(500), Some(500)),
-            create_column_stats(Some(1000), Some(10000), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(0), Some(2000), Some(2500)),
-            create_column_stats(Some(0), Some(100), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
         ];
 
         for (join_type, expected_num_rows) in cases {
             let join_on = vec![
-                (Column::new("a", 0), Column::new("c", 0)),
-                (Column::new("b", 1), Column::new("d", 1)),
+                (
+                    Arc::new(Column::new("a", 0)) as _,
+                    Arc::new(Column::new("c", 0)) as _,
+                ),
+                (
+                    Arc::new(Column::new("b", 1)) as _,
+                    Arc::new(Column::new("d", 1)) as _,
+                ),
             ];
 
             let partial_join_stats = estimate_join_cardinality(
@@ -1855,20 +2050,26 @@ mod tests {
         // Join on a=c, x=y (ignores b/d) where x and y does not intersect
 
         let left_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(100)),
-            create_column_stats(Some(0), Some(500), Some(500)),
-            create_column_stats(Some(1000), Some(10000), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
         ];
 
         let right_col_stats = vec![
-            create_column_stats(Some(0), Some(100), Some(50)),
-            create_column_stats(Some(0), Some(2000), Some(2500)),
-            create_column_stats(Some(0), Some(100), None),
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
         ];
 
         let join_on = vec![
-            (Column::new("a", 0), Column::new("c", 0)),
-            (Column::new("x", 2), Column::new("y", 2)),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("x", 2)) as _,
+                Arc::new(Column::new("y", 2)) as _,
+            ),
         ];
 
         let cases = vec![
@@ -1933,7 +2134,10 @@ mod tests {
             },
         ];
         let join_type = JoinType::Inner;
-        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let on_columns = [(
+            Arc::new(Column::new("b", 1)) as _,
+            Arc::new(Column::new("x", 0)) as _,
+        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];

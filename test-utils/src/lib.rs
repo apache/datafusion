@@ -22,8 +22,10 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
 mod data_gen;
+mod string_gen;
 
 pub use data_gen::AccessLogGenerator;
+pub use string_gen::StringBatchGenerator;
 
 pub use env_logger;
 

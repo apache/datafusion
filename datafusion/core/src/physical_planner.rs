@@ -58,6 +58,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
+use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -65,8 +66,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, InputOrderMode,
-    Partitioning, PhysicalExpr, WindowExpr,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan,
+    ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -74,11 +75,10 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr,
     Cast, GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast,
@@ -87,18 +87,20 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_common::config::FormatOptions;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
+use sqlparser::ast::NullTreatment;
 
 fn create_function_physical_name(
     fun: &str,
@@ -123,6 +125,11 @@ fn physical_name(e: &Expr) -> Result<String> {
 
 fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
+        Expr::Unnest(_) => {
+            internal_err!(
+                "Expr::Unnest should have been converted to LogicalPlan::Unnest"
+            )
+        }
         Expr::Column(c) => {
             if is_first_expr {
                 Ok(c.name.clone())
@@ -200,22 +207,28 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let expr = create_physical_name(expr, false)?;
-            let name = match field {
-                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
-                GetFieldAccess::ListIndex { key } => {
-                    let key = create_physical_name(key, false)?;
-                    format!("{expr}[{key}]")
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
+            match field {
+                GetFieldAccess::NamedStructField { name: _ } => {
+                    unreachable!(
+                        "NamedStructField should have been rewritten in OperatorToFunction"
+                    )
                 }
-                GetFieldAccess::ListRange { start, stop } => {
-                    let start = create_physical_name(start, false)?;
-                    let stop = create_physical_name(stop, false)?;
-                    format!("{expr}[{start}:{stop}]")
+                GetFieldAccess::ListIndex { key: _ } => {
+                    unreachable!(
+                        "ListIndex should have been rewritten in OperatorToFunction"
+                    )
+                }
+                GetFieldAccess::ListRange {
+                    start: _,
+                    stop: _,
+                    stride: _,
+                } => {
+                    unreachable!(
+                        "ListRange should have been rewritten in OperatorToFunction"
+                    )
                 }
             };
-
-            Ok(name)
         }
         Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s
@@ -234,6 +247,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             filter,
             order_by,
+            null_treatment: _,
         }) => match func_def {
             AggregateFunctionDefinition::BuiltIn(..) => {
                 create_function_physical_name(func_def.name(), *distinct, args)
@@ -555,9 +569,9 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Copy(CopyTo{
                     input,
                     output_url,
-                    file_format,
-                    single_file_output,
-                    copy_options,
+                    format_options,
+                    partition_by,
+                    options: source_option_tuples
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let parsed_url = ListingTableUrl::parse(output_url)?;
@@ -565,15 +579,12 @@ impl DefaultPhysicalPlanner {
 
                     let schema: Schema = (**input.schema()).clone().into();
 
-                    let file_type_writer_options = match copy_options{
-                        CopyOptions::SQLOptions(statement_options) => {
-                            FileTypeWriterOptions::build(
-                                file_format,
-                                session_state.config_options(),
-                                statement_options)?
-                        },
-                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
-                    };
+                    // Note: the DataType passed here is ignored for the purposes of writing and inferred instead
+                    // from the schema of the RecordBatch being written. This allows COPY statements to specify only
+                    // the column name rather than column name + explicit data type.
+                    let table_partition_cols = partition_by.iter()
+                        .map(|s| (s.to_string(), arrow_schema::DataType::Null))
+                        .collect::<Vec<_>>();
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -581,19 +592,32 @@ impl DefaultPhysicalPlanner {
                         table_paths: vec![parsed_url],
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
-                        table_partition_cols: vec![],
-                        single_file_output: *single_file_output,
+                        table_partition_cols,
                         overwrite: false,
-                        file_type_writer_options
                     };
-
-                    let sink_format: Arc<dyn FileFormat> = match file_format {
-                        FileType::CSV => Arc::new(CsvFormat::default()),
+                    let mut table_options = session_state.default_table_options().clone();
+                    let sink_format: Arc<dyn FileFormat> = match format_options {
+                        FormatOptions::CSV(options) => {
+                            table_options.csv = options.clone();
+                            table_options.set_file_format(FileType::CSV);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(CsvFormat::default().with_options(table_options.csv))
+                        },
+                        FormatOptions::JSON(options) => {
+                            table_options.json = options.clone();
+                            table_options.set_file_format(FileType::JSON);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(JsonFormat::default().with_options(table_options.json))
+                        },
                         #[cfg(feature = "parquet")]
-                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
-                        FileType::JSON => Arc::new(JsonFormat::default()),
-                        FileType::AVRO => Arc::new(AvroFormat {} ),
-                        FileType::ARROW => Arc::new(ArrowFormat {}),
+                        FormatOptions::PARQUET(options) => {
+                            table_options.parquet = options.clone();
+                            table_options.set_file_format(FileType::PARQUET);
+                            table_options.alter_with_string_hash_map(source_option_tuples)?;
+                            Arc::new(ParquetFormat::default().with_options(table_options.parquet))
+                        },
+                        FormatOptions::AVRO => Arc::new(AvroFormat {} ),
+                        FormatOptions::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await
@@ -606,7 +630,7 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     let name = table_name.table();
                     let schema = session_state.schema_for_ref(table_name)?;
-                    if let Some(provider) = schema.table(name).await {
+                    if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
                     } else {
@@ -623,7 +647,7 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     let name = table_name.table();
                     let schema = session_state.schema_for_ref(table_name)?;
-                    if let Some(provider) = schema.table(name).await {
+                    if let Some(provider) = schema.table(name).await? {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
                     } else {
@@ -719,14 +743,12 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-                    let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             create_window_expr(
                                 e,
                                 logical_input_schema,
-                                &physical_input_schema,
                                 session_state.execution_props(),
                             )
                         })
@@ -896,7 +918,7 @@ impl DefaultPhysicalPlanner {
                     let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                     Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
                 }
-                LogicalPlan::Union(Union { inputs, .. }) => {
+                LogicalPlan::Union(Union { inputs, schema: _ }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
 
                     Ok(Arc::new(UnionExec::new(physical_plans)))
@@ -1031,15 +1053,21 @@ impl DefaultPhysicalPlanner {
                     let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
                     let right_df_schema = right.schema();
+                    let execution_props = session_state.execution_props();
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
-                            let l = l.try_into_col()?;
-                            let r = r.try_into_col()?;
-                            Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
-                            ))
+                            let l = create_physical_expr(
+                                l,
+                                left_df_schema,
+                                execution_props
+                            )?;
+                            let r = create_physical_expr(
+                                r,
+                                right_df_schema,
+                                execution_props
+                            )?;
+                            Ok((l, r))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
 
@@ -1101,6 +1129,7 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
+
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1116,20 +1145,17 @@ impl DefaultPhysicalPlanner {
                     {
                         // Use SortMergeJoin if hash join is not preferred
                         // Sort-Merge join support currently is experimental
-                        if join_filter.is_some() {
-                            // TODO SortMergeJoinExec need to support join filter
-                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
-                        } else {
-                            let join_on_len = join_on.len();
-                            Ok(Arc::new(SortMergeJoinExec::try_new(
-                                physical_left,
-                                physical_right,
-                                join_on,
-                                *join_type,
-                                vec![SortOptions::default(); join_on_len],
-                                null_equals_null,
-                            )?))
-                        }
+
+                        let join_on_len = join_on.len();
+                        Ok(Arc::new(SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::default(); join_on_len],
+                            null_equals_null,
+                        )?))
                     } else if session_state.config().target_partitions() > 1
                         && session_state.config().repartition_joins()
                         && prefer_hash_join {
@@ -1146,6 +1172,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_filter,
                             join_type,
+							None,
                             partition_mode,
                             null_equals_null,
                         )?))
@@ -1156,6 +1183,7 @@ impl DefaultPhysicalPlanner {
                             join_on,
                             join_filter,
                             join_type,
+							None,
                             PartitionMode::CollectLeft,
                             null_equals_null,
                         )?))
@@ -1289,6 +1317,11 @@ impl DefaultPhysicalPlanner {
                     } else {
                         Ok(plan)
                     }
+                }
+                LogicalPlan::RecursiveQuery(RecursiveQuery { name, static_term, recursive_term, is_distinct,.. }) => {
+                    let static_term = self.create_initial_plan(static_term, session_state).await?;
+                    let recursive_term = self.create_initial_plan(recursive_term, session_state).await?;
+                    Ok(Arc::new(RecursiveQueryExec::try_new(name.clone(), static_term, recursive_term, *is_distinct)?))
                 }
             };
             exec_plan
@@ -1526,7 +1559,7 @@ fn get_physical_expr_pair(
 /// queries like:
 /// OVER (ORDER BY a RANGES BETWEEN 3 PRECEDING AND 5 PRECEDING)
 /// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
-pub fn is_window_valid(window_frame: &WindowFrame) -> bool {
+pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
     match (&window_frame.start_bound, &window_frame.end_bound) {
         (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
         | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
@@ -1546,10 +1579,10 @@ pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
     logical_input_schema: &DFSchema,
-    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
+    let physical_input_schema: &Schema = &logical_input_schema.into();
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1557,6 +1590,7 @@ pub fn create_window_expr_with_name(
             partition_by,
             order_by,
             window_frame,
+            null_treatment,
         }) => {
             let args = args
                 .iter()
@@ -1572,7 +1606,8 @@ pub fn create_window_expr_with_name(
                     create_physical_sort_expr(e, logical_input_schema, execution_props)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if !is_window_valid(window_frame) {
+
+            if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
@@ -1580,6 +1615,9 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
             windows::create_window_expr(
                 fun,
                 name,
@@ -1588,6 +1626,7 @@ pub fn create_window_expr_with_name(
                 &order_by,
                 window_frame,
                 physical_input_schema,
+                ignore_nulls,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -1598,7 +1637,6 @@ pub fn create_window_expr_with_name(
 pub fn create_window_expr(
     e: &Expr,
     logical_input_schema: &DFSchema,
-    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
@@ -1606,13 +1644,7 @@ pub fn create_window_expr(
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.display_name()?, e),
     };
-    create_window_expr_with_name(
-        e,
-        name,
-        logical_input_schema,
-        physical_input_schema,
-        execution_props,
-    )
+    create_window_expr_with_name(e, name, logical_input_schema, execution_props)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -1638,6 +1670,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             args,
             filter,
             order_by,
+            null_treatment,
         }) => {
             let args = args
                 .iter()
@@ -1665,6 +1698,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
                     let ordering_reqs = order_by.clone().unwrap_or(vec![]);
@@ -1675,6 +1711,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         &ordering_reqs,
                         physical_input_schema,
                         name,
+                        ignore_nulls,
                     )?;
                     (agg_expr, filter, order_by)
                 }
@@ -1966,31 +2003,36 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::convert::TryFrom;
+    use std::fmt::{self, Debug};
+    use std::ops::{BitAnd, Not};
+
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::{expressions, DisplayFormatType, Partitioning};
-    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
+    use crate::physical_plan::{
+        expressions, DisplayAs, DisplayFormatType, ExecutionMode, Partitioning,
+        PlanProperties, SendableRecordBatchStream,
+    };
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
+
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_contains, TableReference};
-    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_common::{
+        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
-    use fmt::Debug;
-    use std::collections::HashMap;
-    use std::convert::TryFrom;
-    use std::ops::{BitAnd, Not};
-    use std::{any::Any, fmt};
+    use datafusion_physical_expr::EquivalenceProperties;
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2296,10 +2338,11 @@ mod tests {
 
     /// Return a `null` literal representing a struct type like: `{ a: bool }`
     fn struct_literal() -> Expr {
-        let struct_literal = ScalarValue::Struct(
-            None,
+        let struct_literal = ScalarValue::try_from(DataType::Struct(
             vec![Field::new("foo", DataType::Boolean, false)].into(),
-        );
+        ))
+        .unwrap();
+
         lit(struct_literal)
     }
 
@@ -2546,7 +2589,26 @@ mod tests {
 
     #[derive(Debug)]
     struct NoOpExecutionPlan {
-        schema: SchemaRef,
+        cache: PlanProperties,
+    }
+
+    impl NoOpExecutionPlan {
+        fn new(schema: SchemaRef) -> Self {
+            let cache = Self::compute_properties(schema.clone());
+            Self { cache }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
+            let eq_properties = EquivalenceProperties::new(schema);
+            PlanProperties::new(
+                eq_properties,
+                // Output Partitioning
+                Partitioning::UnknownPartitioning(1),
+                // Execution Mode
+                ExecutionMode::Bounded,
+            )
+        }
     }
 
     impl DisplayAs for NoOpExecutionPlan {
@@ -2565,16 +2627,8 @@ mod tests {
             self
         }
 
-        fn schema(&self) -> SchemaRef {
-            self.schema.clone()
-        }
-
-        fn output_partitioning(&self) -> Partitioning {
-            Partitioning::UnknownPartitioning(1)
-        }
-
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-            None
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -2612,13 +2666,9 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Ok(Some(Arc::new(NoOpExecutionPlan {
-                schema: SchemaRef::new(Schema::new(vec![Field::new(
-                    "b",
-                    DataType::Int32,
-                    false,
-                )])),
-            })))
+            Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
+                Schema::new(vec![Field::new("b", DataType::Int32, false)]),
+            )))))
         }
     }
 

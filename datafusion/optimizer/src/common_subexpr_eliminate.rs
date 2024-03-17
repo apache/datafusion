@@ -20,19 +20,19 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{
-    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    TreeNodeVisitor,
 };
 use datafusion_common::{
     internal_err, qualified_name, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
-use datafusion_expr::expr::{is_volatile, Alias};
-use datafusion_expr::logical_plan::{
-    Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
-};
+use datafusion_expr::expr::Alias;
+use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
 
 /// A map from expression's identifier to tuple including
@@ -41,13 +41,13 @@ use datafusion_expr::{col, Expr, ExprSchemable};
 /// - DataType of this expression.
 type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 
-/// Identifier type. Current implementation use describe of a expression (type String) as
+/// Identifier type. Current implementation use describe of an expression (type String) as
 /// Identifier.
 ///
-/// A Identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
+/// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
 /// collision (as low as possible)"
 ///
-/// Since a identifier is likely to be copied many times, it is better that a identifier
+/// Since an identifier is likely to be copied many times, it is better that an identifier
 /// is small or "copy". otherwise some kinds of reference count is needed. String description
 /// here is not such a good choose.
 type Identifier = String;
@@ -105,85 +105,79 @@ impl CommonSubexprEliminate {
         Ok((rewrite_exprs, new_input))
     }
 
-    fn try_optimize_projection(
-        &self,
-        projection: &Projection,
-        config: &dyn OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        let Projection { expr, input, .. } = projection;
-        let input_schema = Arc::clone(input.schema());
-        let mut expr_set = ExprSet::new();
-
-        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
-        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
-
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
-
-        // Since projection expr changes, schema changes also. Use try_new method.
-        Projection::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))
-            .map(LogicalPlan::Projection)
-    }
-
-    fn try_optimize_filter(
-        &self,
-        filter: &Filter,
-        config: &dyn OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        let mut expr_set = ExprSet::new();
-        let predicate = &filter.predicate;
-        let input_schema = Arc::clone(filter.input.schema());
-        let mut id_array = vec![];
-        expr_to_identifier(
-            predicate,
-            &mut expr_set,
-            &mut id_array,
-            input_schema,
-            ExprMask::Normal,
-        )?;
-
-        let (mut new_expr, new_input) = self.rewrite_expr(
-            &[&[predicate.clone()]],
-            &[&[id_array]],
-            &filter.input,
-            &expr_set,
-            config,
-        )?;
-
-        if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-            Ok(LogicalPlan::Filter(Filter::try_new(
-                predicate,
-                Arc::new(new_input),
-            )?))
-        } else {
-            internal_err!("Failed to pop predicate expr")
-        }
-    }
-
     fn try_optimize_window(
         &self,
         window: &Window,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Window {
-            input,
-            window_expr,
-            schema,
-        } = window;
+        let mut window_exprs = vec![];
+        let mut arrays_per_window = vec![];
         let mut expr_set = ExprSet::new();
 
-        let input_schema = Arc::clone(input.schema());
-        let arrays =
-            to_arrays(window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        // Get all window expressions inside the consecutive window operators.
+        // Consecutive window expressions may refer to same complex expression.
+        // If same complex expression is referred more than once by subsequent `WindowAggr`s,
+        // we can cache complex expression by evaluating it with a projection before the
+        // first WindowAggr.
+        // This enables us to cache complex expression "c3+c4" for following plan:
+        // WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // --WindowAggr: windowExpr=[[SUM(c9) ORDER BY [c3 + c4] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        // where, it is referred once by each `WindowAggr` (total of 2) in the plan.
+        let mut plan = LogicalPlan::Window(window.clone());
+        while let LogicalPlan::Window(window) = plan {
+            let Window {
+                input, window_expr, ..
+            } = window;
+            plan = input.as_ref().clone();
 
-        let (mut new_expr, new_input) =
-            self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
+            let input_schema = Arc::clone(input.schema());
+            let arrays =
+                to_arrays(&window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
-        Ok(LogicalPlan::Window(Window {
-            input: Arc::new(new_input),
-            window_expr: pop_expr(&mut new_expr)?,
-            schema: schema.clone(),
-        }))
+            window_exprs.push(window_expr);
+            arrays_per_window.push(arrays);
+        }
+
+        let mut window_exprs = window_exprs
+            .iter()
+            .map(|expr| expr.as_slice())
+            .collect::<Vec<_>>();
+        let arrays_per_window = arrays_per_window
+            .iter()
+            .map(|arrays| arrays.as_slice())
+            .collect::<Vec<_>>();
+
+        assert_eq!(window_exprs.len(), arrays_per_window.len());
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &window_exprs,
+            &arrays_per_window,
+            &plan,
+            &expr_set,
+            config,
+        )?;
+        assert_eq!(window_exprs.len(), new_expr.len());
+
+        // Construct consecutive window operator, with their corresponding new window expressions.
+        plan = new_input;
+        while let Some(new_window_expr) = new_expr.pop() {
+            // Since `new_expr` and `window_exprs` length are same. We can safely `.unwrap` here.
+            let orig_window_expr = window_exprs.pop().unwrap();
+            assert_eq!(new_window_expr.len(), orig_window_expr.len());
+
+            // Rename new re-written window expressions with original name (by giving alias)
+            // Otherwise we may receive schema error, in subsequent operators.
+            let new_window_expr = new_window_expr
+                .into_iter()
+                .zip(orig_window_expr.iter())
+                .map(|(new_window_expr, window_expr)| {
+                    let original_name = window_expr.name_for_alias()?;
+                    new_window_expr.alias_if_changed(original_name)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
+        }
+
+        Ok(plan)
     }
 
     fn try_optimize_aggregate(
@@ -304,25 +298,24 @@ impl CommonSubexprEliminate {
         }
     }
 
-    fn try_optimize_sort(
+    fn try_unary_plan(
         &self,
-        sort: &Sort,
+        plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Sort { expr, input, fetch } = sort;
+        let expr = plan.expressions();
+        let inputs = plan.inputs();
+        let input = inputs[0];
+        let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
 
-        let input_schema = Arc::clone(input.schema());
-        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        // Visit expr list and build expr identifier to occuring count map (`expr_set`).
+        let arrays = to_arrays(&expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
+            self.rewrite_expr(&[&expr], &[&arrays], input, &expr_set, config)?;
 
-        Ok(LogicalPlan::Sort(Sort {
-            expr: pop_expr(&mut new_expr)?,
-            input: Arc::new(new_input),
-            fetch: *fetch,
-        }))
+        plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input])
     }
 }
 
@@ -333,19 +326,15 @@ impl OptimizerRule for CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let optimized_plan = match plan {
-            LogicalPlan::Projection(projection) => {
-                Some(self.try_optimize_projection(projection, config)?)
-            }
-            LogicalPlan::Filter(filter) => {
-                Some(self.try_optimize_filter(filter, config)?)
-            }
+            LogicalPlan::Projection(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Filter(_) => Some(self.try_unary_plan(plan, config)?),
             LogicalPlan::Window(window) => {
                 Some(self.try_optimize_window(window, config)?)
             }
             LogicalPlan::Aggregate(aggregate) => {
                 Some(self.try_optimize_aggregate(aggregate, config)?)
             }
-            LogicalPlan::Sort(sort) => Some(self.try_optimize_sort(sort, config)?),
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
@@ -366,6 +355,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
@@ -526,7 +516,7 @@ enum ExprMask {
 }
 
 impl ExprMask {
-    fn ignores(&self, expr: &Expr) -> Result<bool> {
+    fn ignores(&self, expr: &Expr) -> bool {
         let is_normal_minus_aggregates = matches!(
             expr,
             Expr::Literal(..)
@@ -537,14 +527,12 @@ impl ExprMask {
                 | Expr::Wildcard { .. }
         );
 
-        let is_volatile = is_volatile(expr)?;
-
         let is_aggr = matches!(expr, Expr::AggregateFunction(..));
 
-        Ok(match self {
-            Self::Normal => is_volatile || is_normal_minus_aggregates || is_aggr,
-            Self::NormalAndAggregates => is_volatile || is_normal_minus_aggregates,
-        })
+        match self {
+            Self::Normal => is_normal_minus_aggregates || is_aggr,
+            Self::NormalAndAggregates => is_normal_minus_aggregates,
+        }
     }
 }
 
@@ -601,46 +589,52 @@ impl ExprIdentifierVisitor<'_> {
 
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
     /// before it.
-    fn pop_enter_mark(&mut self) -> (usize, Identifier) {
+    fn pop_enter_mark(&mut self) -> Option<(usize, Identifier)> {
         let mut desc = String::new();
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(idx) => {
-                    return (idx, desc);
+                    return Some((idx, desc));
                 }
                 VisitRecord::ExprItem(s) => {
                     desc.push_str(&s);
                 }
             }
         }
-
-        unreachable!("Enter mark should paired with node number");
+        None
     }
 }
 
 impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
+    fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
+        // related to https://github.com/apache/arrow-datafusion/issues/8814
+        // If the expr contain volatile expression or is a short-circuit expression, skip it.
+        if expr.short_circuits() || is_volatile_expression(expr)? {
+            return Ok(TreeNodeRecursion::Jump);
+        }
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
         // put placeholder
         self.id_array.push((0, "".to_string()));
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
+    fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         self.series_number += 1;
 
-        let (idx, sub_expr_desc) = self.pop_enter_mark();
+        let Some((idx, sub_expr_desc)) = self.pop_enter_mark() else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
         // skip exprs should not be recognize.
-        if self.expr_mask.ignores(expr)? {
+        if self.expr_mask.ignores(expr) {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(VisitRecursion::Continue);
+            return Ok(TreeNodeRecursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -654,7 +648,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -697,67 +691,82 @@ struct CommonSubexprRewriter<'a> {
 }
 
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
-    type N = Expr;
+    type Node = Expr;
 
-    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
+        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
+        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
+        if expr.short_circuits() || is_volatile_expression(&expr)? {
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
+        }
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok(RewriteRecursion::Stop);
+            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok(RewriteRecursion::Skip);
+            return Ok(Transformed::no(expr));
         }
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
-                    Ok(RewriteRecursion::Mutate)
+
+                    // This expr tree is finished.
+                    if self.curr_index >= self.id_array.len() {
+                        return Ok(Transformed::new(
+                            expr,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
+
+                    let (series_number, id) = &self.id_array[self.curr_index];
+                    self.curr_index += 1;
+                    // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
+                    let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
+                        internal_datafusion_err!("expr_set invalid state")
+                    })?;
+                    if *series_number < self.max_series_number
+                        || id.is_empty()
+                        || expr_set_item.1 <= 1
+                    {
+                        return Ok(Transformed::new(
+                            expr,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
+
+                    self.max_series_number = *series_number;
+                    // step index to skip all sub-node (which has smaller series number).
+                    while self.curr_index < self.id_array.len()
+                        && *series_number > self.id_array[self.curr_index].0
+                    {
+                        self.curr_index += 1;
+                    }
+
+                    let expr_name = expr.display_name()?;
+                    // Alias this `Column` expr to it original "expr name",
+                    // `projection_push_down` optimizer use "expr name" to eliminate useless
+                    // projections.
+                    Ok(Transformed::new(
+                        col(id).alias(expr_name),
+                        true,
+                        TreeNodeRecursion::Jump,
+                    ))
                 } else {
                     self.curr_index += 1;
-                    Ok(RewriteRecursion::Skip)
+                    Ok(Transformed::no(expr))
                 }
             }
             _ => internal_err!("expr_set invalid state"),
         }
-    }
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        // This expr tree is finished.
-        if self.curr_index >= self.id_array.len() {
-            return Ok(expr);
-        }
-
-        let (series_number, id) = &self.id_array[self.curr_index];
-        self.curr_index += 1;
-        // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
-        let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
-            DataFusionError::Internal("expr_set invalid state".to_string())
-        })?;
-        if *series_number < self.max_series_number
-            || id.is_empty()
-            || expr_set_item.1 <= 1
-        {
-            return Ok(expr);
-        }
-
-        self.max_series_number = *series_number;
-        // step index to skip all sub-node (which has smaller series number).
-        while self.curr_index < self.id_array.len()
-            && *series_number > self.id_array[self.curr_index].0
-        {
-            self.curr_index += 1;
-        }
-
-        let expr_name = expr.display_name()?;
-        // Alias this `Column` expr to it original "expr name",
-        // `projection_push_down` optimizer use "expr name" to eliminate useless
-        // projections.
-        Ok(col(id).alias(expr_name))
     }
 }
 
@@ -774,6 +783,7 @@ fn replace_common_expr(
         max_series_number: 0,
         curr_index: 0,
     })
+    .data()
 }
 
 #[cfg(test)]
@@ -1252,12 +1262,12 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(lit(1).gt(col("a")).and(lit(1).gt(col("a"))))?
+            .filter((lit(1) + col("a") - lit(10)).gt(lit(1) + col("a")))?
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
+        \n  Filter: Int32(1) + test.atest.aInt32(1) - Int32(10) > Int32(1) + test.atest.aInt32(1)\
+        \n    Projection: Int32(1) + test.a AS Int32(1) + test.atest.aInt32(1), test.a, test.b, test.c\
         \n      TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);

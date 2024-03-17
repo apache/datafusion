@@ -23,7 +23,6 @@ mod case;
 mod cast;
 mod column;
 mod datum;
-mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
@@ -32,7 +31,6 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
-mod nullif;
 mod try_cast;
 
 /// Module with some convenient methods used in expression building
@@ -60,6 +58,7 @@ pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
+pub use crate::aggregate::nth_value::NthValueAgg;
 pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
@@ -67,7 +66,6 @@ pub use crate::aggregate::string_agg::StringAgg;
 pub use crate::aggregate::sum::Sum;
 pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
-
 pub use crate::window::cume_dist::cume_dist;
 pub use crate::window::cume_dist::CumeDist;
 pub use crate::window::lead_lag::WindowShift;
@@ -77,12 +75,12 @@ pub use crate::window::ntile::Ntile;
 pub use crate::window::rank::{dense_rank, percent_rank, rank};
 pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
+pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_column, cast_with_options, CastExpr};
+pub use cast::{cast, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
-pub use get_indexed_field::{GetFieldAccessExpr, GetIndexedFieldExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
@@ -91,27 +89,25 @@ pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
-pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
-pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::Arc;
+
     use crate::expressions::{col, create_aggregate_expr, try_cast};
-    use crate::{AggregateExpr, EmitTo};
+    use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
     use arrow_schema::{Field, Schema};
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::aggregates::coerce_types;
-    use datafusion_expr::AggregateFunction;
-    use std::sync::Arc;
+    use datafusion_expr::{AggregateFunction, EmitTo};
 
     /// macro to perform an aggregation using [`datafusion_expr::Accumulator`] and verify the
     /// result.
@@ -135,7 +131,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 
@@ -168,7 +164,7 @@ pub(crate) mod tests {
             let actual = aggregate_new(&batch, agg)?;
             assert_eq!($EXPECTED, &actual);
 
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<(), ::datafusion_common::DataFusionError>
         }};
     }
 
@@ -195,9 +191,16 @@ pub(crate) mod tests {
         .unwrap();
 
         let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
-        let agg =
-            create_aggregate_expr(&function, distinct, &[input], &[], &schema, "agg")
-                .unwrap();
+        let agg = create_aggregate_expr(
+            &function,
+            distinct,
+            &[input],
+            &[],
+            &schema,
+            "agg",
+            false,
+        )
+        .unwrap();
 
         let result = aggregate(&batch, agg).unwrap();
         assert_eq!(expected, result);

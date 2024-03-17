@@ -25,7 +25,7 @@ use arrow::compute::kernels::bitwise::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 
 use std::sync::Arc;
 

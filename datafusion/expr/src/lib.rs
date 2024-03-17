@@ -30,7 +30,6 @@ mod built_in_function;
 mod built_in_window_function;
 mod columnar_value;
 mod literal;
-mod nullif;
 mod operator;
 mod partition_evaluator;
 mod signature;
@@ -41,17 +40,21 @@ mod udwf;
 
 pub mod aggregate_function;
 pub mod conditional_expressions;
+pub mod execution_props;
 pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
+pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod logical_plan;
+pub mod simplify;
 pub mod tree_node;
 pub mod type_coercion;
 pub mod utils;
+pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
@@ -70,9 +73,9 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
-pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{

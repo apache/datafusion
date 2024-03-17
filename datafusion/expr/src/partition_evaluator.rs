@@ -18,7 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -116,6 +116,11 @@ pub trait PartitionEvaluator: Debug + Send {
                 end: idx + 1,
             })
         }
+    }
+
+    /// Get whether evaluator needs future data for its result (if so returns `false`) or not
+    fn is_causal(&self) -> bool {
+        false
     }
 
     /// Evaluate a window function on an entire input partition.

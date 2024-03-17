@@ -34,6 +34,7 @@ pub mod display;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
+pub mod instant;
 pub mod parsers;
 pub mod rounding;
 pub mod scalar;
@@ -56,7 +57,6 @@ pub use file_options::file_type::{
     FileType, GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
     DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
 };
-pub use file_options::FileTypeWriterOptions;
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
     get_target_functional_dependencies, Constraint, Constraints, Dependency,

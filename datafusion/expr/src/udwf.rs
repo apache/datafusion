@@ -32,11 +32,13 @@ use std::{
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDWF is different from a UDF in that it is stateful across batches.
 ///
-/// See the documetnation on [`PartitionEvaluator`] for more details
+/// See the documentation on [`PartitionEvaluator`] for more details
 ///
-/// 1. For simple (less performant) use cases, use [`create_udwf`] and [`simple_udwf.rs`].
+/// 1. For simple use cases, use [`create_udwf`] (examples in
+/// [`simple_udwf.rs`]).
 ///
-/// 2. For advanced use cases, use [`WindowUDFImpl`] and [`advanced_udwf.rs`].
+/// 2. For advanced use cases, use [`WindowUDFImpl`] which provides full API
+/// access (examples in [`advanced_udwf.rs`]).
 ///
 /// # API Note
 /// This is a separate struct from `WindowUDFImpl` to maintain backwards
@@ -78,7 +80,7 @@ impl WindowUDF {
     ///
     /// See [`WindowUDFImpl`] for a more convenient way to create a
     /// `WindowUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
+    #[deprecated(since = "34.0.0", note = "please implement WindowUDFImpl instead")]
     pub fn new(
         name: &str,
         signature: &Signature,
@@ -110,6 +112,14 @@ impl WindowUDF {
         self.inner.clone()
     }
 
+    /// Adds additional names that can be used to invoke this function, in
+    /// addition to `name`
+    ///
+    /// If you implement [`WindowUDFImpl`] directly you should return aliases directly.
+    pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
+        Self::new_from_impl(AliasedWindowUDFImpl::new(self.inner.clone(), aliases))
+    }
+
     /// creates a [`Expr`] that calls the window function given
     /// the `partition_by`, `order_by`, and `window_frame` definition
     ///
@@ -130,6 +140,7 @@ impl WindowUDF {
             partition_by,
             order_by,
             window_frame,
+            null_treatment: None,
         })
     }
 
@@ -138,6 +149,11 @@ impl WindowUDF {
     /// See [`WindowUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// Returns this function's signature (what input types are accepted)
@@ -214,7 +230,7 @@ where
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
 /// }
 ///
-/// // Create a new ScalarUDF from the implementation
+/// // Create a new WindowUDF from the implementation
 /// let smooth_it = WindowUDF::from(SmoothIt::new());
 ///
 /// // Call the function `add_one(col)`
@@ -222,7 +238,7 @@ where
 ///     vec![col("speed")],                 // smooth_it(speed)
 ///     vec![col("car")],                   // PARTITION BY car
 ///     vec![col("time").sort(true, true)], // ORDER BY time ASC
-///     WindowFrame::new(false),
+///     WindowFrame::new(None),
 /// );
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
@@ -242,6 +258,60 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+}
+
+/// WindowUDF that adds an alias to the underlying function. It is better to
+/// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
+#[derive(Debug)]
+struct AliasedWindowUDFImpl {
+    inner: Arc<dyn WindowUDFImpl>,
+    aliases: Vec<String>,
+}
+
+impl AliasedWindowUDFImpl {
+    pub fn new(
+        inner: Arc<dyn WindowUDFImpl>,
+        new_aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        let mut aliases = inner.aliases().to_vec();
+        aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
+
+        Self { inner, aliases }
+    }
+}
+
+impl WindowUDFImpl for AliasedWindowUDFImpl {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        self.inner.partition_evaluator()
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
 }
 
 /// Implementation of [`WindowUDFImpl`] that wraps the function style pointers

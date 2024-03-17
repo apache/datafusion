@@ -31,7 +31,7 @@ use std::collections::HashSet;
 use crate::aggregate::sum::downcast_sum;
 use crate::aggregate::utils::{down_cast_any_ref, Hashable};
 use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
 use datafusion_expr::Accumulator;
 
@@ -140,7 +140,7 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
 }
 
 impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
@@ -186,7 +186,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         Ok(())
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut acc = T::Native::usize_as(0);
         for distinct_value in self.values.iter() {
             acc = acc.add_wrapping(distinct_value.0)

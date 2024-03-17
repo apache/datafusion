@@ -27,7 +27,7 @@ use crate::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, unbounded_output, ExecutionPlan, InputOrderMode, PhysicalExpr,
+    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
@@ -48,13 +48,13 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-pub use window_agg_exec::WindowAggExec;
-
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
+#[allow(clippy::too_many_arguments)]
 pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
@@ -63,6 +63,7 @@ pub fn create_window_expr(
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateFunction(fun) => {
@@ -73,6 +74,7 @@ pub fn create_window_expr(
                 &[],
                 input_schema,
                 name,
+                ignore_nulls,
             )?;
             window_expr_from_aggregate_expr(
                 partition_by,
@@ -83,7 +85,7 @@ pub fn create_window_expr(
         }
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
             Arc::new(BuiltInWindowExpr::new(
-                create_built_in_window_expr(fun, args, input_schema, name)?,
+                create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
                 partition_by,
                 order_by,
                 window_frame,
@@ -154,18 +156,38 @@ fn get_scalar_value_from_args(
     })
 }
 
+fn get_casted_value(
+    default_value: Option<ScalarValue>,
+    dtype: &DataType,
+) -> Result<ScalarValue> {
+    match default_value {
+        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
+        // If None or Null datatype
+        _ => ScalarValue::try_from(dtype),
+    }
+}
+
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = &fun.return_type(&input_types)?;
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name)),
-        BuiltInWindowFunction::Rank => Arc::new(rank(name)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, data_type)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, data_type)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
@@ -179,32 +201,46 @@ fn create_built_in_window_expr(
 
             if n.is_unsigned() {
                 let n: u64 = n.try_into()?;
-                Arc::new(Ntile::new(name, n))
+                Arc::new(Ntile::new(name, n, data_type))
             } else {
                 let n: i64 = n.try_into()?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
-                Arc::new(Ntile::new(name, n as u64))
+                Arc::new(Ntile::new(name, n as u64, data_type))
             }
         }
         BuiltInWindowFunction::Lag => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lag(name, data_type, arg, shift_offset, default_value))
+            let default_value =
+                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
+            Arc::new(lag(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+                ignore_nulls,
+            ))
         }
         BuiltInWindowFunction::Lead => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(args, 2)?;
-            Arc::new(lead(name, data_type, arg, shift_offset, default_value))
+            let default_value =
+                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
+            Arc::new(lead(
+                name,
+                data_type.clone(),
+                arg,
+                shift_offset,
+                default_value,
+                ignore_nulls,
+            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = args[0].clone();
@@ -214,18 +250,21 @@ fn create_built_in_window_expr(
                 .try_into()
                 .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::nth(name, arg, data_type, n)?)
+            Arc::new(NthValue::nth(
+                name,
+                arg,
+                data_type.clone(),
+                n,
+                ignore_nulls,
+            )?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::first(name, arg, data_type))
+            Arc::new(NthValue::first(name, arg, data_type.clone(), ignore_nulls))
         }
         BuiltInWindowFunction::LastValue => {
             let arg = args[0].clone();
-            let data_type = args[0].data_type(input_schema)?;
-            Arc::new(NthValue::last(name, arg, data_type))
+            Arc::new(NthValue::last(name, arg, data_type.clone(), ignore_nulls))
         }
     })
 }
@@ -314,11 +353,11 @@ pub(crate) fn calc_requirements<
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
-/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// This function calculates the indices such that when partition by expressions reordered with the indices
 /// resulting expressions define a preset for existing ordering.
-// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
-// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
-// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
+/// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used,
+/// this vector will be [1, 0]. It means that when we iterate b, a columns with the order [1, 0]
+/// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
@@ -357,8 +396,8 @@ pub(crate) fn window_equivalence_properties(
 ) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.equivalence_properties()`.
-    let mut window_eq_properties =
-        EquivalenceProperties::new(schema.clone()).extend(input.equivalence_properties());
+    let mut window_eq_properties = EquivalenceProperties::new(schema.clone())
+        .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
@@ -400,7 +439,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = unbounded_output(input);
+    let is_unbounded = input.execution_mode().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
@@ -462,7 +501,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
-    let input_eqs = input.equivalence_properties();
+    let input_eqs = input.equivalence_properties().clone();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
@@ -654,8 +693,9 @@ mod tests {
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Arc::new(WindowFrame::new(false)),
+                Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
             )?],
             blocking_exec,
             vec![],

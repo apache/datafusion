@@ -129,14 +129,15 @@ fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
 
 /// Merge two grouping_set
 ///
-///
-/// Example:
-///
+/// # Example
+/// ```text
 /// (A, B), (C, D) -> (A, B, C, D)
+/// ```
 ///
-/// Error:
+/// # Error
+/// - [`DataFusionError`]: The number of group_expression in grouping_set exceeds the maximum limit
 ///
-/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit
+/// [`DataFusionError`]: datafusion_common::DataFusionError
 fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
     check_grouping_set_size_limit(left.len() + right.len())?;
     Ok(left.iter().chain(right.iter()).cloned().collect())
@@ -144,15 +145,16 @@ fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
 
 /// Compute the cross product of two grouping_sets
 ///
+/// # Example
+/// ```text
+/// [(A, B), (C, D)], [(E), (F)] -> [(A, B, E), (A, B, F), (C, D, E), (C, D, F)]
+/// ```
 ///
-/// Example:
+/// # Error
+/// - [`DataFusionError`]: The number of group_expression in grouping_set exceeds the maximum limit
+/// - [`DataFusionError`]: The number of grouping_set in grouping_sets exceeds the maximum limit
 ///
-/// \[(A, B), (C, D)], [(E), (F)\] -> \[(A, B, E), (A, B, F), (C, D, E), (C, D, F)\]
-///
-/// Error:
-///
-/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
-/// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
+/// [`DataFusionError`]: datafusion_common::DataFusionError
 fn cross_join_grouping_sets<T: Clone>(
     left: &[Vec<T>],
     right: &[Vec<T>],
@@ -270,7 +272,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::ScalarVariable(_, _)
+            Expr::Unnest(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
@@ -663,10 +666,10 @@ where
                 exprs.push(expr.clone())
             }
             // stop recursing down this expr once we find a match
-            return Ok(VisitRecursion::Skip);
+            return Ok(TreeNodeRecursion::Jump);
         }
 
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
@@ -683,10 +686,10 @@ where
         if let Err(e) = f(expr) {
             // save the error for later (it may not be a DataFusionError
             err = Err(e);
-            Ok(VisitRecursion::Stop)
+            Ok(TreeNodeRecursion::Stop)
         } else {
             // keep going
-            Ok(VisitRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         }
     })
     // The closure always returns OK, so this will always too
@@ -723,7 +726,7 @@ pub fn from_plan(
     expr: &[Expr],
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
-    plan.with_new_exprs(expr.to_vec(), inputs)
+    plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
 }
 
 /// Find all columns referenced from an aggregate query
@@ -931,6 +934,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         }
         DataType::List(_) => true,
         DataType::LargeList(_) => true,
+        DataType::FixedSizeList(_, _) => true,
         _ => false,
     }
 }
@@ -1272,28 +1276,32 @@ mod tests {
             vec![col("name")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs.to_vec())?;
@@ -1315,28 +1323,32 @@ mod tests {
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
-            WindowFrame::new(true),
+            WindowFrame::new(Some(false)),
+            None,
         ));
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
             vec![],
             vec![],
-            WindowFrame::new(false),
+            WindowFrame::new(None),
+            None,
         ));
         let min3 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Min),
             vec![col("name")],
             vec![],
             vec![age_asc.clone(), name_desc.clone()],
-            WindowFrame::new(true),
+            WindowFrame::new(Some(false)),
+            None,
         ));
         let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
             vec![col("age")],
             vec![],
             vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
-            WindowFrame::new(true),
+            WindowFrame::new(Some(false)),
+            None,
         ));
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
@@ -1370,7 +1382,8 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
                     Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
                 ],
-                WindowFrame::new(true),
+                WindowFrame::new(Some(false)),
+                None,
             )),
             Expr::WindowFunction(expr::WindowFunction::new(
                 WindowFunctionDefinition::AggregateFunction(AggregateFunction::Sum),
@@ -1381,7 +1394,8 @@ mod tests {
                     Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
                     Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
                 ],
-                WindowFrame::new(true),
+                WindowFrame::new(Some(false)),
+                None,
             )),
         ];
         let expected = vec![

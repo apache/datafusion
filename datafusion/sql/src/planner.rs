@@ -61,6 +61,19 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
+    /// This provides a worktable (an intermediate table that is used to store the results of a CTE during execution)
+    /// We don't directly implement this in the logical plan's ['SqlToRel`]
+    /// because the sql code needs access to a table that contains execution-related types that can't be a direct dependency
+    /// of the sql crate (namely, the `CteWorktable`).
+    /// The [`ContextProvider`] provides a way to "hide" this dependency.
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        _schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Recursive CTE is not implemented")
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -72,6 +85,10 @@ pub trait ContextProvider {
 
     /// Get configuration options
     fn options(&self) -> &ConfigOptions;
+
+    fn udfs_names(&self) -> Vec<String>;
+    fn udafs_names(&self) -> Vec<String>;
+    fn udwfs_names(&self) -> Vec<String>;
 }
 
 /// SQL parser options
@@ -225,7 +242,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
-            let data_type = self.convert_simple_data_type(&column.data_type)?;
+            let data_type = self.convert_data_type(&column.data_type)?;
             let not_nullable = column
                 .options
                 .iter()
@@ -285,7 +302,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.apply_expr_alias(plan, alias.columns)?;
 
         LogicalPlanBuilder::from(plan)
-            .alias(self.normalizer.normalize(alias.name))?
+            .alias(TableReference::bare(self.normalizer.normalize(alias.name)))?
             .build()
     }
 
@@ -345,11 +362,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
             | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type)) => {
-                let data_type = self.convert_simple_data_type(inner_sql_type)?;
-
-                Ok(DataType::List(Arc::new(Field::new(
-                    "field", data_type, true,
-                ))))
+                // Arrays may be multi-dimensional.
+                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                Ok(DataType::new_list(inner_data_type, true))
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
@@ -452,6 +467,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Int64
             | SQLDataType::Float64
             | SQLDataType::Struct(_)
+            | SQLDataType::JSONB
+            | SQLDataType::Unspecified
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

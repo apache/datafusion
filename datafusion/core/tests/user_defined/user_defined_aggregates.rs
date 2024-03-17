@@ -19,7 +19,7 @@
 //! user defined aggregate functions
 
 use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::Int32Array;
+use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
 use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -27,6 +27,7 @@ use std::sync::{
 };
 
 use datafusion::datasource::MemTable;
+use datafusion::test_util::plan_and_collect;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float64Array, TimestampNanosecondArray},
@@ -42,10 +43,10 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{
-    assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
+use datafusion_common::{assert_contains, cast::as_primitive_array, exec_err};
+use datafusion_expr::{
+    create_udaf, AggregateUDFImpl, GroupsAccumulator, SimpleAggregateUDF,
 };
-use datafusion_expr::{create_udaf, SimpleAggregateUDF};
 use datafusion_physical_expr::expressions::AvgAccumulator;
 
 /// Test to show the contents of the setup
@@ -254,6 +255,29 @@ async fn simple_udaf() -> Result<()> {
 }
 
 #[tokio::test]
+async fn deregister_udaf() -> Result<()> {
+    let ctx = SessionContext::new();
+    let my_avg = create_udaf(
+        "my_avg",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg.clone());
+
+    assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    ctx.deregister_udaf("my_avg");
+
+    assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
@@ -293,6 +317,61 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_user_defined_functions_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let my_avg = create_udaf(
+        "dummy",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    )
+    .with_aliases(vec!["dummy_alias"]);
+
+    ctx.register_udaf(my_avg);
+
+    let expected = [
+        "+------------+",
+        "| dummy(t.i) |",
+        "+------------+",
+        "| 1.0        |",
+        "+------------+",
+    ];
+
+    let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
+    assert_batches_eq!(expected, &result);
+
+    let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
+    assert_batches_eq!(expected, &alias_result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_groups_accumulator() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let udaf = AggregateUDF::from(TestGroupsAccumulator {
+        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        result: 1,
+    });
+    ctx.register_udaf(udaf.clone());
+
+    let sql_df = ctx.sql("SELECT geo_mean(a) FROM t group by a").await?;
+    sql_df.show().await?;
 
     Ok(())
 }
@@ -435,7 +514,7 @@ impl TimeSum {
 }
 
 impl Accumulator for TimeSum {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
@@ -457,7 +536,7 @@ impl Accumulator for TimeSum {
         self.update_batch(states)
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         println!("Evaluating to {}", self.sum);
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
@@ -561,36 +640,29 @@ impl FirstSelector {
 
     // Internally, keep the data types as this type
     fn state_datatypes() -> Vec<DataType> {
-        vec![
-            DataType::Float64,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]
+        vec![Self::output_datatype()]
     }
 
     /// Convert to a set of ScalarValues
-    fn to_state(&self) -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::Float64(Some(self.value)),
-            ScalarValue::TimestampNanosecond(Some(self.time), None),
-        ]
-    }
+    fn to_state(&self) -> Result<ScalarValue> {
+        let f64arr = Arc::new(Float64Array::from(vec![self.value])) as ArrayRef;
+        let timearr =
+            Arc::new(TimestampNanosecondArray::from(vec![self.time])) as ArrayRef;
 
-    /// return this selector as a single scalar (struct) value
-    fn to_scalar(&self) -> ScalarValue {
-        ScalarValue::Struct(Some(self.to_state()), Self::fields())
+        let struct_arr =
+            StructArray::try_new(Self::fields(), vec![f64arr, timearr], None)?;
+        Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
 }
 
 impl Accumulator for FirstSelector {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        let state = self.to_state().into_iter().collect::<Vec<_>>();
-
-        Ok(state)
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.evaluate().map(|s| vec![s])
     }
 
     /// produce the output structure
-    fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.to_scalar())
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.to_state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -619,5 +691,108 @@ impl Accumulator for FirstSelector {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TestGroupsAccumulator {
+    signature: Signature,
+    result: u64,
+}
+
+impl AggregateUDFImpl for TestGroupsAccumulator {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "geo_mean"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn accumulator(&self, _arg: &DataType) -> Result<Box<dyn Accumulator>> {
+        // should use groups accumulator
+        panic!("accumulator shouldn't invoke");
+    }
+
+    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
+        Ok(vec![DataType::UInt64])
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+impl Accumulator for TestGroupsAccumulator {
+    fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::from(self.result))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<u64>()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::from(self.result)])
+    }
+
+    fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl GroupsAccumulator for TestGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        _values: &[ArrayRef],
+        _group_indices: &[usize],
+        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn evaluate(&mut self, _emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        Ok(Arc::new(PrimitiveArray::<UInt64Type>::new(
+            vec![self.result].into(),
+            None,
+        )) as ArrayRef)
+    }
+
+    fn state(&mut self, _emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        Ok(vec![Arc::new(PrimitiveArray::<UInt64Type>::new(
+            vec![self.result].into(),
+            None,
+        )) as ArrayRef])
+    }
+
+    fn merge_batch(
+        &mut self,
+        _values: &[ArrayRef],
+        _group_indices: &[usize],
+        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<u64>()
     }
 }

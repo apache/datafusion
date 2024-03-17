@@ -28,11 +28,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::exec_err;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
+use datafusion_common::instant::Instant;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Command
 #[derive(Debug)]
@@ -79,7 +79,8 @@ impl Command {
                             filename, e
                         ))
                     })?;
-                    exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
+                    exec_from_lines(ctx, &mut BufReader::new(file), print_options)
+                        .await?;
                     Ok(())
                 } else {
                     exec_err!("Required filename argument is missing")

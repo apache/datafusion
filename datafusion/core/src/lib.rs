@@ -132,9 +132,9 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion is a "disaggregated" query engine.  This
+//! DataFusion is a "disaggregated" query engine. This
 //! means developers can start with a working, full featured engine, and then
-//! extend the parts of DataFusion they need to specialize for their usecase. For example,
+//! extend the areas they need to specialize for their usecase. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
 //! built in SQL planner, [`SqlToRel`].
@@ -145,7 +145,7 @@
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
 //! * build your own query language or plans ([`LogicalPlanBuilder`])
 //! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
-//! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
+//! * add custom plan rewrite passes ([`AnalyzerRule`], [`OptimizerRule`]  and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
 //! You can find examples of each of them in the [datafusion-examples] directory.
@@ -158,6 +158,7 @@
 //! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
+//! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
 //!
 //! # Architecture
@@ -342,16 +343,20 @@
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
 //! format, making heavy use of functions from the [arrow]
-//! crate. Calling [`execute`] produces 1 or more partitions of data,
-//! consisting an operator that implements
-//! [`SendableRecordBatchStream`].
-//!
-//! Values are represented with [`ColumnarValue`], which are either
+//! crate. Values are represented with [`ColumnarValue`], which are either
 //! [`ScalarValue`] (single constant values) or [`ArrayRef`] (Arrow
 //! Arrays).
 //!
-//! Balanced parallelism is achieved using [`RepartitionExec`], which
-//! implements a [Volcano style] "Exchange".
+//! Calling [`execute`] produces 1 or more partitions of data,
+//! as a [`SendableRecordBatchStream`], which implements a pull based execution
+//! API. Calling `.next().await` will incrementally compute and return the next
+//! [`RecordBatch`]. Balanced parallelism is achieved using [Volcano style]
+//! "Exchange" operations implemented by [`RepartitionExec`].
+//!
+//! While some recent research such as [Morsel-Driven Parallelism] describes challenges
+//! with the pull style Volcano execution model on NUMA architectures, in practice DataFusion achieves
+//! similar scalability as systems that use morsel driven approach such as DuckDB.
+//! See the [DataFusion paper submitted to SIGMOD] for more details.
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -364,7 +369,25 @@
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
+//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/arrow-datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
+//!
+//! ## Thread Scheduling
+//!
+//! DataFusion incrementally computes output from a [`SendableRecordBatchStream`]
+//! with `target_partitions` threads. Parallelism is implementing using multiple
+//! [Tokio] [`task`]s, which are executed by threads managed by a tokio Runtime.
+//! While tokio is most commonly used
+//! for asynchronous network I/O, its combination of an efficient, work-stealing
+//! scheduler, first class compiler support for automatic continuation generation,
+//! and exceptional performance makes it a compelling choice for CPU intensive
+//! applications as well. This is explained in more detail in [Using Rustlang’s Async Tokio
+//! Runtime for CPU-Bound Tasks].
+//!
+//! [Tokio]:  https://tokio.rs
+//! [`task`]: tokio::task
+//! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //!
 //! ## State Management and Configuration
 //!
@@ -393,10 +416,12 @@
 //!
 //! The amount of memory and temporary local disk space used by
 //! DataFusion when running a plan can be controlled using the
-//! [`MemoryPool`] and [`DiskManager`].
+//! [`MemoryPool`] and [`DiskManager`]. Other runtime options can be
+//! found on [`RuntimeEnv`].
 //!
 //! [`DiskManager`]: crate::execution::DiskManager
 //! [`MemoryPool`]: crate::execution::memory_pool::MemoryPool
+//! [`RuntimeEnv`]: crate::execution::runtime_env::RuntimeEnv
 //! [`ObjectStoreRegistry`]: crate::datasource::object_store::ObjectStoreRegistry
 //!
 //! ## Crate Organization
@@ -456,6 +481,11 @@ pub use parquet;
 /// re-export of [`datafusion_common`] crate
 pub mod common {
     pub use datafusion_common::*;
+
+    /// re-export of [`datafusion_common_runtime`] crate
+    pub mod runtime {
+        pub use datafusion_common_runtime::*;
+    }
 }
 
 // Backwards compatibility
@@ -490,6 +520,17 @@ pub use datafusion_common::assert_batches_sorted_eq;
 /// re-export of [`datafusion_sql`] crate
 pub mod sql {
     pub use datafusion_sql::*;
+}
+
+/// re-export of [`datafusion_functions`] crate
+pub mod functions {
+    pub use datafusion_functions::*;
+}
+
+/// re-export of [`datafusion_functions_array`] crate, if "array_expressions" feature is enabled
+pub mod functions_array {
+    #[cfg(feature = "array_expressions")]
+    pub use datafusion_functions_array::*;
 }
 
 #[cfg(test)]

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::instant::Instant;
 use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::time::Instant;
 
 use crate::print_format::PrintFormat;
 
@@ -70,6 +70,7 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
+    pub color: bool,
 }
 
 fn get_timing_info_str(

@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
-use datafusion_expr::expr::{Alias, ScalarFunction, ScalarFunctionDefinition};
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -163,6 +163,7 @@ fn optimize_projections(
                 .collect::<Vec<_>>()
         }
         LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Extension(_)
@@ -217,6 +218,22 @@ fn optimize_projections(
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
             let mut new_aggr_expr = get_at_indices(&aggregate.aggr_expr, &aggregate_reqs);
+
+            // Aggregations always need at least one aggregate expression.
+            // With a nested count, we don't require any column as input, but
+            // still need to create a correct aggregate, which may be optimized
+            // out later. As an example, consider the following query:
+            //
+            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
+            //
+            // which always returns 1.
+            if new_aggr_expr.is_empty()
+                && new_group_bys.is_empty()
+                && !aggregate.aggr_expr.is_empty()
+            {
+                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
+            }
+
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices = indices_referred_by_exprs(schema, all_exprs_iter)?;
@@ -236,21 +253,6 @@ fn optimize_projections(
             let necessary_exprs = get_required_exprs(schema, &necessary_indices);
             let (aggregate_input, _) =
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)?;
-
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT COUNT(*) FROM (SELECT COUNT(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                new_aggr_expr = vec![aggregate.aggr_expr[0].clone()];
-            }
 
             // Create a new aggregate plan with the updated input and only the
             // absolutely necessary fields:
@@ -373,9 +375,9 @@ fn optimize_projections(
             // If new_input is `None`, this means child is not changed, so use
             // `old_child` during construction:
             .map(|(new_input, old_child)| new_input.unwrap_or_else(|| old_child.clone()))
-            .collect::<Vec<_>>();
-        plan.with_new_exprs(plan.expressions(), &new_inputs)
-            .map(Some)
+            .collect();
+        let exprs = plan.expressions();
+        plan.with_new_exprs(exprs, new_inputs).map(Some)
     }
 }
 
@@ -556,17 +558,16 @@ fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
             Expr::Cast(Cast::new(Box::new(new_expr), cast.data_type.clone()))
         }
         Expr::ScalarFunction(scalar_fn) => {
-            // TODO: Support UDFs.
-            let ScalarFunctionDefinition::BuiltIn(fun) = scalar_fn.func_def else {
-                return Ok(None);
-            };
             return Ok(scalar_fn
                 .args
                 .iter()
                 .map(|expr| rewrite_expr(expr, input))
                 .collect::<Result<Option<_>>>()?
                 .map(|new_args| {
-                    Expr::ScalarFunction(ScalarFunction::new(fun, new_args))
+                    Expr::ScalarFunction(ScalarFunction::new_func_def(
+                        scalar_fn.func_def.clone(),
+                        new_args,
+                    ))
                 }));
         }
         // Unsupported type for consecutive projection merge analysis.
@@ -868,7 +869,7 @@ fn rewrite_projection_given_requirements(
     return if let Some(input) =
         optimize_projections(&proj.input, config, &required_indices)?
     {
-        if &projection_schema(&input, &exprs_used)? == input.schema() {
+        if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {
             Projection::try_new(exprs_used, Arc::new(input))
@@ -878,7 +879,7 @@ fn rewrite_projection_given_requirements(
         // Projection expression used is different than the existing projection.
         // In this case, even if the child doesn't change, we should update the
         // projection to use fewer columns:
-        if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
+        if is_projection_unnecessary(&proj.input, &exprs_used)? {
             Ok(Some(proj.input.as_ref().clone()))
         } else {
             Projection::try_new(exprs_used, proj.input.clone())
@@ -888,6 +889,14 @@ fn rewrite_projection_given_requirements(
         // Projection doesn't change.
         Ok(None)
     };
+}
+
+/// Projection is unnecessary, when
+/// - input schema of the projection, output schema of the projection are same, and
+/// - all projection expressions are either Column or Literal
+fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
+    Ok(&projection_schema(input, proj_exprs)? == input.schema()
+        && proj_exprs.iter().all(is_expr_trivial))
 }
 
 #[cfg(test)]
@@ -900,7 +909,7 @@ mod tests {
     use datafusion_common::{Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, Expr, Like, LogicalPlan, Operator,
+        table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -1162,6 +1171,27 @@ mod tests {
 
         let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
         \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Test outer projection isn't discarded despite the same schema as inner
+    // https://github.com/apache/arrow-datafusion/issues/8942
+    #[test]
+    fn test_derived_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .project(vec![
+                col("a"),
+                when(col("a").eq(lit(1)), lit(10))
+                    .otherwise(col("d"))?
+                    .alias("d"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
+        \n  Projection: test.a, Int32(0) AS d\
+        \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }

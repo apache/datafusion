@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -153,11 +153,11 @@ impl Accumulator for StringAggAccumulator {
         Ok(())
     }
 
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
 
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::LargeUtf8(self.values.clone()))
     }
 
@@ -213,6 +213,7 @@ mod tests {
             &[],
             &schema,
             "agg",
+            false,
         )
         .unwrap();
 

@@ -29,7 +29,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
 use arrow_schema::{DataType, Schema};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
 
@@ -180,7 +180,7 @@ impl ExprIntervalGraphNode {
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
-        let expr = node.expression().clone();
+        let expr = node.expr.clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())

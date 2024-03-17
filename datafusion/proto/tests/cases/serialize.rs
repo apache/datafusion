@@ -21,11 +21,12 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use datafusion::execution::FunctionRegistry;
-use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::{col, create_udf, lit};
+use datafusion_expr::{col, create_udf, lit, ColumnarValue};
 use datafusion_expr::{Expr, Volatility};
 use datafusion_proto::bytes::Serializeable;
+use datafusion_proto::logical_plan::to_proto::serialize_expr;
+use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
 #[test]
 #[should_panic(
@@ -226,9 +227,12 @@ fn roundtrip_deeply_nested() {
 
 /// return a `SessionContext` with a `dummy` function registered as a UDF
 fn context_with_udf() -> SessionContext {
-    let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
-
-    let scalar_fn = make_scalar_function(fn_impl);
+    let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
+        let ColumnarValue::Array(array) = &args[0] else {
+            panic!("should be array")
+        };
+        Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
+    });
 
     let udf = create_udf(
         "dummy",
@@ -242,4 +246,41 @@ fn context_with_udf() -> SessionContext {
     ctx.register_udf(udf);
 
     ctx
+}
+
+#[test]
+fn test_expression_serialization_roundtrip() {
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::BuiltinScalarFunction;
+    use datafusion_proto::logical_plan::from_proto::parse_expr;
+    use strum::IntoEnumIterator;
+
+    let ctx = SessionContext::new();
+    let lit = Expr::Literal(ScalarValue::Utf8(None));
+    for builtin_fun in BuiltinScalarFunction::iter() {
+        // default to 4 args (though some exprs like substr have error checking)
+        let num_args = match builtin_fun {
+            BuiltinScalarFunction::Substr => 3,
+            _ => 4,
+        };
+        let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
+        let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
+
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        let proto = serialize_expr(&expr, &extension_codec).unwrap();
+        let deserialize = parse_expr(&proto, &ctx, &extension_codec).unwrap();
+
+        let serialize_name = extract_function_name(&expr);
+        let deserialize_name = extract_function_name(&deserialize);
+
+        assert_eq!(serialize_name, deserialize_name);
+    }
+
+    /// Extracts the first part of a function name
+    /// 'foo(bar)' -> 'foo'
+    fn extract_function_name(expr: &Expr) -> String {
+        let name = expr.display_name().unwrap();
+        name.split('(').next().unwrap().to_string()
+    }
 }

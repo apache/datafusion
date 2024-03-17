@@ -19,9 +19,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::is_volatile_expression;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef,
     DataFusionError, JoinConstraint, Result,
@@ -34,7 +37,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
     and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    ScalarFunctionDefinition, TableProviderFilterPushDown, Volatility,
+    ScalarFunctionDefinition, TableProviderFilterPushDown,
 };
 
 use itertools::Itertools;
@@ -220,17 +223,18 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
+        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
+        | Expr::Unnest(_)
         | Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
             func_def: ScalarFunctionDefinition::UDF(_),
             ..
         }) => {
             is_evaluate = false;
-            Ok(VisitRecursion::Stop)
+            Ok(TreeNodeRecursion::Stop)
         }
         Expr::Alias(_)
         | Expr::BinaryExpr(_)
@@ -252,7 +256,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::ScalarFunction(..)
-        | Expr::InList { .. } => Ok(VisitRecursion::Continue),
+        | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
@@ -295,15 +299,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 //
 // do nothing.
 //
-fn extract_or_clauses_for_join(
-    filters: &[&Expr],
-    schema: &DFSchema,
-    preserved: bool,
-) -> Vec<Expr> {
-    if !preserved {
-        return vec![];
-    }
-
+fn extract_or_clauses_for_join<'a>(
+    filters: &'a [Expr],
+    schema: &'a DFSchema,
+) -> impl Iterator<Item = Expr> + 'a {
     let schema_columns = schema
         .iter()
         .flat_map(|(qualifier, field)| {
@@ -315,8 +314,8 @@ fn extract_or_clauses_for_join(
         })
         .collect::<HashSet<_>>();
 
-    let mut exprs = vec![];
-    for expr in filters.iter() {
+    // new formed OR clauses and their column references
+    filters.iter().filter_map(move |expr| {
         if let Expr::BinaryExpr(BinaryExpr {
             left,
             op: Operator::Or,
@@ -328,13 +327,11 @@ fn extract_or_clauses_for_join(
 
             // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
             if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
-                exprs.push(or(left_expr, right_expr));
+                return Some(or(left_expr, right_expr));
             }
         }
-    }
-
-    // new formed OR clauses and their column references
-    exprs
+        None
+    })
 }
 
 // extract qual from OR sub-clause.
@@ -422,15 +419,17 @@ fn push_down_all_join(
     // 1) can push through join to its children(left or right)
     // 2) can be converted to join conditions if the join type is Inner
     // 3) should be kept as filter conditions
+    let left_schema = left.schema();
+    let right_schema = right.schema();
     let mut left_push = vec![];
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
     for predicate in predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
+        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
             left_push.push(predicate);
         } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right.schema())?
+            && can_pushdown_join_predicate(&predicate, right_schema)?
         {
             right_push.push(predicate);
         } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
@@ -444,10 +443,10 @@ fn push_down_all_join(
 
     // For infer predicates, if they can not push through join, just drop them
     for predicate in infer_predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
+        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
             left_push.push(predicate);
         } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right.schema())?
+            && can_pushdown_join_predicate(&predicate, right_schema)?
         {
             right_push.push(predicate);
         }
@@ -456,10 +455,10 @@ fn push_down_all_join(
     if !on_filter.is_empty() {
         let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_plan)?;
         for on in on_filter {
-            if on_left_preserved && can_pushdown_join_predicate(&on, left.schema())? {
+            if on_left_preserved && can_pushdown_join_predicate(&on, left_schema)? {
                 left_push.push(on)
             } else if on_right_preserved
-                && can_pushdown_join_predicate(&on, right.schema())?
+                && can_pushdown_join_predicate(&on, right_schema)?
             {
                 right_push.push(on)
             } else {
@@ -470,31 +469,14 @@ fn push_down_all_join(
 
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
-    let or_to_left = extract_or_clauses_for_join(
-        &keep_predicates.iter().collect::<Vec<_>>(),
-        left.schema(),
-        left_preserved,
-    );
-    let or_to_right = extract_or_clauses_for_join(
-        &keep_predicates.iter().collect::<Vec<_>>(),
-        right.schema(),
-        right_preserved,
-    );
-    let on_or_to_left = extract_or_clauses_for_join(
-        &join_conditions.iter().collect::<Vec<_>>(),
-        left.schema(),
-        left_preserved,
-    );
-    let on_or_to_right = extract_or_clauses_for_join(
-        &join_conditions.iter().collect::<Vec<_>>(),
-        right.schema(),
-        right_preserved,
-    );
-
-    left_push.extend(or_to_left);
-    left_push.extend(on_or_to_left);
-    right_push.extend(or_to_right);
-    right_push.extend(on_or_to_right);
+    if left_preserved {
+        left_push.extend(extract_or_clauses_for_join(&keep_predicates, left_schema));
+        left_push.extend(extract_or_clauses_for_join(&join_conditions, left_schema));
+    }
+    if right_preserved {
+        right_push.extend(extract_or_clauses_for_join(&keep_predicates, right_schema));
+        right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
+    }
 
     let left = match conjunction(left_push) {
         Some(predicate) => {
@@ -516,28 +498,19 @@ fn push_down_all_join(
     //      it always will be the last element, otherwise result
     //      vector will contain only join keys (without additional
     //      element representing filter).
-    let expr = join_plan.expressions();
-    let mut new_exprs = if !on_filter_empty {
-        expr[..expr.len() - 1].to_vec()
-    } else {
-        expr
-    };
-    if !join_conditions.is_empty() {
-        new_exprs.push(join_conditions.into_iter().reduce(Expr::and).unwrap());
+    let mut exprs = join_plan.expressions();
+    if !on_filter_empty {
+        exprs.pop();
     }
-    let plan = join_plan.with_new_exprs(new_exprs, &[left, right])?;
+    exprs.extend(join_conditions.into_iter().reduce(Expr::and));
+    let plan = join_plan.with_new_exprs(exprs, vec![left, right])?;
 
-    if keep_predicates.is_empty() {
-        Ok(plan)
-    } else {
-        // wrap the join on the filter whose predicates must be kept
-        match conjunction(keep_predicates) {
-            Some(predicate) => Ok(LogicalPlan::Filter(Filter::try_new(
-                predicate,
-                Arc::new(plan),
-            )?)),
-            None => Ok(plan),
+    // wrap the join on the filter whose predicates must be kept
+    match conjunction(keep_predicates) {
+        Some(predicate) => {
+            Filter::try_new(predicate, Arc::new(plan)).map(LogicalPlan::Filter)
         }
+        None => Ok(plan),
     }
 }
 
@@ -691,9 +664,9 @@ impl OptimizerRule for PushDownFilter {
                 // commutable
                 let new_filter = plan.with_new_exprs(
                     plan.expressions(),
-                    &[child_plan.inputs()[0].clone()],
+                    vec![child_plan.inputs()[0].clone()],
                 )?;
-                child_plan.with_new_exprs(child_plan.expressions(), &[new_filter])?
+                child_plan.with_new_exprs(child_plan.expressions(), vec![new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
@@ -713,7 +686,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     subquery_alias.input.clone(),
                 )?);
-                child_plan.with_new_exprs(child_plan.expressions(), &[new_filter])?
+                child_plan.with_new_exprs(child_plan.expressions(), vec![new_filter])?
             }
             LogicalPlan::Projection(projection) => {
                 // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
@@ -733,7 +706,9 @@ impl OptimizerRule for PushDownFilter {
 
                             (qualified_name(qualifier, field.name()), expr)
                         })
-                        .partition(|(_, value)| is_volatile_expression(value));
+                        .partition(|(_, value)| {
+                            is_volatile_expression(value).unwrap_or(true)
+                        });
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];
@@ -758,12 +733,12 @@ impl OptimizerRule for PushDownFilter {
                         match conjunction(keep_predicates) {
                             None => child_plan.with_new_exprs(
                                 child_plan.expressions(),
-                                &[new_filter],
+                                vec![new_filter],
                             )?,
                             Some(keep_predicate) => {
                                 let child_plan = child_plan.with_new_exprs(
                                     child_plan.expressions(),
-                                    &[new_filter],
+                                    vec![new_filter],
                                 )?;
                                 LogicalPlan::Filter(Filter::try_new(
                                     keep_predicate,
@@ -836,13 +811,13 @@ impl OptimizerRule for PushDownFilter {
                 let child = match conjunction(replaced_push_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
-                        Arc::new((*agg.input).clone()),
+                        agg.input.clone(),
                     )?),
                     None => (*agg.input).clone(),
                 };
                 let new_agg = filter
                     .input
-                    .with_new_exprs(filter.input.expressions(), &vec![child])?;
+                    .with_new_exprs(filter.input.expressions(), vec![child])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
@@ -880,6 +855,13 @@ impl OptimizerRule for PushDownFilter {
                 let results = scan
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
+                if filter_predicates.len() != results.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        results.len(),
+                        filter_predicates.len());
+                }
+
                 let zip = filter_predicates.iter().zip(results);
 
                 let new_scan_filters = zip
@@ -948,7 +930,7 @@ impl OptimizerRule for PushDownFilter {
                 };
                 // extension with new inputs.
                 let new_extension =
-                    child_plan.with_new_exprs(child_plan.expressions(), &new_children)?;
+                    child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
 
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
@@ -1015,45 +997,14 @@ pub fn replace_cols_by_name(
     e.transform_up(&|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Transformed::Yes(new_c.clone()),
-                None => Transformed::No(expr),
+                Some(new_c) => Transformed::yes(new_c.clone()),
+                None => Transformed::no(expr),
             }
         } else {
-            Transformed::No(expr)
+            Transformed::no(expr)
         })
     })
-}
-
-/// check whether the expression is volatile predicates
-fn is_volatile_expression(e: &Expr) -> bool {
-    let mut is_volatile = false;
-    e.apply(&mut |expr| {
-        Ok(match expr {
-            Expr::ScalarFunction(f) => match &f.func_def {
-                ScalarFunctionDefinition::BuiltIn(fun)
-                    if fun.volatility() == Volatility::Volatile =>
-                {
-                    is_volatile = true;
-                    VisitRecursion::Stop
-                }
-                ScalarFunctionDefinition::UDF(fun)
-                    if fun.signature().volatility == Volatility::Volatile =>
-                {
-                    is_volatile = true;
-                    VisitRecursion::Stop
-                }
-                ScalarFunctionDefinition::Name(_) => {
-                    return internal_err!(
-                        "Function `Expr` with name should be resolved."
-                    );
-                }
-                _ => VisitRecursion::Continue,
-            },
-            _ => VisitRecursion::Continue,
-        })
-    })
-    .unwrap();
-    is_volatile
+    .data()
 }
 
 /// check whether the expression uses the columns in `check_map`.
@@ -1064,12 +1015,12 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
             match check_map.get(&c.flat_name()) {
                 Some(_) => {
                     is_contain = true;
-                    VisitRecursion::Stop
+                    TreeNodeRecursion::Stop
                 }
-                None => VisitRecursion::Continue,
+                None => TreeNodeRecursion::Continue,
             }
         } else {
-            VisitRecursion::Continue
+            TreeNodeRecursion::Continue
         })
     })
     .unwrap();

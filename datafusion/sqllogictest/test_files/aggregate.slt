@@ -95,6 +95,9 @@ SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Float64, Float64, Float64\)'\. You might need to add explicit type casts\.
+SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
+
 # array agg can use order by
 query ?
 SELECT array_agg(c13 ORDER BY c13)
@@ -135,6 +138,61 @@ AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(agg_order.c1)]
 ------SortExec: expr=[c2@1 DESC,c3@2 ASC NULLS LAST]
 --------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+
+# test array_agg_order with list data type
+statement ok
+CREATE TABLE array_agg_order_list_table AS VALUES
+  ('w', 2, [1,2,3], 10),
+  ('w', 1, [9,5,2], 20),
+  ('w', 1, [3,2,5], 30),
+  ('b', 2, [4,5,6], 20),
+  ('b', 1, [7,8,9], 30)
+;
+
+query T? rowsort
+select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [[7, 8, 9], [4, 5, 6]]
+w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
+
+query T?? rowsort
+select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [7, 8, 9] [4, 5, 6]
+w [3, 2, 5] [1, 2, 3]
+
+query T? rowsort
+select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [4, 5, 6]
+w [9, 5, 2]
+
+statement ok
+drop table array_agg_order_list_table;
+
+# test array_agg_distinct with list data type
+statement ok
+CREATE TABLE array_agg_distinct_list_table AS VALUES
+  ('w', [0,1]),
+  ('w', [0,1]),
+  ('w', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [0,1])
+;
+
+# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/physical-expr/src/aggregate/array_agg_distinct.rs`
+query ??
+select array_sort(c1), array_sort(c2) from (
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+);
+----
+[b, w] [[0, 1], [1, 0]]
+
+statement ok
+drop table array_agg_distinct_list_table;
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
@@ -1301,7 +1359,7 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO: array_agg_distinct output is non-determinisitic -- rewrite with array_sort(list_sort)
+# TODO: array_agg_distinct output is non-deterministic -- rewrite with array_sort(list_sort)
 #       unnest is also not available, so manually unnesting via CROSS JOIN
 # additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
 #
@@ -2197,9 +2255,10 @@ select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query error DataFusion error: Execution error: aggregate function needs at least one non-null element
+query I
 select approx_median(a) from (select 1 as a where 1=0);
-
+----
+NULL
 
 # aggregate_decimal_sum
 query RT
@@ -2511,198 +2570,6 @@ true
 false
 true
 NULL
-
-# TopK aggregation
-statement ok
-CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
-(NULL, 0, 0),
-('a', NULL, NULL),
-('a', 1, 1),
-('a', -1, -1),
-('b', 0, 0),
-('c', 1, 1),
-('c', 2, 2),
-('b', 3, 3);
-
-statement ok
-set datafusion.optimizer.enable_topk_aggregation = false;
-
-query TT
-explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
-----
-logical_plan
-Limit: skip=0, fetch=4
---Sort: MAX(traces.timestamp) DESC NULLS FIRST, fetch=4
-----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
-------TableScan: traces projection=[trace_id, timestamp]
-physical_plan
-GlobalLimitExec: skip=0, fetch=4
---SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
-----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-
-
-query TI
-select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
-----
-b 3
-c 2
-a 1
-NULL 0
-
-query TI
-select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
-----
-a -1
-NULL 0
-b 0
-c 1
-
-query TII
-select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
-----
-a -1 -1
-b 0 0
-NULL 0 0
-c 1 1
-
-query TII
-select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
-----
-a -1 -1
-NULL 0 0
-b 0 0
-c 1 1
-
-statement ok
-set datafusion.optimizer.enable_topk_aggregation = true;
-
-query TT
-explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
-----
-logical_plan
-Limit: skip=0, fetch=4
---Sort: MAX(traces.timestamp) DESC NULLS FIRST, fetch=4
-----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
-------TableScan: traces projection=[trace_id, timestamp]
-physical_plan
-GlobalLimitExec: skip=0, fetch=4
---SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
-----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-
-query TT
-explain select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) desc limit 4;
-----
-logical_plan
-Limit: skip=0, fetch=4
---Sort: MIN(traces.timestamp) DESC NULLS FIRST, fetch=4
-----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MIN(traces.timestamp)]]
-------TableScan: traces projection=[trace_id, timestamp]
-physical_plan
-GlobalLimitExec: skip=0, fetch=4
---SortPreservingMergeExec: [MIN(traces.timestamp)@1 DESC], fetch=4
-----SortExec: TopK(fetch=4), expr=[MIN(traces.timestamp)@1 DESC]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-
-query TT
-explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) asc limit 4;
-----
-logical_plan
-Limit: skip=0, fetch=4
---Sort: MAX(traces.timestamp) ASC NULLS LAST, fetch=4
-----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
-------TableScan: traces projection=[trace_id, timestamp]
-physical_plan
-GlobalLimitExec: skip=0, fetch=4
---SortPreservingMergeExec: [MAX(traces.timestamp)@1 ASC NULLS LAST], fetch=4
-----SortExec: TopK(fetch=4), expr=[MAX(traces.timestamp)@1 ASC NULLS LAST]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-
-query TT
-explain select trace_id, MAX(timestamp) from traces group by trace_id order by trace_id asc limit 4;
-----
-logical_plan
-Limit: skip=0, fetch=4
---Sort: traces.trace_id ASC NULLS LAST, fetch=4
-----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
-------TableScan: traces projection=[trace_id, timestamp]
-physical_plan
-GlobalLimitExec: skip=0, fetch=4
---SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
-----SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST]
-------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
-----------------MemoryExec: partitions=1, partition_sizes=[1]
-
-query TI
-select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
-----
-b 3
-c 2
-a 1
-NULL 0
-
-query TI
-select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
-----
-a -1
-NULL 0
-b 0
-c 1
-
-query TI
-select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 3;
-----
-b 3
-c 2
-a 1
-
-query TI
-select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 3;
-----
-a -1
-NULL 0
-b 0
-
-query TII
-select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
-----
-a -1 -1
-b 0 0
-NULL 0 0
-c 1 1
-
-query TII
-select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
-----
-a -1 -1
-NULL 0 0
-b 0 0
-c 1 1
 
 #
 # Push limit into distinct group-by aggregation tests
@@ -3257,3 +3124,255 @@ query I
 select count(*) from (select count(*) a, count(*) b from (select 1));
 ----
 1
+
+# Distinct Count for string
+# (test for the specialized implementation of distinct count for strings)
+
+# UTF8 string matters for string to &[u8] conversion, add it to prevent regression
+statement ok
+create table distinct_count_string_table as values 
+    (1, 'a', 'longstringtest_a', '台灣'),
+    (2, 'b', 'longstringtest_b1', '日本'),
+    (2, 'b', 'longstringtest_b2', '中國'),
+    (3, 'c', 'longstringtest_c1', '美國'),
+    (3, 'c', 'longstringtest_c2', '歐洲'),
+    (3, 'c', 'longstringtest_c3', '韓國')
+;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_string_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_string_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+
+# test with long strings as well
+statement ok
+create table distinct_count_long_string_table as
+SELECT column1,
+  arrow_cast(column2, 'LargeUtf8') as column2,
+  arrow_cast(column3, 'LargeUtf8') as column3,
+  arrow_cast(column4, 'LargeUtf8') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_long_string_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_long_string_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+statement ok
+drop table distinct_count_long_string_table;
+
+
+# test with binary strings as well
+statement ok
+create table distinct_count_binary_table as
+SELECT column1,
+  arrow_cast(column2, 'Binary') as column2,
+  arrow_cast(column3, 'Binary') as column3,
+  arrow_cast(column4, 'Binary') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_binary_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_binary_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+statement ok
+drop table distinct_count_binary_table;
+
+
+# test with large binary strings as well
+statement ok
+create table distinct_count_large_binary_table as
+SELECT column1,
+  arrow_cast(column2, 'LargeBinary') as column2,
+  arrow_cast(column3, 'LargeBinary') as column3,
+  arrow_cast(column4, 'LargeBinary') as column4
+FROM distinct_count_string_table;
+
+# run through update_batch
+query IIII
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_large_binary_table;
+----
+3 3 6 6
+
+# run through merge_batch
+query IIII rowsort
+select count(distinct column1), count(distinct column2), count(distinct column3), count(distinct column4) from distinct_count_large_binary_table group by column1;
+----
+1 1 1 1
+1 1 2 2
+1 1 3 3
+
+statement ok
+drop table distinct_count_large_binary_table;
+
+
+
+## Cleanup from distinct count tests
+statement ok
+drop table distinct_count_string_table;
+
+
+
+# rule `aggregate_statistics` should not optimize MIN/MAX to wrong values on empty relation
+
+statement ok
+CREATE TABLE empty(col0 INTEGER);
+
+query I
+SELECT MIN(col0) FROM empty WHERE col0=1;
+----
+NULL
+
+query I
+SELECT MAX(col0) FROM empty WHERE col0=1;
+----
+NULL
+
+query TT
+EXPLAIN SELECT MIN(col0) FROM empty;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[MIN(empty.col0)]]
+--TableScan: empty projection=[col0]
+physical_plan
+ProjectionExec: expr=[NULL as MIN(empty.col0)]
+--PlaceholderRowExec
+
+query TT
+EXPLAIN SELECT MAX(col0) FROM empty;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[MAX(empty.col0)]]
+--TableScan: empty projection=[col0]
+physical_plan
+ProjectionExec: expr=[NULL as MAX(empty.col0)]
+--PlaceholderRowExec
+
+statement ok
+DROP TABLE empty;
+
+statement ok
+CREATE TABLE t(col0 INTEGER) as VALUES(2);
+
+query I
+SELECT MIN(col0) FROM t WHERE col0=1;
+----
+NULL
+
+query I
+SELECT MAX(col0) FROM t WHERE col0=1;
+----
+NULL
+
+statement ok
+DROP TABLE t;
+
+
+# Test for the case when the column name is ambiguous
+statement ok
+CREATE TABLE t(a BIGINT) AS VALUES(1), (2), (3);
+
+# The column name referenced by GROUP-BY is ambiguous, prefer the column in base plan
+query I
+SELECT 0 as "t.a" FROM t GROUP BY t.a;
+----
+0
+0
+0
+
+# The column name referenced by HAVING is ambiguous, prefer the column in the base plan
+query I
+SELECT 0 AS "t.a" FROM t HAVING MAX(t.a) = 0;
+----
+
+# Test issue: https://github.com/apache/arrow-datafusion/issues/9161
+query I rowsort
+SELECT CAST(a AS INT) FROM t GROUP BY t.a;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (null::bigint), (3), (4);
+
+query I
+SELECT FIRST_VALUE(column1) FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
+----
+3
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null with ORDER BY in FIRST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 4), (4, 3), (null::bigint, 1), (null::bigint, 1);
+
+query I
+SELECT column1 FROM t ORDER BY column2;
+----
+NULL
+NULL
+4
+3
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT FIRST_VALUE(column1 ORDER BY column2) IGNORE NULLS FROM t;
+----
+4
+
+statement ok
+DROP TABLE t;

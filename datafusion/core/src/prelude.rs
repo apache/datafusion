@@ -38,6 +38,9 @@ pub use datafusion_expr::{
     logical_plan::{JoinType, Partitioning},
     Expr,
 };
+pub use datafusion_functions::expr_fn::*;
+#[cfg(feature = "array_expressions")]
+pub use datafusion_functions_array::expr_fn::*;
 
 pub use std::ops::Not;
 pub use std::ops::{Add, Div, Mul, Neg, Rem, Sub};

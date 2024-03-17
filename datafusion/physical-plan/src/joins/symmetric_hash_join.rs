@@ -32,7 +32,7 @@ use std::task::Poll;
 use std::{usize, vec};
 
 use crate::common::SharedMemoryReservation;
-use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
+use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -41,34 +41,37 @@ use crate::joins::stream_join_utils::{
     StreamJoinMetrics,
 };
 use crate::joins::utils::{
-    build_batch_from_indices, build_join_schema, check_join_is_valid,
-    partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn,
-    StatefulStreamResult,
+    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+    check_join_is_valid, partitioned_join_output_partitioning, ColumnIndex, JoinFilter,
+    JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
 };
 use crate::{
-    expressions::{Column, PhysicalSortExpr},
+    execution_mode_from_children,
+    expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
+use arrow::array::{
+    ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+    UInt64Array,
+};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{
-    internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
-};
+use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
+use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
-use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::Stream;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -167,13 +170,11 @@ pub struct SymmetricHashJoinExec {
     /// Right side stream
     pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    pub(crate) on: Vec<(Column, Column)>,
+    pub(crate) on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
     /// Filters applied when finding matching rows
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// The schema once the join is applied
-    schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Execution metrics
@@ -188,6 +189,8 @@ pub struct SymmetricHashJoinExec {
     pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl SymmetricHashJoinExec {
@@ -228,14 +231,15 @@ impl SymmetricHashJoinExec {
 
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-
+        let schema = Arc::new(schema);
+        let cache =
+            Self::compute_properties(&left, &right, schema.clone(), *join_type, &on);
         Ok(SymmetricHashJoinExec {
             left,
             right,
             on,
             filter,
             join_type: *join_type,
-            schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
@@ -243,7 +247,43 @@ impl SymmetricHashJoinExec {
             left_sort_exprs,
             right_sort_exprs,
             mode,
+            cache,
         })
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        left: &Arc<dyn ExecutionPlan>,
+        right: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        join_type: JoinType,
+        join_on: JoinOnRef,
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = join_equivalence_properties(
+            left.equivalence_properties().clone(),
+            right.equivalence_properties().clone(),
+            &join_type,
+            schema,
+            &[false, false],
+            // Has alternating probe side
+            None,
+            join_on,
+        );
+
+        // Get output partitioning:
+        let left_columns_len = left.schema().fields.len();
+        let output_partitioning = partitioned_join_output_partitioning(
+            join_type,
+            left.output_partitioning(),
+            right.output_partitioning(),
+            left_columns_len,
+        );
+
+        // Determine execution mode:
+        let mode = execution_mode_from_children([left, right]);
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 
     /// left stream
@@ -257,7 +297,7 @@ impl SymmetricHashJoinExec {
     }
 
     /// Set of common columns used to join on
-    pub fn on(&self) -> &[(Column, Column)] {
+    pub fn on(&self) -> &[(PhysicalExprRef, PhysicalExprRef)] {
         &self.on
     }
 
@@ -349,12 +389,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children.iter().any(|u| *u))
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -363,7 +399,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
-                    .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+                    .map(|(l, r)| (l.clone() as _, r.clone() as _))
                     .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
@@ -385,34 +421,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 .as_ref()
                 .map(PhysicalSortRequirement::from_sort_exprs),
         ]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        let left_columns_len = self.left.schema().fields.len();
-        partitioned_join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
-    }
-
-    // TODO: Output ordering might be kept for some cases.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            &self.join_type,
-            self.schema(),
-            &self.maintains_input_order(),
-            // Has alternating probe side
-            None,
-            self.on(),
-        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -785,7 +793,7 @@ pub(crate) fn join_with_probe_batch(
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
+    let (build_indices, probe_indices) = lookup_join_hashmap(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
         probe_batch,
@@ -794,11 +802,22 @@ pub(crate) fn join_with_probe_batch(
         random_state,
         null_equals_null,
         &mut build_hash_joiner.hashes_buffer,
-        filter,
-        build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
-        false,
     )?;
+
+    let (build_indices, probe_indices) = if let Some(filter) = filter {
+        apply_join_filter_to_indices(
+            &build_hash_joiner.input_buffer,
+            probe_batch,
+            build_indices,
+            probe_indices,
+            filter,
+            build_hash_joiner.build_side,
+        )?
+    } else {
+        (build_indices, probe_indices)
+    };
+
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
             &mut build_hash_joiner.visited_rows,
@@ -835,13 +854,109 @@ pub(crate) fn join_with_probe_batch(
     }
 }
 
+/// This method performs lookups against JoinHashMap by hash values of join-key columns, and handles potential
+/// hash collisions.
+///
+/// # Arguments
+///
+/// * `build_hashmap` - hashmap collected from build side data.
+/// * `build_batch` - Build side record batch.
+/// * `probe_batch` - Probe side record batch.
+/// * `build_on` - An array of columns on which the join will be performed. The columns are from the build side of the join.
+/// * `probe_on` - An array of columns on which the join will be performed. The columns are from the probe side of the join.
+/// * `random_state` - The random state for the join.
+/// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
+/// * `hashes_buffer` - Buffer used for probe side keys hash calculation.
+/// * `deleted_offset` - deleted offset for build side data.
+///
+/// # Returns
+///
+/// A [Result] containing a tuple with two equal length arrays, representing indices of rows from build and probe side,
+/// matched by join key columns.
+#[allow(clippy::too_many_arguments)]
+fn lookup_join_hashmap(
+    build_hashmap: &PruningJoinHashMap,
+    build_batch: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_on: &[PhysicalExprRef],
+    probe_on: &[PhysicalExprRef],
+    random_state: &RandomState,
+    null_equals_null: bool,
+    hashes_buffer: &mut Vec<u64>,
+    deleted_offset: Option<usize>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let keys_values = probe_on
+        .iter()
+        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+    let build_join_values = build_on
+        .iter()
+        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+
+    hashes_buffer.clear();
+    hashes_buffer.resize(probe_batch.num_rows(), 0);
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+
+    // As SymmetricHashJoin uses LIFO JoinHashMap, the chained list algorithm
+    // will return build indices for each probe row in a reverse order as such:
+    // Build Indices: [5, 4, 3]
+    // Probe Indices: [1, 1, 1]
+    //
+    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
+    // Let's consider probe rows [0,1] as an example:
+    //
+    // When the probe iteration sequence is reversed, the following pairings can be derived:
+    //
+    // For probe row 1:
+    //     (5, 1)
+    //     (4, 1)
+    //     (3, 1)
+    //
+    // For probe row 0:
+    //     (5, 0)
+    //     (4, 0)
+    //     (3, 0)
+    //
+    // After reversing both sets of indices, we obtain reversed indices:
+    //
+    //     (3,0)
+    //     (4,0)
+    //     (5,0)
+    //     (3,1)
+    //     (4,1)
+    //     (5,1)
+    //
+    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    let (mut matched_probe, mut matched_build) = build_hashmap
+        .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+
+    matched_probe.as_slice_mut().reverse();
+    matched_build.as_slice_mut().reverse();
+
+    let build_indices: UInt64Array =
+        PrimitiveArray::new(matched_build.finish().into(), None);
+    let probe_indices: UInt32Array =
+        PrimitiveArray::new(matched_probe.finish().into(), None);
+
+    let (build_indices, probe_indices) = equal_rows_arr(
+        &build_indices,
+        &probe_indices,
+        &build_join_values,
+        &keys_values,
+        null_equals_null,
+    )?;
+
+    Ok((build_indices, probe_indices))
+}
+
 pub struct OneSideHashJoiner {
     /// Build side
     build_side: JoinSide,
     /// Input record batch buffer
     pub input_buffer: RecordBatch,
     /// Columns from the side
-    pub(crate) on: Vec<Column>,
+    pub(crate) on: Vec<PhysicalExprRef>,
     /// Hashmap
     pub(crate) hashmap: PruningJoinHashMap,
     /// Reuse the hashes buffer
@@ -868,7 +983,11 @@ impl OneSideHashJoiner {
         size += std::mem::size_of_val(&self.deleted_offset);
         size
     }
-    pub fn new(build_side: JoinSide, on: Vec<Column>, schema: SchemaRef) -> Self {
+    pub fn new(
+        build_side: JoinSide,
+        on: Vec<PhysicalExprRef>,
+        schema: SchemaRef,
+    ) -> Self {
         Self {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
@@ -1213,9 +1332,10 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, Column};
+    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
 
     use once_cell::sync::Lazy;
     use rstest::*;
@@ -1336,8 +1456,13 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            binary(
+                col("lc1", left_schema)?,
+                Operator::Plus,
+                lit(ScalarValue::Int32(Some(1))),
+                left_schema,
+            )?,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1404,8 +1529,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1458,8 +1583,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1510,8 +1635,8 @@ mod tests {
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
@@ -1559,8 +1684,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1620,8 +1745,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1681,8 +1806,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1744,8 +1869,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1803,8 +1928,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1870,8 +1995,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![
@@ -1929,8 +2054,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
@@ -2013,8 +2138,8 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
@@ -2106,8 +2231,8 @@ mod tests {
         )?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
+            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
+            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
         )];
 
         let intermediate_schema = Schema::new(vec![

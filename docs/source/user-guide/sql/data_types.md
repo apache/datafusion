@@ -29,19 +29,19 @@ You can see the corresponding Arrow type for any SQL expression using
 the `arrow_typeof` function. For example:
 
 ```sql
-❯ select arrow_typeof(interval '1 month');
-+-------------------------------------+
-| arrowtypeof(IntervalYearMonth("1")) |
-+-------------------------------------+
-| Interval(YearMonth)                 |
-+-------------------------------------+
+select arrow_typeof(interval '1 month');
++---------------------------------------------------------------------+
+| arrow_typeof(IntervalMonthDayNano("79228162514264337593543950336")) |
++---------------------------------------------------------------------+
+| Interval(MonthDayNano)                                              |
++---------------------------------------------------------------------+
 ```
 
 You can cast a SQL expression to a specific Arrow type using the `arrow_cast` function
 For example, to cast the output of `now()` to a `Timestamp` with second precision:
 
 ```sql
-❯ select arrow_cast(now(), 'Timestamp(Second, None)');
+select arrow_cast(now(), 'Timestamp(Second, None)');
 +---------------------+
 | now()               |
 +---------------------+

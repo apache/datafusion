@@ -18,34 +18,22 @@
 //! Tree node implementation for logical plan
 
 use crate::LogicalPlan;
-use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{tree_node::TreeNode, Result};
-use std::borrow::Cow;
+
+use datafusion_common::tree_node::{
+    Transformed, TransformedIterator, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
+use datafusion_common::{handle_visit_recursion, Result};
 
 impl TreeNode for LogicalPlan {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.inputs().into_iter().map(Cow::Borrowed).collect()
-    }
-
-    fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        // Note,
-        //
+    fn apply<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+        &self,
+        f: &mut F,
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::apply_subqueries`] before visiting its children
-        match op(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
-        self.apply_subqueries(op)?;
-
-        self.apply_children(&mut |node| node.apply(op))
+        handle_visit_recursion!(f(self)?, DOWN);
+        self.apply_subqueries(f)?;
+        self.apply_children(&mut |n| n.apply(f))
     }
 
     /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
@@ -68,54 +56,58 @@ impl TreeNode for LogicalPlan {
     /// visitor.post_visit(Filter)
     /// visitor.post_visit(Projection)
     /// ```
-    fn visit<V: TreeNodeVisitor<N = Self>>(
+    fn visit<V: TreeNodeVisitor<Node = Self>>(
         &self,
         visitor: &mut V,
-    ) -> Result<VisitRecursion> {
+    ) -> Result<TreeNodeRecursion> {
         // Compared to the default implementation, we need to invoke
         // [`Self::visit_subqueries`] before visiting its children
-
-        match visitor.pre_visit(self)? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-        };
-
-        self.visit_subqueries(visitor)?;
-
-        match self.apply_children(&mut |node| node.visit(visitor))? {
-            VisitRecursion::Continue => {}
-            // If the recursion should skip, do not apply to its children. And let the recursion continue
-            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-            // If the recursion should stop, do not apply to its children
-            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+        match visitor.f_down(self)? {
+            TreeNodeRecursion::Continue => {
+                self.visit_subqueries(visitor)?;
+                handle_visit_recursion!(
+                    self.apply_children(&mut |n| n.visit(visitor))?,
+                    UP
+                );
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Jump => {
+                self.visit_subqueries(visitor)?;
+                visitor.f_up(self)
+            }
+            TreeNodeRecursion::Stop => Ok(TreeNodeRecursion::Stop),
         }
-
-        visitor.post_visit(self)
     }
 
-    fn map_children<F>(self, transform: F) -> Result<Self>
+    fn apply_children<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
+        &self,
+        f: &mut F,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for child in self.inputs() {
+            tnr = f(child)?;
+            handle_visit_recursion!(tnr, DOWN)
+        }
+        Ok(tnr)
+    }
+
+    fn map_children<F>(self, f: F) -> Result<Transformed<Self>>
     where
-        F: FnMut(Self) -> Result<Self>,
+        F: FnMut(Self) -> Result<Transformed<Self>>,
     {
-        let old_children = self.inputs();
-        let new_children = old_children
+        let new_children = self
+            .inputs()
             .iter()
             .map(|&c| c.clone())
-            .map(transform)
-            .collect::<Result<Vec<_>>>()?;
-
-        // if any changes made, make a new child
-        if old_children
-            .iter()
-            .zip(new_children.iter())
-            .any(|(c1, c2)| c1 != &c2)
-        {
-            self.with_new_exprs(self.expressions(), new_children.as_slice())
+            .map_until_stop_and_collect(f)?;
+        // Propagate up `new_children.transformed` and `new_children.tnr`
+        // along with the node containing transformed children.
+        if new_children.transformed {
+            new_children.map_data(|new_children| {
+                self.with_new_exprs(self.expressions(), new_children)
+            })
         } else {
-            Ok(self)
+            Ok(new_children.update_data(|_| self))
         }
     }
 }

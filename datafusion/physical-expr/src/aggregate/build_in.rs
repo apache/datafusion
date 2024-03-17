@@ -26,12 +26,16 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use crate::aggregate::regr::RegrType;
-use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
-use arrow::datatypes::Schema;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
+
+use arrow::datatypes::Schema;
+
+use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_expr::AggregateFunction;
+
+use crate::aggregate::regr::RegrType;
+use crate::expressions::{self, Literal};
+use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -42,6 +46,7 @@ pub fn create_aggregate_expr(
     ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the result data type for this aggregate function
@@ -355,13 +360,16 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Median, true) => {
             return not_impl_err!("MEDIAN(DISTINCT) aggregations are not available");
         }
-        (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
-            input_phy_exprs[0].clone(),
-            name,
-            input_phy_types[0].clone(),
-            ordering_req.to_vec(),
-            ordering_types,
-        )),
+        (AggregateFunction::FirstValue, _) => Arc::new(
+            expressions::FirstValue::new(
+                input_phy_exprs[0].clone(),
+                name,
+                input_phy_types[0].clone(),
+                ordering_req.to_vec(),
+                ordering_types,
+            )
+            .with_ignore_nulls(ignore_nulls),
+        ),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
@@ -369,6 +377,26 @@ pub fn create_aggregate_expr(
             ordering_req.to_vec(),
             ordering_types,
         )),
+        (AggregateFunction::NthValue, _) => {
+            let expr = &input_phy_exprs[0];
+            let Some(n) = input_phy_exprs[1]
+                .as_any()
+                .downcast_ref::<Literal>()
+                .map(|literal| literal.value())
+            else {
+                return exec_err!("Second argument of NTH_VALUE needs to be a literal");
+            };
+            let nullable = expr.nullable(input_schema)?;
+            Arc::new(expressions::NthValueAgg::new(
+                expr.clone(),
+                n.clone().try_into()?,
+                name,
+                input_phy_types[0].clone(),
+                nullable,
+                ordering_types,
+                ordering_req.to_vec(),
+            ))
+        }
         (AggregateFunction::StringAgg, false) => {
             if !ordering_req.is_empty() {
                 return not_impl_err!(
@@ -390,17 +418,19 @@ pub fn create_aggregate_expr(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use arrow::datatypes::{DataType, Field};
+
+    use datafusion_common::{plan_err, DataFusionError, ScalarValue};
+    use datafusion_expr::type_coercion::aggregates::NUMERICS;
+    use datafusion_expr::{type_coercion, Signature};
+
     use crate::expressions::{
         try_cast, ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg,
         BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Correlation, Count, Covariance,
         DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::plan_err;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::type_coercion::aggregates::NUMERICS;
-    use datafusion_expr::{type_coercion, Signature};
+
+    use super::*;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {
@@ -1282,7 +1312,15 @@ mod tests {
                 "Invalid or wrong number of arguments passed to aggregate: '{name}'"
             );
         }
-        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
+        create_aggregate_expr(
+            fun,
+            distinct,
+            &coerced_phy_exprs,
+            &[],
+            input_schema,
+            name,
+            false,
+        )
     }
 
     // Returns the coerced exprs for each `input_exprs`.

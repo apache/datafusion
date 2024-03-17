@@ -22,10 +22,8 @@ use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::expr::{BinaryExpr, Placeholder, ScalarFunction};
 use datafusion_expr::{lit, Expr, Operator};
-use datafusion_expr::{BuiltinScalarFunction, ScalarFunctionDefinition};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -52,6 +50,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Invalid HexStringLiteral '{s}'")
                 }
             }
+            Value::EscapedStringLiteral(s) => Ok(lit(s)),
             _ => plan_err!("Unsupported Value '{value:?}'"),
         }
     }
@@ -135,43 +134,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         elements: Vec<SQLExpr>,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        let mut values = Vec::with_capacity(elements.len());
+        let values = elements
+            .into_iter()
+            .map(|element| {
+                self.sql_expr_to_logical_expr(element, schema, &mut PlannerContext::new())
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        for element in elements {
-            let value = self.sql_expr_to_logical_expr(
-                element,
-                schema,
-                &mut PlannerContext::new(),
-            )?;
-
-            match value {
-                Expr::Literal(_) => {
-                    values.push(value);
-                }
-                Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                    ..
-                }) => {
-                    if fun == BuiltinScalarFunction::MakeArray {
-                        values.push(value);
-                    } else {
-                        return not_impl_err!(
-                            "ScalarFunctions without MakeArray are not supported: {value}"
-                        );
-                    }
-                }
-                _ => {
-                    return not_impl_err!(
-                        "Arrays with elements other than literal are not supported: {value}"
-                    );
-                }
-            }
+        if let Some(udf) = self.context_provider.get_function_meta("make_array") {
+            Ok(Expr::ScalarFunction(ScalarFunction::new_udf(udf, values)))
+        } else {
+            not_impl_err!(
+                "array_expression featrue is disable, So should implement make_array UDF by yourself"
+            )
         }
-
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            values,
-        )))
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan

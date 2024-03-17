@@ -52,7 +52,7 @@ SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
 query R
 SELECT AVG("UserID") FROM hits;
 ----
--304548765855551600
+-304548765855551740
 
 query I
 SELECT COUNT(DISTINCT "UserID") FROM hits;
@@ -273,3 +273,6 @@ SELECT "WindowClientWidth", "WindowClientHeight", COUNT(*) AS PageViews FROM hit
 query PI
 SELECT DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) AS M, COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate"::INT::DATE >= '2013-07-14' AND "EventDate"::INT::DATE <= '2013-07-15' AND "IsRefresh" = 0 AND "DontCountHits" = 0 GROUP BY DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) ORDER BY DATE_TRUNC('minute', M) LIMIT 10 OFFSET 1000;
 ----
+
+statement ok
+drop table hits;

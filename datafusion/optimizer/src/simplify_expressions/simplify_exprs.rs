@@ -19,12 +19,15 @@
 
 use std::sync::Arc;
 
-use super::{ExprSimplifier, SimplifyContext};
-use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_physical_expr::execution_props::ExecutionProps;
+
+use crate::{OptimizerConfig, OptimizerRule};
+
+use super::ExprSimplifier;
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
 /// [`Expr`]`s evaluating constants and applying algebraic
@@ -85,15 +88,28 @@ impl SimplifyExpressions {
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        let simplifier = ExprSimplifier::new(info);
-
         let new_inputs = plan
             .inputs()
             .iter()
             .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
-        let expr = plan
+        let simplifier = ExprSimplifier::new(info);
+
+        // The left and right expressions in a Join on clause are not
+        // commutative, for reasons that are not entirely clear. Thus, do not
+        // reorder expressions in Join while simplifying.
+        //
+        // This is likely related to the fact that order of the columns must
+        // match the order of the children. see
+        // https://github.com/apache/arrow-datafusion/pull/8780 for more details
+        let simplifier = if let LogicalPlan::Join(_) = plan {
+            simplifier.with_canonicalize(false)
+        } else {
+            simplifier
+        };
+
+        let exprs = plan
             .expressions()
             .into_iter()
             .map(|e| {
@@ -104,7 +120,7 @@ impl SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        plan.with_new_exprs(expr, &new_inputs)
+        plan.with_new_exprs(exprs, new_inputs)
     }
 }
 
@@ -119,46 +135,21 @@ impl SimplifyExpressions {
 mod tests {
     use std::ops::Not;
 
-    use crate::simplify_expressions::utils::for_test::{
-        cast_to_int64_expr, now_expr, to_timestamp_expr,
-    };
-    use crate::test::{assert_fields_eq, test_table_scan_with_name};
-
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::logical_plan::builder::table_scan_with_filters;
-    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
+    use chrono::{DateTime, Utc};
 
-    use crate::OptimizerContext;
+    use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
         ExprSchemable, JoinType,
     };
+    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
 
-    /// A macro to assert that one string is contained within another with
-    /// a nice error message if they are not.
-    ///
-    /// Usage: `assert_contains!(actual, expected)`
-    ///
-    /// Is a macro so test error
-    /// messages are on the same line as the failure;
-    ///
-    /// Both arguments must be convertable into Strings (Into<String>)
-    macro_rules! assert_contains {
-        ($ACTUAL: expr, $EXPECTED: expr) => {
-            let actual_value: String = $ACTUAL.into();
-            let expected_value: String = $EXPECTED.into();
-            assert!(
-                actual_value.contains(&expected_value),
-                "Can not find expected in actual.\n\nExpected:\n{}\n\nActual:\n{}",
-                expected_value,
-                actual_value
-            );
-        };
-    }
+    use crate::test::{assert_fields_eq, test_table_scan_with_name};
+    use crate::OptimizerContext;
+
+    use super::*;
 
     fn test_table_scan() -> LogicalPlan {
         let schema = Schema::new(vec![
@@ -425,18 +416,6 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    // expect optimizing will result in an error, returning the error string
-    fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
-        let rule = SimplifyExpressions::new();
-
-        let err = rule
-            .try_optimize(plan, &config)
-            .expect_err("expected optimization to fail");
-
-        err.to_string()
-    }
-
     fn get_optimized_plan_formatted(
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
@@ -452,38 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_expr_folded() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![to_timestamp_expr("2020-09-08T12:00:00+00:00")];
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test"
-            .to_string();
-        let actual = get_optimized_plan_formatted(&plan, &Utc::now());
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn to_timestamp_expr_wrong_arg() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![to_timestamp_expr("I'M NOT A TIMESTAMP")];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected =
-            "Error parsing timestamp from 'I'M NOT A TIMESTAMP': error parsing date";
-        let actual = get_optimized_plan_err(&plan, &Utc::now());
-        assert_contains!(actual, expected);
-        Ok(())
-    }
-
-    #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
@@ -494,42 +441,6 @@ mod tests {
         let expected = "Projection: Int32(0) AS Utf8(\"0\")\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn cast_expr_wrong_arg() -> Result<()> {
-        let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("")), DataType::Int32))];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        let expected = "Cannot cast string '' to value of Int32 type";
-        let actual = get_optimized_plan_err(&plan, &Utc::now());
-        assert_contains!(actual, expected);
-        Ok(())
-    }
-
-    #[test]
-    fn multiple_now_expr() -> Result<()> {
-        let table_scan = test_table_scan();
-        let time = Utc::now();
-        let proj = vec![now_expr(), now_expr().alias("t2")];
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)?
-            .build()?;
-
-        // expect the same timestamp appears in both exprs
-        let actual = get_optimized_plan_formatted(&plan, &time);
-        let expected = format!(
-            "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
-            \n  TableScan: test",
-            time.timestamp_nanos_opt().unwrap(),
-            time.timestamp_nanos_opt().unwrap()
-        );
-
         assert_eq!(expected, actual);
         Ok(())
     }
@@ -550,59 +461,6 @@ mod tests {
         let expected =
             "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
-
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn now_less_than_timestamp() -> Result<()> {
-        let table_scan = test_table_scan();
-
-        let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = Utc.timestamp_nanos(1599566400000000000i64);
-
-        //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
-        let plan =
-            LogicalPlanBuilder::from(table_scan)
-                .filter(cast_to_int64_expr(now_expr()).lt(cast_to_int64_expr(
-                    to_timestamp_expr(ts_string),
-                ) + lit(50000_i64)))?
-                .build()?;
-
-        // Note that constant folder runs and folds the entire
-        // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true)\
-                        \n  TableScan: test";
-        let actual = get_optimized_plan_formatted(&plan, &time);
-
-        assert_eq!(expected, actual);
-        Ok(())
-    }
-
-    #[test]
-    fn select_date_plus_interval() -> Result<()> {
-        let table_scan = test_table_scan();
-
-        let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = Utc.timestamp_nanos(1599566400000000000i64);
-
-        //  now() < cast(to_timestamp(...) as int) + 5000000000
-        let schema = table_scan.schema();
-
-        let date_plus_interval_expr = to_timestamp_expr(ts_string)
-            .cast_to(&DataType::Date32, schema)?
-            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
-
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .project(vec![date_plus_interval_expr])?
-            .build()?;
-
-        // Note that constant folder runs and folds the entire
-        // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
-  TableScan: test"#;
-        let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
         Ok(())

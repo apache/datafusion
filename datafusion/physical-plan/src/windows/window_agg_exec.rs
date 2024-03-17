@@ -30,27 +30,23 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
-    WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 
+use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
-use arrow::datatypes::SchemaBuilder;
+use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::{
-    array::ArrayRef,
-    datatypes::{Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalSortRequirement;
 
-use futures::stream::Stream;
-use futures::{ready, StreamExt};
+use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
 #[derive(Debug)]
@@ -68,6 +64,8 @@ pub struct WindowAggExec {
     /// Partition by indices that defines preset for existing ordering
     // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
 }
 
 impl WindowAggExec {
@@ -82,6 +80,7 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
+        let cache = Self::compute_properties(schema.clone(), &input, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -89,6 +88,7 @@ impl WindowAggExec {
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
+            cache,
         })
     }
 
@@ -114,6 +114,32 @@ impl WindowAggExec {
             partition_by,
             &self.ordered_partition_by_indices,
         )
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        input: &Arc<dyn ExecutionPlan>,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> PlanProperties {
+        // Calculate equivalence properties:
+        let eq_properties = window_equivalence_properties(&schema, input, window_expr);
+
+        // Get output partitioning:
+        // Because we can have repartitioning using the partition keys this
+        // would be either 1 or more than 1 depending on the presense of repartitioning.
+        let output_partitioning = input.output_partitioning().clone();
+
+        // Determine execution mode:
+        let mode = match input.execution_mode() {
+            ExecutionMode::Bounded => ExecutionMode::Bounded,
+            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
+                ExecutionMode::PipelineBreaking
+            }
+        };
+
+        // Construct properties cache:
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -151,37 +177,12 @@ impl ExecutionPlan for WindowAggExec {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        // because we can have repartitioning using the partition keys
-        // this would be either 1 or more than 1 depending on the presense of
-        // repartitioning
-        self.input.output_partitioning()
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            plan_err!(
-                "Window Error: Windowing is not currently support for unbounded inputs."
-            )
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input().output_ordering()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -208,11 +209,6 @@ impl ExecutionPlan for WindowAggExec {
         } else {
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
-    }
-
-    /// Get the [`EquivalenceProperties`] within the plan
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn with_new_children(

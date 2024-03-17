@@ -179,8 +179,8 @@ EXPLAIN VERBOSE SELECT a, b, c FROM simple_explain_test
 initial_logical_plan
 Projection: simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
 --TableScan: simple_explain_test
+logical_plan after apply_function_rewrites SAME TEXT AS ABOVE
 logical_plan after inline_table_scan SAME TEXT AS ABOVE
-logical_plan after operator_to_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
@@ -248,6 +248,7 @@ physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
 physical_plan after PipelineChecker SAME TEXT AS ABOVE
@@ -303,6 +304,7 @@ physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
@@ -338,6 +340,7 @@ physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after EnforceDistribution SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
 GlobalLimitExec: skip=0, fetch=10
@@ -379,4 +382,16 @@ Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64
 --EmptyRelation
 physical_plan
 ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
+--PlaceholderRowExec
+
+# Explain Struct
+
+query TT
+explain select struct(1, 2.3, 'abc');
+----
+logical_plan
+Projection: Struct({c0:1,c1:2.3,c2:abc}) AS struct(Int64(1),Float64(2.3),Utf8("abc"))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[{c0:1,c1:2.3,c2:abc} as struct(Int64(1),Float64(2.3),Utf8("abc"))]
 --PlaceholderRowExec

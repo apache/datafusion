@@ -28,26 +28,33 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
+use arrow_array::Float32Array;
 use arrow_schema::ArrowError;
+use object_store::local::LocalFileSystem;
+use std::fs;
 use std::sync::Arc;
+use tempfile::TempDir;
+use url::Url;
 
-use datafusion::dataframe::DataFrame;
+use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
-use datafusion::test_util::parquet_test_data;
+use datafusion::test_util::{parquet_test_data, populate_csv_partitions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{assert_contains, DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort};
+use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
-    scalar_subquery, sum, wildcard, AggregateFunction, Expr, ExprSchemable, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    array_agg, avg, cast, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
+    placeholder, scalar_subquery, sum, when, wildcard, AggregateFunction, Expr,
+    ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
-use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
@@ -174,11 +181,12 @@ async fn test_count_wildcard_on_window() -> Result<()> {
             vec![wildcard()],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
-            WindowFrame {
-                units: WindowFrameUnits::Range,
-                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            },
+            WindowFrame::new_bounds(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            ),
+            None,
         ))])?
         .explain(false, false)?
         .collect()
@@ -1429,6 +1437,125 @@ async fn unnest_analyze_metrics() -> Result<()> {
 
     Ok(())
 }
+#[tokio::test]
+async fn test_read_batches() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("number", DataType::Float32, false),
+    ]));
+
+    let batches = vec![
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.11, 2.22, 3.33])),
+            ],
+        )
+        .unwrap(),
+    ];
+    let df = ctx.read_batches(batches).unwrap();
+    df.clone().show().await.unwrap();
+    let result = df.collect().await?;
+    let expected = [
+        "+----+--------+",
+        "| id | number |",
+        "+----+--------+",
+        "| 1  | 1.12   |",
+        "| 2  | 3.4    |",
+        "| 3  | 2.33   |",
+        "| 4  | 9.1    |",
+        "| 5  | 6.66   |",
+        "| 3  | 1.11   |",
+        "| 4  | 2.22   |",
+        "| 5  | 3.33   |",
+        "+----+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+#[tokio::test]
+async fn test_read_batches_empty() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let batches = vec![];
+    let df = ctx.read_batches(batches).unwrap();
+    df.clone().show().await.unwrap();
+    let result = df.collect().await?;
+    let expected = ["++", "++"];
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn consecutive_projection_same_schema() -> Result<()> {
+    let config = SessionConfig::new();
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionState::new_with_config_rt(config, runtime);
+    let ctx = SessionContext::new_with_state(state);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    let batch =
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![0, 1]))])
+            .unwrap();
+
+    let df = ctx.read_batch(batch).unwrap();
+    df.clone().show().await.unwrap();
+
+    // Add `t` column full of nulls
+    let df = df
+        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .unwrap();
+    df.clone().show().await.unwrap();
+
+    let df = df
+        // (case when id = 1 then 10 else t) as t
+        .with_column(
+            "t",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap()
+        // (case when id = 1 then 10 else t) as t2
+        .with_column(
+            "t2",
+            when(col("id").eq(lit(1)), lit(10))
+                .otherwise(col("t"))
+                .unwrap(),
+        )
+        .unwrap();
+
+    let results = df.collect().await?;
+    let expected = [
+        "+----+----+----+",
+        "| id | t  | t2 |",
+        "+----+----+----+",
+        "| 0  |    |    |",
+        "| 1  | 10 | 10 |",
+        "+----+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
 
 async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
@@ -1701,6 +1828,227 @@ async fn test_array_agg() -> Result<()> {
         "+-------------------------------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = $0 [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // The placeholder is not replaced with a value,
+    // so the filter data type is not know, i.e. a = $0.
+    // Therefore, the optimization fails.
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_err());
+    assert!(optimized_plan
+        .unwrap_err()
+        .to_string()
+        .contains("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+
+    // Prodiving a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit(1))
+        .unwrap()
+        .filter(col("a").eq(placeholder("$0")))
+        .unwrap()
+        .with_param_values(vec![("0", ScalarValue::from(3i32))]) // <-- provide parameter value
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a = Int32(3) [a:Int32]",
+        "  Projection: Int32(1) AS a [a:Int32]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_ok());
+
+    let actual = optimized_plan.unwrap().display_indent_schema().to_string();
+    let expected = "EmptyRelation [a:Int32]";
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_partitioned_parquet_results() -> Result<()> {
+    // create partitioned input file and context
+    let tmp_dir = TempDir::new()?;
+
+    let ctx = SessionContext::new();
+
+    // Create an in memory table with schema C1 and C2, both strings
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::Utf8, false),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["abc", "def"])),
+            Arc::new(StringArray::from(vec!["123", "456"])),
+        ],
+    )?;
+
+    let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
+
+    // Register the table in the context
+    ctx.register_table("test", mem_table)?;
+
+    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+    let local_url = Url::parse("file://local").unwrap();
+    ctx.runtime_env().register_object_store(&local_url, local);
+
+    // execute a simple query and write the results to parquet
+    let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+    let out_dir_url = format!("file://{out_dir}");
+
+    // Write the results to parquet with partitioning
+    let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+    let df_write_options =
+        DataFrameWriteOptions::new().with_partition_by(vec![String::from("c2")]);
+
+    df.write_parquet(&out_dir_url, df_write_options, None)
+        .await?;
+
+    // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
+    let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
+    let filted_df = ctx
+        .read_parquet(&partitioned_file, ParquetReadOptions::default())
+        .await?;
+
+    // Check that the c2 column is gone and that c1 is abc.
+    let results = filted_df.collect().await?;
+    let expected = ["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
+
+    assert_batches_eq!(expected, &results);
+
+    // Read the entire set of parquet files
+    let df = ctx
+        .read_parquet(
+            &out_dir_url,
+            ParquetReadOptions::default()
+                .table_partition_cols(vec![(String::from("c2"), DataType::Utf8)]),
+        )
+        .await?;
+
+    // Check that the df has the entire set of data
+    let results = df.collect().await?;
+    let expected = [
+        "+-----+-----+",
+        "| c1  | c2  |",
+        "+-----+-----+",
+        "| abc | 123 |",
+        "| def | 456 |",
+        "+-----+-----+",
+    ];
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_parquet_results() -> Result<()> {
+    // create partitioned input file and context
+    let tmp_dir = TempDir::new()?;
+    // let mut ctx = create_ctx(&tmp_dir, 4).await?;
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
+    // register csv file with the execution context
+    ctx.register_csv(
+        "test",
+        tmp_dir.path().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+
+    // register a local file system object store for /tmp directory
+    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+    let local_url = Url::parse("file://local").unwrap();
+    ctx.runtime_env().register_object_store(&local_url, local);
+
+    // execute a simple query and write the results to parquet
+    let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+    let out_dir_url = "file://local/out/";
+    let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+    df.write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
+        .await?;
+    // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
+
+    // create a new context and verify that the results were saved to a partitioned parquet file
+    let ctx = SessionContext::new();
+
+    // get write_id
+    let mut paths = fs::read_dir(&out_dir).unwrap();
+    let path = paths.next();
+    let name = path
+        .unwrap()?
+        .path()
+        .file_name()
+        .expect("Should be a file name")
+        .to_str()
+        .expect("Should be a str")
+        .to_owned();
+    let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
+    let write_id = parsed_id.to_owned();
+
+    // register each partition as well as the top level dir
+    ctx.register_parquet(
+        "part0",
+        &format!("{out_dir}/{write_id}_0.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
+        .await?;
+
+    let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
+    let allparts = ctx
+        .sql("SELECT c1, c2 FROM allparts")
+        .await?
+        .collect()
+        .await?;
+
+    let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
+
+    assert_eq!(part0[0].schema(), allparts[0].schema());
+
+    assert_eq!(allparts_count, 40);
 
     Ok(())
 }

@@ -21,9 +21,8 @@ use std::fs;
 use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use super::SendableRecordBatchStream;
+use super::{ExecutionPlanProperties, SendableRecordBatchStream};
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 
@@ -37,10 +36,8 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use futures::{Future, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-use pin_project_lite::pin_project;
-use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
@@ -171,53 +168,6 @@ pub fn compute_record_batch_statistics(
         num_rows: Precision::Exact(nb_rows),
         total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
-    }
-}
-
-pin_project! {
-    /// Helper that aborts the given join handle on drop.
-    ///
-    /// Useful to kill background tasks when the consumer is dropped.
-    #[derive(Debug)]
-    pub struct AbortOnDropSingle<T>{
-        #[pin]
-        join_handle: JoinHandle<T>,
-    }
-
-    impl<T> PinnedDrop for AbortOnDropSingle<T> {
-        fn drop(this: Pin<&mut Self>) {
-            this.join_handle.abort();
-        }
-    }
-}
-
-impl<T> AbortOnDropSingle<T> {
-    /// Create new abort helper from join handle.
-    pub fn new(join_handle: JoinHandle<T>) -> Self {
-        Self { join_handle }
-    }
-}
-
-impl<T> Future for AbortOnDropSingle<T> {
-    type Output = Result<T, tokio::task::JoinError>;
-
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.join_handle.poll(cx)
-    }
-}
-
-/// Helper that aborts the given join handles on drop.
-///
-/// Useful to kill background tasks when the consumer is dropped.
-#[derive(Debug)]
-pub struct AbortOnDropMany<T>(pub Vec<JoinHandle<T>>);
-
-impl<T> Drop for AbortOnDropMany<T> {
-    fn drop(&mut self) {
-        for join_handle in &self.0 {
-            join_handle.abort();
-        }
     }
 }
 
@@ -373,6 +323,32 @@ impl IPCWriter {
     }
 }
 
+/// Checks if the given projection is valid for the given schema.
+pub fn can_project(
+    schema: &arrow_schema::SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<()> {
+    match projection {
+        Some(columns) => {
+            if columns
+                .iter()
+                .max()
+                .map_or(false, |&i| i >= schema.fields().len())
+            {
+                Err(arrow_schema::ArrowError::SchemaError(format!(
+                    "project index {} out of bounds, max field {}",
+                    columns.iter().max().unwrap(),
+                    schema.fields().len()
+                ))
+                .into())
+            } else {
+                Ok(())
+            }
+        }
+        None => Ok(()),
+    }
+}
+
 /// Returns the total number of bytes of memory occupied physically by this batch.
 #[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
 pub fn batch_byte_size(batch: &RecordBatch) -> usize {
@@ -390,11 +366,10 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::{
-        array::{Float32Array, Float64Array},
+        array::{Float32Array, Float64Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
-    use arrow_array::UInt64Array;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 

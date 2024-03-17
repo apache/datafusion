@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
     // creating a new `PartitionEvaluator`)
     //
     // `ORDER BY time`: within each partition ('green' or 'red') the
-    // rows will be be ordered by the value in the `time` column
+    // rows will be ordered by the value in the `time` column
     //
     // `evaluate_inside_range` is invoked with a window defined by the
     // SQL. In this case:
@@ -220,7 +220,7 @@ async fn main() -> Result<()> {
         vec![col("speed")],                 // smooth_it(speed)
         vec![col("car")],                   // PARTITION BY car
         vec![col("time").sort(true, true)], // ORDER BY time ASC
-        WindowFrame::new(false),
+        WindowFrame::new(None),
     );
     let df = ctx.table("cars").await?.window(vec![window_expr])?;
 

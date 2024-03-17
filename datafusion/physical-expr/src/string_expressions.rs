@@ -21,28 +21,30 @@
 
 //! String expressions
 
+use std::sync::Arc;
+use std::{
+    fmt::{Display, Formatter},
+    iter,
+};
+
 use arrow::{
     array::{
-        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
-        OffsetSizeTrait, StringArray,
+        Array, ArrayRef, GenericStringArray, Int32Array, Int64Array, OffsetSizeTrait,
+        StringArray,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
+use uuid::Uuid;
+
 use datafusion_common::utils::datafusion_strsim;
+use datafusion_common::Result;
 use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
     exec_err, ScalarValue,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::sync::Arc;
-use std::{
-    fmt::{Display, Formatter},
-    iter,
-};
-use uuid::Uuid;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
 /// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
@@ -62,7 +64,7 @@ where
     F: Fn(&'a str) -> R,
 {
     if args.len() != 1 {
-        return internal_err!(
+        return exec_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
             name
@@ -102,7 +104,7 @@ where
                     &[a.as_ref()], op, name
                 )?)))
             }
-            other => internal_err!("Unsupported data type {other:?} for function {name}"),
+            other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
@@ -113,7 +115,7 @@ where
                 let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
-            other => internal_err!("Unsupported data type {other:?} for function {name}"),
+            other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -170,7 +172,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return internal_err!(
+        return exec_err!(
             "concat was called with {} arguments. It requires at least 1.",
             args.len()
         );
@@ -236,7 +238,7 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // do not accept 0 or 1 arguments.
     if args.len() < 2 {
-        return internal_err!(
+        return exec_err!(
             "concat_ws was called with {} arguments. It requires at least 2.",
             args.len()
         );
@@ -296,10 +298,54 @@ pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+/// Returns the position of the first occurrence of substring in string.
+/// The position is counted from 1. If the substring is not found, returns 0.
+/// For example, instr('Helloworld', 'world') = 6.
+pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let substr_array = as_generic_string_array::<T>(&args[1])?;
+
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let result = string_array
+                .iter()
+                .zip(substr_array.iter())
+                .map(|(string, substr)| match (string, substr) {
+                    (Some(string), Some(substr)) => string
+                        .find(substr)
+                        .map_or(Some(0), |index| Some((index + 1) as i32)),
+                    _ => None,
+                })
+                .collect::<Int32Array>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let result = string_array
+                .iter()
+                .zip(substr_array.iter())
+                .map(|(string, substr)| match (string, substr) {
+                    (Some(string), Some(substr)) => string
+                        .find(substr)
+                        .map_or(Some(0), |index| Some((index + 1) as i64)),
+                    _ => None,
+                })
+                .collect::<Int64Array>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            exec_err!(
+                "instr was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+            )
+        }
+    }
+}
+
 /// Converts the string to all lower case.
 /// lower('TOM') = 'tom'
 pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_ascii_lowercase(), "lower")
+    handle(args, |string| string.to_lowercase(), "lower")
 }
 
 enum TrimType {
@@ -366,7 +412,7 @@ fn general_trim<T: OffsetSizeTrait>(
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            internal_err!(
+            exec_err!(
             "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
         )
         }
@@ -461,17 +507,21 @@ pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
 pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let prefix_array = as_generic_string_array::<T>(&args[1])?;
+    let left = as_generic_string_array::<T>(&args[0])?;
+    let right = as_generic_string_array::<T>(&args[1])?;
 
-    let result = string_array
-        .iter()
-        .zip(prefix_array.iter())
-        .map(|(string, prefix)| match (string, prefix) {
-            (Some(string), Some(prefix)) => Some(string.starts_with(prefix)),
-            _ => None,
-        })
-        .collect::<BooleanArray>();
+    let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Returns true if string ends with suffix.
+/// ends_with('alphabet', 'abet') = 't'
+pub fn ends_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let left = as_generic_string_array::<T>(&args[0])?;
+    let right = as_generic_string_array::<T>(&args[1])?;
+
+    let result = arrow::compute::kernels::comparison::ends_with(left, right)?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -493,7 +543,7 @@ where
                 } else if let Some(value_isize) = value.to_isize() {
                     Ok(Some(format!("{value_isize:x}")))
                 } else {
-                    internal_err!("Unsupported data type {integer:?} for function to_hex")
+                    exec_err!("Unsupported data type {integer:?} for function to_hex")
                 }
             } else {
                 Ok(None)
@@ -507,7 +557,7 @@ where
 /// Converts the string to all upper case.
 /// upper('tom') = 'TOM'
 pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_ascii_uppercase(), "upper")
+    handle(args, |string| string.to_uppercase(), "upper")
 }
 
 /// Prints random (v4) uuid values per row
@@ -515,7 +565,7 @@ pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
         ColumnarValue::Array(array) => array.len(),
-        _ => return internal_err!("Expect uuid function to take no param"),
+        _ => return exec_err!("Expect uuid function to take no param"),
     };
 
     let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
@@ -606,9 +656,7 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            internal_err!(
-                "overlay was called with {other} arguments. It requires 3 or 4."
-            )
+            exec_err!("overlay was called with {other} arguments. It requires 3 or 4.")
         }
     }
 }
@@ -617,10 +665,10 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// LEVENSHTEIN('kitten', 'sitting') = 3
 pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return exec_err!(
             "levenshtein function requires two arguments, got {}",
             args.len()
-        )));
+        );
     }
     let str1_array = as_generic_string_array::<T>(&args[0])?;
     let str2_array = as_generic_string_array::<T>(&args[1])?;
@@ -652,7 +700,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            internal_err!(
+            exec_err!(
                 "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
             )
         }
@@ -661,11 +709,12 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::string_expressions;
     use arrow::{array::Int32Array, datatypes::Int32Type};
     use arrow_array::Int64Array;
+
     use datafusion_common::cast::as_int32_array;
+
+    use crate::string_expressions;
 
     use super::*;
 

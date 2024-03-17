@@ -18,18 +18,19 @@
 mod guarantee;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
+use crate::tree_node::ExprContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::Result;
 use datafusion_expr::Operator;
@@ -127,55 +128,12 @@ pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
         .collect()
 }
 
-#[derive(Clone, Debug)]
-pub struct ExprTreeNode<T> {
-    expr: Arc<dyn PhysicalExpr>,
-    data: Option<T>,
-    child_nodes: Vec<ExprTreeNode<T>>,
-}
+pub type ExprTreeNode<T> = ExprContext<Option<T>>;
 
-impl<T> ExprTreeNode<T> {
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        let children = expr.children();
-        ExprTreeNode {
-            expr,
-            data: None,
-            child_nodes: children.into_iter().map(Self::new).collect_vec(),
-        }
-    }
-
-    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    pub fn children(&self) -> &[ExprTreeNode<T>] {
-        &self.child_nodes
-    }
-}
-
-impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn children_nodes(&self) -> Vec<Cow<Self>> {
-        self.children().iter().map(Cow::Borrowed).collect()
-    }
-
-    fn map_children<F>(mut self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        self.child_nodes = self
-            .child_nodes
-            .into_iter()
-            .map(transform)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(self)
-    }
-}
-
-/// This struct facilitates the [TreeNodeRewriter] mechanism to convert a
-/// [PhysicalExpr] tree into a DAEG (i.e. an expression DAG) by collecting
-/// identical expressions in one node. Caller specifies the node type in the
-/// DAEG via the `constructor` argument, which constructs nodes in the DAEG
-/// from the [ExprTreeNode] ancillary object.
+/// This struct is used to convert a [`PhysicalExpr`] tree into a DAEG (i.e. an expression
+/// DAG) by collecting identical expressions in one node. Caller specifies the node type
+/// in the DAEG via the `constructor` argument, which constructs nodes in the DAEG from
+/// the [`ExprTreeNode`] ancillary object.
 struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> {
     // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
@@ -185,16 +143,15 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
-    for PhysicalExprDAEGBuilder<'a, T, F>
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
+    PhysicalExprDAEGBuilder<'a, T, F>
 {
-    type N = ExprTreeNode<NodeIndex>;
     // This method mutates an expression node by transforming it to a physical expression
     // and adding it to the graph. The method returns the mutated expression node.
     fn mutate(
         &mut self,
         mut node: ExprTreeNode<NodeIndex>,
-    ) -> Result<ExprTreeNode<NodeIndex>> {
+    ) -> Result<Transformed<ExprTreeNode<NodeIndex>>> {
         // Get the expression associated with the input expression node.
         let expr = &node.expr;
 
@@ -207,7 +164,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
             // of visited expressions and return the newly created node index.
             None => {
                 let node_idx = self.graph.add_node((self.constructor)(&node)?);
-                for expr_node in node.child_nodes.iter() {
+                for expr_node in node.children.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
                 self.visited_plans.push((expr.clone(), node_idx));
@@ -217,7 +174,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
         // Set the data field of the input expression node to the corresponding node index.
         node.data = Some(node_idx);
         // Return the mutated expression node.
-        Ok(node)
+        Ok(Transformed::yes(node))
     }
 }
 
@@ -230,7 +187,7 @@ where
     F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>,
 {
     // Create a new expression tree node from the input expression.
-    let init = ExprTreeNode::new(expr);
+    let init = ExprTreeNode::new_default(expr);
     // Create a new `PhysicalExprDAEGBuilder` instance.
     let mut builder = PhysicalExprDAEGBuilder {
         graph: StableGraph::<T, usize>::new(),
@@ -238,7 +195,9 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init.rewrite(&mut builder)?;
+    let root = init
+        .transform_up_mut(&mut |node| builder.mutate(node))
+        .data()?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }
@@ -252,7 +211,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
                 columns.insert(column.clone());
             }
         }
-        Ok(VisitRecursion::Continue)
+        Ok(TreeNodeRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
@@ -275,13 +234,14 @@ pub fn reassign_predicate_columns(
                 Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Transformed::Yes(Arc::new(Column::new(
+            return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
                 index,
             ))));
         }
-        Ok(Transformed::No(expr))
+        Ok(Transformed::no(expr))
     })
+    .data()
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window
@@ -388,7 +348,7 @@ mod tests {
     }
 
     fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
-        let expr = node.expression().clone();
+        let expr = node.expr.clone();
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
         } else if expr.as_any().is::<Column>() {

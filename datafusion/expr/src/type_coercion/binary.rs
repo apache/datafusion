@@ -28,9 +28,7 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::{
-    exec_datafusion_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-};
+use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -95,6 +93,13 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             )
         }
         RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
+                )
+            })
+        }
+        LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
             regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
@@ -356,7 +361,7 @@ fn string_temporal_coercion(
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one both are numeric
-fn comparison_binary_numeric_coercion(
+pub(crate) fn comparison_binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

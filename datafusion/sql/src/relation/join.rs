@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Column, DataFusionError, Result};
+use datafusion_common::{not_impl_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
 use std::collections::HashSet;
