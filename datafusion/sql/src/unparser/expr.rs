@@ -40,7 +40,7 @@ use super::Unparser;
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "(a > 4)")
+/// assert_eq!(format!("{}", sql), "(\"a\" > 4)")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -169,7 +169,7 @@ impl Unparser<'_> {
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: self.dialect.identifier_quote_style(),
+            quote_style: Some(self.dialect.identifier_quote_style().unwrap_or('"')),
         }
     }
 
@@ -491,28 +491,28 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"("a"."b"."c" > 4)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
                 }),
-                r#"CAST(a AS DATETIME)"#,
+                r#"CAST("a" AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::UInt32,
                 }),
-                r#"CAST(a AS INTEGER UNSIGNED)"#,
+                r#"CAST("a" AS INTEGER UNSIGNED)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
@@ -549,7 +549,7 @@ mod tests {
                     order_by: None,
                     null_treatment: None,
                 }),
-                "SUM(a)",
+                r#"SUM("a")"#,
             ),
             (
                 Expr::AggregateFunction(AggregateFunction {
