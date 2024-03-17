@@ -24,7 +24,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{Expr, Projection};
+use datafusion_expr::{Aggregate, Expr, Projection};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -214,6 +214,27 @@ impl SimplifyExpressions {
                 let new_expr = simplify_expr(simplifier, expr)?;
                 Projection::try_new(new_expr, new_input)
                     .map(LogicalPlan::Projection)
+                    .map(Transformed::yes)
+            }
+            LogicalPlan::Aggregate(Aggregate { input, group_expr, aggr_expr, .. }) => {
+                let input = Arc::into_inner(input).unwrap();
+                let Transformed {
+                    data,
+                    transformed: _,
+                    tnr: _,
+                } = Self::optimize_internal_owned(input, execution_props)?;
+
+                let new_input = Arc::new(data);
+                let group_expr_len = group_expr.len();
+                let expr = group_expr.into_iter().chain(aggr_expr.into_iter()).collect();
+                let new_expr = simplify_expr(simplifier, expr)?;
+
+                // group exprs are the first expressions
+                let mut group_expr = new_expr;
+                let agg_expr = group_expr.split_off(group_expr_len);
+
+                Aggregate::try_new(new_input, group_expr, agg_expr)
+                    .map(LogicalPlan::Aggregate)
                     .map(Transformed::yes)
             }
             _ => {
