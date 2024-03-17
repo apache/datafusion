@@ -23,8 +23,8 @@ use datafusion_common::{
 use datafusion_expr::{Aggregate, Expr, LogicalPlan};
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if one exists
-/// prior to encountering a Join, TableScan, or a nested subquery (derived table factor). 
-/// If an Aggregate node is not found prior to this or at all before reaching the end 
+/// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
+/// If an Aggregate node is not found prior to this or at all before reaching the end
 /// of the tree, None is returned.
 pub(crate) fn find_agg_node_within_select(
     plan: &LogicalPlan,
