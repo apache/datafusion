@@ -18,8 +18,8 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::Field;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
-    TableReference,
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
+    OwnedTableReference, Result, TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -283,10 +283,12 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
 fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
-) -> Option<(&'schema Field, Option<TableReference<'ids>>, &'ids [String])> {
+) -> Option<(&'schema Field, Option<OwnedTableReference>, &'ids [String])> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
-        let field = schema.field_with_name(qualifier.as_ref(), column).ok();
-        field.map(|f| (f, qualifier, nested_names))
+        let qualifier_and_field = schema
+            .field_and_qualifier_with_name(qualifier.as_ref(), column)
+            .ok();
+        qualifier_and_field.map(|(qualifier, field)| (field, qualifier, nested_names))
     })
 }
 

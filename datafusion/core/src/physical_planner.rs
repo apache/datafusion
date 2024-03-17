@@ -2226,25 +2226,23 @@ mod tests {
             .await;
 
         let expected_error: &str = "Error during planning: \
-        Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-        LogicalPlan schema: DFSchema { fields: [\
-            DFField { qualifier: None, field: Field { \
-                name: \"a\", \
+            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
+            LogicalPlan schema: \
+            DFSchema { inner: Schema { fields: \
+                [Field { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} } }\
-        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
-        ExecutionPlan schema: Schema { fields: [\
-            Field { \
-                name: \"b\", \
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }, field_qualifiers: [None], \
+                functional_dependencies: FunctionalDependencies { deps: [] } }, \
+            ExecutionPlan schema: Schema { fields: \
+                [Field { name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: {} }\
-        ], metadata: {} }";
+                dict_is_ordered: false, metadata: {} }], \
+                metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(

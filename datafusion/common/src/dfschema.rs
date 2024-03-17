@@ -394,6 +394,30 @@ impl DFSchema {
         }
     }
 
+    pub fn field_and_qualifier_with_name(
+        &self,
+        qualifier: Option<&TableReference>,
+        name: &str,
+    ) -> Result<(Option<OwnedTableReference>, &Field)> {
+        if let Some(qualifier) = qualifier {
+            self.field_and_qualifier_with_qualified_name(qualifier, name)
+        } else {
+            self.field_and_qualifier_with_unqualified_name(name)
+        }
+    }
+
+    pub fn field_and_qualifier_with_qualified_name(
+        &self,
+        qualifier: &TableReference,
+        name: &str,
+    ) -> Result<(Option<OwnedTableReference>, &Field)> {
+        let idx = self
+            .index_of_column_by_name(Some(qualifier), name)?
+            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
+
+        Ok((self.field_qualifiers[idx].clone(), self.field(idx)))
+    }
+
     /// Find all fields having the given qualifier
     pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
         self.iter()
@@ -527,18 +551,11 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> Result<&Field> {
-        let qualifier_and_field = self.iter().find(|(q, f)| match q {
-            Some(q) => q.eq(&qualifier) && name == f.name(),
-            None => false,
-        });
-        match qualifier_and_field {
-            Some((_, f)) => Ok(f),
-            None => Err(field_not_found(
-                Some(qualifier.to_owned_reference()),
-                name,
-                self,
-            )),
-        }
+        let idx = self
+            .index_of_column_by_name(Some(qualifier), name)?
+            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
+
+        Ok(self.field(idx))
     }
 
     /// Find the field with the given qualified column
