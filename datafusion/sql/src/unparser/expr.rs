@@ -18,7 +18,7 @@
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, Column, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
@@ -150,6 +150,36 @@ impl Unparser<'_> {
                     special: false,
                     order_by: vec![],
                 }))
+            }
+            Expr::ScalarSubquery(subq) => {
+                let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::Subquery(sub_query))
+            }
+            Expr::InSubquery(insubq) => {
+                let inexpr = Box::new(self.expr_to_sql(insubq.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::InSubquery {
+                    expr: inexpr,
+                    subquery: sub_query,
+                    negated: insubq.negated,
+                })
             }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }

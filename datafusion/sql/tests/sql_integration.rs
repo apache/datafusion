@@ -4582,6 +4582,16 @@ fn roundtrip_statement() -> Result<()> {
             group by "Last Name", id 
             having count_first_name>5 and count_first_name<10
             order by count_first_name, "Last Name""#,
+            r#"select p.id, count("First Name") as count_first_name,
+            "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person) 
+            from person_quoted_cols qp
+            inner join person p
+            on p.id = qp.id
+            where p.id!=3 and "First Name"=='test' and qp.id in 
+            (select id from (select id, count(*) from person group by id having count(*) > 0))
+            group by "Last Name", p.id 
+            having count_first_name>5 and count_first_name<10
+            order by count_first_name, "Last Name""#,
         ];
 
     for query in tests {

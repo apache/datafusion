@@ -183,8 +183,6 @@ impl Unparser<'_> {
                 }
             }
             LogicalPlan::Filter(filter) => {
-                println!("filter {plan:?}");
-
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
