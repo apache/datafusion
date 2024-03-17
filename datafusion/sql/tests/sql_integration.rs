@@ -4594,6 +4594,11 @@ fn roundtrip_statement() -> Result<()> {
             order by count_first_name, "Last Name""#,
         ];
 
+    // For each test sql string, we transform as follows:
+    // sql -> ast::Statement (s1) -> LogicalPlan (p1) -> ast::Statement (s2) -> LogicalPlan (p2)
+    // We test not that s1==s2, but rather p1==p2. This ensures that unparser preserves the logical
+    // query information of the original sql string and disreguards other differences in syntax or
+    // quoting.
     for query in tests {
         let dialect = GenericDialect {};
         let statement = Parser::new(&dialect)
