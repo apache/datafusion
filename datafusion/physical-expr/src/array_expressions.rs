@@ -18,12 +18,10 @@
 //! Array expressions
 
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{self};
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
@@ -788,205 +786,71 @@ pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum SetOp {
-    Union,
-    Intersect,
-}
+/// array_reverse SQL function
+pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() != 1 {
+        return exec_err!("array_reverse needs one argument");
+    }
 
-impl Display for SetOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SetOp::Union => write!(f, "array_union"),
-            SetOp::Intersect => write!(f, "array_intersect"),
+    match &arg[0].data_type() {
+        DataType::List(field) => {
+            let array = as_list_array(&arg[0])?;
+            general_array_reverse::<i32>(array, field)
         }
+        DataType::LargeList(field) => {
+            let array = as_large_list_array(&arg[0])?;
+            general_array_reverse::<i64>(array, field)
+        }
+        DataType::Null => Ok(arg[0].clone()),
+        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }
 
-fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
-    l: &GenericListArray<OffsetSize>,
-    r: &GenericListArray<OffsetSize>,
-    field: Arc<Field>,
-    set_op: SetOp,
-) -> Result<ArrayRef> {
-    if matches!(l.value_type(), DataType::Null) {
-        let field = Arc::new(Field::new("item", r.value_type(), true));
-        return general_array_distinct::<OffsetSize>(r, &field);
-    } else if matches!(r.value_type(), DataType::Null) {
-        let field = Arc::new(Field::new("item", l.value_type(), true));
-        return general_array_distinct::<OffsetSize>(l, &field);
-    }
-
-    if l.value_type() != r.value_type() {
-        return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
-    }
-
-    let dt = l.value_type();
-
-    let mut offsets = vec![OffsetSize::usize_as(0)];
-    let mut new_arrays = vec![];
-
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
-    for (first_arr, second_arr) in l.iter().zip(r.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
-
-            let l_iter = l_values.iter().sorted().dedup();
-            let values_set: HashSet<_> = l_iter.clone().collect();
-            let mut rows = if set_op == SetOp::Union {
-                l_iter.collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
-            for r_val in r_values.iter().sorted().dedup() {
-                match set_op {
-                    SetOp::Union => {
-                        if !values_set.contains(&r_val) {
-                            rows.push(r_val);
-                        }
-                    }
-                    SetOp::Intersect => {
-                        if values_set.contains(&r_val) {
-                            rows.push(r_val);
-                        }
-                    }
-                }
-            }
-
-            let last_offset = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.first() {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!("{set_op}: failed to get array from rows");
-                }
-            };
-            new_arrays.push(array);
-        }
-    }
-
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    let arr = GenericListArray::<OffsetSize>::try_new(field, offsets, values, None)?;
-    Ok(Arc::new(arr))
-}
-
-fn general_set_op(
-    array1: &ArrayRef,
-    array2: &ArrayRef,
-    set_op: SetOp,
-) -> Result<ArrayRef> {
-    match (array1.data_type(), array2.data_type()) {
-        (DataType::Null, DataType::List(field)) => {
-            if set_op == SetOp::Intersect {
-                return Ok(new_empty_array(&DataType::Null));
-            }
-            let array = as_list_array(&array2)?;
-            general_array_distinct::<i32>(array, field)
-        }
-
-        (DataType::List(field), DataType::Null) => {
-            if set_op == SetOp::Intersect {
-                return make_array(&[]);
-            }
-            let array = as_list_array(&array1)?;
-            general_array_distinct::<i32>(array, field)
-        }
-        (DataType::Null, DataType::LargeList(field)) => {
-            if set_op == SetOp::Intersect {
-                return Ok(new_empty_array(&DataType::Null));
-            }
-            let array = as_large_list_array(&array2)?;
-            general_array_distinct::<i64>(array, field)
-        }
-        (DataType::LargeList(field), DataType::Null) => {
-            if set_op == SetOp::Intersect {
-                return make_array(&[]);
-            }
-            let array = as_large_list_array(&array1)?;
-            general_array_distinct::<i64>(array, field)
-        }
-        (DataType::Null, DataType::Null) => Ok(new_empty_array(&DataType::Null)),
-
-        (DataType::List(field), DataType::List(_)) => {
-            let array1 = as_list_array(&array1)?;
-            let array2 = as_list_array(&array2)?;
-            generic_set_lists::<i32>(array1, array2, field.clone(), set_op)
-        }
-        (DataType::LargeList(field), DataType::LargeList(_)) => {
-            let array1 = as_large_list_array(&array1)?;
-            let array2 = as_large_list_array(&array2)?;
-            generic_set_lists::<i64>(array1, array2, field.clone(), set_op)
-        }
-        (data_type1, data_type2) => {
-            internal_err!(
-                "{set_op} does not support types '{data_type1:?}' and '{data_type2:?}'"
-            )
-        }
-    }
-}
-
-/// Array_union SQL function
-pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_union needs two arguments");
-    }
-    let array1 = &args[0];
-    let array2 = &args[1];
-
-    general_set_op(array1, array2, SetOp::Union)
-}
-
-/// array_intersect SQL function
-pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_intersect needs two arguments");
-    }
-
-    let array1 = &args[0];
-    let array2 = &args[1];
-
-    general_set_op(array1, array2, SetOp::Intersect)
-}
-
-pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
-    array: &GenericListArray<OffsetSize>,
+fn general_array_reverse<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
     field: &FieldRef,
-) -> Result<ArrayRef> {
-    let dt = array.value_type();
-    let mut offsets = Vec::with_capacity(array.len());
-    offsets.push(OffsetSize::usize_as(0));
-    let mut new_arrays = Vec::with_capacity(array.len());
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
-    // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
-        let values = converter.convert_columns(&[arr])?;
-        // sort elements in list and remove duplicates
-        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
-        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-        let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.first() {
-            Some(array) => array.clone(),
-            None => {
-                return internal_err!("array_distinct: failed to get array from rows")
-            }
-        };
-        new_arrays.push(array);
+) -> Result<ArrayRef>
+where
+    O: TryFrom<i64>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut nulls = vec![];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let mut index = end - O::one();
+        let mut cnt = 0;
+
+        while index >= start {
+            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            index = index - O::one();
+            cnt += 1;
+        }
+        offsets.push(offsets[row_index] + O::usize_as(cnt));
     }
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
-        offsets,
-        values,
-        None,
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(nulls.into()),
     )?))
 }

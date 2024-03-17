@@ -566,6 +566,14 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit("NULLS LAST"),
         ),
         array_distinct(make_array(vec![lit(1), lit(3), lit(3), lit(2), lit(2)])),
+        array_intersect(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_union(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
         array_resize(make_array(vec![lit(1), lit(2), lit(3)]), lit(5), lit(0)),
         array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(2)),
         array_slice(
