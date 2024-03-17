@@ -897,26 +897,29 @@ impl LogicalPlan {
             }) => {
                 // Update schema with unnested column type.
                 let input = Arc::new(inputs[0].clone());
-                let nested_field = input.schema().field_from_column(column)?;
-                let unnested_field = schema.field_from_column(column)?;
-                let fields = input
+                let (nested_qualifier, nested_field) =
+                    input.schema().qualifier_and_field_from_column(column)?;
+                let (unnested_qualifier, unnested_field) =
+                    schema.qualifier_and_field_from_column(column)?;
+                let qualifiers_and_fields = input
                     .schema()
-                    .fields()
                     .iter()
-                    .map(|f| {
-                        if f.as_ref() == nested_field {
-                            unnested_field.clone()
+                    .map(|(qualifier, field)| {
+                        if qualifier.eq(&nested_qualifier.as_ref())
+                            && field == &nested_field
+                        {
+                            (unnested_qualifier.clone(), unnested_field.clone())
                         } else {
-                            f.as_ref().clone()
+                            (qualifier.cloned(), field.clone())
                         }
                     })
                     .collect::<Vec<_>>();
 
                 let schema = Arc::new(
-                    DFSchema::new_with_metadata(
-                        fields,
+                    DFSchema::from_qualified_fields(
+                        qualifiers_and_fields,
                         input.schema().metadata().clone(),
-                    )
+                    )?
                     // We can use the existing functional dependencies as is:
                     .with_functional_dependencies(
                         input.schema().functional_dependencies().clone(),
