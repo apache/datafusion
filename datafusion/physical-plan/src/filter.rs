@@ -236,7 +236,6 @@ impl FilterExec {
             predicate,
             &collect_columns(predicate),
         ));
-        println!("eq_properties {:?}", eq_properties);
         Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
