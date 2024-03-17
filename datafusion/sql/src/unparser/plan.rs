@@ -15,16 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err,
-    tree_node::{Transformed, TreeNode, TreeNodeRecursion},
-    DataFusionError, Result,
-};
-use datafusion_expr::{
-    expr::Alias, utils::find_column_exprs, Expr, ExprSchemable, JoinConstraint, JoinType,
-    LogicalPlan,
-};
-use sqlparser::ast::{self, Ident, SelectItem};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_expr::{expr::Alias, Expr, JoinConstraint, JoinType, LogicalPlan};
+use sqlparser::ast::{self};
 
 use crate::unparser::utils::unproject_agg_exprs;
 

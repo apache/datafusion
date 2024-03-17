@@ -3,7 +3,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     Result,
 };
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, Projection};
+use datafusion_expr::{Aggregate, Expr, LogicalPlan};
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if one exists
 /// prior to encountering a Join, TableScan, or subquery node. If an Aggregate node is not found
