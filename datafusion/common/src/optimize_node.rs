@@ -27,33 +27,37 @@ pub enum OptimizedState {
 
 #[derive(Debug)]
 pub struct Optimized<T, E = DataFusionError> {
-    pub data: T,
+    pub optimzied_data: Option<T>,
+    // Used to store the original data if optimized successfully
+    pub original_data: T,
     pub optimized_state: OptimizedState,
+    // Used to store the error if optimized failed, so we can early return but preserve the original data
     pub error: Option<E>,
 }
 
 impl<T, E> Optimized<T, E> {
-    /// Create a new `Transformed` object with the given information.
-    pub fn new(data: T, optimized_state: OptimizedState) -> Self {
+    pub fn yes(optimzied_data: T, original_data: T) -> Self {
         Self {
-            data,
-            optimized_state,
+            optimzied_data: Some(optimzied_data),
+            original_data,
+            optimized_state: OptimizedState::Yes,
             error: None,
         }
     }
 
-
-    pub fn yes(data: T) -> Self {
-        Self::new(data, OptimizedState::Yes)
-    }
-
-    pub fn no(data: T) -> Self {
-        Self::new(data, OptimizedState::No)
-    }
-
-    pub fn fail(data: T, e: E) -> Self {
+    pub fn no(original_data: T) -> Self {
         Self {
-            data,
+            optimzied_data: None,
+            original_data,
+            optimized_state: OptimizedState::No,
+            error: None,
+        }
+    }
+
+    pub fn fail(original_data: T, e: E) -> Self {
+        Self {
+            optimzied_data: None,
+            original_data,
             optimized_state: OptimizedState::Fail,
             error: Some(e),
         }

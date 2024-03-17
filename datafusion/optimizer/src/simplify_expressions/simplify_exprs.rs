@@ -207,33 +207,41 @@ impl SimplifyExpressions {
         }
 
         match plan {
-            LogicalPlan::Projection(Projection { expr, input, schema }) => {
+            LogicalPlan::Projection(Projection { expr, input, .. }) => {
                 // fails if more than one arc is created
                 let input = Arc::into_inner(input).unwrap();
-                let Optimized { data: new_input, optimized_state, error } = Self::optimize_internal_owned(input, execution_props);
+                let Optimized { optimzied_data: new_input, original_data, optimized_state, error } = Self::optimize_internal_owned(input, execution_props);
 
                 if optimized_state == OptimizedState::Fail {
                     return Optimized::fail(plan, error.unwrap());
                 }
+
+                let new_input = if optimized_state == OptimizedState::Yes {
+                    Arc::new(new_input.unwrap())
+                } else {
+                    Arc::new(original_data)
+                };
 
                 let new_expr = simplify_expr(simplifier, expr);
                 if new_expr.is_err() {
                     return Optimized::fail(plan, new_expr.unwrap_err());
                 }
                 let new_expr = new_expr.unwrap();
-                let res = Projection::try_new(new_expr, Arc::new(new_input))
+                let res = Projection::try_new(new_expr, new_input)
                     .map(LogicalPlan::Projection);
                 if res.is_err() {
-                    let restored_plan = LogicalPlan::Projection(Projection {
-                        expr,
-                        input: Arc::new(new_input),
-                        schema,
-                    });
+                    // let restored_plan = LogicalPlan::Projection(Projection {
+                    //     expr,
+                    //     input: Arc::new(new_input),
+                    //     schema,
+                    // });
 
                     return Optimized::fail(plan, res.unwrap_err());
                 }
+
+                let new_plan = res.unwrap();
                 
-                Optimized::yes(res.unwrap())
+                Optimized::yes(new_plan, plan)
             }
             _ => {
                 let new_inputs = plan

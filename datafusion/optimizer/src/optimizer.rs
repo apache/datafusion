@@ -102,7 +102,7 @@ pub trait OptimizerRule {
     ) -> Optimized<LogicalPlan> {
         let res = self.try_optimize(&plan, config);
         match res {
-            Ok(Some(plan)) => Optimized::yes(plan),
+            Ok(Some(new_plan)) => Optimized::yes(new_plan, plan),
             Ok(None) => Optimized::no(plan),
             Err(e) => {
                 Optimized::fail(plan, e)
