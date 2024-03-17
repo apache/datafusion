@@ -106,7 +106,8 @@ impl ScalarUDFImpl for MakeArray {
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
-/// Can be used if the expected input and output are ArrayRef
+/// Constructs an array using the input `data` as `ArrayRef`.
+/// Returns a reference-counted `Array` instance result.
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     let mut data_type = DataType::Null;
     for arg in arrays {
