@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use datafusion_common::optimize_node::{Optimized, OptimizedState};
 use datafusion_common::{tree_node::Transformed, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -69,8 +70,11 @@ impl OptimizerRule for SimplifyExpressions {
         &self,
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        todo!("todo")
+    ) -> Optimized<LogicalPlan> {
+        let mut execution_props = ExecutionProps::new();
+        execution_props.query_execution_start_time = config.query_execution_start_time();
+
+        Self::optimize_internal_owned(plan, &execution_props)
     }
 }
 
@@ -139,7 +143,7 @@ impl SimplifyExpressions {
     fn optimize_internal_owned(
         plan: LogicalPlan,
         execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    ) -> Optimized<LogicalPlan> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
@@ -153,20 +157,24 @@ impl SimplifyExpressions {
             //
             // Thus, use the full schema of the inner provider without any
             // projection applied for simplification
-            Arc::new(DFSchema::try_from_qualified_schema(
+
+            let schema = DFSchema::try_from_qualified_schema(
                 &scan.table_name,
                 &scan.source.schema(),
-            )?)
+            );
+
+            if schema.is_err() {
+                return Optimized::fail(plan, schema.unwrap_err());
+            }
+
+            let schema = schema.unwrap();
+
+            Arc::new(schema)
         } else {
             Arc::new(DFSchema::empty())
         };
-        let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        // let new_inputs = plan
-        //     .inputs()
-        //     .iter()
-        //     .map(|input| Self::optimize_internal(input, execution_props))
-        //     .collect::<Result<Vec<_>>>()?;
+        let info = SimplifyContext::new(execution_props).with_schema(schema);
 
         let simplifier = ExprSimplifier::new(info);
 
@@ -199,24 +207,45 @@ impl SimplifyExpressions {
         }
 
         match plan {
-            LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                ..
-            }) => {
+            LogicalPlan::Projection(Projection { expr, input, schema }) => {
                 // fails if more than one arc is created
                 let input = Arc::into_inner(input).unwrap();
-                let new_input = Self::optimize_internal_owned(input, execution_props)?;
-                let new_expr = simplify_expr(simplifier, expr)?;
-                Projection::try_new(new_expr, Arc::new(new_input))
-                    .map(LogicalPlan::Projection)
+                let Optimized { data: new_input, optimized_state, error } = Self::optimize_internal_owned(input, execution_props);
+
+                if optimized_state == OptimizedState::Fail {
+                    return Optimized::fail(plan, error.unwrap());
+                }
+
+                let new_expr = simplify_expr(simplifier, expr);
+                if new_expr.is_err() {
+                    return Optimized::fail(plan, new_expr.unwrap_err());
+                }
+                let new_expr = new_expr.unwrap();
+                let res = Projection::try_new(new_expr, Arc::new(new_input))
+                    .map(LogicalPlan::Projection);
+                if res.is_err() {
+                    let restored_plan = LogicalPlan::Projection(Projection {
+                        expr,
+                        input: Arc::new(new_input),
+                        schema,
+                    });
+
+                    return Optimized::fail(plan, res.unwrap_err());
+                }
+                
+                Optimized::yes(res.unwrap())
             }
             _ => {
                 let new_inputs = plan
                     .inputs()
                     .iter()
                     .map(|input| Self::optimize_internal(input, execution_props))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>();
+
+                if new_inputs.is_err() {
+                    return Optimized::fail(plan, new_inputs.unwrap_err());
+                }
+
                 let exprs = plan
                     .expressions()
                     .into_iter()
@@ -226,21 +255,23 @@ impl SimplifyExpressions {
                         let new_e = simplifier.simplify(e)?;
                         new_e.alias_if_changed(original_name)
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>();
 
-                plan.with_new_exprs(exprs, new_inputs)
+                if exprs.is_err() {
+                    return Optimized::fail(plan, exprs.unwrap_err());
+                }
+
+                let new_inputs = new_inputs.unwrap();
+                let exprs = exprs.unwrap();
+
+                let res = plan.with_new_exprs(exprs, new_inputs);
+                if res.is_err() {
+                    return Optimized::fail(plan, res.unwrap_err());
+                }
+
+                Optimized::yes(res.unwrap())
             }
         }
-        // let new_inputs = plan.owned_inputs().into_iter().map(|input| {
-        //     Self::optimize_internal_owned(input, execution_props)
-        // }).collect::<Result<Vec<_>>>()?;
-
-        // let exprs = plan.rewrite_expressions(|e| {
-        //     // TODO: unify with `rewrite_preserving_name`
-        //     let original_name = e.name_for_alias()?;
-        //     let new_e = simplifier.simplify(e)?;
-        //     new_e.alias_if_changed(original_name)
-        // })?;
     }
 }
 

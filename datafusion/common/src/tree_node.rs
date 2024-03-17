@@ -469,6 +469,10 @@ impl<T> Transformed<T> {
         }
     }
 
+    pub fn is_transformed(&self) -> bool {
+        self.transformed
+    }
+
     /// Wrapper for transformed data with [`TreeNodeRecursion::Continue`] statement.
     pub fn yes(data: T) -> Self {
         Self::new(data, true, TreeNodeRecursion::Continue)
