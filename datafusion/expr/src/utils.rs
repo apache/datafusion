@@ -737,7 +737,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
-fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
+fn exprlist_to_fields_aggregate(exprs: &[&Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
@@ -754,12 +754,14 @@ fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<D
 
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields(exprs: &[Expr], plan: &LogicalPlan) -> Result<Vec<DFField>> {
+    let exprs = expr.into_iter().collect::<Vec<_>>();
+
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs, agg)),
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs.as_slice(), agg)),
         _ => None,
     };
     if let Some(fields) = fields {
