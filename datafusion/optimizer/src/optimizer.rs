@@ -48,15 +48,11 @@ use crate::utils::log_plan;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::optimize_node::{Optimized, OptimizedState};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{
-    not_impl_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
-};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
-use datafusion_expr::{EmptyRelation, Projection};
 use log::{debug, warn};
 
 /// `OptimizerRule` transforms one [`LogicalPlan`] into another which
@@ -93,7 +89,7 @@ pub trait OptimizerRule {
 
     /// does this rule support rewriting owned plans?
     fn supports_owned(&self) -> bool {
-        return false;
+        false
     }
 
     /// if supports_owned returns true, calls try_optimize_owned
@@ -608,7 +604,7 @@ impl Optimizer {
                     let Transformed {
                         data: node,
                         transformed,
-                        tnr,
+                        tnr: _,
                     } = self.optimize_owned_node(rule, plan, config)?;
                     if transformed {
                         is_transformed = true;
@@ -616,7 +612,7 @@ impl Optimizer {
                     let Transformed {
                         data: inputs,
                         transformed,
-                        tnr,
+                        tnr: _,
                     } = self.optimize_owned_inputs(rule, node, config)?;
                     if transformed {
                         is_transformed = true;
@@ -633,7 +629,7 @@ impl Optimizer {
                     let Transformed {
                         data: inputs,
                         transformed,
-                        tnr,
+                        tnr: _,
                     } = self.optimize_owned_inputs(rule, plan, config)?;
                     if transformed {
                         is_transformed = true;

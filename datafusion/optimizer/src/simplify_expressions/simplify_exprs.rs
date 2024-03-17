@@ -144,14 +144,6 @@ impl SimplifyExpressions {
         plan: LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<Transformed<LogicalPlan>> {
-        // match plan {
-        //     LogicalPlan::Projection(Projection { ref expr, ref input, .. }) => {
-        //         let strong_cnt = Arc::strong_count(input);
-        //         println!("strong count 2: {}", strong_cnt);
-        //     }
-        //     _ => {}
-        // }
-
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
@@ -210,15 +202,13 @@ impl SimplifyExpressions {
 
         match plan {
             LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                // println!("strong count: {}", Arc::strong_count(&input));
-                // fails if more than one arc is created
+                // `into_inner` fails if more than one clone is created
+                // 'skip failed rule' path fail because we need to clone before optimization and it fails because of `into_inner`
                 let input = Arc::into_inner(input).unwrap();
-                // let input = input.;
-                // let input = Arc::try_unwrap(input)
                 let Transformed {
                     data,
-                    transformed,
-                    tnr,
+                    transformed: _,
+                    tnr: _,
                 } = Self::optimize_internal_owned(input, execution_props)?;
 
                 let new_input = Arc::new(data);
