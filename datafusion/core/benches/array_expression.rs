@@ -22,10 +22,9 @@ extern crate datafusion;
 
 mod data_utils;
 use crate::criterion::Criterion;
-use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{ArrayRef, Int64Array, ListArray};
-use datafusion_physical_expr::array_expressions;
+use datafusion::functions_array::expr_fn::array_replace_all;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -59,8 +58,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("array_replace", |b| {
         b.iter(|| {
+            let args = args.as_slice();
             assert_eq!(
-                array_expressions::array_replace_all(args.as_slice())
+                array_replace_all(args[0], args[1], args[2])
                     .unwrap()
                     .as_list::<i32>(),
                 criterion::black_box(&expected_array)
