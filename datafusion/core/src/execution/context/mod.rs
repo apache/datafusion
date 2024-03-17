@@ -1875,16 +1875,29 @@ impl SessionState {
             stringified_plans
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
-            // optimize the child plan, capturing the output of each optimizer
-            let optimized_plan = self.optimizer.optimize(
-                &analyzed_plan,
-                self,
-                |optimized_plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                    stringified_plans.push(optimized_plan.to_stringified(plan_type));
-                },
-            );
+            let optimized_plan = if self.options().optimizer.skip_failed_rules {
+                self.optimizer.optimize(
+                    &analyzed_plan,
+                    self,
+                    |optimized_plan, optimizer| {
+                        let optimizer_name = optimizer.name().to_string();
+                        let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                        stringified_plans.push(optimized_plan.to_stringified(plan_type));
+                    },
+                )
+            } else {
+                // optimize the child plan, capturing the output of each optimizer
+                self.optimizer.optimize_owned(
+                    analyzed_plan,
+                    self,
+                    |optimized_plan, optimizer| {
+                        let optimizer_name = optimizer.name().to_string();
+                        let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                        stringified_plans.push(optimized_plan.to_stringified(plan_type));
+                    },
+                )
+            };
+
             let (plan, logical_optimization_succeeded) = match optimized_plan {
                 Ok(plan) => (Arc::new(plan), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
@@ -1904,10 +1917,21 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            let analyzed_plan =
-                self.analyzer
-                    .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+
+            if self.options().optimizer.skip_failed_rules {
+                let analyzed_plan =
+                    self.analyzer
+                        .execute_and_check(plan, self.options(), |_, _| {})?;
+                self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+
+            } else {
+
+                let analyzed_plan =
+                    self.analyzer
+                        .execute_and_check(plan, self.options(), |_, _| {})?;
+                self.optimizer.optimize_owned(analyzed_plan, self, |_, _| {})
+            }
+
         }
     }
 

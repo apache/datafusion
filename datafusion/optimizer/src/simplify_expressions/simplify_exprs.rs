@@ -70,7 +70,7 @@ impl OptimizerRule for SimplifyExpressions {
         &self,
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Optimized<LogicalPlan> {
+    ) -> Result<Transformed<LogicalPlan>> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
 
@@ -143,7 +143,15 @@ impl SimplifyExpressions {
     fn optimize_internal_owned(
         plan: LogicalPlan,
         execution_props: &ExecutionProps,
-    ) -> Optimized<LogicalPlan> {
+    ) -> Result<Transformed<LogicalPlan>> {
+        // match plan {
+        //     LogicalPlan::Projection(Projection { ref expr, ref input, .. }) => {
+        //         let strong_cnt = Arc::strong_count(input);
+        //         println!("strong count 2: {}", strong_cnt);
+        //     }
+        //     _ => {}
+        // }
+
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
@@ -161,13 +169,7 @@ impl SimplifyExpressions {
             let schema = DFSchema::try_from_qualified_schema(
                 &scan.table_name,
                 &scan.source.schema(),
-            );
-
-            if schema.is_err() {
-                return Optimized::fail(plan, schema.unwrap_err());
-            }
-
-            let schema = schema.unwrap();
+            )?;
 
             Arc::new(schema)
         } else {
@@ -208,51 +210,29 @@ impl SimplifyExpressions {
 
         match plan {
             LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                // println!("strong count: {}", Arc::strong_count(&input));
                 // fails if more than one arc is created
                 let input = Arc::into_inner(input).unwrap();
-                let Optimized { optimzied_data: new_input, original_data, optimized_state, error } = Self::optimize_internal_owned(input, execution_props);
+                // let input = input.;
+                // let input = Arc::try_unwrap(input)
+                let Transformed {
+                    data,
+                    transformed,
+                    tnr,
+                } = Self::optimize_internal_owned(input, execution_props)?;
 
-                if optimized_state == OptimizedState::Fail {
-                    return Optimized::fail(plan, error.unwrap());
-                }
-
-                let new_input = if optimized_state == OptimizedState::Yes {
-                    Arc::new(new_input.unwrap())
-                } else {
-                    Arc::new(original_data)
-                };
-
-                let new_expr = simplify_expr(simplifier, expr);
-                if new_expr.is_err() {
-                    return Optimized::fail(plan, new_expr.unwrap_err());
-                }
-                let new_expr = new_expr.unwrap();
-                let res = Projection::try_new(new_expr, new_input)
-                    .map(LogicalPlan::Projection);
-                if res.is_err() {
-                    // let restored_plan = LogicalPlan::Projection(Projection {
-                    //     expr,
-                    //     input: Arc::new(new_input),
-                    //     schema,
-                    // });
-
-                    return Optimized::fail(plan, res.unwrap_err());
-                }
-
-                let new_plan = res.unwrap();
-                
-                Optimized::yes(new_plan, plan)
+                let new_input = Arc::new(data);
+                let new_expr = simplify_expr(simplifier, expr)?;
+                Projection::try_new(new_expr, new_input)
+                    .map(LogicalPlan::Projection)
+                    .map(Transformed::yes)
             }
             _ => {
                 let new_inputs = plan
                     .inputs()
                     .iter()
                     .map(|input| Self::optimize_internal(input, execution_props))
-                    .collect::<Result<Vec<_>>>();
-
-                if new_inputs.is_err() {
-                    return Optimized::fail(plan, new_inputs.unwrap_err());
-                }
+                    .collect::<Result<Vec<_>>>()?;
 
                 let exprs = plan
                     .expressions()
@@ -263,21 +243,9 @@ impl SimplifyExpressions {
                         let new_e = simplifier.simplify(e)?;
                         new_e.alias_if_changed(original_name)
                     })
-                    .collect::<Result<Vec<_>>>();
+                    .collect::<Result<Vec<_>>>()?;
 
-                if exprs.is_err() {
-                    return Optimized::fail(plan, exprs.unwrap_err());
-                }
-
-                let new_inputs = new_inputs.unwrap();
-                let exprs = exprs.unwrap();
-
-                let res = plan.with_new_exprs(exprs, new_inputs);
-                if res.is_err() {
-                    return Optimized::fail(plan, res.unwrap_err());
-                }
-
-                Optimized::yes(res.unwrap())
+                plan.with_new_exprs(exprs, new_inputs).map(Transformed::yes)
             }
         }
     }
