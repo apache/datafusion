@@ -17,9 +17,8 @@
 
 //! [`ScalarUDFImpl`] definitions for array_position function.
 
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
+use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
-use datafusion_common::plan_err;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -78,13 +77,11 @@ impl ScalarUDFImpl for ArrayPosition {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
-            _ => {
-                return plan_err!("The array_position function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(UInt64)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
@@ -114,7 +111,10 @@ fn general_position_dispatch<O: OffsetSizeTrait>(
     let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
 
-    check_datatypes("array_position", &[list_array.values(), element_array])?;
+    crate::utils::check_datatypes(
+        "array_position",
+        &[list_array.values(), element_array],
+    )?;
 
     let arr_from = if args.len() == 3 {
         as_int64_array(&args[2])?
@@ -139,19 +139,6 @@ fn general_position_dispatch<O: OffsetSizeTrait>(
     }
 
     generic_position::<O>(list_array, element_array, arr_from)
-}
-
-fn check_datatypes(name: &str, args: &[&ArrayRef]) -> datafusion_common::Result<()> {
-    let data_type = args[0].data_type();
-    if !args.iter().all(|arg| {
-        arg.data_type().equals_datatype(data_type)
-            || arg.data_type().equals_datatype(&DataType::Null)
-    }) {
-        let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-        return plan_err!("{name} received incompatible types: '{types:?}'.");
-    }
-
-    Ok(())
 }
 
 fn generic_position<OffsetSize: OffsetSizeTrait>(
@@ -324,15 +311,11 @@ impl ScalarUDFImpl for ArrayPositions {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => {
-                List(Arc::new(Field::new("item", UInt64, true)))
-            }
-            _ => {
-                return plan_err!("The array_position function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(List(Arc::new(Field::new("item", UInt64, true))))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
@@ -356,12 +339,12 @@ pub fn array_positions_inner(args: &[ArrayRef]) -> datafusion_common::Result<Arr
     match &args[0].data_type() {
         DataType::List(_) => {
             let arr = as_list_array(&args[0])?;
-            check_datatypes("array_positions", &[arr.values(), element])?;
+            crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i32>(arr, element)
         }
         DataType::LargeList(_) => {
             let arr = as_large_list_array(&args[0])?;
-            check_datatypes("array_positions", &[arr.values(), element])?;
+            crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)
         }
         array_type => {
