@@ -56,6 +56,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
@@ -616,20 +617,14 @@ impl ParquetSink {
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
         parquet_props: WriterProperties,
-    ) -> Result<
-        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
-    > {
-        let (_, multipart_writer) = object_store
-            .put_multipart(location)
-            .await
-            .map_err(DataFusionError::ObjectStore)?;
+    ) -> Result<AsyncArrowWriter<BufWriter>> {
+        let buf_writer = BufWriter::new(object_store, location.clone());
         let writer = AsyncArrowWriter::try_new(
-            multipart_writer,
+            buf_writer,
             self.get_writer_schema(),
             PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
-
         Ok(writer)
     }
 
