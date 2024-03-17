@@ -282,12 +282,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
         }),
-        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
-        BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_union)(args)
-        }),
 
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {

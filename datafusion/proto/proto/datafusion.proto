@@ -658,8 +658,8 @@ enum ScalarFunction {
   // 116 was ArrayPopBack
   // 117 was StringToArray
   // 118 was ToTimestampNanos
-  ArrayIntersect = 119;
-  ArrayUnion = 120;
+  // 119 was ArrayIntersect
+  // 120 was ArrayUnion
   OverLay = 121;
   // 122 is Range
   ArrayExcept = 123;

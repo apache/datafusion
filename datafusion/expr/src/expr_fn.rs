@@ -638,14 +638,6 @@ scalar_expr!(
     array from to,
     "replaces all occurrences of the specified element with another specified element."
 );
-scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
-
-scalar_expr!(
-    ArrayIntersect,
-    array_intersect,
-    first_array second_array,
-    "Returns an array of the elements in the intersection of array1 and array2."
-);
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
