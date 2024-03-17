@@ -1917,21 +1917,18 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-
             if self.options().optimizer.skip_failed_rules {
                 let analyzed_plan =
                     self.analyzer
                         .execute_and_check(plan, self.options(), |_, _| {})?;
                 self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
-
             } else {
-
                 let analyzed_plan =
                     self.analyzer
                         .execute_and_check(plan, self.options(), |_, _| {})?;
-                self.optimizer.optimize_owned(analyzed_plan, self, |_, _| {})
+                self.optimizer
+                    .optimize_owned(analyzed_plan, self, |_, _| {})
             }
-
         }
     }
 

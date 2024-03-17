@@ -50,7 +50,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::optimize_node::{Optimized, OptimizedState};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{not_impl_err, DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
@@ -392,14 +394,6 @@ impl Optimizer {
     {
         let options = config.options();
 
-        // match plan {
-        //     LogicalPlan::Projection(Projection { expr, input, .. }) => {
-        //         let strong_cnt = Arc::strong_count(input);
-        //         println!("strong count 1: {}", strong_cnt);
-        //     }
-        //     _ => {}
-        // }
-
         let mut cur_plan = plan;
 
         let start_time = Instant::now();
@@ -420,16 +414,23 @@ impl Optimizer {
                         None
                     };
 
+                let cur_schema = cur_plan.schema().clone();
+
                 let optimized = self.optimize_owned_recursively(rule, cur_plan, config);
                 match optimized {
                     Ok(Transformed {
                         data: plan,
                         transformed,
-                        tnr,
+                        tnr: _,
                     }) => {
                         if transformed {
                             // TODO: need to fix this
-                            // assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
+                            let schema = plan.schema();
+                            assert_schema_is_the_same_v2(
+                                rule.name(),
+                                cur_schema.as_ref(),
+                                schema,
+                            )?;
                             observer(&plan, rule.as_ref());
                             log_plan(rule.name(), &plan);
                         } else {
@@ -675,6 +676,28 @@ pub(crate) fn assert_schema_is_the_same(
             "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
             prev_plan.schema(),
             new_plan.schema()
+        ));
+        Err(DataFusionError::Context(
+            String::from(rule_name),
+            Box::new(e),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn assert_schema_is_the_same_v2(
+    rule_name: &str,
+    prev_schema: &DFSchema,
+    new_schema: &DFSchemaRef,
+) -> Result<()> {
+    let equivalent = prev_schema.equivalent_names_and_types(new_schema);
+
+    if !equivalent {
+        let e = DataFusionError::Internal(format!(
+            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
+            prev_schema,
+            new_schema
         ));
         Err(DataFusionError::Context(
             String::from(rule_name),
