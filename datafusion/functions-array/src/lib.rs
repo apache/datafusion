@@ -33,6 +33,7 @@ mod concat;
 mod core;
 mod extract;
 mod kernels;
+mod position;
 mod rewrite;
 mod set_ops;
 mod udf;
@@ -57,6 +58,8 @@ pub mod expr_fn {
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
+    pub use super::position::array_position;
+    pub use super::position::array_positions;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
@@ -107,6 +110,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        position::array_position_udf(),
+        position::array_positions_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

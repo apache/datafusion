@@ -591,18 +591,6 @@ scalar_expr!(
     "Returns an array of the elements that appear in the first array but not in the second."
 );
 scalar_expr!(
-    ArrayPosition,
-    array_position,
-    array element index,
-    "searches for an element in the array, returns first occurrence."
-);
-scalar_expr!(
-    ArrayPositions,
-    array_positions,
-    array element,
-    "searches for an element in the array, returns all occurrences."
-);
-scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
@@ -1182,8 +1170,6 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(ArrayPosition, array_position, array, element, index);
-        test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
         test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
