@@ -337,18 +337,11 @@ fn get_excluded_columns(
     }
 
     let mut result = vec![];
-    let columns = schema.columns();
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
-        let field_idx = if let Some(qualifier) = qualifier {
-            schema.index_of_column_by_name(Some(qualifier), col_name)?
-        } else {
-            schema.index_of_column_by_name(None, col_name)?
-        };
-        if let Some(field_idx) = field_idx {
-            let field = columns[field_idx].clone();
-            result.push(field)
-        }
+        let (qualifier, field) =
+            schema.field_and_qualifier_with_name(qualifier.as_ref(), col_name)?;
+        result.push(Column::new(qualifier, field.name()));
     }
     Ok(result)
 }
