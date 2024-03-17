@@ -576,6 +576,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
             }
+            SQLExpr::AtTimeZone {
+                timestamp,
+                time_zone,
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(self.sql_expr_to_logical_expr_internal(
+                    *timestamp,
+                    schema,
+                    planner_context,
+                )?),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(time_zone.into())),
+            ))),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
