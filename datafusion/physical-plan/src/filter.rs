@@ -19,6 +19,7 @@
 //! include in its output batches.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -37,10 +38,11 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
@@ -158,7 +160,53 @@ impl FilterExec {
             column_statistics,
         })
     }
+    fn is_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
+        expr.as_any().is::<Literal>()
+            && expr.children().iter().all(|child| Self::is_constant(child))
+    }
 
+    fn extend_constants(
+        predicate: &Arc<dyn PhysicalExpr>,
+        columns: &HashSet<Column>,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut res_constants = Vec::new();
+
+        let constant_match = |x: &Arc<dyn PhysicalExpr>,
+                              y: &Arc<dyn PhysicalExpr>|
+         -> Option<Arc<dyn PhysicalExpr>> {
+            if columns
+                .iter()
+                .any(|col| x.as_any().downcast_ref::<Column>() == Some(col))
+                && Self::is_constant(y)
+            {
+                Some(x.clone())
+            } else {
+                None
+            }
+        };
+
+        predicate
+            .apply(&mut |expr| {
+                if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                    if binary.op() == &Operator::Eq {
+                        if let Some(constant_expr) =
+                            constant_match(binary.left(), binary.right())
+                        {
+                            res_constants.push(constant_expr)
+                        }
+                        if let Some(constant_expr) =
+                            constant_match(binary.right(), binary.left())
+                        {
+                            res_constants.push(constant_expr)
+                        }
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("no way to return error during recursion");
+
+        res_constants
+    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -181,8 +229,14 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _);
+        // this is for statistics
         eq_properties = eq_properties.add_constants(constants);
-
+        // this is for logical constant (for example: a = '1', then a could be marked as a constant)
+        eq_properties = eq_properties.add_constants(Self::extend_constants(
+            predicate,
+            &collect_columns(predicate),
+        ));
+        println!("eq_properties {:?}", eq_properties);
         Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
