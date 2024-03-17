@@ -633,8 +633,8 @@ enum ScalarFunction {
   // 89 was ArrayRepeat
   // 90 was ArrayLength
   // 91 was ArrayNdims
-  ArrayPosition = 92;
-  ArrayPositions = 93;
+  // 92 was ArrayPosition
+  // 93 was ArrayPositions
   // 94 was ArrayPrepend
   ArrayRemove = 95;
   ArrayReplace = 96;

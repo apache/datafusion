@@ -2906,8 +2906,8 @@ pub enum ScalarFunction {
     /// 89 was ArrayRepeat
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
-    ArrayPosition = 92,
-    ArrayPositions = 93,
+    /// 92 was ArrayPosition
+    /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
     ArrayRemove = 95,
     ArrayReplace = 96,
@@ -3019,8 +3019,6 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayPosition => "ArrayPosition",
-            ScalarFunction::ArrayPositions => "ArrayPositions",
             ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::Cot => "Cot",
@@ -3100,8 +3098,6 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayPosition" => Some(Self::ArrayPosition),
-            "ArrayPositions" => Some(Self::ArrayPositions),
             "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
             "Cot" => Some(Self::Cot),
