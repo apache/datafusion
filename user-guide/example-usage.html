@@ -663,13 +663,9 @@ worth noting that using the settings in the <code class="docutils literal notran
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>Finally, in order to build with the <code class="docutils literal notranslate"><span class="pre">simd</span></code> optimization <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">nightly</span></code> is required.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>rustup<span class="w"> </span>toolchain<span class="w"> </span>install<span class="w"> </span>nightly
-</pre></div>
-</div>
 <p>Based on the instruction set architecture you are building on you will want to configure the <code class="docutils literal notranslate"><span class="pre">target-cpu</span></code> as well, ideally
 with <code class="docutils literal notranslate"><span class="pre">native</span></code> or at least <code class="docutils literal notranslate"><span class="pre">avx2</span></code>.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>+nightly<span class="w"> </span>run<span class="w"> </span>--release
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
 </pre></div>
 </div>
 </section>
