@@ -585,24 +585,6 @@ scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(
-    ArrayRemove,
-    array_remove,
-    array element,
-    "removes the first element from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveN,
-    array_remove_n,
-    array element max,
-    "removes the first `max` elements from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveAll,
-    array_remove_all,
-    array element,
-    "removes all elements from the array equal to the given value."
-);
-scalar_expr!(
     ArrayReplace,
     array_replace,
     array from to,
@@ -1164,9 +1146,6 @@ mod test {
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
 
-        test_scalar_expr!(ArrayRemove, array_remove, array, element);
-        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
-        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
         test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
         test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
