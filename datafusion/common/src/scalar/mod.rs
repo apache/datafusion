@@ -1111,9 +1111,7 @@ impl ScalarValue {
             ScalarValue::DurationNanosecond(_) => {
                 DataType::Duration(TimeUnit::Nanosecond)
             }
-            ScalarValue::Union(_, fields, mode) => {
-                DataType::Union(fields.clone(), mode.clone())
-            }
+            ScalarValue::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
@@ -2115,7 +2113,7 @@ impl ScalarValue {
                             value.to_array_of_size(size)?
                         } else {
                             let dt = field.data_type();
-                            new_null_array(&dt, size)
+                            new_null_array(dt, size)
                         };
                         let field = (**field).clone();
                         child_arrays.push((field, ar));
@@ -3112,7 +3110,7 @@ impl TryFrom<&DataType> for ScalarValue {
                     .into(),
             ),
             DataType::Union(fields, mode) => {
-                ScalarValue::Union(None, fields.clone(), mode.clone())
+                ScalarValue::Union(None, fields.clone(), *mode)
             }
             DataType::Null => ScalarValue::Null,
             _ => {
@@ -3231,7 +3229,7 @@ impl fmt::Display for ScalarValue {
                 )?
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "{{{}}}", format!("{}:{}", id, val))?,
+                Some((id, val)) => write!(f, "{}:{}", id, val)?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
@@ -3350,7 +3348,7 @@ impl fmt::Debug for ScalarValue {
                 write!(f, "DurationNanosecond(\"{self}\")")
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "{{{}}}", format!("{}:{}", id, val)),
+                Some((id, val)) => write!(f, "Union {}:{}", id, val),
                 None => write!(f, "Union(NULL)"),
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
