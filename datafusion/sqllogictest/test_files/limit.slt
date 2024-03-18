@@ -320,7 +320,7 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 0
 
 # The aggregate does not need to be computed because the input statistics are exact and
-# the number of rows is less than or equal to the the "fetch+skip" value (LIMIT+OFFSET).
+# the number of rows is less than or equal to the "fetch+skip" value (LIMIT+OFFSET).
 query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
