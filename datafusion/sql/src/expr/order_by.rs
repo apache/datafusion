@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, Result,
-};
+use datafusion_common::{plan_datafusion_err, plan_err, Column, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};

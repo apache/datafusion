@@ -35,8 +35,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{

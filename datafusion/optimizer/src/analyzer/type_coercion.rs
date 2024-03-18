@@ -763,9 +763,9 @@ mod test {
     };
     use crate::test::assert_analyzed_plan_eq;
 
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection};
     use datafusion_expr::{

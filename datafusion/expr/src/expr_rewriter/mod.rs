@@ -310,9 +310,8 @@ mod test {
     use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFSchema, OwnedTableReference, ScalarValue};
-    use std::ops::Add;
 
     #[derive(Default)]
     struct RecordingRewriter {

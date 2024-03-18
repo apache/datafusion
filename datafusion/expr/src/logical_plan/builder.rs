@@ -47,13 +47,13 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, FileType, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    get_target_functional_dependencies, plan_datafusion_err, plan_err, Column, DFSchema,
+    DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -1122,7 +1122,7 @@ impl LogicalPlanBuilder {
         )?))
     }
 }
-pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
+pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
     fields
         .into_iter()
@@ -1131,14 +1131,9 @@ pub fn change_redundant_column(fields: Vec<DFField>) -> Vec<DFField> {
             *counter += 1;
             if *counter > 1 {
                 let new_name = format!("{}:{}", field.name(), *counter - 1);
-                DFField::new(
-                    field.qualifier().cloned(),
-                    &new_name,
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                )
+                Field::new(new_name, field.data_type().clone(), field.is_nullable())
             } else {
-                field
+                field.as_ref().clone()
             }
         })
         .collect()
@@ -2116,23 +2111,23 @@ mod tests {
     }
     #[test]
     fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
-        let t2_field_1 = DFField::new_unqualified("a", DataType::Int32, false);
-        let t2_field_3 = DFField::new_unqualified("a", DataType::Int32, false);
-        let t1_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
-        let t2_field_2 = DFField::new_unqualified("b", DataType::Int32, false);
+        let t1_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t1_field_2 = Field::new("b", DataType::Int32, false);
+        let t2_field_2 = Field::new("b", DataType::Int32, false);
 
         let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
-        let remove_redundant = change_redundant_column(field_vec);
+        let remove_redundant = change_redundant_column(&Fields::from(field_vec));
 
         assert_eq!(
             remove_redundant,
             vec![
-                DFField::new_unqualified("a", DataType::Int32, false),
-                DFField::new_unqualified("a:1", DataType::Int32, false),
-                DFField::new_unqualified("b", DataType::Int32, false),
-                DFField::new_unqualified("b:1", DataType::Int32, false),
-                DFField::new_unqualified("a:2", DataType::Int32, false),
+                Field::new("a", DataType::Int32, false),
+                Field::new("a:1", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("b:1", DataType::Int32, false),
+                Field::new("a:2", DataType::Int32, false),
             ]
         );
         Ok(())

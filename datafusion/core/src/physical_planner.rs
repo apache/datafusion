@@ -2023,9 +2023,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{
-        assert_contains, DFField, DFSchema, DFSchemaRef, TableReference,
-    };
+    use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{

@@ -28,8 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    ExprSchema, OwnedTableReference, Result,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
+    OwnedTableReference, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -69,8 +69,8 @@ impl ExprSchemable for Expr {
     /// ## and Float32 results in Float32 type
     ///
     /// ```
-    /// # use arrow::datatypes::DataType;
-    /// # use datafusion_common::{DFField, DFSchema};
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::DFSchema;
     /// # use datafusion_expr::{col, ExprSchemable};
     /// # use std::collections::HashMap;
     ///
@@ -78,12 +78,11 @@ impl ExprSchemable for Expr {
     ///   let expr = col("c1") + col("c2");
     ///   let schema = DFSchema::new_with_metadata(
     ///     vec![
-    ///       DFField::new_unqualified("c1", DataType::Int32, true),
-    ///       DFField::new_unqualified("c2", DataType::Float32, true),
+    ///       Field::new("c1", DataType::Int32, true),
+    ///       Field::new("c2", DataType::Float32, true),
     ///       ],
     ///       HashMap::new(),
-    ///   )
-    ///   .unwrap();
+    ///   );
     ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```

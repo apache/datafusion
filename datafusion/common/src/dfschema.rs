@@ -299,25 +299,16 @@ impl DFSchema {
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
         let mut qualifiers = Vec::new();
         for (qualifier, field) in other_schema.iter() {
-
-        let self_fields: HashSet<&DFField> = self.fields.iter().collect();
-        let self_unqualified_names: HashSet<&str> =
-            self.fields.iter().map(|x| x.name().as_str()).collect();
-
-        let mut fields_to_add = vec![];
-
-        for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
-                Some(_) => self_fields.contains(field),
+                Some(q) => self.has_column_with_qualified_name(q, field.name()),
                 // for unqualified columns, check as unqualified name
-                None => self_unqualified_names.contains(field.name().as_str()),
+                None => self.has_column_with_unqualified_name(field.name()),
             };
             if !duplicated_field {
                 // self.inner.fields.push(field.clone());
                 schema_builder.push(field.clone());
                 qualifiers.push(qualifier.cloned());
-                fields_to_add.push(field.clone());
             }
         }
         let mut metadata = self.inner.metadata.clone();
@@ -327,8 +318,6 @@ impl DFSchema {
         let finished_with_metadata = finished.with_metadata(metadata);
         self.inner = finished_with_metadata.into();
         self.field_qualifiers.extend(qualifiers);
-        self.fields.extend(fields_to_add);
-        self.metadata.extend(other_schema.metadata.clone())
     }
 
     /// Get a list of fields

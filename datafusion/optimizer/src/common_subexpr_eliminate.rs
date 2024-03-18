@@ -29,7 +29,8 @@ use datafusion_common::tree_node::{
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_err, qualified_name, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_datafusion_err, internal_err, qualified_name, Column, DFSchema, DFSchemaRef,
+    DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};

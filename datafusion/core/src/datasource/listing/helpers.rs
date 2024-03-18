@@ -31,21 +31,15 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_schema::Fields;
+use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
-use crate::{error::Result, scalar::ScalarValue};
-
-use super::PartitionedFile;
-use crate::datasource::listing::ListingTableUrl;
-use crate::execution::context::SessionState;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Column, DFSchema, DataFusionError};
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
-use futures::stream::{BoxStream, FuturesUnordered, StreamExt, TryStreamExt};
-use log::{debug, trace};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 

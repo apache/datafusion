@@ -1532,7 +1532,7 @@ mod tests {
     use crate::test::test_table_scan_with_name;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFField, ToDFSchema};
+    use datafusion_common::{assert_contains, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::execution_props::ExecutionProps;
 

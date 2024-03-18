@@ -484,7 +484,7 @@ mod tests {
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
 
     #[test]

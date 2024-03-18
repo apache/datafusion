@@ -22,7 +22,7 @@ use arrow::array::{BooleanArray, Int32Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::common::{DFField, DFSchema};
+use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{
@@ -273,18 +273,16 @@ fn expression_type_demo() -> Result<()> {
     // a schema. In this case we create a schema where the column `c` is of
     // type Utf8 (a String / VARCHAR)
     let schema = DFSchema::new_with_metadata(
-        vec![DFField::new_unqualified("c", DataType::Utf8, true)],
+        vec![Field::new("c", DataType::Utf8, true)],
         HashMap::new(),
-    )
-    .unwrap();
+    );
     assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
 
     // Using a schema where the column `foo` is of type Int32
     let schema = DFSchema::new_with_metadata(
-        vec![DFField::new_unqualified("c", DataType::Int32, true)],
+        vec![Field::new("c", DataType::Int32, true)],
         HashMap::new(),
-    )
-    .unwrap();
+    );
     assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
 
     // Get the type of an expression that adds 2 columns. Adding an Int32
@@ -292,12 +290,11 @@ fn expression_type_demo() -> Result<()> {
     let expr = col("c1") + col("c2");
     let schema = DFSchema::new_with_metadata(
         vec![
-            DFField::new_unqualified("c1", DataType::Int32, true),
-            DFField::new_unqualified("c2", DataType::Float32, true),
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Float32, true),
         ],
         HashMap::new(),
-    )
-    .unwrap();
+    );
     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
 
     Ok(())

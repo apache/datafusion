@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     internal_err, plan_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    DataFusionError, JoinConstraint, Result,
+    JoinConstraint, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::replace_col;
