@@ -211,10 +211,8 @@ impl FilterExec {
         eq_properties = eq_properties.add_constants(constants);
         // this is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties = eq_properties.add_constants(Self::extend_constants(
-            predicate,
-            &collect_columns(predicate),
-        ));
+        eq_properties =
+            eq_properties.add_constants(Self::extend_constants(input, predicate));
         Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
