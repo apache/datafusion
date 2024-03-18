@@ -605,6 +605,14 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(3), lit(3), lit(2), lit(3), lit(1)]),
             lit(3),
         ),
+        array_replace(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        array_replace_n(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(2),
+            lit(4),
+            lit(1),
+        ),
+        array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
