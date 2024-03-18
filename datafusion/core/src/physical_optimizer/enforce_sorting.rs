@@ -131,7 +131,7 @@ fn update_coalesce_ctx_children(
     coalesce_context.data = if children.is_empty() {
         // Plan has no children, it cannot be a `CoalescePartitionsExec`.
         false
-    } else if is_coalesce_partitions(&coalesce_context.plan) || coalesce_context.data {
+    } else if is_coalesce_partitions(&coalesce_context.plan) {
         // Initiate a connection:
         true
     } else {
