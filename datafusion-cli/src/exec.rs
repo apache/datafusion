@@ -412,7 +412,7 @@ mod tests {
             )
         })?;
         for location in locations {
-            let sql = format!("copy (values (1,2)) to '{}';", location);
+            let sql = format!("copy (values (1,2)) to '{}' STORED AS PARQUET;", location);
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail
@@ -438,8 +438,8 @@ mod tests {
         let location = "s3://bucket/path/file.parquet";
 
         // Missing region, use object_store defaults
-        let sql = format!("COPY (values (1,2)) TO '{location}'
-            (format parquet, 'aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}')");
+        let sql = format!("COPY (values (1,2)) TO '{location}' STORED AS PARQUET
+            OPTIONS ('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}')");
         copy_to_table_test(location, &sql).await?;
 
         Ok(())

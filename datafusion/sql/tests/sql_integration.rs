@@ -22,25 +22,23 @@ use std::{sync::Arc, vec};
 
 use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
-use datafusion_sql::planner::PlannerContext;
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
+    plan_err, DFSchema, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
 };
-use datafusion_common::{plan_err, DFSchema, ParamValues};
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{ContextProvider, ParserOptions, SqlToRel},
+    planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
 use rstest::rstest;
+use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
@@ -389,7 +387,7 @@ fn plan_rollback_transaction_chained() {
 
 #[test]
 fn plan_copy_to() {
-    let sql = "COPY test_decimal to 'output.csv'";
+    let sql = "COPY test_decimal to 'output.csv' STORED AS CSV";
     let plan = r#"
 CopyTo: format=csv output_url=output.csv options: ()
   TableScan: test_decimal
@@ -404,6 +402,18 @@ fn plan_explain_copy_to() {
     let plan = r#"
 Explain
   CopyTo: format=csv output_url=output.csv options: ()
+    TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_explain_copy_to_format() {
+    let sql = "EXPLAIN COPY test_decimal to 'output.tbl' STORED AS CSV";
+    let plan = r#"
+Explain
+  CopyTo: format=csv output_url=output.tbl options: ()
     TableScan: test_decimal
     "#
     .trim();

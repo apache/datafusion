@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::prelude::*;
+
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -27,7 +28,7 @@ async fn unsupported_ddl_returns_error() {
     // disallow ddl
     let options = SQLOptions::new().with_allow_ddl(false);
 
-    let sql = "create view test_view as select * from test";
+    let sql = "CREATE VIEW test_view AS SELECT * FROM test";
     let df = ctx.sql_with_options(sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),
@@ -46,7 +47,7 @@ async fn unsupported_dml_returns_error() {
 
     let options = SQLOptions::new().with_allow_dml(false);
 
-    let sql = "insert into test values (1)";
+    let sql = "INSERT INTO test VALUES (1)";
     let df = ctx.sql_with_options(sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),
@@ -67,7 +68,10 @@ async fn unsupported_copy_returns_error() {
 
     let options = SQLOptions::new().with_allow_dml(false);
 
-    let sql = format!("copy (values(1)) to '{}'", tmpfile.to_string_lossy());
+    let sql = format!(
+        "COPY (values(1)) TO '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
     let df = ctx.sql_with_options(&sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),
@@ -106,7 +110,7 @@ async fn ddl_can_not_be_planned_by_session_state() {
     let state = ctx.state();
 
     // can not create a logical plan for catalog DDL
-    let sql = "drop table test";
+    let sql = "DROP TABLE test";
     let plan = state.create_logical_plan(sql).await.unwrap();
     let physical_plan = state.create_physical_plan(&plan).await;
     assert_eq!(
