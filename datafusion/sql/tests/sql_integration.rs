@@ -24,20 +24,21 @@ use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    plan_err, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
+    plan_err, DFSchema, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     AggregateUDF, ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
     Volatility, WindowUDF,
 };
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{ContextProvider, ParserOptions, SqlToRel},
+    planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use rstest::rstest;
+use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
