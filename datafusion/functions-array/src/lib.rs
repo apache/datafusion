@@ -36,6 +36,7 @@ mod extract;
 mod kernels;
 mod position;
 mod remove;
+mod replace;
 mod rewrite;
 mod set_ops;
 mod udf;
@@ -66,6 +67,9 @@ pub mod expr_fn {
     pub use super::remove::array_remove;
     pub use super::remove::array_remove_all;
     pub use super::remove::array_remove_n;
+    pub use super::replace::array_replace;
+    pub use super::replace::array_replace_all;
+    pub use super::replace::array_replace_n;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
@@ -120,8 +124,11 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         position::array_position_udf(),
         position::array_positions_udf(),
         remove::array_remove_udf(),
-        remove::array_remove_n_udf(),
         remove::array_remove_all_udf(),
+        remove::array_remove_n_udf(),
+        replace::array_replace_n_udf(),
+        replace::array_replace_all_udf(),
+        replace::array_replace_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

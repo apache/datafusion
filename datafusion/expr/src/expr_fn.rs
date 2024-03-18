@@ -584,25 +584,6 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-scalar_expr!(
-    ArrayReplace,
-    array_replace,
-    array from to,
-    "replaces the first occurrence of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceN,
-    array_replace_n,
-    array from to max,
-    "replaces the first `max` occurrences of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceAll,
-    array_replace_all,
-    array from to,
-    "replaces all occurrences of the specified element with another specified element."
-);
-
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
@@ -1145,11 +1126,6 @@ mod test {
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
-
-        test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
-        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
-        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
