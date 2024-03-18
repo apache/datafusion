@@ -160,9 +160,6 @@ impl FilterExec {
             column_statistics,
         })
     }
-    fn is_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
-        expr.as_any().is::<Literal>() && expr.children().iter().all(Self::is_constant)
-    }
 
     fn extend_constants(
         input: &Arc<dyn ExecutionPlan>,
