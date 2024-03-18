@@ -38,16 +38,14 @@ select f64, coalesce(1.0 / f64, 0.0), acos(coalesce(1.0 / f64, 0.0)) from double
 ----
 10.1 0.09900990099 1.471623942989
 
-# BUG: should be 1.471623942989
 # common subexpr with coalesce (short-circuited) and alias
 query RRR rowsort
 select f64, coalesce(1.0 / f64, 0.0) as f64_1, acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
-10.1 0.09900990099 0.09900990099
+10.1 0.09900990099 1.471623942989
 
-# BUG: should be 1.471623942989
 # common subexpr with case (short-circuited)
 query RRR rowsort
 select f64, case when f64 > 0 then 1.0 / f64 else null end, acos(case when f64 > 0 then 1.0 / f64 else null end) from doubles;
 ----
-10.1 0.09900990099 0.09900990099
+10.1 0.09900990099 1.471623942989
