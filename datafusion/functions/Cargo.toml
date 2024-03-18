@@ -34,14 +34,21 @@ core_expressions = []
 # enable datetime functions
 datetime_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
-default = ["core_expressions", "datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions"]
+default = [
+    "core_expressions",
+    "datetime_expressions",
+    "encoding_expressions",
+    "math_expressions",
+    "regex_expressions",
+    "crypto_expressions",
+]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
-
+crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 [lib]
 name = "datafusion_functions"
 path = "src/lib.rs"
@@ -51,7 +58,10 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 base64 = { version = "0.22", optional = true }
+blake2 = { version = "^0.10.2", optional = true }
+blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -60,8 +70,9 @@ datafusion-physical-expr = { workspace = true, default-features = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
+md-5 = { version = "^0.10.0", optional = true }
 regex = { version = "1.8", optional = true }
-
+sha2 = { version = "^0.10.1", optional = true }
 [dev-dependencies]
 criterion = "0.5"
 rand = { workspace = true }
@@ -75,3 +86,11 @@ name = "to_timestamp"
 [[bench]]
 harness = false
 name = "regx"
+
+[[bench]]
+harness = false
+name = "make_date"
+
+[[bench]]
+harness = false
+name = "to_char"

@@ -82,6 +82,7 @@ clickbench_extended:    ClickBench "inspired" queries against a single parquet (
 DATA_DIR        directory to store datasets
 CARGO_COMMAND   command that runs the benchmark binary
 DATAFUSION_DIR  directory to use (default $DATAFUSION_DIR)
+RESULTS_NAME    folder where the benchmark files are stored
 "
     exit 1
 }
@@ -166,18 +167,19 @@ main() {
             esac
             ;;
         run)
-            # Parse positional paraleters
+            # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
             BRANCH_NAME=$(cd ${DATAFUSION_DIR} && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
-            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$BRANCH_NAME"}
+            RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
+            RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
 
             echo "***************************"
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
-            echo "BRACH_NAME: ${BRANCH_NAME}"
+            echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
