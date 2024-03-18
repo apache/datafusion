@@ -75,6 +75,6 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 # 0.10 and 0.11 are incompatible. Need to upgrade tonic to 0.11 when upgrading to arrow 51
-tonic = "0.10"
+tonic = "0.11"
 url = { workspace = true }
 uuid = "1.2"

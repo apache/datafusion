@@ -57,14 +57,14 @@ version = "36.0.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
-arrow = { version = "50.0.0", features = ["prettyprint"] }
-arrow-array = { version = "50.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "50.0.0", default-features = false }
-arrow-flight = { version = "50.0.0", features = ["flight-sql-experimental"] }
-arrow-ipc = { version = "50.0.0", default-features = false, features = ["lz4"] }
-arrow-ord = { version = "50.0.0", default-features = false }
-arrow-schema = { version = "50.0.0", default-features = false }
-arrow-string = { version = "50.0.0", default-features = false }
+arrow = { version = "51.0.0", features = ["prettyprint"] }
+arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "51.0.0", default-features = false }
+arrow-flight = { version = "51.0.0", features = ["flight-sql-experimental"] }
+arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
+arrow-ord = { version = "51.0.0", default-features = false }
+arrow-schema = { version = "51.0.0", default-features = false }
+arrow-string = { version = "51.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -95,7 +95,7 @@ log = "^0.4"
 num_cpus = "1.13.0"
 object_store = { version = "0.9.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "50.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
 rstest = "0.18.0"
 serde_json = "1"
@@ -122,14 +122,3 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "c3899cea0cda046c2c635d6a2f75baee8ee1ea99" }
