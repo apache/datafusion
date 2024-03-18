@@ -18,7 +18,7 @@
 use arrow_array::{Date32Array, Date64Array};
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, Column, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
@@ -40,7 +40,7 @@ use super::Unparser;
 /// let expr = col("a").gt(lit(4));
 /// let sql = expr_to_sql(&expr).unwrap();
 ///
-/// assert_eq!(format!("{}", sql), "(a > 4)")
+/// assert_eq!(format!("{}", sql), "(\"a\" > 4)")
 /// ```
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
@@ -151,6 +151,36 @@ impl Unparser<'_> {
                     order_by: vec![],
                 }))
             }
+            Expr::ScalarSubquery(subq) => {
+                let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::Subquery(sub_query))
+            }
+            Expr::InSubquery(insubq) => {
+                let inexpr = Box::new(self.expr_to_sql(insubq.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                Ok(ast::Expr::InSubquery {
+                    expr: inexpr,
+                    subquery: sub_query,
+                    negated: insubq.negated,
+                })
+            }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }
     }
@@ -169,7 +199,7 @@ impl Unparser<'_> {
     pub(super) fn new_ident(&self, str: String) -> ast::Ident {
         ast::Ident {
             value: str,
-            quote_style: self.dialect.identifier_quote_style(),
+            quote_style: Some(self.dialect.identifier_quote_style().unwrap_or('"')),
         }
     }
 
@@ -491,28 +521,28 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
+            ((col("a") + col("b")).gt(lit(4)), r#"(("a" + "b") > 4)"#),
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"("a"."b"."c" > 4)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
                 }),
-                r#"CAST(a AS DATETIME)"#,
+                r#"CAST("a" AS DATETIME)"#,
             ),
             (
                 Expr::Cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::UInt32,
                 }),
-                r#"CAST(a AS INTEGER UNSIGNED)"#,
+                r#"CAST("a" AS INTEGER UNSIGNED)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
@@ -549,7 +579,7 @@ mod tests {
                     order_by: None,
                     null_treatment: None,
                 }),
-                "SUM(a)",
+                r#"SUM("a")"#,
             ),
             (
                 Expr::AggregateFunction(AggregateFunction {

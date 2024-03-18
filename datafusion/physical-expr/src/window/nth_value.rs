@@ -83,19 +83,16 @@ impl NthValue {
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
-        n: u32,
+        n: i64,
         ignore_nulls: bool,
     ) -> Result<Self> {
-        if ignore_nulls {
-            return exec_err!("NTH_VALUE ignore_nulls is not supported yet");
-        }
         match n {
             0 => exec_err!("NTH_VALUE expects n to be non-zero"),
             _ => Ok(Self {
                 name: name.into(),
                 expr,
                 data_type,
-                kind: NthValueKind::Nth(n as i64),
+                kind: NthValueKind::Nth(n),
                 ignore_nulls,
             }),
         }
@@ -267,20 +264,37 @@ impl PartitionEvaluator for NthValueEvaluator {
                             if index >= n_range {
                                 // Outside the range, return NULL:
                                 ScalarValue::try_from(arr.data_type())
+                            } else if self.ignore_nulls {
+                                let valid_indices = valid_indices.unwrap();
+                                if index >= valid_indices.len() {
+                                    return ScalarValue::try_from(arr.data_type());
+                                }
+                                ScalarValue::try_from_array(
+                                    &slice.unwrap(),
+                                    valid_indices[index],
+                                )
                             } else {
                                 ScalarValue::try_from_array(arr, range.start + index)
                             }
                         }
                         Ordering::Less => {
                             let reverse_index = (-n) as usize;
-                            if n_range >= reverse_index {
+                            if n_range < reverse_index {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            } else if self.ignore_nulls {
+                                let valid_indices = valid_indices.unwrap();
+                                if reverse_index > valid_indices.len() {
+                                    return ScalarValue::try_from(arr.data_type());
+                                }
+                                let new_index =
+                                    valid_indices[valid_indices.len() - reverse_index];
+                                ScalarValue::try_from_array(&slice.unwrap(), new_index)
+                            } else {
                                 ScalarValue::try_from_array(
                                     arr,
                                     range.start + n_range - reverse_index,
                                 )
-                            } else {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
                             }
                         }
                         Ordering::Equal => {

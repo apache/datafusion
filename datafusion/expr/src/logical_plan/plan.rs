@@ -2031,7 +2031,8 @@ impl Window {
         let fields = input.schema().fields();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
+        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
+        window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2357,7 +2358,7 @@ impl DistinctOn {
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
         let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&select_expr, &input)?,
+            exprlist_to_fields(select_expr.as_slice(), &input)?,
             input.schema().metadata().clone(),
         )?;
 
@@ -2436,7 +2437,7 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+        let mut fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2446,7 +2447,7 @@ impl Aggregate {
                 .collect::<Vec<_>>();
         }
 
-        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+        fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
         let schema =
             DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;

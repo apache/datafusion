@@ -255,15 +255,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveN => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_n)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_all)(args)
-        }),
         BuiltinScalarFunction::ArrayReplace => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace)(args)
         }),
