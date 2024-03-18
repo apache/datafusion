@@ -31,7 +31,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::kernels::compare_element_to_list;
+use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;

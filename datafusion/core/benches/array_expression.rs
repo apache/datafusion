@@ -47,7 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     from_array.clone(),
                     to_array.clone()
                 ),
-                criterion::black_box(&expected_array).clone()
+                *criterion::black_box(&expected_array)
             )
         })
     });
