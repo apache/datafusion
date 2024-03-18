@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite, SharedBuffer};
+use super::write::{create_writer, SharedBuffer};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
@@ -942,7 +942,7 @@ async fn concatenate_parallel_row_groups(
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
 ) -> Result<FileMetaData> {
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
@@ -984,7 +984,7 @@ async fn concatenate_parallel_row_groups(
 /// task then stitches these independent RowGroups together and streams this large
 /// single parquet file to an ObjectStore in multiple parts.
 async fn output_single_parquet_file_parallelized(
-    object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
     output_schema: Arc<Schema>,
     parquet_props: &WriterProperties,
