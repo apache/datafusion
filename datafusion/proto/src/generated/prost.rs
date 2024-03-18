@@ -2935,7 +2935,7 @@ pub enum ScalarFunction {
     /// 120 was ArrayUnion
     OverLay = 121,
     /// 122 is Range
-    ArrayExcept = 123,
+    /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
     Levenshtein = 125,
     SubstrIndex = 126,
@@ -3029,7 +3029,6 @@ impl ScalarFunction {
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
@@ -3108,7 +3107,6 @@ impl ScalarFunction {
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
             "OverLay" => Some(Self::OverLay),
-            "ArrayExcept" => Some(Self::ArrayExcept),
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),

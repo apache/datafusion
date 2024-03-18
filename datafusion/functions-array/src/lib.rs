@@ -31,6 +31,7 @@ pub mod macros;
 mod array_has;
 mod concat;
 mod core;
+mod except;
 mod extract;
 mod kernels;
 mod position;
@@ -54,6 +55,7 @@ pub mod expr_fn {
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
     pub use super::core::make_array;
+    pub use super::except::array_except;
     pub use super::extract::array_element;
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
@@ -92,6 +94,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         concat::array_append_udf(),
         concat::array_prepend_udf(),
         concat::array_concat_udf(),
+        except::array_except_udf(),
         extract::array_element_udf(),
         extract::array_pop_back_udf(),
         extract::array_pop_front_udf(),

@@ -585,12 +585,6 @@ scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(
-    ArrayExcept,
-    array_except,
-    first_array second_array,
-    "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
