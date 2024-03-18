@@ -27,23 +27,18 @@ use datafusion_expr::EmitTo;
 use datafusion_physical_expr::LexOrdering;
 
 /// A [`GroupValues`] making use of order
-pub struct FullOrderedGroupValues {
+pub struct GroupValuesFullyOrdered {
     /// The output schema
     schema: SchemaRef,
 
-    /// The actual group by values, stored in arrow [`Row`] format.
+    /// The actual group by values, stored as `Vec<ScalarValue>` for each distinct group.
     /// `group_values[i]` holds the group value for group_index `i`.
-    ///
-    /// The row format is used to compare group keys quickly and store
-    /// them efficiently in memory. Quick comparison is especially
-    /// important for multi-column group keys.
-    ///
-    /// [`Row`]: arrow::row::Row
     group_values: Option<Vec<Vec<ScalarValue>>>,
+    /// The ordering of the Group by expressions.
     sort_exprs: LexOrdering,
 }
 
-impl FullOrderedGroupValues {
+impl GroupValuesFullyOrdered {
     pub fn try_new(schema: SchemaRef, sort_exprs: LexOrdering) -> Result<Self> {
         Ok(Self {
             schema,
@@ -53,11 +48,13 @@ impl FullOrderedGroupValues {
     }
 }
 
-impl GroupValues for FullOrderedGroupValues {
+impl GroupValues for GroupValuesFullyOrdered {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format
-        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
+        // We shouldn't receive empty group by.
         assert!(!cols.is_empty());
+        // Number of group by columns, and ordering expression length should be same.
+        // Otherwise mode wouldn't be FullyOrdered.
+        assert_eq!(cols.len(), self.sort_exprs.len());
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -72,8 +69,6 @@ impl GroupValues for FullOrderedGroupValues {
             None => vec![],
         };
 
-        assert_eq!(cols.len(), self.sort_exprs.len());
-        // TODO: May need to change iteration order
         let sort_columns = cols
             .iter()
             .zip(&self.sort_exprs)
@@ -85,17 +80,16 @@ impl GroupValues for FullOrderedGroupValues {
         let ranges = evaluate_partition_ranges(n_rows, &sort_columns)?;
         assert!(!ranges.is_empty());
         let first_section = &ranges[0];
+
+        // Determine whether first group calculated from the new data, is continuation of
+        // the last group from the previous data received.
         let row = get_row_at_idx(cols, first_section.start)?;
-        let mut should_insert = false;
-        if let Some(last_group) = group_values.last() {
-            if !row.eq(last_group) {
-                // Group by value changed
-                should_insert = true;
-            }
+        let same_group = if let Some(last_group) = group_values.last() {
+            row.eq(last_group)
         } else {
-            should_insert = true;
-        }
-        if should_insert {
+            false
+        };
+        if !same_group {
             group_values.push(row);
         }
         groups.extend(vec![

@@ -30,7 +30,7 @@ use row::GroupValuesRows;
 mod bytes;
 mod fully_ordered;
 
-use crate::aggregates::group_values::fully_ordered::FullOrderedGroupValues;
+use crate::aggregates::group_values::fully_ordered::GroupValuesFullyOrdered;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -60,10 +60,6 @@ pub fn new_group_values(
     schema: SchemaRef,
     ordering: Option<Vec<PhysicalSortExpr>>,
 ) -> Result<Box<dyn GroupValues>> {
-    if let Some(ordering) = ordering {
-        // println!("creating fully ordered mode");
-        return Ok(Box::new(FullOrderedGroupValues::try_new(schema, ordering)?));
-    }
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -90,6 +86,10 @@ pub fn new_group_values(
         if let DataType::LargeBinary = d {
             return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Binary)));
         }
+    } else if let Some(ordering) = ordering {
+        return Ok(Box::new(GroupValuesFullyOrdered::try_new(
+            schema, ordering,
+        )?));
     }
 
     Ok(Box::new(GroupValuesRows::try_new(schema)?))
