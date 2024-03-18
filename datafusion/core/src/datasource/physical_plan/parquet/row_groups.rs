@@ -199,6 +199,10 @@ impl PruningStatistics for BloomFilterStatistics {
         None
     }
 
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
     /// Use bloom filters to determine if we are sure this column can not
     /// possibly contain `values`
     ///
@@ -330,6 +334,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         let (c, _) = self.column(&column.name)?;
         let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
         scalar.to_array().ok()
+    }
+
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
     }
 
     fn contained(
