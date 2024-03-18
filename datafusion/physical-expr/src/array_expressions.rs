@@ -24,7 +24,6 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use arrow_buffer::NullBuffer;
 
-use arrow_schema::FieldRef;
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{exec_err, plan_err, Result};
@@ -560,73 +559,4 @@ pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
             exec_err!("array_replace_all does not support type '{array_type:?}'.")
         }
     }
-}
-
-/// array_reverse SQL function
-pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
-    if arg.len() != 1 {
-        return exec_err!("array_reverse needs one argument");
-    }
-
-    match &arg[0].data_type() {
-        DataType::List(field) => {
-            let array = as_list_array(&arg[0])?;
-            general_array_reverse::<i32>(array, field)
-        }
-        DataType::LargeList(field) => {
-            let array = as_large_list_array(&arg[0])?;
-            general_array_reverse::<i64>(array, field)
-        }
-        DataType::Null => Ok(arg[0].clone()),
-        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
-    }
-}
-
-fn general_array_reverse<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
-    field: &FieldRef,
-) -> Result<ArrayRef>
-where
-    O: TryFrom<i64>,
-{
-    let values = array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut offsets = vec![O::usize_as(0)];
-    let mut nulls = vec![];
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
-
-    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        // skip the null value
-        if array.is_null(row_index) {
-            nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.extend(0, 0, 1);
-            continue;
-        } else {
-            nulls.push(true);
-        }
-
-        let start = offset_window[0];
-        let end = offset_window[1];
-
-        let mut index = end - O::one();
-        let mut cnt = 0;
-
-        while index >= start {
-            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
-            index = index - O::one();
-            cnt += 1;
-        }
-        offsets.push(offsets[row_index] + O::usize_as(cnt));
-    }
-
-    let data = mutable.freeze();
-    Ok(Arc::new(GenericListArray::<O>::try_new(
-        field.clone(),
-        OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
-        Some(nulls.into()),
-    )?))
 }
