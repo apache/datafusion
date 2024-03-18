@@ -779,9 +779,9 @@ impl DFSchema {
     /// Strip all field qualifier in schema
     pub fn strip_qualifiers(self) -> Self {
         DFSchema {
-            inner: self.inner.clone(),
             field_qualifiers: vec![None; self.inner.fields.len()],
-            functional_dependencies: self.functional_dependencies.clone(),
+            inner: self.inner,
+            functional_dependencies: self.functional_dependencies,
         }
     }
 
@@ -789,9 +789,9 @@ impl DFSchema {
     pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
         let qualifier = qualifier.into();
         DFSchema {
-            inner: self.inner.clone(),
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
-            functional_dependencies: self.functional_dependencies.clone(),
+            inner: self.inner,
+            functional_dependencies: self.functional_dependencies,
         }
     }
 
