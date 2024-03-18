@@ -123,13 +123,9 @@ impl Unparser<'_> {
                 let mut builder = TableRelationBuilder::default();
                 let mut table_parts = vec![];
                 if let Some(schema_name) = scan.table_name.schema() {
-                    table_parts.push(self.new_ident(
-                        schema_name.to_string(),
-                    ));
+                    table_parts.push(self.new_ident(schema_name.to_string()));
                 }
-                table_parts.push(
-                    self.new_ident(scan.table_name.table().to_string())
-                );
+                table_parts.push(self.new_ident(scan.table_name.table().to_string()));
                 builder.name(ast::ObjectName(table_parts));
                 relation.table(builder);
 
