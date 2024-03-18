@@ -1225,6 +1225,28 @@ pub struct IntervalMonthDayNanoValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionField {
+    #[prost(int32, tag = "1")]
+    pub field_id: i32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<Field>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionValue {
+    /// Note that a null union value must have one or more fields, so we
+    /// encode a null UnionValue as one with value_id == 128
+    #[prost(int32, tag = "1")]
+    pub value_id: i32,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+    #[prost(message, repeated, tag = "3")]
+    pub fields: ::prost::alloc::vec::Vec<UnionField>,
+    #[prost(enumeration = "UnionMode", tag = "4")]
+    pub mode: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarFixedSizeBinary {
     #[prost(bytes = "vec", tag = "1")]
     pub values: ::prost::alloc::vec::Vec<u8>,
@@ -1236,7 +1258,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1320,6 +1342,8 @@ pub mod scalar_value {
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "34")]
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
+        #[prost(message, tag = "42")]
+        UnionValue(::prost::alloc::boxed::Box<super::UnionValue>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
