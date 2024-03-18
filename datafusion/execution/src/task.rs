@@ -124,7 +124,7 @@ impl TaskContext {
         self.runtime.clone()
     }
 
-    /// Update the [`ConfigOptions`]
+    /// Update the [`SessionConfig`]
     pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
         self.session_config = session_config;
         self

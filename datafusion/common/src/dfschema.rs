@@ -97,10 +97,11 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// ```rust
 /// use datafusion_common::{DFSchema, DFField};
 /// use arrow_schema::Schema;
+/// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::new(vec![
+/// let df_schema = DFSchema::new_with_metadata(vec![
 ///    DFField::new_unqualified("c1", arrow::datatypes::DataType::Int32, false),
-/// ]).unwrap();
+/// ], HashMap::new()).unwrap();
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
