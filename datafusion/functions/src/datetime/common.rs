@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::datatypes::DataType;
-use arrow_array::{
+use arrow::array::{
     Array, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+use arrow::datatypes::DataType;
 use chrono::LocalResult::Single;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use itertools::Either;

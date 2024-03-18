@@ -18,12 +18,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::builder::PrimitiveBuilder;
+use arrow::array::cast::AsArray;
+use arrow::array::types::{Date32Type, Int32Type};
+use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8};
-use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Date32Type, Int32Type};
-use arrow_array::PrimitiveArray;
 use chrono::prelude::*;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -177,7 +177,7 @@ fn make_date_inner<F: FnMut(i32)>(
 #[cfg(test)]
 mod tests {
     use crate::datetime::make_date::MakeDateFunc;
-    use arrow_array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
+    use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
