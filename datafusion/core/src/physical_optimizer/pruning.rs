@@ -1005,12 +1005,14 @@ impl<'a> PruningExpressionBuilder<'a> {
             .max_column_expr(&self.column, &self.column_expr, self.field)
     }
 
-    /// Note that this function intentionally overwrites the column expression to [`phys_expr::Column`].
-    /// i.e. expressions like [`phys_expr::CastExpr`] or [`phys_expr::TryCastExpr`] will be overwritten.
+    /// This function is to simply retune the `null_count` physical expression no matter what the
+    /// predicate expression is
     ///
-    /// This is to avoid cases like `cast(x_null_count)` or `try_cast(x_null_count)`.
+    /// i.e., x > 5 => x_null_count,
+    ///       cast(x as int) < 10 => x_null_count,
+    ///       try_cast(x as float) < 10.0 => x_null_count
     fn null_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // overwrite to [`phys_expr::Column`]
+        // Retune to [`phys_expr::Column`]
         let column_expr = Arc::new(self.column.clone()) as _;
 
         // null_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
@@ -1023,12 +1025,14 @@ impl<'a> PruningExpressionBuilder<'a> {
         )
     }
 
-    /// Note that this function intentionally overwrites the column expression to [`phys_expr::Column`].
-    /// i.e. expressions like [`phys_expr::CastExpr`] or [`phys_expr::TryCastExpr`] will be overwritten.
+    /// This function is to simply retune the `row_count` physical expression no matter what the
+    /// predicate expression is
     ///
-    /// This is to avoid cases like `cast(x_row_count)` or `try_cast(x_row_count)`.
+    /// i.e., x > 5 => x_row_count,
+    ///       cast(x as int) < 10 => x_row_count,
+    ///       try_cast(x as float) < 10.0 => x_row_count
     fn row_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // overwrite to [`phys_expr::Column`]
+        // Retune to [`phys_expr::Column`]
         let column_expr = Arc::new(self.column.clone()) as _;
 
         // row_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
