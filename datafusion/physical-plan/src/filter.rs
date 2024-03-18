@@ -165,47 +165,23 @@ impl FilterExec {
     }
 
     fn extend_constants(
+        input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
-        columns: &HashSet<Column>,
     ) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut res_constants = Vec::new();
+        let input_eqs = input.equivalence_properties();
 
-        let constant_match = |x: &Arc<dyn PhysicalExpr>,
-                              y: &Arc<dyn PhysicalExpr>|
-         -> Option<Arc<dyn PhysicalExpr>> {
-            if columns
-                .iter()
-                .any(|col| x.as_any().downcast_ref::<Column>() == Some(col))
-                && Self::is_constant(y)
-            {
-                Some(x.clone())
-            } else {
-                None
-            }
-        };
-        let mut contains_or = false;
-        predicate
-            .apply(&mut |expr| {
-                if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-                    if binary.op() == &Operator::Eq {
-                        if let Some(constant_expr) =
-                            constant_match(binary.left(), binary.right())
-                        {
-                            res_constants.push(constant_expr)
-                        } else if let Some(constant_expr) =
-                            constant_match(binary.right(), binary.left())
-                        {
-                            res_constants.push(constant_expr)
-                        }
-                    } else if binary.op() == &Operator::Or {
-                        contains_or = true;
+        let conjunctions = split_conjunction(predicate);
+        for conjunction in conjunctions {
+            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
+                if binary.op() == &Operator::Eq {
+                    if input_eqs.is_expr_constant(binary.left()) {
+                        res_constants.push(binary.right().clone())
+                    } else if input_eqs.is_expr_constant(binary.right()) {
+                        res_constants.push(binary.left().clone())
                     }
                 }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .expect("no way to return error during recursion");
-        if contains_or {
-            res_constants.clear();
+            }
         }
         res_constants
     }
