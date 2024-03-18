@@ -742,7 +742,7 @@ impl DefaultPhysicalPlanner {
                         );
                     }
 
-                    let logical_input_schema = input.schema();
+                    let logical_input_schema = logical_plan.schema();
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {

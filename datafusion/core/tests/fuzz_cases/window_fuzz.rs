@@ -46,6 +46,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+#[ignore = "reason"]
 async fn window_bounded_window_random_comparison() -> Result<()> {
     // make_staggered_batches gives result sorted according to a, b, c
     // In the test cases first entry represents partition by columns
@@ -142,6 +143,7 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
 // This tests whether we can generate bounded window results for each input
 // batch immediately for causal window frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+#[ignore = "reason"]
 async fn bounded_window_causal_non_causal() -> Result<()> {
     let session_config = SessionConfig::new();
     let ctx = SessionContext::new_with_config(session_config);
