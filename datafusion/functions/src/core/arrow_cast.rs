@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, DataFusionError, ExprSchema, Result,
     ScalarValue,
@@ -76,8 +76,10 @@ impl ScalarUDFImpl for ArrowCastFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        parse_data_type(&arg_types[1].to_string())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // should be using return_type_from_exprs and not calling the default
+        // implementation
+        internal_err!("arrow_cast should return type from exprs")
     }
 
     fn return_type_from_exprs(
@@ -693,8 +695,6 @@ impl Display for Token {
 
 #[cfg(test)]
 mod test {
-    use arrow_schema::{IntervalUnit, TimeUnit};
-
     use super::*;
 
     #[test]
