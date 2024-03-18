@@ -82,5 +82,5 @@ pub(crate) async fn create_writer(
     object_store: Arc<dyn ObjectStore>,
 ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
     let buf_writer = BufWriter::new(object_store, location.clone());
-    Ok(file_compression_type.convert_async_writer(buf_writer)?)
+    file_compression_type.convert_async_writer(buf_writer)
 }
