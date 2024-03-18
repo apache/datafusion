@@ -27,8 +27,7 @@ use std::sync::Arc;
 
 use arrow_array::types::UInt64Type;
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, ListArray, OffsetSizeTrait, Scalar,
-    UInt32Array, UInt64Array,
+    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
