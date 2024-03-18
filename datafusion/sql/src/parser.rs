@@ -136,7 +136,6 @@ impl fmt::Display for CopyToStatement {
 
         if !options.is_empty() {
             let opts: Vec<_> = options.iter().map(|(k, v)| format!("{k} {v}")).collect();
-            // print them in sorted order
             write!(f, " OPTIONS ({})", opts.join(", "))?;
         }
 

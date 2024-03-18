@@ -1627,4 +1627,31 @@ mod tests {
         table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
     }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options() {
+        let mut table_config = TableOptions::new();
+        table_config.set_file_format(FileType::PARQUET);
+        table_config
+            .set("format.bloom_filter_enabled::col1", "true")
+            .unwrap();
+        assert_eq!(
+            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
+            Some(true)
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options_config_entry() {
+        let mut table_config = TableOptions::new();
+        table_config
+            .set("parquet.bloom_filter_enabled::col1", "true")
+            .unwrap();
+        let entries = table_config.entries();
+        assert!(entries
+            .iter()
+            .any(|item| item.key == "parquet.bloom_filter_enabled::col1"))
+    }
 }
