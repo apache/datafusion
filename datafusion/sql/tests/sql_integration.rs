@@ -2822,6 +2822,20 @@ impl ContextProvider for MockContextProvider {
                 ),
                 Field::new("😀", DataType::Int32, false),
             ])),
+            "person_quoted_cols" => Ok(Schema::new(vec![
+                Field::new("id", DataType::UInt32, false),
+                Field::new("First Name", DataType::Utf8, false),
+                Field::new("Last Name", DataType::Utf8, false),
+                Field::new("Age", DataType::Int32, false),
+                Field::new("State", DataType::Utf8, false),
+                Field::new("Salary", DataType::Float64, false),
+                Field::new(
+                    "Birth Date",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    false,
+                ),
+                Field::new("😀", DataType::Int32, false),
+            ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
                 Field::new("customer_id", DataType::UInt32, false),
@@ -4491,17 +4505,25 @@ impl TableSource for EmptyTable {
 #[test]
 fn roundtrip_expr() {
     let tests: Vec<(TableReference, &str, &str)> = vec![
-        (TableReference::bare("person"), "age > 35", "(age > 35)"),
-        (TableReference::bare("person"), "id = '10'", "(id = '10')"),
+        (
+            TableReference::bare("person"),
+            "age > 35",
+            r#"("age" > 35)"#,
+        ),
+        (
+            TableReference::bare("person"),
+            "id = '10'",
+            r#"("id" = '10')"#,
+        ),
         (
             TableReference::bare("person"),
             "CAST(id AS VARCHAR)",
-            "CAST(id AS VARCHAR)",
+            r#"CAST("id" AS VARCHAR)"#,
         ),
         (
             TableReference::bare("person"),
             "SUM((age * 2))",
-            "SUM((age * 2))",
+            r#"SUM(("age" * 2))"#,
         ),
     ];
 
@@ -4528,79 +4550,77 @@ fn roundtrip_expr() {
 }
 
 #[test]
-fn roundtrip_statement() {
-    let tests: Vec<(&str, &str)> = vec![
-        (
+fn roundtrip_statement() -> Result<()> {
+    let tests: Vec<&str> = vec![
             "select ta.j1_id from j1 ta;",
-            r#"SELECT ta.j1_id FROM j1 AS ta"#,
-        ),
-        (
             "select ta.j1_id from j1 ta order by ta.j1_id;",
-            r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST"#,
-        ),
-        (
             "select * from j1 ta order by ta.j1_id, ta.j1_string desc;",
-            r#"SELECT ta.j1_id, ta.j1_string FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST, ta.j1_string DESC NULLS FIRST"#,
-        ),
-        (
             "select * from j1 limit 10;",
-            r#"SELECT j1.j1_id, j1.j1_string FROM j1 LIMIT 10"#,
-        ),
-        (
             "select ta.j1_id from j1 ta where ta.j1_id > 1;",
-            r#"SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1)"#,
-        ),
-        (
             "select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id);",
-            r#"SELECT ta.j1_id, tb.j2_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id)"#,
-        ),
-        (
             "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
-            r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
-        ),
-        (
             "select * from (select id, first_name from person)",
-            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM person)"
-        ),
-        (
             "select * from (select id, first_name from (select * from person))",
-            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀 FROM person))"
-        ),
-        (
             "select id, count(*) as cnt from (select id from person) group by id",
-            "SELECT person.id, COUNT(*) AS cnt FROM (SELECT person.id FROM person) GROUP BY person.id"
-        ),
-        (
+            "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
+            r#"select "First Name" from person_quoted_cols"#,
+            r#"select id, count("First Name") as cnt from (select id, "First Name" from person_quoted_cols) group by id"#,
             "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
-            "SELECT p1.id, COUNT(*) AS cnt FROM (SELECT p1.id FROM person AS p1 JOIN person AS p2 ON (p1.id = p2.id)) GROUP BY p1.id"
-        ),
-        (
             "select id, count(*), first_name from person group by first_name, id",
-            "SELECT person.id, COUNT(*), person.first_name FROM person GROUP BY person.first_name, person.id"
-        ),
-    ];
+            "select id, sum(age), first_name from person group by first_name, id",
+            "select id, count(*), first_name 
+            from person 
+            where id!=3 and first_name=='test'
+            group by first_name, id 
+            having count(*)>5 and count(*)<10
+            order by count(*)",
+            r#"select id, count("First Name") as count_first_name, "Last Name" 
+            from person_quoted_cols
+            where id!=3 and "First Name"=='test'
+            group by "Last Name", id 
+            having count_first_name>5 and count_first_name<10
+            order by count_first_name, "Last Name""#,
+            r#"select p.id, count("First Name") as count_first_name,
+            "Last Name", sum(qp.id/p.id - (select sum(id) from person_quoted_cols) ) / (select count(*) from person) 
+            from (select id, "First Name", "Last Name" from person_quoted_cols) qp
+            inner join (select * from person) p
+            on p.id = qp.id
+            where p.id!=3 and "First Name"=='test' and qp.id in 
+            (select id from (select id, count(*) from person group by id having count(*) > 0))
+            group by "Last Name", p.id 
+            having count_first_name>5 and count_first_name<10
+            order by count_first_name, "Last Name""#,
+        ];
 
-    let roundtrip = |sql: &str| -> Result<String> {
+    // For each test sql string, we transform as follows:
+    // sql -> ast::Statement (s1) -> LogicalPlan (p1) -> ast::Statement (s2) -> LogicalPlan (p2)
+    // We test not that s1==s2, but rather p1==p2. This ensures that unparser preserves the logical
+    // query information of the original sql string and disreguards other differences in syntax or
+    // quoting.
+    for query in tests {
         let dialect = GenericDialect {};
-        let statement = Parser::new(&dialect).try_with_sql(sql)?.parse_statement()?;
+        let statement = Parser::new(&dialect)
+            .try_with_sql(query)?
+            .parse_statement()?;
 
         let context = MockContextProvider::default();
         let sql_to_rel = SqlToRel::new(&context);
-        let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+        let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
-        println!("{}", plan.display_indent());
+        let roundtrip_statement = plan_to_sql(&plan)?;
 
-        let ast = plan_to_sql(&plan)?;
+        let actual = format!("{}", &roundtrip_statement);
+        println!("roundtrip sql: {actual}");
+        println!("plan {}", plan.display_indent());
 
-        println!("{ast}");
+        let plan_roundtrip = sql_to_rel
+            .sql_statement_to_plan(roundtrip_statement.clone())
+            .unwrap();
 
-        Ok(format!("{}", ast))
-    };
-
-    for (query, expected) in tests {
-        let actual = roundtrip(query).unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(plan, plan_roundtrip);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
