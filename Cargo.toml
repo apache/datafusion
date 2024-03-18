@@ -58,7 +58,7 @@ version = "36.0.0"
 #
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
 arrow = { version = "50.0.0", features = ["prettyprint"] }
-arrow-array = { version = "50.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-array = { version = "51.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "50.0.0", default-features = false }
 arrow-flight = { version = "50.0.0", features = ["flight-sql-experimental"] }
 arrow-ipc = { version = "50.0.0", default-features = false, features = ["lz4"] }
