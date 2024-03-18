@@ -820,34 +820,34 @@ impl ScalarUDFImpl for Flatten {
 }
 
 make_udf_function!(
-    ArrayDistinct,
-    array_distinct,
+    ArrayReverse,
+    array_reverse,
     array,
-    "return distinct values from the array after removing duplicates.",
-    array_distinct_udf
+    "reverses the order of elements in the array.",
+    array_reverse_udf
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayDistinct {
+pub(super) struct ArrayReverse {
     signature: Signature,
     aliases: Vec<String>,
 }
 
-impl crate::udf::ArrayDistinct {
+impl crate::udf::ArrayReverse {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
-            aliases: vec!["array_distinct".to_string(), "list_distinct".to_string()],
+            signature: Signature::any(1, Volatility::Immutable),
+            aliases: vec!["array_reverse".to_string(), "list_reverse".to_string()],
         }
     }
 }
 
-impl ScalarUDFImpl for crate::udf::ArrayDistinct {
+impl ScalarUDFImpl for crate::udf::ArrayReverse {
     fn as_any(&self) -> &dyn Any {
         self
     }
     fn name(&self) -> &str {
-        "array_distinct"
+        "array_reserse"
     }
 
     fn signature(&self) -> &Signature {
@@ -855,27 +855,12 @@ impl ScalarUDFImpl for crate::udf::ArrayDistinct {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            _ => exec_err!(
-                "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::array_distinct(&args).map(ColumnarValue::Array)
+        crate::kernels::array_reverse(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {

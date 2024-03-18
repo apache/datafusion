@@ -19,7 +19,7 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Date32Array, StringArray};
+use arrow::array::{ArrayRef, Date32Array, StringArray};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

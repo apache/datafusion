@@ -17,8 +17,8 @@
 
 extern crate criterion;
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::{ArrayRef, StringArray};
+use arrow::array::builder::StringBuilder;
+use arrow::array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;

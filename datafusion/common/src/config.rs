@@ -296,9 +296,7 @@ config_namespace! {
         pub listing_table_ignore_subdirectory: bool, default = true
 
         /// Should DataFusion support recursive CTEs
-        /// Defaults to false since this feature is a work in progress and may not
-        /// behave as expected
-        pub enable_recursive_ctes: bool, default = false
+        pub enable_recursive_ctes: bool, default = true
     }
 }
 

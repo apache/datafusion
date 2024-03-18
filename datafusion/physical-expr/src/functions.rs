@@ -255,24 +255,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_except)(args)
-        }),
-        BuiltinScalarFunction::ArrayPosition => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_position)(args)
-        }),
-        BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_positions)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveN => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_n)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_all)(args)
-        }),
         BuiltinScalarFunction::ArrayReplace => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace)(args)
         }),
@@ -281,15 +263,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayReverse => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_reverse)(args)
-        }),
-        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
-        BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_union)(args)
         }),
 
         // string functions

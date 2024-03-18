@@ -2906,10 +2906,10 @@ pub enum ScalarFunction {
     /// 89 was ArrayRepeat
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
-    ArrayPosition = 92,
-    ArrayPositions = 93,
+    /// 92 was ArrayPosition
+    /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
-    ArrayRemove = 95,
+    /// 95 was ArrayRemove
     ArrayReplace = 96,
     /// 97 was ArrayToString
     /// 98 was Cardinality
@@ -2919,9 +2919,9 @@ pub enum ScalarFunction {
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
-    ArrayRemoveN = 107,
+    /// 107 was ArrayRemoveN
     ArrayReplaceN = 108,
-    ArrayRemoveAll = 109,
+    /// 109 was ArrayRemoveAll
     ArrayReplaceAll = 110,
     Nanvl = 111,
     /// 112 was Flatten
@@ -2931,27 +2931,27 @@ pub enum ScalarFunction {
     /// 116 was ArrayPopBack
     /// 117 was StringToArray
     /// 118 was ToTimestampNanos
-    ArrayIntersect = 119,
-    ArrayUnion = 120,
+    /// 119 was ArrayIntersect
+    /// 120 was ArrayUnion
     OverLay = 121,
-    /// / 122 is Range
-    ArrayExcept = 123,
+    /// 122 is Range
+    /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
-    /// / 128 was ArraySort
-    /// / 129 was ArrayDistinct
-    /// / 130 was ArrayResize
-    EndsWith = 131,
-    /// / 132 was InStr
-    /// / 133 was MakeDate
+    /// 128 was ArraySort
+    /// 129 was ArrayDistinct
+    /// 130 was ArrayResize
     ///
-    /// / 135 is RegexpLike
-    /// / 136 was ToChar
-    /// / 137 was ToDate
-    /// / 138 was ToUnixtime
-    ArrayReverse = 134,
+    /// 132 was InStr
+    /// 133 was MakeDate
+    /// 134 was ArrayReverse
+    /// 135 is RegexpLike
+    /// 136 was ToChar
+    /// 137 was ToDate
+    /// 138 was ToUnixtime
+    EndsWith = 131,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3019,26 +3019,17 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayPosition => "ArrayPosition",
-            ScalarFunction::ArrayPositions => "ArrayPositions",
-            ScalarFunction::ArrayRemove => "ArrayRemove",
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
-            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayIntersect => "ArrayIntersect",
-            ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::ArrayReverse => "ArrayReverse",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3103,26 +3094,17 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayPosition" => Some(Self::ArrayPosition),
-            "ArrayPositions" => Some(Self::ArrayPositions),
-            "ArrayRemove" => Some(Self::ArrayRemove),
             "ArrayReplace" => Some(Self::ArrayReplace),
             "Cot" => Some(Self::Cot),
-            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
             "ArrayReplaceN" => Some(Self::ArrayReplaceN),
-            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "ArrayIntersect" => Some(Self::ArrayIntersect),
-            "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
-            "ArrayExcept" => Some(Self::ArrayExcept),
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
-            "ArrayReverse" => Some(Self::ArrayReverse),
             _ => None,
         }
     }

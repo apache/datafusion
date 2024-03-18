@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
-use arrow_array::{ArrayRef, StructArray};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -102,7 +102,7 @@ impl ScalarUDFImpl for StructFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Int64Array;
+    use arrow::array::Int64Array;
     use datafusion_common::cast::as_struct_array;
     use datafusion_common::ScalarValue;
 

@@ -19,7 +19,7 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int32Array};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::Rng;
