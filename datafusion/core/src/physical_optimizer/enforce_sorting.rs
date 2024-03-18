@@ -162,18 +162,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // remove unnecessary sorts, and optimize sort-sensitive operators:
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?.data;
         let new_plan = if config.optimizer.repartition_sorts {
-            let data_vec: Vec<_> = adjusted.children.iter().map(|x| x.data).collect();
-            let mut plan_with_coalesce_partitions =
+            let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            plan_with_coalesce_partitions.children = plan_with_coalesce_partitions
-                .children
-                .into_iter()
-                .enumerate()
-                .map(|(id, mut child)| {
-                    child.data = data_vec[id];
-                    child
-                })
-                .collect();
             let parallel = plan_with_coalesce_partitions
                 .transform_up(&parallelize_sorts)
                 .data()?;
