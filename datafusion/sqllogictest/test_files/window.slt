@@ -3407,6 +3407,44 @@ WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
 LOCATION '../core/tests/data/window_2.csv';
 
+# Since column b is constant after filter b=0,
+# There should be no SortExec(b ASC) in the plan
+# window requirement b ASC is already satisfied by existing ordering.
+query TT
+EXPLAIN SELECT *, SUM(a) OVER(ORDER BY b ASC)
+FROM multiple_ordered_table
+where b=0
+----
+logical_plan
+WindowAggr: windowExpr=[[SUM(CAST(multiple_ordered_table.a AS Int64)) ORDER BY [multiple_ordered_table.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--Filter: multiple_ordered_table.b = Int32(0)
+----TableScan: multiple_ordered_table projection=[a0, a, b, c, d], partial_filters=[multiple_ordered_table.b = Int32(0)]
+physical_plan
+BoundedWindowAggExec: wdw=[SUM(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+--CoalesceBatchesExec: target_batch_size=4096
+----FilterExec: b@2 = 0
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]], has_header=true
+
+# Since column b is constant after filter b=0,
+# window requirement b ASC, d ASC can be satisfied
+# by the SortExec(d ASC). We do not need to sort by [b ASC, d ASC]
+query TT
+EXPLAIN SELECT *, SUM(a) OVER(ORDER BY b ASC, d ASC)
+FROM multiple_ordered_table
+where b=0
+----
+logical_plan
+WindowAggr: windowExpr=[[SUM(CAST(multiple_ordered_table.a AS Int64)) ORDER BY [multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--Filter: multiple_ordered_table.b = Int32(0)
+----TableScan: multiple_ordered_table projection=[a0, a, b, c, d], partial_filters=[multiple_ordered_table.b = Int32(0)]
+physical_plan
+BoundedWindowAggExec: wdw=[SUM(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.b ASC NULLS LAST, multiple_ordered_table.d ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+--SortExec: expr=[d@4 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=4096
+------FilterExec: b@2 = 0
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]], has_header=true
+
+
 # Create an unbounded source where there is multiple orderings.
 statement ok
 CREATE UNBOUNDED EXTERNAL TABLE multiple_ordered_table_inf (

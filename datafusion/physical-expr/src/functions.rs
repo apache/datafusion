@@ -255,24 +255,6 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArrayElement => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_element)(args)
-        }),
-        BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_except)(args)
-        }),
-        BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_pop_front)(args)
-        }),
-        BuiltinScalarFunction::ArrayPopBack => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_pop_back)(args)
-        }),
-        BuiltinScalarFunction::ArrayPosition => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_position)(args)
-        }),
-        BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_positions)(args)
-        }),
         BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_remove)(args)
         }),
@@ -290,18 +272,6 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function_inner(array_expressions::array_replace_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayReverse => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_reverse)(args)
-        }),
-        BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_slice)(args)
-        }),
-        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_intersect)(args)
-        }),
-        BuiltinScalarFunction::ArrayUnion => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_union)(args)
         }),
 
         // string functions

@@ -1387,15 +1387,21 @@ fn recursive_ctes() {
               select n + 1 FROM numbers WHERE N < 10
         )
         select * from numbers;";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not enabled",
-        err.strip_backtrace()
-    );
+    quick_test(
+        sql,
+        "Projection: numbers.n\
+    \n  SubqueryAlias: numbers\
+    \n    RecursiveQuery: is_distinct=false\
+    \n      Projection: Int64(1) AS n\
+    \n        EmptyRelation\
+    \n      Projection: numbers.n + Int64(1)\
+    \n        Filter: numbers.n < Int64(10)\
+    \n          TableScan: numbers",
+    )
 }
 
 #[test]
-fn recursive_ctes_enabled() {
+fn recursive_ctes_disabled() {
     let sql = "
         WITH RECURSIVE numbers AS (
               select 1 as n
@@ -1404,28 +1410,20 @@ fn recursive_ctes_enabled() {
         )
         select * from numbers;";
 
-    // manually setting up test here so that we can enable recursive ctes
+    // manually setting up test here so that we can disable recursive ctes
     let mut context = MockContextProvider::default();
-    context.options_mut().execution.enable_recursive_ctes = true;
+    context.options_mut().execution.enable_recursive_ctes = false;
 
     let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
     let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
     let mut ast = result.unwrap();
 
-    let plan = planner
+    let err = planner
         .statement_to_plan(ast.pop_front().unwrap())
-        .expect("recursive cte plan creation failed");
-
+        .expect_err("query should have failed");
     assert_eq!(
-        format!("{plan:?}"),
-        "Projection: numbers.n\
-        \n  SubqueryAlias: numbers\
-        \n    RecursiveQuery: is_distinct=false\
-        \n      Projection: Int64(1) AS n\
-        \n        EmptyRelation\
-        \n      Projection: numbers.n + Int64(1)\
-        \n        Filter: numbers.n < Int64(10)\
-        \n          TableScan: numbers"
+        "This feature is not implemented: Recursive CTEs are not enabled",
+        err.strip_backtrace()
     );
 }
 
@@ -4560,6 +4558,26 @@ fn roundtrip_statement() {
             "select ta.j1_id, tb.j2_string, tc.j3_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id) join j3 tc on (ta.j1_id = tc.j3_id);",
             r#"SELECT ta.j1_id, tb.j2_string, tc.j3_string FROM j1 AS ta JOIN j2 AS tb ON (ta.j1_id = tb.j2_id) JOIN j3 AS tc ON (ta.j1_id = tc.j3_id)"#,
         ),
+        (
+            "select * from (select id, first_name from person)",
+            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM person)"
+        ),
+        (
+            "select * from (select id, first_name from (select * from person))",
+            "SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name FROM (SELECT person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀 FROM person))"
+        ),
+        (
+            "select id, count(*) as cnt from (select id from person) group by id",
+            "SELECT person.id, COUNT(*) AS cnt FROM (SELECT person.id FROM person) GROUP BY person.id"
+        ),
+        (
+            "select id, count(*) as cnt from (select p1.id as id from person p1 inner join person p2 on p1.id=p2.id) group by id",
+            "SELECT p1.id, COUNT(*) AS cnt FROM (SELECT p1.id FROM person AS p1 JOIN person AS p2 ON (p1.id = p2.id)) GROUP BY p1.id"
+        ),
+        (
+            "select id, count(*), first_name from person group by first_name, id",
+            "SELECT person.id, COUNT(*), person.first_name FROM person GROUP BY person.first_name, person.id"
+        ),
     ];
 
     let roundtrip = |sql: &str| -> Result<String> {
@@ -4570,7 +4588,11 @@ fn roundtrip_statement() {
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 
+        println!("{}", plan.display_indent());
+
         let ast = plan_to_sql(&plan)?;
+
+        println!("{ast}");
 
         Ok(format!("{}", ast))
     };

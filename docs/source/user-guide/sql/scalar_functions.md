@@ -1958,6 +1958,7 @@ from_unixtime(expression)
 - [array_extract](#array_extract)
 - [array_fill](#array_fill)
 - [array_indexof](#array_indexof)
+- [array_intersect](#array_intersect)
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
@@ -1991,11 +1992,13 @@ from_unixtime(expression)
 - [list_dims](#list_dims)
 - [list_distinct](#list_distinct)
 - [list_element](#list_element)
+- [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
 - [list_indexof](#list_indexof)
+- [list_intersect](#list_intersect)
 - [list_join](#list_join)
 - [list_length](#list_length)
 - [list_ndims](#list_ndims)
@@ -2016,6 +2019,7 @@ from_unixtime(expression)
 - [list_replace_all](#list_replace_all)
 - [list_slice](#list_slice)
 - [list_to_string](#list_to_string)
+- [list_union](#list_union)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [string_to_array](#string_to_array)
@@ -2338,6 +2342,44 @@ flatten(array)
 ### `array_indexof`
 
 _Alias of [array_position](#array_position)._
+
+### `array_intersect`
+
+Returns an array of elements in the intersection of array1 and array2.
+
+```
+array_intersect(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
++----------------------------------------------------+
+| [3, 4]                                             |
++----------------------------------------------------+
+❯ select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
++----------------------------------------------------+
+| []                                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_intersect
 
 ### `array_join`
 
@@ -3035,9 +3077,17 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distinct`
+
+_Alias of [array_dims](#array_distinct)._
+
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_except`
+
+_Alias of [array_element](#array_except)._
 
 ### `list_extract`
 
@@ -3058,6 +3108,10 @@ _Alias of [array_has_any](#array_has_any)._
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
+
+### `list_intersect`
+
+_Alias of [array_position](#array_intersect)._
 
 ### `list_join`
 
@@ -3142,6 +3196,10 @@ _Alias of [array_slice](#array_slice)._
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_union`
+
+_Alias of [array_to_string](#array_union)._
 
 ### `make_array`
 

@@ -17,17 +17,16 @@
 
 //! Rewrites for using Array Functions
 
-use crate::concat::{array_append, array_concat};
-use crate::expr_fn::{array_has_all, array_prepend};
+use crate::array_has::array_has_all;
+use crate::concat::{array_append, array_concat, array_prepend};
+use crate::extract::{array_element, array_slice};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::{
-    BinaryExpr, BuiltinScalarFunction, Expr, GetFieldAccess, GetIndexedField, Operator,
-};
+use datafusion_expr::{BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Operator};
 use datafusion_functions::expr_fn::get_field;
 
 /// Rewrites expressions into function calls to array functions
@@ -161,13 +160,7 @@ impl FunctionRewrite for ArrayFunctionRewriter {
             Expr::GetIndexedField(GetIndexedField {
                 expr,
                 field: GetFieldAccess::ListIndex { key },
-            }) => {
-                let args = vec![*expr, *key];
-                Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::ArrayElement,
-                    args,
-                )))
-            }
+            }) => Transformed::yes(array_element(*expr, *key)),
 
             // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
             Expr::GetIndexedField(GetIndexedField {
@@ -178,13 +171,7 @@ impl FunctionRewrite for ArrayFunctionRewriter {
                         stop,
                         stride,
                     },
-            }) => {
-                let args = vec![*expr, *start, *stop, *stride];
-                Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::ArraySlice,
-                    args,
-                )))
-            }
+            }) => Transformed::yes(array_slice(*expr, *start, *stop, *stride)),
 
             _ => Transformed::no(expr),
         };
