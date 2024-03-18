@@ -2567,15 +2567,6 @@ fn approx_median_window() {
 }
 
 #[test]
-fn select_arrow_cast() {
-    let sql = "SELECT arrow_cast(1234, 'Float64'), arrow_cast('foo', 'LargeUtf8')";
-    let expected = "\
-    Projection: CAST(Int64(1234) AS Float64), CAST(Utf8(\"foo\") AS LargeUtf8)\
-    \n  EmptyRelation";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn select_typed_date_string() {
     let sql = "SELECT date '2020-12-10' AS date";
     let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
@@ -2669,6 +2660,11 @@ fn logical_plan_with_dialect_and_options(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
             DataType::Int32,
+        ))
+        .with_udf(make_udf(
+            "arrow_cast",
+            vec![DataType::Int64, DataType::Utf8],
+            DataType::Float64,
         ))
         .with_udf(make_udf(
             "date_trunc",
