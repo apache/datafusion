@@ -161,8 +161,7 @@ impl FilterExec {
         })
     }
     fn is_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
-        expr.as_any().is::<Literal>()
-            && expr.children().iter().all(|child| Self::is_constant(child))
+        expr.as_any().is::<Literal>() && expr.children().iter().all(Self::is_constant)
     }
 
     fn extend_constants(
@@ -184,7 +183,7 @@ impl FilterExec {
                 None
             }
         };
-
+        let mut contains_or = false;
         predicate
             .apply(&mut |expr| {
                 if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
@@ -193,18 +192,21 @@ impl FilterExec {
                             constant_match(binary.left(), binary.right())
                         {
                             res_constants.push(constant_expr)
-                        }
-                        if let Some(constant_expr) =
+                        } else if let Some(constant_expr) =
                             constant_match(binary.right(), binary.left())
                         {
                             res_constants.push(constant_expr)
                         }
+                    } else if binary.op() == &Operator::Or {
+                        contains_or = true;
                     }
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
             .expect("no way to return error during recursion");
-
+        if contains_or {
+            res_constants.clear();
+        }
         res_constants
     }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -232,6 +234,7 @@ impl FilterExec {
         // this is for statistics
         eq_properties = eq_properties.add_constants(constants);
         // this is for logical constant (for example: a = '1', then a could be marked as a constant)
+        // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
         eq_properties = eq_properties.add_constants(Self::extend_constants(
             predicate,
             &collect_columns(predicate),
