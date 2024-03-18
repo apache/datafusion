@@ -225,31 +225,38 @@ impl PartitionEvaluator for NthValueEvaluator {
             }
 
             // Extract valid indices if ignoring nulls.
-            let (slice, valid_indices) = if self.ignore_nulls {
+            let valid_indices = if self.ignore_nulls {
+                // Calculate valid indices, inside the window frame boundaries
                 let slice = arr.slice(range.start, n_range);
-                let valid_indices =
-                    slice.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+                let valid_indices = slice
+                    .nulls()
+                    .map(|nulls| {
+                        nulls
+                            .valid_indices()
+                            // Add offset `range.start` to valid indices, to point correct index in the original arr.
+                            .map(|idx| idx + range.start)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 if valid_indices.is_empty() {
                     return ScalarValue::try_from(arr.data_type());
                 }
-                (Some(slice), Some(valid_indices))
+                Some(valid_indices)
             } else {
-                (None, None)
+                None
             };
             match self.state.kind {
                 NthValueKind::First => {
-                    if let Some(slice) = &slice {
-                        let valid_indices = valid_indices.unwrap();
-                        ScalarValue::try_from_array(slice, valid_indices[0])
+                    if let Some(valid_indices) = &valid_indices {
+                        ScalarValue::try_from_array(arr, valid_indices[0])
                     } else {
                         ScalarValue::try_from_array(arr, range.start)
                     }
                 }
                 NthValueKind::Last => {
-                    if let Some(slice) = &slice {
-                        let valid_indices = valid_indices.unwrap();
+                    if let Some(valid_indices) = &valid_indices {
                         ScalarValue::try_from_array(
-                            slice,
+                            arr,
                             valid_indices[valid_indices.len() - 1],
                         )
                     } else {
@@ -264,15 +271,11 @@ impl PartitionEvaluator for NthValueEvaluator {
                             if index >= n_range {
                                 // Outside the range, return NULL:
                                 ScalarValue::try_from(arr.data_type())
-                            } else if self.ignore_nulls {
-                                let valid_indices = valid_indices.unwrap();
+                            } else if let Some(valid_indices) = valid_indices {
                                 if index >= valid_indices.len() {
                                     return ScalarValue::try_from(arr.data_type());
                                 }
-                                ScalarValue::try_from_array(
-                                    &slice.unwrap(),
-                                    valid_indices[index],
-                                )
+                                ScalarValue::try_from_array(&arr, valid_indices[index])
                             } else {
                                 ScalarValue::try_from_array(arr, range.start + index)
                             }
@@ -282,14 +285,13 @@ impl PartitionEvaluator for NthValueEvaluator {
                             if n_range < reverse_index {
                                 // Outside the range, return NULL:
                                 ScalarValue::try_from(arr.data_type())
-                            } else if self.ignore_nulls {
-                                let valid_indices = valid_indices.unwrap();
+                            } else if let Some(valid_indices) = valid_indices {
                                 if reverse_index > valid_indices.len() {
                                     return ScalarValue::try_from(arr.data_type());
                                 }
                                 let new_index =
                                     valid_indices[valid_indices.len() - reverse_index];
-                                ScalarValue::try_from_array(&slice.unwrap(), new_index)
+                                ScalarValue::try_from_array(&arr, new_index)
                             } else {
                                 ScalarValue::try_from_array(
                                     arr,
