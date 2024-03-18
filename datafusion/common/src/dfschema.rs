@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -269,14 +269,24 @@ impl DFSchema {
         if other_schema.inner.fields.is_empty() {
             return;
         }
+
+        let self_fields: HashSet<(Option<&OwnedTableReference>, &FieldRef)> =
+            self.iter().collect();
+        let self_unqualified_names: HashSet<&str> = self
+            .inner
+            .fields
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
         let mut qualifiers = Vec::new();
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
-                Some(q) => self.has_column_with_qualified_name(q, field.name()),
+                Some(q) => self_fields.contains(&(Some(q), field)),
                 // for unqualified columns, check as unqualified name
-                None => self.has_column_with_unqualified_name(field.name()),
+                None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
                 // self.inner.fields.push(field.clone());
