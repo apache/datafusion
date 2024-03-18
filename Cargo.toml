@@ -61,7 +61,7 @@ arrow = { version = "50.0.0", features = ["prettyprint"] }
 arrow-array = { version = "50.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "50.0.0", default-features = false }
 arrow-flight = { version = "50.0.0", features = ["flight-sql-experimental"] }
-arrow-ipc = { version = "50.0.0", default-features = false, features = ["lz4"] }
+arrow-ipc = { version = "51.0.0", default-features = false, features = ["lz4"] }
 arrow-ord = { version = "50.0.0", default-features = false }
 arrow-schema = { version = "50.0.0", default-features = false }
 arrow-string = { version = "50.0.0", default-features = false }
