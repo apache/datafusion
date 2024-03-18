@@ -58,7 +58,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
                     if let Some(outer) = planner_context.outer_query_schema() {
-                        match outer.field_and_qualifier_with_unqualified_name(
+                        match outer.qualified_field_with_unqualified_name(
                             normalize_ident.as_str(),
                         ) {
                             Ok((qualifier, field)) => {
@@ -286,7 +286,7 @@ fn search_dfschema<'ids, 'schema>(
 ) -> Option<(&'schema Field, Option<OwnedTableReference>, &'ids [String])> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
         let qualifier_and_field = schema
-            .field_and_qualifier_with_name(qualifier.as_ref(), column)
+            .qualified_field_with_name(qualifier.as_ref(), column)
             .ok();
         qualifier_and_field.map(|(qualifier, field)| (field, qualifier, nested_names))
     })

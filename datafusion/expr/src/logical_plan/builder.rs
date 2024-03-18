@@ -208,9 +208,8 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let inner = Arc::new(Schema::new_with_metadata(fields, HashMap::new()));
-        let dfschema = DFSchema::from_unqualified_schema(&inner);
-        let schema = DFSchemaRef::new(dfschema?);
+        let dfschema = DFSchema::new_with_metadata(fields, HashMap::new());
+        let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -1550,7 +1549,7 @@ pub fn unnest_with_options(
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
     let (unnest_qualifier, unnest_field) =
-        input.schema().qualifier_and_field_from_column(&column)?;
+        input.schema().qualified_field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
     let unnested_field = match unnest_field.data_type() {

@@ -38,7 +38,7 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             match nested_expr {
                 Expr::Column(col) => {
                     let (qualifier, field) =
-                        plan.schema().qualifier_and_field_from_column(&col)?;
+                        plan.schema().qualified_field_from_column(&col)?;
                     Ok(Transformed::yes(Expr::Column(Column::new(
                         qualifier,
                         field.name(),

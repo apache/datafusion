@@ -917,9 +917,9 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 let input = Arc::new(inputs.swap_remove(0));
                 let (nested_qualifier, nested_field) =
-                    input.schema().qualifier_and_field_from_column(column)?;
+                    input.schema().qualified_field_from_column(column)?;
                 let (unnested_qualifier, unnested_field) =
-                    schema.qualifier_and_field_from_column(column)?;
+                    schema.qualified_field_from_column(column)?;
                 let qualifiers_and_fields = input
                     .schema()
                     .iter()

@@ -198,7 +198,7 @@ impl DataFrame {
             .map(|name| {
                 self.plan
                     .schema()
-                    .field_and_qualifier_with_unqualified_name(name)
+                    .qualified_field_with_unqualified_name(name)
             })
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
@@ -1314,18 +1314,16 @@ impl DataFrame {
             Column::from_qualified_name_ignore_case(old_name)
         };
 
-        let (qualifier_rename, field_rename) = match self
-            .plan
-            .schema()
-            .qualifier_and_field_from_column(&old_column)
-        {
-            Ok(qualifier_and_field) => qualifier_and_field,
-            // no-op if field not found
-            Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _)) => {
-                return Ok(self)
-            }
-            Err(err) => return Err(err),
-        };
+        let (qualifier_rename, field_rename) =
+            match self.plan.schema().qualified_field_from_column(&old_column) {
+                Ok(qualifier_and_field) => qualifier_and_field,
+                // no-op if field not found
+                Err(DataFusionError::SchemaError(
+                    SchemaError::FieldNotFound { .. },
+                    _,
+                )) => return Ok(self),
+                Err(err) => return Err(err),
+            };
         let projection = self
             .plan
             .schema()

@@ -343,7 +343,7 @@ fn get_excluded_columns(
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let (qualifier, field) =
-            schema.field_and_qualifier_with_name(qualifier.as_ref(), col_name)?;
+            schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
         result.push(Column::new(qualifier, field.name()));
     }
     Ok(result)
@@ -814,7 +814,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => {
-                match input_schema.field_and_qualifier_with_unqualified_name(&name) {
+                match input_schema.qualified_field_with_unqualified_name(&name) {
                     Ok((qualifier, field)) => {
                         Expr::Column(Column::new(qualifier, field.name()))
                     }
