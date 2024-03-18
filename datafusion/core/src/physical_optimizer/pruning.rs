@@ -315,23 +315,15 @@ pub trait PruningStatistics {
 /// * `false`: there are no rows that could possibly match the predicate,
 ///            **PRUNES** the container
 ///
-/// For example, given a column `x`, the `x_min` and `x_max` and `x_null_count`
-/// represent the minimum and maximum values, and the null count of column `x`,
-/// provided by the `PruningStatistics`. Here are some examples of the rewritten
-/// predicates:
+/// For example, given a column `x`, the `x_min`, `x_max`, `x_null_count`, and
+/// `x_row_count` represent the minimum and maximum values, the null count of
+/// column `x`, and the row count of column `x`, provided by the `PruningStatistics`.
+/// `x_null_count` and `x_row_count` are used to handle the case where the column `x`
+/// is known to be all `NULL`s. Note this is different from knowing nothing about
+/// the column `x`, which confusingly is encoded by returning `NULL` for the min/max
+/// values from [`PruningStatistics::max_values`] and [`PruningStatistics::min_values`].
 ///
-/// Original Predicate | Rewritten Predicate
-/// ------------------ | --------------------
-/// `x = 5` | `x_min <= 5 AND 5 <= x_max`
-/// `x < 5` | `x_max < 5`
-/// `x = 5 AND y = 10` | `x_min <= 5 AND 5 <= x_max AND y_min <= 10 AND 10 <= y_max`
-/// `x IS NULL`  | `x_null_count > 0`
-///
-/// In addition, for a given column `x`, the `x_null_count` and `x_row_count` will
-/// be compared using a `CASE` statement to wrap the rewritten predicate to handle
-/// the case where the column `x` is known to be all `NULL`s. Note this
-/// is different from knowing nothing about the column `x`, which confusingly is
-/// encoded by returning `NULL` for the min/max values from [`PruningStatistics::min_values`].
+/// Here are some examples of the rewritten predicates:
 ///
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
@@ -339,6 +331,7 @@ pub trait PruningStatistics {
 /// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
 /// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
 /// `x IS NULL`  | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_null_count > 0 END`
+/// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
@@ -354,22 +347,8 @@ pub trait PruningStatistics {
 ///
 ///
 /// ### Example 1
-/// Given the predicate, `x = 5 AND y = 10`, if we know that for a given container, `x` is
-/// between `1 and 100` and we know that `y` is between `4` and `7`, we know nothing about
-/// the null count and row count of `x` and `y`, the input statistics might look like:
 ///
-/// Column   | Value
-/// -------- | -----
-/// `x_min`  | `1`
-/// `x_max`  | `100`
-/// `x_null_count` | `null`
-/// `x_row_count`  | `null`
-/// `y_min`  | `4`
-/// `y_max`  | `7`
-/// `y_null_count` | `null`
-/// `y_row_count`  | `null`
-///
-/// The rewritten predicate would look like
+/// Given the predicate, `x = 5 AND y = 10`, the rewritten predicate would look like:
 ///
 /// ```sql
 /// CASE
@@ -382,6 +361,21 @@ pub trait PruningStatistics {
 ///     ELSE y_min <= 10 AND 10 <= y_max
 /// END
 /// ```
+///
+/// If we know that for a given container, `x` is between `1 and 100` and we know that
+/// `y` is between `4` and `7`, we know nothing about the null count and row count of
+/// `x` and `y`, the input statistics might look like:
+///
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `1`
+/// `x_max`  | `100`
+/// `x_null_count` | `null`
+/// `x_row_count`  | `null`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
 ///
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
@@ -405,23 +399,9 @@ pub trait PruningStatistics {
 /// predicate row by row.
 ///
 /// ### Example 2
-/// Given the same predicate, `x = 5 AND y = 10`, if we know that for another given container,
-/// `x_min` is NULL and `x_max` is NULL (the min/max values are unknown), `x_null_count` is `100` and `x_row_count` is `100`;
-/// we know that `y` is between `4` and `7`, but we know nothing about the null count and row
-/// count of `y`. The input statistics might look like:
 ///
-/// Column   | Value
-/// -------- | -----
-/// `x_min`  | `null`
-/// `x_max`  | `null`
-/// `x_null_count` | `100`
-/// `x_row_count`  | `100`
-/// `y_min`  | `4`
-/// `y_max`  | `7`
-/// `y_null_count` | `null`
-/// `y_row_count`  | `null`
-///
-/// The rewritten predicate would look like the same as example 1:
+/// Given the same predicate, `x = 5 AND y = 10`, the rewritten predicate would
+/// look like the same as example 1:
 ///
 /// ```sql
 /// CASE
@@ -434,6 +414,22 @@ pub trait PruningStatistics {
 ///  ELSE y_min <= 10 AND 10 <= y_max
 /// END
 /// ```
+///
+/// If we know that for another given container, `x_min` is NULL and `x_max` is
+/// NULL (the min/max values are unknown), `x_null_count` is `100` and `x_row_count`
+///  is `100`; we know that `y` is between `4` and `7`, but we know nothing about
+/// the null count and row count of `y`. The input statistics might look like:
+///
+/// Column   | Value
+/// -------- | -----
+/// `x_min`  | `null`
+/// `x_max`  | `null`
+/// `x_null_count` | `100`
+/// `x_row_count`  | `100`
+/// `y_min`  | `4`
+/// `y_max`  | `7`
+/// `y_null_count` | `null`
+/// `y_row_count`  | `null`
 ///
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
