@@ -384,9 +384,9 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Return a copied version of config for this Session
+    /// Return a copied version of table options for this Session
     pub fn copied_table_options(&self) -> TableOptions {
-        self.state.read().default_table_options().clone()
+        self.state.read().default_table_options()
     }
 
     /// Creates a [`DataFrame`] from SQL query text.
@@ -2002,8 +2002,9 @@ impl SessionState {
     }
 
     /// return the TableOptions options with its extensions
-    pub fn default_table_options(&self) -> &TableOptions {
-        &self.table_option_namespace
+    pub fn default_table_options(&self) -> TableOptions {
+        self.table_option_namespace
+            .combine_with_session_config(self.config_options())
     }
 
     /// Get a new TaskContext to run in this session

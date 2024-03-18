@@ -314,7 +314,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-    let mut table_options = ctx.state().default_table_options().clone();
+    let mut table_options = ctx.copied_table_options();
     table_options.set_file_format(FileType::CSV);
     table_options.set("format.delimiter", ";")?;
 

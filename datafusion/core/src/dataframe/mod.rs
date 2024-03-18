@@ -1161,8 +1161,8 @@ impl DataFrame {
                 "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
             ));
         }
-        let table_options = self.session_state.default_table_options();
-        let props = writer_options.unwrap_or_else(|| table_options.csv.clone());
+        let props = writer_options
+            .unwrap_or_else(|| self.session_state.default_table_options().csv);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
@@ -1210,9 +1210,8 @@ impl DataFrame {
             ));
         }
 
-        let table_options = self.session_state.default_table_options();
-
-        let props = writer_options.unwrap_or_else(|| table_options.json.clone());
+        let props = writer_options
+            .unwrap_or_else(|| self.session_state.default_table_options().json);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
