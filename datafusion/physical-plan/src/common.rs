@@ -349,12 +349,6 @@ pub fn can_project(
     }
 }
 
-/// Returns the total number of bytes of memory occupied physically by this batch.
-#[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
-pub fn batch_byte_size(batch: &RecordBatch) -> usize {
-    batch.get_array_memory_size()
-}
-
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
