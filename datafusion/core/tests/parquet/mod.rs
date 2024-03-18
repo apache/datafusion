@@ -117,14 +117,31 @@ impl TestOutput {
         self.metric_value("predicate_evaluation_errors")
     }
 
+    /// The number of row_groups matched by bloom filter
+    fn row_groups_matched_bloom_filter(&self) -> Option<usize> {
+        self.metric_value("row_groups_matched_bloom_filter")
+    }
+
     /// The number of row_groups pruned by bloom filter
     fn row_groups_pruned_bloom_filter(&self) -> Option<usize> {
         self.metric_value("row_groups_pruned_bloom_filter")
     }
 
+    /// The number of row_groups matched by statistics
+    fn row_groups_matched_statistics(&self) -> Option<usize> {
+        self.metric_value("row_groups_matched_statistics")
+    }
+
     /// The number of row_groups pruned by statistics
     fn row_groups_pruned_statistics(&self) -> Option<usize> {
         self.metric_value("row_groups_pruned_statistics")
+    }
+
+    /// The number of row_groups matched by bloom filter or statistics
+    fn row_groups_matched(&self) -> Option<usize> {
+        self.row_groups_matched_bloom_filter()
+            .zip(self.row_groups_matched_statistics())
+            .map(|(a, b)| a + b)
     }
 
     /// The number of row_groups pruned
