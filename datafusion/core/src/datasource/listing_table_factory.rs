@@ -34,7 +34,6 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::config::TableOptions;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, FileType};
 use datafusion_expr::CreateExternalTable;
 
@@ -58,8 +57,7 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let mut table_options =
-            TableOptions::default_from_session_config(state.config_options());
+        let mut table_options = state.default_table_options();
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
@@ -227,7 +225,7 @@ mod tests {
         let name = OwnedTableReference::bare("foo".to_string());
 
         let mut options = HashMap::new();
-        options.insert("csv.schema_infer_max_rec".to_owned(), "1000".to_owned());
+        options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         let cmd = CreateExternalTable {
             name,
             location: csv_file.path().to_str().unwrap().to_string(),

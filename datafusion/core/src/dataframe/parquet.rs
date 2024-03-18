@@ -57,9 +57,8 @@ impl DataFrame {
             ));
         }
 
-        let table_options = self.session_state.default_table_options();
-
-        let props = writer_options.unwrap_or_else(|| table_options.parquet.clone());
+        let props = writer_options
+            .unwrap_or_else(|| self.session_state.default_table_options().parquet);
 
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
