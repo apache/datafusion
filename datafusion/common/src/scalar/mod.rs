@@ -379,6 +379,9 @@ impl PartialEq for ScalarValue {
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
             (IntervalMonthDayNano(_), _) => false,
+            (Union(val1, fields1, mode1), Union(val2, fields2, mode2)) => {
+                val1.eq(val2) && fields1.eq(fields2) && mode1.eq(mode2)
+            }
             (Union(_, _, _), _) => false,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
             (Dictionary(_, _), _) => false,
