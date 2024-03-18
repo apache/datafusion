@@ -19,7 +19,6 @@
 //! include in its output batches.
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -38,11 +37,10 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
