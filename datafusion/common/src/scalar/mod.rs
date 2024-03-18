@@ -2130,7 +2130,7 @@ impl ScalarValue {
                         value_offsets,
                         child_arrays,
                     )
-                    .map_err(|e| DataFusionError::ArrowError(e))?;
+                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
                     Arc::new(ar)
                 }
                 None => {
