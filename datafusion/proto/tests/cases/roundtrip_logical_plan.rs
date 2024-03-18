@@ -566,7 +566,53 @@ async fn roundtrip_expr_api() -> Result<()> {
             lit("NULLS LAST"),
         ),
         array_distinct(make_array(vec![lit(1), lit(3), lit(3), lit(2), lit(2)])),
+        array_intersect(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
+        array_union(
+            make_array(vec![lit(1), lit(3)]),
+            make_array(vec![lit(1), lit(4)]),
+        ),
         array_resize(make_array(vec![lit(1), lit(2), lit(3)]), lit(5), lit(0)),
+        array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(2)),
+        array_slice(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(1),
+            lit(2),
+            lit(1),
+        ),
+        array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_reverse(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_position(
+            make_array(vec![lit(1), lit(2), lit(3), lit(4)]),
+            lit(3),
+            lit(2),
+        ),
+        array_positions(make_array(vec![lit(4), lit(3), lit(3), lit(1)]), lit(3)),
+        array_except(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            make_array(vec![lit(1), lit(2)]),
+        ),
+        array_remove(make_array(vec![lit(4), lit(3), lit(2), lit(1)]), lit(3)),
+        array_remove_n(
+            make_array(vec![lit(1), lit(3), lit(3), lit(3)]),
+            lit(3),
+            lit(2),
+        ),
+        array_remove_all(
+            make_array(vec![lit(3), lit(3), lit(2), lit(3), lit(1)]),
+            lit(3),
+        ),
+        array_replace(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        array_replace_n(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(2),
+            lit(4),
+            lit(1),
+        ),
+        array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
     ];
 
     // ensure expressions created with the expr api can be round tripped

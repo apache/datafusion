@@ -18,13 +18,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::types::ArrowTemporalType;
+use arrow::array::{Array, ArrayRef, ArrowNumericType, Float64Array, PrimitiveArray};
 use arrow::compute::cast;
 use arrow::compute::kernels::temporal;
 use arrow::datatypes::DataType::{Date32, Date64, Float64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
-use arrow_array::types::ArrowTemporalType;
-use arrow_array::{Array, ArrayRef, ArrowNumericType, Float64Array, PrimitiveArray};
 
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_timestamp_microsecond_array,

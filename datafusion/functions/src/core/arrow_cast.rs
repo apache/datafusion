@@ -136,7 +136,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
 
 /// Parses `str` into a `DataType`.
 ///
-/// `parse_data_type` is the the reverse of [`DataType`]'s `Display`
+/// `parse_data_type` is the reverse of [`DataType`]'s `Display`
 /// impl, and maintains the invariant that
 /// `parse_data_type(data_type.to_string()) == data_type`
 ///

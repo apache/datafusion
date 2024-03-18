@@ -369,13 +369,13 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
-    use arrow_array::types::Int64Type;
-    use arrow_array::{
+    use arrow::array::types::Int64Type;
+    use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     };
+    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::datatypes::TimeUnit;
     use chrono::Utc;
 
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};

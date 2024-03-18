@@ -584,101 +584,6 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-scalar_expr!(
-    ArrayPopBack,
-    array_pop_back,
-    array,
-    "returns the array without the last element."
-);
-
-scalar_expr!(
-    ArrayPopFront,
-    array_pop_front,
-    array,
-    "returns the array without the first element."
-);
-
-scalar_expr!(
-    ArrayElement,
-    array_element,
-    array element,
-    "extracts the element with the index n from the array."
-);
-scalar_expr!(
-    ArrayExcept,
-    array_except,
-    first_array second_array,
-    "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
-    ArrayPosition,
-    array_position,
-    array element index,
-    "searches for an element in the array, returns first occurrence."
-);
-scalar_expr!(
-    ArrayPositions,
-    array_positions,
-    array element,
-    "searches for an element in the array, returns all occurrences."
-);
-scalar_expr!(
-    ArrayRemove,
-    array_remove,
-    array element,
-    "removes the first element from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveN,
-    array_remove_n,
-    array element max,
-    "removes the first `max` elements from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveAll,
-    array_remove_all,
-    array element,
-    "removes all elements from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayReplace,
-    array_replace,
-    array from to,
-    "replaces the first occurrence of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceN,
-    array_replace_n,
-    array from to max,
-    "replaces the first `max` occurrences of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceAll,
-    array_replace_all,
-    array from to,
-    "replaces all occurrences of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReverse,
-    array_reverse,
-    array,
-    "reverses the order of elements in the array."
-);
-scalar_expr!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array."
-);
-scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
-
-scalar_expr!(
-    ArrayIntersect,
-    array_intersect,
-    first_array second_array,
-    "Returns an array of the elements in the intersection of array1 and array2."
-);
-
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
@@ -1221,18 +1126,6 @@ mod test {
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);
         test_scalar_expr!(Upper, upper, string);
-
-        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
-        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_scalar_expr!(ArrayPosition, array_position, array, element, index);
-        test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayRemove, array_remove, array, element);
-        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
-        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
-        test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
-        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
-        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
