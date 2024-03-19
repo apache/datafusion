@@ -230,6 +230,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
             }
+            DataType::Utf8View | DataType::BinaryView | DataType::ListView(_) | DataType::LargeListView(_) => {
+                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
+            }
         };
 
         Ok(res)

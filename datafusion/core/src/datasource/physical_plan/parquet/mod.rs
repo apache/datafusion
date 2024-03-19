@@ -701,12 +701,8 @@ pub async fn plan_to_parquet(
         let (_, multipart_writer) = storeref.put_multipart(&file).await?;
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let mut writer = AsyncArrowWriter::try_new(
-                multipart_writer,
-                plan.schema(),
-                10485760,
-                propclone,
-            )?;
+            let mut writer =
+                AsyncArrowWriter::try_new(multipart_writer, plan.schema(), propclone)?;
             while let Some(next_batch) = stream.next().await {
                 let batch = next_batch?;
                 writer.write(&batch).await?;
