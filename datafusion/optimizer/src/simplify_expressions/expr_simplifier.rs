@@ -1449,13 +1449,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Operator::Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
-                let left = as_inlist(left.as_ref());
-                let right = as_inlist(right.as_ref());
-
-                let lhs = left.unwrap();
-                let rhs = right.unwrap();
-                let lhs = lhs.into_owned();
-                let rhs = rhs.into_owned();
+                let lhs = to_inlist(*left).unwrap();
+                let rhs = to_inlist(*right).unwrap();
                 let mut seen: HashSet<Expr> = HashSet::new();
                 let list = lhs
                     .list
@@ -1602,12 +1597,11 @@ fn are_inlist_and_eq_and_match_neg(
     is_left_neg: bool,
     is_right_neg: bool,
 ) -> bool {
-    let left = as_inlist(left);
-    let right = as_inlist(right);
-    if let (Some(lhs), Some(rhs)) = (left, right) {
-        lhs.expr == rhs.expr && lhs.negated == is_left_neg && rhs.negated == is_right_neg
-    } else {
-        false
+    match (left, right) {
+        (Expr::InList(l), Expr::InList(r)) => {
+            l.expr == r.expr && l.negated == is_left_neg && r.negated == is_right_neg
+        }
+        _ => false,
     }
 }
 
@@ -1645,6 +1639,30 @@ fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+fn to_inlist(expr: Expr) -> Option<InList> {
+    match expr {
+        Expr::InList(inlist) => Some(inlist),
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) => match (left.as_ref(), right.as_ref()) {
+            (Expr::Column(_), Expr::Literal(_)) => Some(InList {
+                expr: left,
+                list: vec![*right],
+                negated: false,
+            }),
+            (Expr::Literal(_), Expr::Column(_)) => Some(InList {
+                expr: right,
+                list: vec![*left],
+                negated: false,
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }
