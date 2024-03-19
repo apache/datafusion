@@ -171,7 +171,11 @@ fn _to_char_scalar(
     // of the implementation in arrow-rs we need to convert it to an array
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let array = expression.into_array(1)?;
+    let array_from_expr = expression.into_array(1)?;
+    let array = match format {
+        Some(_) => array_from_expr,
+        None => ColumnarValue::create_null_array(array_from_expr.len()).into_array(1)?,
+    };
     let format_options = match _build_format_options(data_type, format) {
         Ok(value) => value,
         Err(value) => return value,
@@ -215,8 +219,19 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
         // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
-        let result = formatter.value(idx).try_to_string();
+        let result = match format {
+            Some(_) => {
+                let formatter =
+                    ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
+                formatter.value(idx).try_to_string()
+            }
+            None => {
+                let null_array = ColumnarValue::create_null_array(1).into_array(1)?;
+                let formatter =
+                    ArrayFormatter::try_new(null_array.as_ref(), &format_options)?;
+                formatter.value(0).try_to_string()
+            }
+        };
         match result {
             Ok(value) => results.push(value),
             Err(e) => return exec_err!("{}", e),
