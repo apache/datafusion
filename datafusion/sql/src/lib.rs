@@ -42,5 +42,4 @@ pub mod utils;
 mod values;
 
 pub use datafusion_common::{ResolvedTableReference, TableReference};
-pub use expr::arrow_cast::parse_data_type;
 pub use sqlparser;

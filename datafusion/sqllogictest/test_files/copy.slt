@@ -21,13 +21,13 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'parquet.compression' 'zstd(10)');
+COPY source_table TO 'test_files/scratch/copy/table/' STORED AS parquet OPTIONS ('format.compression' 'zstd(10)');
 ----
 2
 
 # Copy to directory as partitioned files
 query IT
-COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' (format parquet, 'parquet.compression' 'zstd(10)', partition_by 'col2');
+COPY source_table TO 'test_files/scratch/copy/partitioned_table1/' STORED AS parquet PARTITIONED BY (col2) OPTIONS ('format.compression' 'zstd(10)');
 ----
 2
 
@@ -54,8 +54,8 @@ select * from validate_partitioned_parquet_bar order by col1;
 
 # Copy to directory as partitioned files
 query ITT
-COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' 
-(format parquet, partition_by 'column2, column3', 'parquet.compression' 'zstd(10)');
+COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' STORED AS parquet PARTITIONED BY (column2, column3)
+OPTIONS ('format.compression' 'zstd(10)');
 ----
 3
 
@@ -82,8 +82,8 @@ select * from validate_partitioned_parquet_a_x order by column1;
 
 # Copy to directory as partitioned files
 query TTT
-COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' 
-(format parquet, 'parquet.compression' 'zstd(10)', partition_by 'column1, column3');
+COPY (values ('1', 'a', 'x'), ('2', 'b', 'y'), ('3', 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table3/' STORED AS parquet PARTITIONED BY (column1, column3)
+OPTIONS ('format.compression' 'zstd(10)');
 ----
 3
 
@@ -111,49 +111,52 @@ a
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
 
-query TTT
-insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
-----
-3
-
-query T
-select "'test'" from test
-----
-a
-b
-c
-
-# Note to place a single ' inside of a literal string escape by putting two ''
-query TTT
-copy test to 'test_files/scratch/copy/escape_quote' (format csv, partition_by '''test2'',''test3''')
-----
-3
-
-statement ok
-CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV 
-LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
-
+## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
+## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
+#
+#query TTT
+#insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
+#----
+#3
+#
+#query T
+#select "'test'" from test
+#----
+#a
+#b
+#c
+#
+# # Note to place a single ' inside of a literal string escape by putting two ''
+#query TTT
+#copy test to 'test_files/scratch/copy/escape_quote' STORED AS CSV;
+#----
+#3
+#
+#statement ok
+#CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV
+#LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
+#
 # This triggers a panic (index out of bounds)
 # https://github.com/apache/arrow-datafusion/issues/9269
 #query
 #select * from validate_partitioned_escape_quote;
 
 query TT
-EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' (format parquet, 'parquet.compression' 'zstd(10)');
+EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (parquet.compression zstd(10))
+CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: (format.compression zstd(10))
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 FileSinkExec: sink=ParquetSink(file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
-query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension!
+query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
 EXPLAIN COPY source_table to 'test_files/scratch/copy/table/'
 
 query TT
-EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' (format parquet)
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table/' STORED AS PARQUET
 ----
 logical_plan
 CopyTo: format=parquet output_url=test_files/scratch/copy/table/ options: ()
@@ -164,7 +167,7 @@ FileSinkExec: sink=ParquetSink(file_groups=[])
 
 # Copy more files to directory via query
 query IT
-COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' (format parquet);
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table/' STORED AS PARQUET;
 ----
 4
 
@@ -185,7 +188,7 @@ select * from validate_parquet;
 query ?
 copy (values (struct(timestamp '2021-01-01 01:00:01', 1)), (struct(timestamp '2022-01-01 01:00:01', 2)), 
 (struct(timestamp '2023-01-03 01:00:01', 3)), (struct(timestamp '2024-01-01 01:00:01', 4)))
-to 'test_files/scratch/copy/table_nested2/' (format parquet);
+to 'test_files/scratch/copy/table_nested2/' STORED AS PARQUET;
 ----
 4
 
@@ -204,7 +207,7 @@ query ??
 COPY 
 (values (struct ('foo', (struct ('foo', make_array(struct('a',1), struct('b',2))))), make_array(timestamp '2023-01-01 01:00:01',timestamp '2023-01-01 01:00:01')), 
 (struct('bar', (struct ('foo', make_array(struct('aa',10), struct('bb',20))))), make_array(timestamp '2024-01-01 01:00:01', timestamp '2024-01-01 01:00:01'))) 
-to 'test_files/scratch/copy/table_nested/' (format parquet);
+to 'test_files/scratch/copy/table_nested/' STORED AS PARQUET;
 ----
 2
 
@@ -221,7 +224,7 @@ select * from validate_parquet_nested;
 query ?
 copy (values ([struct('foo', 1), struct('bar', 2)])) 
 to 'test_files/scratch/copy/array_of_struct/'
-(format parquet);
+STORED AS PARQUET;
 ----
 1
 
@@ -236,8 +239,7 @@ select * from validate_array_of_struct;
 
 query ?
 copy (values (struct('foo', [1,2,3], struct('bar', [2,3,4])))) 
-to 'test_files/scratch/copy/struct_with_array/'
-(format parquet);
+to 'test_files/scratch/copy/struct_with_array/' STORED AS PARQUET;
 ----
 1
 
@@ -255,31 +257,32 @@ select * from validate_struct_with_array;
 query IT
 COPY source_table
 TO 'test_files/scratch/copy/table_with_options/'
-(format parquet,
-'parquet.compression' snappy,
-'parquet.compression::col1' 'zstd(5)',
-'parquet.compression::col2' snappy,
-'parquet.max_row_group_size' 12345,
-'parquet.data_pagesize_limit' 1234,
-'parquet.write_batch_size' 1234,
-'parquet.writer_version' 2.0,
-'parquet.dictionary_page_size_limit' 123,
-'parquet.created_by' 'DF copy.slt',
-'parquet.column_index_truncate_length' 123,
-'parquet.data_page_row_count_limit' 1234,
-'parquet.bloom_filter_enabled' true,
-'parquet.bloom_filter_enabled::col1' false,
-'parquet.bloom_filter_fpp::col2' 0.456,
-'parquet.bloom_filter_ndv::col2' 456,
-'parquet.encoding' plain,
-'parquet.encoding::col1' DELTA_BINARY_PACKED,
-'parquet.dictionary_enabled::col2' true,
-'parquet.dictionary_enabled' false,
-'parquet.statistics_enabled' page,
-'parquet.statistics_enabled::col2' none,
-'parquet.max_statistics_size' 123,
-'parquet.bloom_filter_fpp' 0.001,
-'parquet.bloom_filter_ndv' 100
+STORED AS PARQUET
+OPTIONS (
+'format.compression' snappy,
+'format.compression::col1' 'zstd(5)',
+'format.compression::col2' snappy,
+'format.max_row_group_size' 12345,
+'format.data_pagesize_limit' 1234,
+'format.write_batch_size' 1234,
+'format.writer_version' 2.0,
+'format.dictionary_page_size_limit' 123,
+'format.created_by' 'DF copy.slt',
+'format.column_index_truncate_length' 123,
+'format.data_page_row_count_limit' 1234,
+'format.bloom_filter_enabled' true,
+'format.bloom_filter_enabled::col1' false,
+'format.bloom_filter_fpp::col2' 0.456,
+'format.bloom_filter_ndv::col2' 456,
+'format.encoding' plain,
+'format.encoding::col1' DELTA_BINARY_PACKED,
+'format.dictionary_enabled::col2' true,
+'format.dictionary_enabled' false,
+'format.statistics_enabled' page,
+'format.statistics_enabled::col2' none,
+'format.max_statistics_size' 123,
+'format.bloom_filter_fpp' 0.001,
+'format.bloom_filter_ndv' 100
 )
 ----
 2
@@ -312,7 +315,7 @@ select * from validate_parquet_single;
 
 # copy from table to folder of compressed json files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, 'json.compression' gzip);
+COPY source_table  to 'test_files/scratch/copy/table_json_gz' STORED AS JSON OPTIONS ('format.compression' gzip);
 ----
 2
 
@@ -328,7 +331,7 @@ select * from validate_json_gz;
 
 # copy from table to folder of compressed csv files
 query IT
-COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, 'csv.has_header' false, 'csv.compression' gzip);
+COPY source_table  to 'test_files/scratch/copy/table_csv' STORED AS CSV OPTIONS ('format.has_header' false, 'format.compression' gzip);
 ----
 2
 
@@ -360,7 +363,7 @@ select * from validate_single_csv;
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/copy/table_json' (format json);
+COPY source_table to 'test_files/scratch/copy/table_json' STORED AS JSON;
 ----
 2
 
@@ -376,7 +379,7 @@ select * from validate_json;
 
 # Copy from table to single json file
 query IT
-COPY source_table  to 'test_files/scratch/copy/table.json';
+COPY source_table  to 'test_files/scratch/copy/table.json' STORED AS JSON ;
 ----
 2
 
@@ -394,12 +397,12 @@ select * from validate_single_json;
 query IT
 COPY source_table
 to 'test_files/scratch/copy/table_csv_with_options'
-(format csv,
-'csv.has_header' false,
-'csv.compression' uncompressed,
-'csv.datetime_format' '%FT%H:%M:%S.%9f',
-'csv.delimiter' ';',
-'csv.null_value' 'NULLVAL');
+STORED AS CSV OPTIONS (
+'format.has_header' false,
+'format.compression' uncompressed,
+'format.datetime_format' '%FT%H:%M:%S.%9f',
+'format.delimiter' ';',
+'format.null_value' 'NULLVAL');
 ----
 2
 
@@ -417,7 +420,7 @@ select * from validate_csv_with_options;
 
 # Copy from table to single arrow file
 query IT
-COPY source_table to 'test_files/scratch/copy/table.arrow';
+COPY source_table to 'test_files/scratch/copy/table.arrow' STORED AS ARROW;
 ----
 2
 
@@ -437,7 +440,7 @@ select * from validate_arrow_file;
 query T?
 COPY (values 
 ('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)'))) 
-to 'test_files/scratch/copy/table_dict.arrow';
+to 'test_files/scratch/copy/table_dict.arrow' STORED AS ARROW;
 ----
 2
 
@@ -456,7 +459,7 @@ d bar
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/copy/table_arrow' (format arrow);
+COPY source_table to 'test_files/scratch/copy/table_arrow' STORED AS ARROW;
 ----
 2
 
@@ -475,12 +478,12 @@ select * from validate_arrow;
 
 # Copy from table with options
 query error DataFusion error: Invalid or Unsupported Configuration: Config value "row_group_size" not found on JsonOptions
-COPY source_table  to 'test_files/scratch/copy/table.json' ('json.row_group_size' 55);
+COPY source_table  to 'test_files/scratch/copy/table.json' STORED AS JSON OPTIONS ('format.row_group_size' 55);
 
 # Incomplete statement
 query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)
 COPY (select col2, sum(col1) from source_table
 
 # Copy from table with non literal
-query error DataFusion error: SQL error: ParserError\("Expected ',' or '\)' after option definition, found: \+"\)
+query error DataFusion error: SQL error: ParserError\("Unexpected token \("\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);

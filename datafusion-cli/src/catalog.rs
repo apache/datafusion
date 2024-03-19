@@ -189,7 +189,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
                     &state,
                     table_url.scheme(),
                     url,
-                    state.default_table_options(),
+                    &state.default_table_options(),
                 )
                 .await?;
                 state.runtime_env().register_object_store(url, store);

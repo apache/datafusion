@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests for the DataFusion SQL query planner that require functions from the
+//! datafusion-functions crate.
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,11 +46,17 @@ fn init() {
 }
 
 #[test]
+fn select_arrow_cast() {
+    let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
+    let expected = "Projection: Float64(1234) AS f64, LargeUtf8(\"foo\") AS large\
+        \n  EmptyRelation";
+    quick_test(sql, expected);
+}
+#[test]
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let sql = "SELECT col_int32
         FROM test
         WHERE col_ts_nano_none < (now() - interval '1 hour')";
-    let plan = test_sql(sql)?;
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
@@ -55,7 +64,7 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
         "Projection: test.col_int32\
          \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
          \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    assert_eq!(expected, format!("{plan:?}"));
+    quick_test(sql, expected);
     Ok(())
 }
 
@@ -74,6 +83,11 @@ fn timestamp_nano_ts_utc_predicates() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+fn quick_test(sql: &str, expected_plan: &str) {
+    let plan = test_sql(sql).unwrap();
+    assert_eq!(expected_plan, format!("{:?}", plan));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -81,12 +95,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
-    let now_udf = datetime::functions()
-        .iter()
-        .find(|f| f.name() == "now")
-        .unwrap()
-        .to_owned();
-    let context_provider = MyContextProvider::default().with_udf(now_udf);
+    let context_provider = MyContextProvider::default()
+        .with_udf(datetime::now())
+        .with_udf(datafusion_functions::core::arrow_cast());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 

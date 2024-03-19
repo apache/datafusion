@@ -1155,7 +1155,6 @@ mod tests {
         Ok(())
     }
 
-    #[allow(deprecated)]
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
@@ -1177,16 +1176,12 @@ mod tests {
                 .to_string(),
             expected_help
         );
-        let y_col = Column::new_unqualified("y");
-        assert_contains!(
-            schema.index_of_column(&y_col).unwrap_err().to_string(),
-            expected_help
-        );
-        let c0_column = Column::new_unqualified("t1.c0");
-        assert_contains!(
-            schema.index_of_column(&c0_column).unwrap_err().to_string(),
-            expected_err_msg
-        );
+        assert!(schema.index_of_column_by_name(None, "y").unwrap().is_none());
+        assert!(schema
+            .index_of_column_by_name(None, "t1.c0")
+            .unwrap()
+            .is_none());
+ 
         Ok(())
     }
 

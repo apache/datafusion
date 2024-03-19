@@ -32,8 +32,8 @@
 
 use crate::sort_properties::SortProperties;
 use crate::{
-    array_expressions, conditional_expressions, math_expressions, string_expressions,
-    PhysicalExpr, ScalarFunctionExpr,
+    conditional_expressions, math_expressions, string_expressions, PhysicalExpr,
+    ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -253,30 +253,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cot => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
-
-        // array functions
-        BuiltinScalarFunction::ArrayExcept => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_except)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemove => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveN => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_n)(args)
-        }),
-        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_remove_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayReplace => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_replace)(args)
-        }),
-        BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_replace_n)(args)
-        }),
-        BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
-            make_scalar_function_inner(array_expressions::array_replace_all)(args)
-        }),
-
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {

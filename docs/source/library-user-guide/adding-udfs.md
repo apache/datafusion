@@ -204,7 +204,7 @@ let df = ctx.sql(&sql).await.unwrap();
 
 ## Adding a Window UDF
 
-Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the the proximal rows is helpful, but adds some complexity to the implementation.
+Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
 
 For example, we will declare a user defined window function that computes a moving average.
 

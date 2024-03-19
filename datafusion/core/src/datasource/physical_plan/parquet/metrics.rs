@@ -29,8 +29,12 @@ use crate::physical_plan::metrics::{
 pub struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
+    /// Number of row groups whose bloom filters were checked and matched
+    pub row_groups_matched_bloom_filter: Count,
     /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_bloom_filter: Count,
+    /// Number of row groups whose statistics were checked and matched
+    pub row_groups_matched_statistics: Count,
     /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: Count,
     /// Total number of bytes scanned
@@ -56,9 +60,17 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .counter("predicate_evaluation_errors", partition);
 
+        let row_groups_matched_bloom_filter = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("row_groups_matched_bloom_filter", partition);
+
         let row_groups_pruned_bloom_filter = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .counter("row_groups_pruned_bloom_filter", partition);
+
+        let row_groups_matched_statistics = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("row_groups_matched_statistics", partition);
 
         let row_groups_pruned_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -85,7 +97,9 @@ impl ParquetFileMetrics {
 
         Self {
             predicate_evaluation_errors,
+            row_groups_matched_bloom_filter,
             row_groups_pruned_bloom_filter,
+            row_groups_matched_statistics,
             row_groups_pruned_statistics,
             bytes_scanned,
             pushdown_rows_filtered,

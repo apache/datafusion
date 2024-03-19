@@ -217,56 +217,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Get all meaningful schemas of a plan and its children plan.
-    #[deprecated(since = "20.0.0")]
-    pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
-        match self {
-            // return self and children schemas
-            LogicalPlan::Window(_)
-            | LogicalPlan::Projection(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_) => {
-                let mut schemas = vec![self.schema()];
-                self.inputs().iter().for_each(|input| {
-                    schemas.push(input.schema());
-                });
-                schemas
-            }
-            // just return self.schema()
-            LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::TableScan(_) => {
-                vec![self.schema()]
-            }
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // return only the schema of the static term
-                static_term.all_schemas()
-            }
-            // return children schemas
-            LogicalPlan::Limit(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Prepare(_) => {
-                self.inputs().iter().map(|p| p.schema()).collect()
-            }
-            // return empty
-            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
-        }
-    }
-
     /// Returns the (fixed) output schema for explain plans
     pub fn explain_schema() -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
@@ -2041,7 +1991,8 @@ impl Window {
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
+        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
+        window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2364,7 +2315,7 @@ impl DistinctOn {
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
         let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
-            exprlist_to_fields(&select_expr, &input)?
+            exprlist_to_fields(select_expr.as_slice(), &input)?
                 .into_iter()
                 .unzip();
 
@@ -2450,7 +2401,7 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+        let mut fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2460,12 +2411,12 @@ impl Aggregate {
                 .collect::<Vec<_>>();
         }
 
-        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
-        let (q, f): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+        fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
             fields.into_iter().unzip();
 
-        let schema = Arc::new(Schema::new(f));
-        let dfschema = DFSchema::from_field_specific_qualified_schema(q, &schema)?;
+        let schema = Arc::new(Schema::new(fields));
+        let dfschema = DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(dfschema))
     }
@@ -3091,14 +3042,6 @@ digraph {
         empty_schema: DFSchemaRef,
     }
 
-    impl NoChildExtension {
-        fn empty() -> Self {
-            Self {
-                empty_schema: Arc::new(DFSchema::empty()),
-            }
-        }
-    }
-
     impl UserDefinedLogicalNode for NoChildExtension {
         fn as_any(&self) -> &dyn std::any::Any {
             unimplemented!()
@@ -3139,18 +3082,6 @@ digraph {
         fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
             unimplemented!()
         }
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_extension_all_schemas() {
-        let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(NoChildExtension::empty()),
-        });
-
-        let schemas = plan.all_schemas();
-        assert_eq!(1, schemas.len());
-        assert_eq!(0, schemas[0].fields().len());
     }
 
     #[test]
