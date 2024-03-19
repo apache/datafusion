@@ -1001,7 +1001,7 @@ mod tests {
         }
 
         fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-            write!(f, "NoopPlan")
+            write!(f, "NoOpUserDefined")
         }
 
         fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
