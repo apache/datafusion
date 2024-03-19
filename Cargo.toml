@@ -57,7 +57,7 @@ version = "36.0.0"
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
-arrow = { version = "50.0.0", features = ["prettyprint"] }
+arrow = { version = "51.0.0", features = ["prettyprint"] }
 arrow-array = { version = "50.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "50.0.0", default-features = false }
 arrow-flight = { version = "50.0.0", features = ["flight-sql-experimental"] }
