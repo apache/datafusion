@@ -162,14 +162,35 @@ fn optimize_projections(
                 .map(|input| ((0..input.schema().fields().len()).collect_vec(), false))
                 .collect::<Vec<_>>()
         }
+        LogicalPlan::Extension(extension) => {
+            let children = extension.node.inputs();
+            if children.len() == 1 {
+                // has single child
+                let exprs = plan.expressions();
+                let child = children[0];
+                // let node_schema = extension.node.schema();
+                // let child_schema = child.schema();
+                if child.schema().fields() == extension.node.schema().fields() {
+                    // Preserves the schema
+                    let child_req =
+                        get_all_required_indices(indices, child, exprs.iter())
+                            .map(|idxs| (idxs, false))?;
+                    vec![child_req]
+                } else {
+                    // TODO: Add support for `LogicalPlan::Extension` where its input schema is modified.
+                    return Ok(None);
+                }
+            } else {
+                // TODO: Add support for `LogicalPlan::Extension` with multi children.
+                return Ok(None);
+            }
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::Extension(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
-            // TODO: Add support for `LogicalPlan::Extension`.
             return Ok(None);
         }
         LogicalPlan::Projection(proj) => {
@@ -899,19 +920,56 @@ fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
     use std::sync::Arc;
 
     use crate::optimize_projections::OptimizeProjections;
     use crate::test::{assert_optimized_plan_eq, test_table_scan};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Result, TableReference};
+    use datafusion_common::{DFSchemaRef, Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, when, Expr, Like, LogicalPlan, Operator,
+        table_scan, try_cast, when, Expr, Extension, Like, LogicalPlan, Operator,
+        UserDefinedLogicalNodeCore,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoOpUserDefined {
+        schema: DFSchemaRef,
+        input: Arc<LogicalPlan>,
+    }
+
+    impl UserDefinedLogicalNodeCore for NoOpUserDefined {
+        fn name(&self) -> &str {
+            "NoOpUserDefined"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.input.expressions()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "NoopPlan")
+        }
+
+        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            Self {
+                input: Arc::new(inputs[0].clone()),
+                schema: self.schema.clone(),
+            }
+        }
     }
 
     #[test]
@@ -1189,6 +1247,27 @@ mod tests {
 
         let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE d END AS d\
         \n  Projection: test.a, Int32(0) AS d\
+        \n    TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Test outer projection isn't discarded despite the same schema as inner
+    // https://github.com/apache/arrow-datafusion/issues/8942
+    #[test]
+    fn test_user_defined_logical_plan_node() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpUserDefined {
+                input: Arc::new(table_scan.clone()),
+                schema: table_scan.schema().clone(),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoopPlan\
         \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
