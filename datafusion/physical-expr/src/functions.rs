@@ -44,6 +44,7 @@ use arrow_array::Array;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 pub use datafusion_expr::FuncMonotonicity;
+use datafusion_expr::ScalarFunctionDefinition;
 use datafusion_expr::{
     type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
     ScalarFunctionImplementation,
@@ -57,7 +58,7 @@ pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    execution_props: &ExecutionProps,
+    _execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_expr_types = input_phy_exprs
         .iter()
@@ -69,14 +70,12 @@ pub fn create_physical_expr(
 
     let data_type = fun.return_type(&input_expr_types)?;
 
-    let fun_expr: ScalarFunctionImplementation =
-        create_physical_fun(fun, execution_props)?;
-
     let monotonicity = fun.monotonicity();
 
+    let fun_def = ScalarFunctionDefinition::BuiltIn(*fun);
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
-        fun_expr,
+        fun_def,
         input_phy_exprs.to_vec(),
         data_type,
         monotonicity,
@@ -195,7 +194,6 @@ where
 /// Create a physical scalar function.
 pub fn create_physical_fun(
     fun: &BuiltinScalarFunction,
-    _execution_props: &ExecutionProps,
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
