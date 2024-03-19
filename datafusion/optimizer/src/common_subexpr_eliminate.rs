@@ -53,10 +53,32 @@ type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 /// here is not such a good choose.
 type Identifier = String;
 
-/// Perform Common Sub-expression Elimination optimization.
+/// Performs Common Sub-expression Elimination optimization.
 ///
-/// Currently only common sub-expressions within one logical plan will
+/// This optimization improves query performance by computing expressions that
+/// appear more than once and reusing those results rather than re-computing the
+/// same value
+///
+/// Currently only common sub-expressions within a single `LogicalPlan` are
 /// be eliminated.
+///
+/// # Example
+///
+/// Given a projection that computes the same expensive expression
+/// multiple times such as parsing as string as a date with `to_date` twice:
+///
+/// ```text
+/// ProjectionExec(expr=[extract (day from to_date(c1)), extract (year from to_date(c1))])
+/// ```
+///
+/// This optimization will rewrite the plan to compute the common expression once
+/// using a new `ProjectionExec` and then rewrite the original expressions to
+/// refer to that new column.
+///
+/// ```text
+/// ProjectionExec(exprs=[extract (day from new_col), extract (year from new_col)]) <-- reuse here
+///   ProjectionExec(exprs=[to_date(c1) as new_col]) <-- compute to_date once
+/// ```
 pub struct CommonSubexprEliminate {}
 
 impl CommonSubexprEliminate {
