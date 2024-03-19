@@ -278,6 +278,9 @@ pub enum ScalarValue {
     /// Duration in nanoseconds
     DurationNanosecond(Option<i64>),
     /// A nested datatype that can represent slots of differing types. Components:
+    /// `.0`: a tuple of union `type_id` and the single value held by this Scalar
+    /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
+    /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
     Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
