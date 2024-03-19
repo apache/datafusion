@@ -78,9 +78,6 @@ use hashbrown::HashMap;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
-/// Size of the buffer for [`AsyncArrowWriter`].
-const PARQUET_WRITER_BUFFER_SIZE: usize = 10485760;
-
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
 const INITIAL_BUFFER_BYTES: usize = 1048576;
@@ -626,7 +623,6 @@ impl ParquetSink {
         let writer = AsyncArrowWriter::try_new(
             multipart_writer,
             self.get_writer_schema(),
-            PARQUET_WRITER_BUFFER_SIZE,
             Some(parquet_props),
         )?;
 
