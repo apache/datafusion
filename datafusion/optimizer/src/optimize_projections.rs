@@ -1270,7 +1270,8 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    // Test outer projection isn't discarded despite the same schema as inner
+    // https://github.com/apache/arrow-datafusion/issues/8942
     #[test]
     fn test_derived_column() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1290,8 +1291,7 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Test outer projection isn't discarded despite the same schema as inner
-    // https://github.com/apache/arrow-datafusion/issues/8942
+    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
     #[test]
     fn test_user_defined_logical_plan_node() -> Result<()> {
         let table_scan = test_table_scan()?;
