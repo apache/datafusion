@@ -159,7 +159,6 @@ impl DFSchema {
         Ok(schema)
     }
 
-    // TODO ADD TESTS FOR THIS NEW FUNCTION
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn from_field_specific_qualified_schema<'a>(
         qualifiers: Vec<Option<impl Into<TableReference<'a>>>>,
@@ -178,7 +177,6 @@ impl DFSchema {
         Ok(dfschema)
     }
 
-    // TODO Add tests
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn from_qualified_fields(
         qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
@@ -1047,6 +1045,35 @@ mod tests {
     fn from_qualified_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         assert_eq!("fields:[t1.c0, t1.c1], metadata:{}", schema.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_field_specific_qualified_schema() -> Result<()> {
+        let schema = DFSchema::from_field_specific_qualified_schema(
+            vec![Some("t1"), None],
+            &Arc::new(Schema::new(vec![
+                Field::new("c0", DataType::Boolean, true),
+                Field::new("c1", DataType::Boolean, true),
+            ])),
+        )?;
+        assert_eq!("fields:[t1.c0, c1], metadata:{}", schema.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_qualified_fields() -> Result<()> {
+        let schema = DFSchema::from_qualified_fields(
+            vec![
+                (
+                    Some("t0".into()),
+                    Arc::new(Field::new("c0", DataType::Boolean, true)),
+                ),
+                (None, Arc::new(Field::new("c1", DataType::Boolean, true))),
+            ],
+            HashMap::new(),
+        )?;
+        assert_eq!("fields:[t0.c0, c1], metadata:{}", schema.to_string());
         Ok(())
     }
 
