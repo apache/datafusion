@@ -174,11 +174,9 @@ fn optimize_projections(
             let child = children[0];
             let node_schema = extension.node.schema();
             let child_schema = child.schema();
-            if let Some(mapping) =
-                get_field_mappings(node_schema.fields(), child_schema.fields())
+            if let Some(parent_required_indices_mapped) =
+                get_mapped_indices(indices, node_schema.fields(), child_schema.fields())
             {
-                let parent_required_indices_mapped =
-                    indices.iter().map(|idx| mapping[idx]).collect::<Vec<_>>();
                 let child_req_indices =
                     indices_referred_by_exprs(child_schema, exprs.iter())?;
                 vec![(
@@ -923,24 +921,27 @@ fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result
         && proj_exprs.iter().all(is_expr_trivial))
 }
 
-/// Constructs a mapping between indices of the source fields and target fields based on their equality.
+/// Calculates the correspondinf target indices of the expressions at the `source_indices` of the `source_fields`.
 ///
 /// # Arguments
 ///
+/// * `source_indices` - A slice of `usize` representing the indices that needs to be mapped among the source fields.
 /// * `source_fields` - A slice of `DFField` structs representing the source fields.
 /// * `target_fields` - A slice of `DFField` structs representing the target fields.
 ///
 /// # Returns
 ///
-/// Returns `Some(mapping)` where `mapping` is a `HashMap<usize, usize>` representing the
-/// mapping between the indices of source and target fields.
-/// Returns `None` if there are no matches or if there is an ambiguity in the matches for any of the source field.
-fn get_field_mappings(
+/// Returns `Some(mapped_indices)` where `mapped_indices` is a vector of `usize` representing
+/// the indices in the target fields corresponding to the matched target fields for each source
+/// index. Returns `None` if there are no matches or if there is an ambiguity in the matches for any of the source field.
+fn get_mapped_indices(
+    source_indices: &[usize],
     source_fields: &[DFField],
     target_fields: &[DFField],
-) -> Option<HashMap<usize, usize>> {
-    let mut mapping = HashMap::new();
-    for (source_idx, source_field) in source_fields.iter().enumerate() {
+) -> Option<Vec<usize>> {
+    let mut mapped_indices = vec![];
+    for &source_idx in source_indices {
+        let source_field = &source_fields[source_idx];
         let matches = target_fields
             .iter()
             .enumerate()
@@ -949,13 +950,13 @@ fn get_field_mappings(
         if matches.len() == 1 {
             // There is single match, no ambiguity
             let (target_idx, _) = matches[0];
-            mapping.insert(source_idx, target_idx);
+            mapped_indices.push(target_idx);
         } else {
             // Either no match, or ambiguity
             return None;
         }
     }
-    Some(mapping)
+    Some(mapped_indices)
 }
 
 #[cfg(test)]
@@ -1306,7 +1307,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, Int32(0) AS d\
-        \n  NoopPlan\
+        \n  NoOpUserDefined\
         \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
