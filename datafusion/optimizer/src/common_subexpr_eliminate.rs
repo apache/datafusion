@@ -284,8 +284,9 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
-                        let id =
-                            ExprIdentifierVisitor::<'static>::desc_expr(&expr_rewritten);
+                        let id = ExprIdentifierVisitor::<'static>::expr_identifier(
+                            &expr_rewritten,
+                        );
                         let out_name =
                             expr_rewritten.to_field(&new_input_schema)?.qualified_name();
                         agg_exprs.push(expr_rewritten.alias(&id));
@@ -584,12 +585,14 @@ enum VisitRecord {
     /// `usize` is the monotone increasing series number assigned in pre_visit().
     /// Starts from 0. Is used to index the identifier array `id_array` in post_visit().
     EnterMark(usize),
+    /// the node's children were skipped => jump to f_up on same node
+    JumpMark(usize),
     /// Accumulated identifier of sub expression.
     ExprItem(Identifier),
 }
 
 impl ExprIdentifierVisitor<'_> {
-    fn desc_expr(expr: &Expr) -> String {
+    fn expr_identifier(expr: &Expr) -> Identifier {
         format!("{expr}")
     }
 
@@ -600,11 +603,11 @@ impl ExprIdentifierVisitor<'_> {
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
-                VisitRecord::EnterMark(idx) => {
+                VisitRecord::EnterMark(idx) | VisitRecord::JumpMark(idx) => {
                     return (idx, desc);
                 }
-                VisitRecord::ExprItem(s) => {
-                    desc.push_str(&s);
+                VisitRecord::ExprItem(id) => {
+                    desc.push_str(&id);
                 }
             }
         }
@@ -616,34 +619,39 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
-        self.visit_stack
-            .push(VisitRecord::EnterMark(self.node_count));
-        self.node_count += 1;
         // put placeholder, sets the proper array length
         self.id_array.push((0, "".to_string()));
 
         // related to https://github.com/apache/arrow-datafusion/issues/8814
         // If the expr contain volatile expression or is a short-circuit expression, skip it.
         if expr.short_circuits() || is_volatile_expression(expr)? {
-            return Ok(TreeNodeRecursion::Jump);
+            self.visit_stack
+                .push(VisitRecord::JumpMark(self.node_count));
+            return Ok(TreeNodeRecursion::Jump); // go to f_up
         }
+
+        self.visit_stack
+            .push(VisitRecord::EnterMark(self.node_count));
+        self.node_count += 1;
+
         Ok(TreeNodeRecursion::Continue)
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
         self.series_number += 1;
 
-        let (idx, sub_expr_desc) = self.pop_enter_mark();
+        let (idx, sub_expr_identifier) = self.pop_enter_mark();
 
         // skip exprs should not be recognize.
         if self.expr_mask.ignores(expr) {
-            self.id_array[idx].0 = self.series_number;
-            let desc = Self::desc_expr(expr);
-            self.visit_stack.push(VisitRecord::ExprItem(desc));
+            let curr_expr_identifier = Self::expr_identifier(expr);
+            self.visit_stack
+                .push(VisitRecord::ExprItem(curr_expr_identifier));
+            self.id_array[idx].0 = self.series_number; // leave Identifer as empty "", since will not use as common expr
             return Ok(TreeNodeRecursion::Continue);
         }
-        let mut desc = Self::desc_expr(expr);
-        desc.push_str(&sub_expr_desc);
+        let mut desc = Self::expr_identifier(expr);
+        desc.push_str(&sub_expr_identifier);
 
         self.id_array[idx] = (self.series_number, desc.clone());
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
