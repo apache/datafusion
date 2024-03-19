@@ -149,6 +149,12 @@ fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
     Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
 }
 
+/// invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of seconds, milliseconds, microseconds or
+/// nanoseconds
+///
+/// # Panics
+/// If `array` is not a temporal type such as Timestamp or Date32
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,
