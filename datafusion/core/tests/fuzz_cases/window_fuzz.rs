@@ -681,8 +681,8 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    // The planner updates the schema before calling the `create_window_expr`
-    // Replicate the same
+    // The planner has fully updated schema before calling the `create_window_expr`
+    // Replicate the same for this test
     let data_types = args
         .iter()
         .map(|e| e.clone().as_ref().data_type(&schema))
