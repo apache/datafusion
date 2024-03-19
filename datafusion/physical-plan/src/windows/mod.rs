@@ -175,7 +175,7 @@ fn create_built_in_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // derive the output datatype from incoming schema
-    let out_data_type: &DataType = &input_schema.field_with_name(&name)?.data_type();
+    let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
         BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, out_data_type)),

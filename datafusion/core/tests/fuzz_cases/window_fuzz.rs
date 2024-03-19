@@ -22,6 +22,7 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -39,6 +40,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
@@ -46,7 +48,6 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-#[ignore = "reason"]
 async fn window_bounded_window_random_comparison() -> Result<()> {
     // make_staggered_batches gives result sorted according to a, b, c
     // In the test cases first entry represents partition by columns
@@ -680,6 +681,26 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
+    // The planner updates the schema before calling the `create_window_expr`
+    // Replicate the same
+    let data_types = args
+        .iter()
+        .map(|e| e.clone().as_ref().data_type(&schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+
+    window_fields.extend_from_slice(&[Field::new(
+        &fn_name,
+        window_expr_return_type,
+        true,
+    )]);
+    let extended_schema = Arc::new(Schema::new(window_fields));
+
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(
             &window_fn,
@@ -688,7 +709,7 @@ async fn run_window_test(
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),
-            schema.as_ref(),
+            &extended_schema,
             false,
         )?],
         exec1,
@@ -706,7 +727,7 @@ async fn run_window_test(
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),
-            schema.as_ref(),
+            &extended_schema,
             false,
         )?],
         exec2,
