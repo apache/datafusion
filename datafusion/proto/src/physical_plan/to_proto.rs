@@ -381,7 +381,11 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     Ok(AggrFn { inner, distinct })
 }
 
-pub fn serialize_expr(
+/// Serialize a `PhysicalExpr` to default protobuf representation.
+///
+/// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
+/// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`])
+pub fn serialize_physical_expr(
     value: Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode, DataFusionError> {
