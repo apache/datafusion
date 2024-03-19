@@ -637,9 +637,7 @@ mod tests {
         );
 
         let schema = DFSchema::new_with_metadata(
-            vec![Field::new("foo", DataType::Int32, true)
-                .with_metadata(meta.clone())
-                .into()],
+            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())],
             HashMap::new(),
         );
 
