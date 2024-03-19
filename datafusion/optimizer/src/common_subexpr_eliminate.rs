@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
+use arrow::array;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -34,6 +35,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, Expr, ExprSchemable};
+use regex_syntax::ast::print;
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -120,14 +122,25 @@ impl CommonSubexprEliminate {
             .iter()
             .zip(arrays_list.iter())
             .map(|(exprs, arrays)| {
-                exprs
+                println!("************ \n expr is {:?} \n ************ \n", exprs);
+                let res = exprs
                     .iter()
                     .cloned()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
+                        println!(
+                            "************ \n current expr is {:?} \n ************ \n",
+                            expr
+                        );
+                        println!(
+                            "************ \n current id_array is {:?} \n ************ \n",
+                            id_array
+                        );
                         replace_common_expr(expr, id_array, expr_set, affected_id)
                     })
-                    .collect::<Result<Vec<_>>>()
+                    .collect::<Result<Vec<_>>>();
+                println!("************ \n expr is {:?} \n ************ \n", res);
+                res
             })
             .collect::<Result<Vec<_>>>()
     }
@@ -140,6 +153,18 @@ impl CommonSubexprEliminate {
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+        println!(
+            "************ \n current plan is {:?} \n *********** \n",
+            input
+        );
+        println!(
+            "************ \n exprs list are {:?} \n *********** \n",
+            exprs_list
+        );
+        println!(
+            "************ \n array list are {:?} \n *********** \n",
+            arrays_list
+        );
         let mut affected_id = BTreeSet::<Identifier>::new();
 
         let rewrite_exprs =
@@ -151,7 +176,14 @@ impl CommonSubexprEliminate {
         if !affected_id.is_empty() {
             new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
         }
-
+        println!(
+            "\n *********** \n rewrite expressions are {:?} \n *********** \n",
+            rewrite_exprs
+        );
+        println!(
+            "\n *********** \n new input is {:?} \n *********** \n",
+            new_input
+        );
         Ok((rewrite_exprs, new_input))
     }
 
@@ -187,7 +219,10 @@ impl CommonSubexprEliminate {
             window_exprs.push(window_expr);
             arrays_per_window.push(arrays);
         }
-
+        println!(
+            "\n *********** \n window exprs are {:?} \n *********** \n",
+            window_exprs
+        );
         let mut window_exprs = window_exprs
             .iter()
             .map(|expr| expr.as_slice())
@@ -196,7 +231,10 @@ impl CommonSubexprEliminate {
             .iter()
             .map(|arrays| arrays.as_slice())
             .collect::<Vec<_>>();
-
+        println!(
+            "\n *********** \n arrays per windows are  {:?} \n *********** \n",
+            arrays_per_window
+        );
         assert_eq!(window_exprs.len(), arrays_per_window.len());
         let (mut new_expr, new_input) = self.rewrite_expr(
             &window_exprs,
@@ -205,8 +243,19 @@ impl CommonSubexprEliminate {
             &expr_set,
             config,
         )?;
+        println!(
+            "\n *********** \n new exprs are  {:?} \n *********** \n",
+            new_expr
+        );
+        println!(
+            "\n *********** \n new input are  {:?} \n *********** \n",
+            new_input
+        );
         assert_eq!(window_exprs.len(), new_expr.len());
-
+        println!(
+            "\n *********** \n before plan are  {:?} \n *********** \n",
+            plan
+        );
         // Construct consecutive window operator, with their corresponding new window expressions.
         plan = new_input;
         while let Some(new_window_expr) = new_expr.pop() {
@@ -220,13 +269,17 @@ impl CommonSubexprEliminate {
                 .into_iter()
                 .zip(orig_window_expr.iter())
                 .map(|(new_window_expr, window_expr)| {
+                    println!("new_window_expr is {:?}", new_window_expr);
                     let original_name = window_expr.name_for_alias()?;
                     new_window_expr.alias_if_changed(original_name)
                 })
                 .collect::<Result<Vec<_>>>()?;
             plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
         }
-
+        println!(
+            "\n *********** \n final plan are  {:?} \n *********** \n",
+            plan
+        );
         Ok(plan)
     }
 
@@ -353,6 +406,8 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let expr = plan.expressions();
+        println!("********** \n expressions are {:?} \n ********* \n", expr);
+        println!("********** \n ur plan is {:?} \n ********* \n", plan);
         let inputs = plan.inputs();
         let input = inputs[0];
         let input_schema = Arc::clone(input.schema());
@@ -360,11 +415,17 @@ impl CommonSubexprEliminate {
 
         // Visit expr list and build expr identifier to occuring count map (`expr_set`).
         let arrays = to_arrays(&expr, input_schema, &mut expr_set, ExprMask::Normal)?;
-
+        println!("********* \n arrays {:?} \n ********* \n", arrays);
+        println!("********* \n expr_set {:?} \n ********* \n", expr_set);
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[&expr], &[&arrays], input, &expr_set, config)?;
-
-        plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input])
+        println!(
+            "********* \n new expr is {:?} \n and new input is {:?} ********* \n",
+            new_expr, new_input
+        );
+        let res_plan = plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input]);
+        println!("********* \n res plan is {:?} \n ********* \n", res_plan);
+        res_plan
     }
 }
 
@@ -412,9 +473,17 @@ impl OptimizerRule for CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
+        println!(
+            "***************** \n original schema is {:?} \n ***************",
+            original_schema
+        );
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
                 // add an additional projection if the output schema changed.
+                println!(
+                    "************** \n optimized schema {:?} \n ************",
+                    optimized_plan.schema(),
+                );
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
                     optimized_plan,
@@ -454,9 +523,12 @@ fn to_arrays(
     expr_set: &mut ExprSet,
     expr_mask: ExprMask,
 ) -> Result<Vec<Vec<(usize, String)>>> {
-    expr.iter()
+    println!("schema is {:?}", input_schema);
+    let res = expr
+        .iter()
         .map(|e| {
             let mut id_array = vec![];
+            println!("current expression is {:?}", e);
             expr_to_identifier(
                 e,
                 expr_set,
@@ -467,7 +539,9 @@ fn to_arrays(
 
             Ok(id_array)
         })
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>();
+    println!("res is {:?}", res);
+    res
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
@@ -674,6 +748,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
+        println!("********* \n expr is {:?} \n *********", expr);
         self.series_number += 1;
 
         let (idx, sub_expr_identifier) = self.pop_enter_mark();
@@ -693,7 +768,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
 
         let data_type = expr.get_type(&self.input_schema)?;
-
+        print!("data type is {:?}", data_type);
         self.expr_set
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
@@ -747,6 +822,10 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
+        println!(
+            "****************** \n expr is {:?} \n ****************** \n ",
+            expr
+        );
         if expr.short_circuits() || is_volatile_expression(&expr)? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
@@ -819,14 +898,25 @@ fn replace_common_expr(
     expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
-    expr.rewrite(&mut CommonSubexprRewriter {
-        expr_set,
-        id_array,
-        affected_id,
-        max_series_number: 0,
-        curr_index: 0,
-    })
-    .data()
+    println!("************ \n expr are {:?} \n ************", expr);
+    println!(
+        "************ \n id_array are {:?} \n ************",
+        id_array
+    );
+    let rewrited = expr
+        .rewrite(&mut CommonSubexprRewriter {
+            expr_set,
+            id_array,
+            affected_id,
+            max_series_number: 0,
+            curr_index: 0,
+        })
+        .data();
+    println!(
+        "************ \n rewrited values are {:?} \n ************",
+        rewrited
+    );
+    rewrited
 }
 
 #[cfg(test)]
