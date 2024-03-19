@@ -80,7 +80,7 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound,
 };
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::to_proto::serialize_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -788,7 +788,7 @@ fn roundtrip_scalar_udf_extension_codec() {
     ctx.register_udf(udf.clone());
     let extension_codec = ScalarUDFExtensionCodec {};
     let proto: protobuf::PhysicalExprNode =
-        match serialize_expr(Arc::new(test_expr), &extension_codec) {
+        match serialize_physical_expr(Arc::new(test_expr), &extension_codec) {
             Ok(proto) => proto,
             Err(e) => panic!("failed to serialize expr: {e:?}"),
         };

@@ -171,18 +171,19 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 .collect::<Result<Vec<_>>>()?,
         };
 
-        let fun_implementation = match self.fun {
-            ScalarFunctionDefinition::BuiltIn(ref fun) => create_physical_fun(fun)?,
-            ScalarFunctionDefinition::UDF(ref fun) => fun.fun(),
-            ScalarFunctionDefinition::Name(_) => {
-                return internal_err!(
-                    "Name function must be resolved to one of the other variants prior to physical planning"
-                );
-            }
-        };
         // evaluate the function
-        let fun = fun_implementation.as_ref();
-        (fun)(&inputs)
+        match self.fun {
+            ScalarFunctionDefinition::BuiltIn(ref fun) => {
+                let fun = create_physical_fun(fun)?;
+                (fun)(&inputs)
+            }
+            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
+            ScalarFunctionDefinition::Name(_) => {
+                internal_err!(
+                    "Name function must be resolved to one of the other variants prior to physical planning"
+                )
+            }
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {

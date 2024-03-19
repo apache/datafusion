@@ -82,7 +82,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
             .iter()
-            .map(|e| serialize_expr(e.clone(), &codec))
+            .map(|e| serialize_physical_expr(e.clone(), &codec))
             .collect::<Result<Vec<_>>>()?;
 
         let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
@@ -247,13 +247,13 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
         let codec = DefaultPhysicalExtensionCodec {};
         let args = args
             .into_iter()
-            .map(|e| serialize_expr(e, &codec))
+            .map(|e| serialize_physical_expr(e, &codec))
             .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
         let partition_by = window_expr
             .partition_by()
             .iter()
-            .map(|p| serialize_expr(p.clone(), &codec))
+            .map(|p| serialize_physical_expr(p.clone(), &codec))
             .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
 
         let order_by = window_expr
@@ -402,8 +402,14 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: Some(Box::new(serialize_expr(expr.left().clone(), codec)?)),
-            r: Some(Box::new(serialize_expr(expr.right().clone(), codec)?)),
+            l: Some(Box::new(serialize_physical_expr(
+                expr.left().clone(),
+                codec,
+            )?)),
+            r: Some(Box::new(serialize_physical_expr(
+                expr.right().clone(),
+                codec,
+            )?)),
             op: format!("{:?}", expr.op()),
         });
 
@@ -421,7 +427,8 @@ pub fn serialize_physical_expr(
                             expr: expr
                                 .expr()
                                 .map(|exp| {
-                                    serialize_expr(exp.clone(), codec).map(Box::new)
+                                    serialize_physical_expr(exp.clone(), codec)
+                                        .map(Box::new)
                                 })
                                 .transpose()?,
                             when_then_expr: expr
@@ -436,7 +443,10 @@ pub fn serialize_physical_expr(
                                 >>()?,
                             else_expr: expr
                                 .else_expr()
-                                .map(|a| serialize_expr(a.clone(), codec).map(Box::new))
+                                .map(|a| {
+                                    serialize_physical_expr(a.clone(), codec)
+                                        .map(Box::new)
+                                })
                                 .transpose()?,
                         },
                     ),
@@ -447,7 +457,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
                 protobuf::PhysicalNot {
-                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.arg().to_owned(),
+                        codec,
+                    )?)),
                 },
             ))),
         })
@@ -455,7 +468,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
                 Box::new(protobuf::PhysicalIsNull {
-                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.arg().to_owned(),
+                        codec,
+                    )?)),
                 }),
             )),
         })
@@ -463,7 +479,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
                 Box::new(protobuf::PhysicalIsNotNull {
-                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.arg().to_owned(),
+                        codec,
+                    )?)),
                 }),
             )),
         })
@@ -473,14 +492,14 @@ pub fn serialize_physical_expr(
                 protobuf::physical_expr_node::ExprType::InList(
                     Box::new(
                         protobuf::PhysicalInListNode {
-                            expr: Some(Box::new(serialize_expr(
+                            expr: Some(Box::new(serialize_physical_expr(
                                 expr.expr().to_owned(),
                                 codec,
                             )?)),
                             list: expr
                                 .list()
                                 .iter()
-                                .map(|a| serialize_expr(a.clone(), codec))
+                                .map(|a| serialize_physical_expr(a.clone(), codec))
                                 .collect::<Result<
                                     Vec<protobuf::PhysicalExprNode>,
                                     DataFusionError,
@@ -495,7 +514,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
                 protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(serialize_expr(expr.arg().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.arg().to_owned(),
+                        codec,
+                    )?)),
                 },
             ))),
         })
@@ -509,7 +531,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(serialize_expr(cast.expr().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        cast.expr().to_owned(),
+                        codec,
+                    )?)),
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
@@ -518,7 +543,10 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
                 protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(serialize_expr(cast.expr().to_owned(), codec)?)),
+                    expr: Some(Box::new(serialize_physical_expr(
+                        cast.expr().to_owned(),
+                        codec,
+                    )?)),
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
@@ -527,7 +555,7 @@ pub fn serialize_physical_expr(
         let args: Vec<protobuf::PhysicalExprNode> = expr
             .args()
             .iter()
-            .map(|e| serialize_expr(e.to_owned(), codec))
+            .map(|e| serialize_physical_expr(e.to_owned(), codec))
             .collect::<Result<Vec<_>, _>>()?;
         if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
             let fun: protobuf::ScalarFunction = (&fun).try_into()?;
@@ -573,8 +601,11 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalLikeExprNode {
                     negated: expr.negated(),
                     case_insensitive: expr.case_insensitive(),
-                    expr: Some(Box::new(serialize_expr(expr.expr().to_owned(), codec)?)),
-                    pattern: Some(Box::new(serialize_expr(
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.expr().to_owned(),
+                        codec,
+                    )?)),
+                    pattern: Some(Box::new(serialize_physical_expr(
                         expr.pattern().to_owned(),
                         codec,
                     )?)),
@@ -592,8 +623,8 @@ fn try_parse_when_then_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(serialize_expr(when_expr.clone(), codec)?),
-        then_expr: Some(serialize_expr(then_expr.clone(), codec)?),
+        when_expr: Some(serialize_physical_expr(when_expr.clone(), codec)?),
+        then_expr: Some(serialize_physical_expr(then_expr.clone(), codec)?),
     })
 }
 
@@ -726,7 +757,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             let expr_node_vec = order
                 .iter()
                 .map(|sort_expr| {
-                    let expr = serialize_expr(sort_expr.expr.clone(), &codec)?;
+                    let expr = serialize_physical_expr(sort_expr.expr.clone(), &codec)?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
                         asc: !sort_expr.options.descending,
@@ -793,7 +824,7 @@ impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
         match expr {
             None => Ok(protobuf::MaybeFilter { expr: None }),
             Some(expr) => Ok(protobuf::MaybeFilter {
-                expr: Some(serialize_expr(expr, &codec)?),
+                expr: Some(serialize_physical_expr(expr, &codec)?),
             }),
         }
     }
@@ -821,7 +852,7 @@ impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
     fn try_from(sort_expr: PhysicalSortExpr) -> std::result::Result<Self, Self::Error> {
         let codec = DefaultPhysicalExtensionCodec {};
         Ok(PhysicalSortExprNode {
-            expr: Some(Box::new(serialize_expr(sort_expr.expr, &codec)?)),
+            expr: Some(Box::new(serialize_physical_expr(sort_expr.expr, &codec)?)),
             asc: !sort_expr.options.descending,
             nulls_first: sort_expr.options.nulls_first,
         })
