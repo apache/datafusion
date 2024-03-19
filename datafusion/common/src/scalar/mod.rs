@@ -511,8 +511,8 @@ impl PartialOrd for ScalarValue {
             (DurationMicrosecond(_), _) => None,
             (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.partial_cmp(v2),
             (DurationNanosecond(_), _) => None,
-            (Union(v1, t1, _m1), Union(v2, t2, _m2)) => {
-                if t1.eq(t2) {
+            (Union(v1, t1, m1), Union(v2, t2, m2)) => {
+                if t1.eq(t2) && m1.eq(m2) {
                     v1.partial_cmp(v2)
                 } else {
                     None
