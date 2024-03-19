@@ -2909,8 +2909,8 @@ pub enum ScalarFunction {
     /// 92 was ArrayPosition
     /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
-    ArrayRemove = 95,
-    ArrayReplace = 96,
+    /// 95 was ArrayRemove
+    /// 96 was ArrayReplace
     /// 97 was ArrayToString
     /// 98 was Cardinality
     /// 99 was ArrayElement
@@ -2919,10 +2919,10 @@ pub enum ScalarFunction {
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
-    ArrayRemoveN = 107,
-    ArrayReplaceN = 108,
-    ArrayRemoveAll = 109,
-    ArrayReplaceAll = 110,
+    /// 107 was ArrayRemoveN
+    /// 108 was ArrayReplaceN
+    /// 109 was ArrayRemoveAll
+    /// 110 was ArrayReplaceAll
     Nanvl = 111,
     /// 112 was Flatten
     /// 113 was IsNan
@@ -3019,13 +3019,7 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayRemove => "ArrayRemove",
-            ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
-            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
-            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
-            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::OverLay => "OverLay",
@@ -3097,13 +3091,7 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayRemove" => Some(Self::ArrayRemove),
-            "ArrayReplace" => Some(Self::ArrayReplace),
             "Cot" => Some(Self::Cot),
-            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
-            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
-            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
-            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
             "OverLay" => Some(Self::OverLay),

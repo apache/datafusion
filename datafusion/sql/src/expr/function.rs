@@ -34,8 +34,6 @@ use sqlparser::ast::{
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 
-use super::arrow_cast::ARROW_CAST_NAME;
-
 /// Suggest a valid function based on an invalid input function name
 pub fn suggest_valid_function(
     input_function_name: &str,
@@ -249,12 +247,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     null_treatment,
                 )));
             };
-
-            // Special case arrow_cast (as its type is dependent on its argument value)
-            if name == ARROW_CAST_NAME {
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
-                return super::arrow_cast::create_arrow_cast(args, schema);
-            }
         }
 
         // Could not find the relevant function, so return an error

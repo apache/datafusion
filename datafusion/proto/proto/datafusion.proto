@@ -636,8 +636,8 @@ enum ScalarFunction {
   // 92 was ArrayPosition
   // 93 was ArrayPositions
   // 94 was ArrayPrepend
-  ArrayRemove = 95;
-  ArrayReplace = 96;
+  // 95 was ArrayRemove
+  // 96 was ArrayReplace
   // 97 was ArrayToString
   // 98 was Cardinality
   // 99 was ArrayElement
@@ -646,10 +646,10 @@ enum ScalarFunction {
   // 104 was ArrayHas
   // 105 was ArrayHasAny
   // 106 was ArrayHasAll
-  ArrayRemoveN = 107;
-  ArrayReplaceN = 108;
-  ArrayRemoveAll = 109;
-  ArrayReplaceAll = 110;
+  // 107 was ArrayRemoveN
+  // 108 was ArrayReplaceN
+  // 109 was ArrayRemoveAll
+  // 110 was ArrayReplaceAll
   Nanvl = 111;
   // 112 was Flatten
   // 113 was IsNan

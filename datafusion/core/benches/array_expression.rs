@@ -22,48 +22,32 @@ extern crate datafusion;
 
 mod data_utils;
 use crate::criterion::Criterion;
-use arrow_array::cast::AsArray;
-use arrow_array::types::Int64Type;
-use arrow_array::{ArrayRef, Int64Array, ListArray};
-use datafusion_physical_expr::array_expressions;
-use std::sync::Arc;
+use datafusion::functions_array::expr_fn::{array_replace_all, make_array};
+use datafusion_expr::lit;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Construct large arrays for benchmarking
 
     let array_len = 100000000;
 
-    let array = (0..array_len).map(|_| Some(2_i64)).collect::<Vec<_>>();
-    let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-        Some(array.clone()),
-        Some(array.clone()),
-        Some(array),
-    ]);
-    let from_array = Int64Array::from_value(2, 3);
-    let to_array = Int64Array::from_value(-2, 3);
+    let array = (0..array_len).map(|_| lit(2_i64)).collect::<Vec<_>>();
+    let list_array = make_array(vec![make_array(array); 3]);
+    let from_array = make_array(vec![lit(2_i64); 3]);
+    let to_array = make_array(vec![lit(-2_i64); 3]);
 
-    let args = vec![
-        Arc::new(list_array) as ArrayRef,
-        Arc::new(from_array) as ArrayRef,
-        Arc::new(to_array) as ArrayRef,
-    ];
-
-    let array = (0..array_len).map(|_| Some(-2_i64)).collect::<Vec<_>>();
-    let expected_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-        Some(array.clone()),
-        Some(array.clone()),
-        Some(array),
-    ]);
+    let expected_array = list_array.clone();
 
     // Benchmark array functions
 
     c.bench_function("array_replace", |b| {
         b.iter(|| {
             assert_eq!(
-                array_expressions::array_replace_all(args.as_slice())
-                    .unwrap()
-                    .as_list::<i32>(),
-                criterion::black_box(&expected_array)
+                array_replace_all(
+                    list_array.clone(),
+                    from_array.clone(),
+                    to_array.clone()
+                ),
+                *criterion::black_box(&expected_array)
             )
         })
     });

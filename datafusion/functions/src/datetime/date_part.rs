@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{Date32, Date64, Float64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
-use arrow_array::{Array, ArrayRef, Float64Array};
 
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_int32_array, as_timestamp_microsecond_array,

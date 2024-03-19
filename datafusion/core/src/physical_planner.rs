@@ -595,7 +595,7 @@ impl DefaultPhysicalPlanner {
                         table_partition_cols,
                         overwrite: false,
                     };
-                    let mut table_options = session_state.default_table_options().clone();
+                    let mut table_options = session_state.default_table_options();
                     let sink_format: Arc<dyn FileFormat> = match format_options {
                         FormatOptions::CSV(options) => {
                             table_options.csv = options.clone();

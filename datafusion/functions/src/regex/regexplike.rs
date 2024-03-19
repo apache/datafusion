@@ -188,7 +188,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::BooleanBuilder;
-    use arrow_array::StringArray;
+    use arrow::array::StringArray;
 
     use crate::regex::regexplike::regexp_like;
 
