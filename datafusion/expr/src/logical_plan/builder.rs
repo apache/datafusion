@@ -1144,61 +1144,71 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
-    fn nullify_fields(
-        fields: &[(Option<OwnedTableReference>, Arc<Field>)],
+    fn nullify_fields<'a>(
+        fields: impl Iterator<Item = (Option<&'a OwnedTableReference>, &'a Arc<Field>)>,
     ) -> Vec<(Option<OwnedTableReference>, Arc<Field>)> {
         fields
-            .iter()
             .map(|(q, f)| {
                 // TODO: find a good way to do that
                 let field = f.as_ref().clone().with_nullable(true);
-                (q.clone().map(|r| r.to_owned()), Arc::new(field))
+                (q.map(|r| r.to_owned_reference()), Arc::new(field))
             })
             .collect()
     }
 
     let right_fields = right.iter();
     let left_fields = left.iter();
-    let right_fields = right_fields
-        .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.to_owned()))
-        .collect::<Vec<_>>();
-    let left_fields = left_fields
-        .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.to_owned()))
-        .collect::<Vec<_>>();
 
-    let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = match join_type {
+    let qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = match join_type
+    {
         JoinType::Inner => {
             // left then right
+            let left_fields = left_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect::<Vec<_>>();
+            let right_fields = right_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect::<Vec<_>>();
             left_fields.into_iter().chain(right_fields).collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
+            let left_fields = left_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect::<Vec<_>>();
             left_fields
                 .into_iter()
-                .chain(nullify_fields(&right_fields))
+                .chain(nullify_fields(right_fields))
                 .collect()
         }
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
-            nullify_fields(&left_fields)
+            let right_fields = right_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect::<Vec<_>>();
+            nullify_fields(left_fields)
                 .into_iter()
                 .chain(right_fields)
                 .collect()
         }
         JoinType::Full => {
             // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(&left_fields)
+            nullify_fields(left_fields)
                 .into_iter()
-                .chain(nullify_fields(&right_fields))
+                .chain(nullify_fields(right_fields))
                 .collect()
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
             left_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
             right_fields
+                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()))
+                .collect()
         }
     };
     let func_dependencies = left.functional_dependencies().join(
@@ -1208,11 +1218,7 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
-        fields.into_iter().map(|(q, f)| (q, f.clone())).unzip();
-    let schema = Schema::new_with_metadata(fields, metadata);
-    let dfschema =
-        DFSchema::from_field_specific_qualified_schema(qualifiers, &Arc::new(schema))?;
+    let dfschema = DFSchema::from_qualified_fields(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
