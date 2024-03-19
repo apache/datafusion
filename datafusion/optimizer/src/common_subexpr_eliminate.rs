@@ -42,6 +42,19 @@ use datafusion_expr::{col, Expr, ExprSchemable};
 /// - DataType of this expression.
 type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 
+/// An ordered map of Identifiers encountered during visitation.
+///
+/// Is created in the ExprIdentifierVisitor, which identifies the common expressions.
+/// Is consumed in the CommonSubexprRewriter, which performs mutations.
+///
+/// Vec idx is ordered by expr nodes visited on f_down.
+/// - series_number.
+///     - Incr in fn_up, start from 1.
+///     - the higher idx have the lower series_number.
+/// - Identifier.
+///     - is empty ("") if expr should not be considered for common elimation.
+type IdArray = Vec<(usize, Identifier)>;
+
 /// Identifier type. Current implementation use describe of an expression (type String) as
 /// Identifier.
 ///
@@ -532,18 +545,18 @@ impl ExprMask {
 /// Go through an expression tree and generate identifier.
 ///
 /// An identifier contains information of the expression itself and its sub-expression.
-/// This visitor implementation use a stack `visit_stack` to track traversal, which
+/// This visitor implementation use a stack `f_down()` to track traversal, which
 /// lets us know when a sub-tree's visiting is finished. When `pre_visit` is called
 /// (traversing to a new node), an `EnterMark` and an `ExprItem` will be pushed into stack.
-/// And try to pop out a `EnterMark` on leaving a node (`post_visit()`). All `ExprItem`
+/// And try to pop out a `EnterMark` on leaving a node (`f_up()`). All `ExprItem`
 /// before the first `EnterMark` is considered to be sub-tree of the leaving node.
 ///
 /// This visitor also records identifier in `id_array`. Makes the following traverse
 /// pass can get the identifier of a node without recalculate it. We assign each node
 /// in the expr tree a series number, start from 1, maintained by `series_number`.
-/// Series number represents the order we left (`post_visit`) a node. Has the property
+/// Series number represents the order we left (`f_up()`) a node. Has the property
 /// that child node's series number always smaller than parent's. While `id_array` is
-/// organized in the order we enter (`pre_visit`) a node. `node_count` helps us to
+/// organized in the order we enter (`f_down()`) a node. `node_count` helps us to
 /// get the index of `id_array` for each node.
 ///
 /// `Expr` without sub-expr (column, literal etc.) will not have identifier
@@ -552,15 +565,15 @@ struct ExprIdentifierVisitor<'a> {
     // param
     expr_set: &'a mut ExprSet,
     /// series number (usize) and identifier.
-    id_array: &'a mut Vec<(usize, Identifier)>,
+    id_array: &'a mut IdArray,
     /// input schema for the node that we're optimizing, so we can determine the correct datatype
     /// for each subexpression
     input_schema: DFSchemaRef,
     // inner states
     visit_stack: Vec<VisitRecord>,
-    /// increased in pre_visit, start from 0.
+    /// increased in fn_down, start from 0.
     node_count: usize,
-    /// increased in post_visit, start from 1.
+    /// increased in fn_up, start from 1.
     series_number: usize,
     /// which expression should be skipped?
     expr_mask: ExprMask,
@@ -606,7 +619,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
-        // put placeholder
+        // put placeholder, sets the proper array length
         self.id_array.push((0, "".to_string()));
 
         // related to https://github.com/apache/arrow-datafusion/issues/8814
@@ -671,7 +684,7 @@ fn expr_to_identifier(
 /// evaluate result of replaced expression.
 struct CommonSubexprRewriter<'a> {
     expr_set: &'a ExprSet,
-    id_array: &'a [(usize, Identifier)],
+    id_array: &'a IdArray,
     /// Which identifier is replaced.
     affected_id: &'a mut BTreeSet<Identifier>,
 
@@ -765,7 +778,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
 fn replace_common_expr(
     expr: Expr,
-    id_array: &[(usize, Identifier)],
+    id_array: &IdArray,
     expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
