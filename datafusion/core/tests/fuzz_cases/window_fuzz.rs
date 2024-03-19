@@ -757,7 +757,7 @@ async fn run_window_test(
 // The planner has fully updated schema before calling the `create_window_expr`
 // Replicate the same for this test
 fn schema_add_window_fields(
-    args: &Vec<Arc<dyn PhysicalExpr>>,
+    args: &[Arc<dyn PhysicalExpr>],
     schema: &Arc<Schema>,
     window_fn: &WindowFunctionDefinition,
     fn_name: &str,
