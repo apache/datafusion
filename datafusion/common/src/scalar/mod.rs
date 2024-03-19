@@ -1746,7 +1746,7 @@ impl ScalarValue {
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
-    /// `data_type`, to a [`ListArray`].
+    /// `data_type`, to a single element [`ListArray`].
     ///
     /// Example
     /// ```
