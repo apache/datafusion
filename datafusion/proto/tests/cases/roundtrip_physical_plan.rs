@@ -760,13 +760,14 @@ fn roundtrip_scalar_udf_extension_codec() {
 
         fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
             let binding = node.inner();
-            let udf = binding.as_any().downcast_ref::<MyRegexUdf>().unwrap();
-            let proto = MyRegexUdfNode {
-                pattern: udf.pattern.clone(),
-            };
-            proto.encode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
-            })?;
+            if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+                let proto = MyRegexUdfNode {
+                    pattern: udf.pattern.clone(),
+                };
+                proto.encode(buf).map_err(|e| {
+                    DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+                })?;
+            }
             Ok(())
         }
     }
