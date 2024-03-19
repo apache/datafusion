@@ -961,6 +961,20 @@ message StructValue {
   repeated Field fields = 3;
 }
 
+message UnionField {
+  int32 field_id = 1;
+  Field field = 2;
+}
+
+message UnionValue {
+  // Note that a null union value must have one or more fields, so we
+  // encode a null UnionValue as one with value_id == 128
+  int32 value_id = 1;
+  ScalarValue value = 2;
+  repeated UnionField fields = 3;
+  UnionMode mode = 4;
+}
+
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1015,6 +1029,7 @@ message ScalarValue{
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
+    UnionValue union_value = 42;
   }
 }
 
