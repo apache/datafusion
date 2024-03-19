@@ -204,7 +204,10 @@ impl DataFrame {
         let expr: Vec<Expr> = fields
             .iter()
             .map(|(qualifier, field)| {
-                Expr::Column(Column::new(qualifier.clone(), field.name()))
+                Expr::Column(Column::new(
+                    qualifier.map(|q| q.to_owned_reference()),
+                    field.name(),
+                ))
             })
             .collect();
         self.select(expr)
@@ -1318,9 +1321,7 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename.as_ref())
-                    && field.as_ref() == field_rename
-                {
+                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
                     col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
                 } else {
                     col(Column::new(qualifier.cloned(), field.name()))

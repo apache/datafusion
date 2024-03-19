@@ -65,7 +65,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                 Ok(Expr::OuterReferenceColumn(
                                     field.data_type().clone(),
-                                    Column::new(qualifier, field.name()),
+                                    Column::new(
+                                        qualifier.map(|q| q.to_owned_reference()),
+                                        field.name(),
+                                    ),
                                 ))
                             }
                             Err(_) => Ok(Expr::Column(Column {
@@ -283,7 +286,11 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
 fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
-) -> Option<(&'schema Field, Option<OwnedTableReference>, &'ids [String])> {
+) -> Option<(
+    &'schema Field,
+    Option<&'schema OwnedTableReference>,
+    &'ids [String],
+)> {
     generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
         let qualifier_and_field = schema
             .qualified_field_with_name(qualifier.as_ref(), column)

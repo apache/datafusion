@@ -1571,8 +1571,8 @@ pub fn unnest_with_options(
     let fields = input_schema
         .iter()
         .map(|(q, f)| {
-            if f.as_ref() == unnest_field && q == unnest_qualifier.as_ref() {
-                (unnest_qualifier.clone(), unnested_field.clone())
+            if f.as_ref() == unnest_field && q == unnest_qualifier {
+                (unnest_qualifier.cloned(), unnested_field.clone())
             } else {
                 (q.cloned(), f.clone())
             }
@@ -1584,7 +1584,10 @@ pub fn unnest_with_options(
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    let column = Column::new(unnest_qualifier, unnested_field.name());
+    let column = Column::new(
+        unnest_qualifier.map(|q| q.to_owned_reference()),
+        unnested_field.name(),
+    );
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),

@@ -344,7 +344,10 @@ fn get_excluded_columns(
         let col_name = ident.value.as_str();
         let (qualifier, field) =
             schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
-        result.push(Column::new(qualifier, field.name()));
+        result.push(Column::new(
+            qualifier.map(|q| q.to_owned_reference()),
+            field.name(),
+        ));
     }
     Ok(result)
 }
@@ -814,9 +817,10 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         _ => match e.display_name() {
             Ok(name) => {
                 match input_schema.qualified_field_with_unqualified_name(&name) {
-                    Ok((qualifier, field)) => {
-                        Expr::Column(Column::new(qualifier, field.name()))
-                    }
+                    Ok((qualifier, field)) => Expr::Column(Column::new(
+                        qualifier.map(|q| q.to_owned_reference()),
+                        field.name(),
+                    )),
                     // expression not provided as input, do not convert to a column reference
                     Err(_) => e,
                 }

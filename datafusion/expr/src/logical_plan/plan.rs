@@ -874,10 +874,13 @@ impl LogicalPlan {
                     .schema()
                     .iter()
                     .map(|(qualifier, field)| {
-                        if qualifier.eq(&nested_qualifier.as_ref())
+                        if qualifier.eq(&nested_qualifier)
                             && field.as_ref() == nested_field
                         {
-                            (unnested_qualifier.clone(), Arc::new(unnested_field.clone()))
+                            (
+                                unnested_qualifier.cloned(),
+                                Arc::new(unnested_field.clone()),
+                            )
                         } else {
                             (qualifier.cloned(), field.clone())
                         }

@@ -40,7 +40,7 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
                     let (qualifier, field) =
                         plan.schema().qualified_field_from_column(&col)?;
                     Ok(Transformed::yes(Expr::Column(Column::new(
-                        qualifier,
+                        qualifier.map(|q| q.to_owned_reference()),
                         field.name(),
                     ))))
                 }

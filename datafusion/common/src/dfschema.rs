@@ -383,14 +383,14 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<(Option<OwnedTableReference>, &Field)> {
+    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
         if let Some(qualifier) = qualifier {
             let idx = self
                 .index_of_column_by_name(Some(qualifier), name)?
                 .ok_or_else(|| {
                     field_not_found(Some(qualifier.to_string()), name, self)
                 })?;
-            Ok((self.field_qualifiers[idx].clone(), self.field(idx)))
+            Ok((self.field_qualifiers[idx].as_ref(), self.field(idx)))
         } else {
             self.qualified_field_with_unqualified_name(name)
         }
@@ -428,7 +428,7 @@ impl DFSchema {
     pub fn qualified_fields_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Vec<(Option<&TableReference>, &Field)> {
+    ) -> Vec<(Option<&OwnedTableReference>, &Field)> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
             .map(|(qualifier, field)| (qualifier, field.as_ref()))
@@ -456,11 +456,11 @@ impl DFSchema {
     pub fn qualified_field_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Result<(Option<OwnedTableReference>, &Field)> {
+    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok((matches[0].0.map(|r| r.to_owned_reference()), &matches[0].1)),
+            1 => Ok((matches[0].0, &matches[0].1)),
             _ => {
                 // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
                 // Because name may generate from Alias/... . It means that it don't own qualifier.
@@ -474,12 +474,7 @@ impl DFSchema {
                     .filter(|(q, _)| q.is_none())
                     .collect::<Vec<_>>();
                 if fields_without_qualifier.len() == 1 {
-                    Ok((
-                        fields_without_qualifier[0]
-                            .0
-                            .map(|r| r.to_owned_reference()),
-                        fields_without_qualifier[0].1,
-                    ))
+                    Ok((fields_without_qualifier[0].0, fields_without_qualifier[0].1))
                 } else {
                     _schema_err!(SchemaError::AmbiguousReference {
                         field: Column {
@@ -549,18 +544,8 @@ impl DFSchema {
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
-    ) -> Result<(Option<OwnedTableReference>, &Field)> {
-        match &column.relation {
-            Some(r) => {
-                let field = self.field_with_qualified_name(r, &column.name)?;
-                Ok((Some(r.to_owned_reference()), field))
-            }
-            None => {
-                let (qualifier, field) =
-                    self.qualified_field_with_unqualified_name(&column.name)?;
-                Ok((qualifier, field))
-            }
-        }
+    ) -> Result<(Option<&OwnedTableReference>, &Field)> {
+        self.qualified_field_with_name(column.relation.as_ref(), &column.name)
     }
 
     /// Find if the field exists with the given name
