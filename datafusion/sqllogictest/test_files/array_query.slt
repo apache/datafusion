@@ -112,7 +112,7 @@ SELECT count(distinct column2) FROM data GROUP BY column3;
 query II
 SELECT count(distinct column1), count(distinct column2) FROM data GROUP BY column3;
 ----
-1 1
+2 2
 
 
 ###########
