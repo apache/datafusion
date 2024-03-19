@@ -294,7 +294,7 @@ impl Optimizer {
     /// invoking observer function after each call
     pub fn optimize<F>(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &dyn OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
