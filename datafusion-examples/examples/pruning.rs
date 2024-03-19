@@ -163,6 +163,11 @@ impl PruningStatistics for MyCatalog {
         None
     }
 
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        // In this example, we know nothing about the number of rows in each file
+        None
+    }
+
     fn contained(
         &self,
         _column: &Column,

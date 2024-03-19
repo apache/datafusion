@@ -102,14 +102,6 @@ pub enum BuiltinScalarFunction {
     /// cot
     Cot,
 
-    // array functions
-    /// array_replace
-    ArrayReplace,
-    /// array_replace_n
-    ArrayReplaceN,
-    /// array_replace_all
-    ArrayReplaceAll,
-
     // string functions
     /// ascii
     Ascii,
@@ -262,9 +254,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -322,9 +311,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -477,11 +463,6 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                Signature::any(3, self.volatility())
-            }
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -779,15 +760,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-
-            // hashing functions
-            BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-            BuiltinScalarFunction::ArrayReplaceN => {
-                &["array_replace_n", "list_replace_n"]
-            }
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                &["array_replace_all", "list_replace_all"]
-            }
             BuiltinScalarFunction::OverLay => &["overlay"],
         }
     }

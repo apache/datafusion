@@ -703,27 +703,6 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
     }
 }
 
-/// Returns the datatype of the window function
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `WindowFunction::return_type` instead"
-)]
-pub fn return_type(
-    fun: &WindowFunctionDefinition,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    fun.return_type(input_expr_types)
-}
-
-/// the signatures supported by the function `fun`.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `WindowFunction::signature` instead"
-)]
-pub fn signature(fun: &WindowFunctionDefinition) -> Signature {
-    fun.signature()
-}
-
 // Exists expression.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Exists {
@@ -885,13 +864,6 @@ impl Expr {
     /// will not include any CAST expressions.
     pub fn display_name(&self) -> Result<String> {
         create_name(self)
-    }
-
-    /// Returns the name of this expression as it should appear in a schema. This name
-    /// will not include any CAST expressions.
-    #[deprecated(since = "14.0.0", note = "please use `display_name` instead")]
-    pub fn name(&self) -> Result<String> {
-        self.display_name()
     }
 
     /// Returns a full and complete string representation of this expression.

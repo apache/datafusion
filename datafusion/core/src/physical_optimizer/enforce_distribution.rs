@@ -392,7 +392,7 @@ fn adjust_input_keys_ordering(
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
-        // Construct a mapping from new name to the the orginal Column
+        // Construct a mapping from new name to the orginal Column
         let new_required = map_columns_before_projection(&requirements.data, expr);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;

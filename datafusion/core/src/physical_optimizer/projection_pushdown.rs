@@ -322,7 +322,7 @@ fn try_swapping_with_output_req(
     projection: &ProjectionExec,
     output_req: &OutputRequirementExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -372,7 +372,7 @@ fn try_swapping_with_output_req(
 fn try_swapping_with_coalesce_partitions(
     projection: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -387,7 +387,7 @@ fn try_swapping_with_filter(
     projection: &ProjectionExec,
     filter: &FilterExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -412,7 +412,7 @@ fn try_swapping_with_repartition(
     projection: &ProjectionExec,
     repartition: &RepartitionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -454,7 +454,7 @@ fn try_swapping_with_sort(
     projection: &ProjectionExec,
     sort: &SortExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -1082,7 +1082,7 @@ fn join_table_borders(
     (far_right_left_col_ind, far_left_right_col_ind)
 }
 
-/// Tries to update the equi-join `Column`'s of a join as if the the input of
+/// Tries to update the equi-join `Column`'s of a join as if the input of
 /// the join was replaced by a projection.
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
@@ -1152,7 +1152,7 @@ fn new_columns_for_join_on(
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
 }
 
-/// Tries to update the column indices of a [`JoinFilter`] as if the the input of
+/// Tries to update the column indices of a [`JoinFilter`] as if the input of
 /// the join was replaced by a projection.
 fn update_join_filter(
     projection_left_exprs: &[(Column, String)],

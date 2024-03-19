@@ -2910,7 +2910,7 @@ pub enum ScalarFunction {
     /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
     /// 95 was ArrayRemove
-    ArrayReplace = 96,
+    /// 96 was ArrayReplace
     /// 97 was ArrayToString
     /// 98 was Cardinality
     /// 99 was ArrayElement
@@ -2920,9 +2920,9 @@ pub enum ScalarFunction {
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
     /// 107 was ArrayRemoveN
-    ArrayReplaceN = 108,
+    /// 108 was ArrayReplaceN
     /// 109 was ArrayRemoveAll
-    ArrayReplaceAll = 110,
+    /// 110 was ArrayReplaceAll
     Nanvl = 111,
     /// 112 was Flatten
     /// 113 was IsNan
@@ -3019,10 +3019,7 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
-            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::OverLay => "OverLay",
@@ -3094,10 +3091,7 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayReplace" => Some(Self::ArrayReplace),
             "Cot" => Some(Self::Cot),
-            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
-            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
             "OverLay" => Some(Self::OverLay),
