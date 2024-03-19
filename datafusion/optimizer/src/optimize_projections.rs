@@ -31,7 +31,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
+    get_required_group_by_exprs_indices, Column, DFField, DFSchema, DFSchemaRef,
+    JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
@@ -164,24 +165,28 @@ fn optimize_projections(
         }
         LogicalPlan::Extension(extension) => {
             let children = extension.node.inputs();
-            if children.len() == 1 {
-                // has single child
-                let exprs = plan.expressions();
-                let child = children[0];
-                // let node_schema = extension.node.schema();
-                // let child_schema = child.schema();
-                if child.schema().fields() == extension.node.schema().fields() {
-                    // Preserves the schema
-                    let child_req =
-                        get_all_required_indices(indices, child, exprs.iter())
-                            .map(|idxs| (idxs, false))?;
-                    vec![child_req]
-                } else {
-                    // TODO: Add support for `LogicalPlan::Extension` where its input schema is modified.
-                    return Ok(None);
-                }
-            } else {
+            if children.len() != 1 {
                 // TODO: Add support for `LogicalPlan::Extension` with multi children.
+                return Ok(None);
+            }
+            // has single child
+            let exprs = plan.expressions();
+            let child = children[0];
+            let node_schema = extension.node.schema();
+            let child_schema = child.schema();
+            if let Some(mapping) =
+                get_field_mappings(node_schema.fields(), child_schema.fields())
+            {
+                let parent_required_indices_mapped =
+                    indices.iter().map(|idx| mapping[idx]).collect::<Vec<_>>();
+                let child_req_indices =
+                    indices_referred_by_exprs(child_schema, exprs.iter())?;
+                vec![(
+                    merge_slices(&parent_required_indices_mapped, &child_req_indices),
+                    false,
+                )]
+            } else {
+                // Requirements from parent cannot be routed down to user defined logical plan safely
                 return Ok(None);
             }
         }
@@ -916,6 +921,41 @@ fn rewrite_projection_given_requirements(
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
     Ok(&projection_schema(input, proj_exprs)? == input.schema()
         && proj_exprs.iter().all(is_expr_trivial))
+}
+
+/// Constructs a mapping between indices of the source fields and target fields based on their equality.
+///
+/// # Arguments
+///
+/// * `source_fields` - A slice of `DFField` structs representing the source fields.
+/// * `target_fields` - A slice of `DFField` structs representing the target fields.
+///
+/// # Returns
+///
+/// Returns `Some(mapping)` where `mapping` is a `HashMap<usize, usize>` representing the
+/// mapping between the indices of source and target fields.
+/// Returns `None` if there are no matches or if there is an ambiguity in the matches for any of the source field.
+fn get_field_mappings(
+    source_fields: &[DFField],
+    target_fields: &[DFField],
+) -> Option<HashMap<usize, usize>> {
+    let mut mapping = HashMap::new();
+    for (source_idx, source_field) in source_fields.iter().enumerate() {
+        let matches = target_fields
+            .iter()
+            .enumerate()
+            .filter(|(_idx, target_field)| source_field.eq(target_field))
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            // There is single match, no ambiguity
+            let (target_idx, _) = matches[0];
+            mapping.insert(source_idx, target_idx);
+        } else {
+            // Either no match, or ambiguity
+            return None;
+        }
+    }
+    Some(mapping)
 }
 
 #[cfg(test)]
