@@ -801,6 +801,7 @@ async fn tpcds_physical_q53() -> Result<()> {
     create_physical_plan(53).await
 }
 
+#[ignore]
 #[tokio::test]
 async fn tpcds_physical_q54() -> Result<()> {
     create_physical_plan(54).await

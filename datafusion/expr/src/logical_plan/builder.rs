@@ -352,10 +352,12 @@ impl LogicalPlanBuilder {
 
     /// Select the given column indices
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
-        let fields = self.plan.schema().columns();
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| Expr::Column(fields[x].clone()))
+            .map(|x| {
+                let (qualifier, field) = self.plan.schema().qualified_field(x);
+                Expr::Column(Column::new(qualifier.cloned(), field.name()))
+            })
             .collect();
         self.project(exprs)
     }
@@ -541,11 +543,7 @@ impl LogicalPlanBuilder {
         }
 
         // remove pushed down sort columns
-        let new_expr = schema
-            .columns()
-            .iter()
-            .map(|f| Expr::Column(f.clone()))
-            .collect();
+        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
         let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
@@ -1317,44 +1315,35 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
     }
 
-    // QUESTION: Should columns be sorted before comparison? I.e. what happens if
-    // left is cols A,B and right is cols B,A?  And what about schema metadata?
     // create union schema
-    let (union_table_refs, union_fields): (
-        Vec<Option<OwnedTableReference>>,
-        Vec<Arc<Field>>,
-    ) = zip(left_plan.schema().iter(), right_plan.schema().iter())
-        .map(
-            |((left_qualifier, left_field), (_right_qualifier, right_field))| {
-                let nullable = left_field.is_nullable() || right_field.is_nullable();
-                let data_type =
-                    comparison_coercion(left_field.data_type(), right_field.data_type())
-                        .ok_or_else(|| {
-                            plan_datafusion_err!(
+    let union_qualified_fields =
+        zip(left_plan.schema().iter(), right_plan.schema().iter())
+            .map(
+                |((left_qualifier, left_field), (_right_qualifier, right_field))| {
+                    let nullable = left_field.is_nullable() || right_field.is_nullable();
+                    let data_type = comparison_coercion(
+                        left_field.data_type(),
+                        right_field.data_type(),
+                    )
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
                 right_field.name(),
                 right_field.data_type(),
                 left_field.name(),
                 left_field.data_type()
             )
-                        })?;
+                    })?;
 
-                Ok((
-                    left_qualifier,
-                    Arc::new(Field::new(left_field.name(), data_type, nullable)),
-                ))
-            },
-        )
-        .collect::<Result<Vec<_>>>()?
-        .iter()
-        .map(|(q, f)| (q.cloned(), f.clone()))
-        .unzip();
-    let union_schema: Schema = Schema::new_with_metadata(union_fields, HashMap::new());
-
-    let union_schema = DFSchema::from_field_specific_qualified_schema(
-        union_table_refs,
-        &Arc::new(union_schema),
-    )?;
+                    Ok((
+                        left_qualifier.cloned(),
+                        Arc::new(Field::new(left_field.name(), data_type, nullable)),
+                    ))
+                },
+            )
+            .collect::<Result<Vec<_>>>()?;
+    let union_schema =
+        DFSchema::from_qualified_fields(union_qualified_fields, HashMap::new())?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()

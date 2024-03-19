@@ -178,11 +178,15 @@ impl Column {
         }
 
         for schema in schemas {
-            let columns = schema.columns_with_unqualified_name(&self.name);
-            match columns.len() {
+            let qualified_fields =
+                schema.qualified_fields_with_unqualified_name(&self.name);
+            match qualified_fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(columns[0].clone());
+                    return Ok(Column::new(
+                        qualified_fields[0].0.cloned(),
+                        qualified_fields[0].1.name(),
+                    ));
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -198,6 +202,7 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
+                    let columns = schema.columns_with_unqualified_name(&self.name);
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|f| using_col.contains(f));
                         // All matched fields belong to the same using column set, in orther words
@@ -262,14 +267,18 @@ impl Column {
         }
 
         for schema_level in schemas {
-            let columns = schema_level
+            let qualified_fields = schema_level
                 .iter()
-                .flat_map(|s| s.columns_with_unqualified_name(&self.name))
+                .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
-            match columns.len() {
+            match qualified_fields.len() {
                 0 => continue,
-                1 => return Ok(columns[0].clone()),
-
+                1 => {
+                    return Ok(Column::new(
+                        qualified_fields[0].0.cloned(),
+                        qualified_fields[0].1.name(),
+                    ))
+                }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //
@@ -284,6 +293,10 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
+                    let columns = schema_level
+                        .iter()
+                        .flat_map(|s| s.columns_with_unqualified_name(&self.name))
+                        .collect::<Vec<_>>();
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words

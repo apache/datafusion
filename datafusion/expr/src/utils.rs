@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    DataFusionError, OwnedTableReference, Result, ScalarValue, TableReference,
+    OwnedTableReference, Result, ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
@@ -857,20 +857,8 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
-            let maybe_field = plan
-                .schema()
-                .iter()
-                .find(|&(qu, fi)| {
-                    col.relation == qu.cloned() && col.name == fi.name().clone()
-                })
-                .map(|(q, f)| (q.map(|r| r.to_owned_reference()), f.clone()));
-            if let Some(field) = maybe_field {
-                Ok(Expr::Column(Column::new(field.0, field.1.name())))
-            } else {
-                Err(DataFusionError::Internal(
-                    "A column for the expression could not be found".to_string(),
-                ))
-            }
+            let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
+            Ok(Expr::Column(Column::new(qualifier.cloned(), field.name())))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }

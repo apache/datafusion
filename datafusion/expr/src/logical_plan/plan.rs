@@ -1993,7 +1993,7 @@ impl Window {
             .map(|(q, f)| (q.cloned(), f.clone()))
             .collect();
         let input_len = fields.len();
-        let mut window_fields = fields.clone();
+        let mut window_fields = fields;
         let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
         window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
@@ -2317,17 +2317,14 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
-        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
-            exprlist_to_fields(select_expr.as_slice(), &input)?
-                .into_iter()
-                .unzip();
+        let qualified_fields = exprlist_to_fields(select_expr.as_slice(), &input)?
+            .into_iter()
+            .collect();
 
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields,
+        let dfschema = DFSchema::from_qualified_fields(
+            qualified_fields,
             input.schema().metadata().clone(),
-        ));
-        let dfschema =
-            DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
+        )?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -2404,25 +2401,21 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
+        let mut qualified_fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
-            fields = fields
+            qualified_fields = qualified_fields
                 .into_iter()
                 .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
         }
 
-        fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
-        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
-            fields.into_iter().unzip();
+        qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = Arc::new(Schema::new(fields));
-        let dfschema =
-            DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
+        let schema = DFSchema::from_qualified_fields(qualified_fields, HashMap::new())?;
 
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(dfschema))
+        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of
