@@ -309,10 +309,9 @@ impl RecursiveQueryStream {
         // Downstream plans should not expect any partitioning.
         let partition = 0;
 
-        self.recursive_stream = Some(
-            self.recursive_term
-                .execute(partition, self.task_context.clone())?,
-        );
+        let recursive_plan = clear_plan_caches(self.recursive_term.clone())?;
+        self.recursive_stream =
+            Some(recursive_plan.execute(partition, self.task_context.clone())?);
         self.poll_next(cx)
     }
 }
@@ -339,6 +338,17 @@ fn assign_work_table(
         } else {
             Ok(Transformed::no(plan))
         }
+    })
+    .data()
+}
+
+/// Worktable changes after each iteration, the data cached in the plan may be outdated
+/// and need to be cleared.
+fn clear_plan_caches(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    // TODO: We should only clear the caches derived from the worktable
+    plan.transform_up(&|plan| match plan.clear_cached()? {
+        Some(new_plan) => Ok(Transformed::yes(new_plan)),
+        None => Ok(Transformed::no(plan)),
     })
     .data()
 }

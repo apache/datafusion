@@ -402,6 +402,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
+
+    /// Some plans have side effects after executed, such as caching data in memory.
+    /// An example is `CrossJoinExec` which loads the left table into memory and caches it.
+    /// This method is used to clear those caches, allowing plans to execute in a bare environment.
+    ///
+    /// Returns a new `ExecutionPlan` with empty caches.
+    /// If the plan does not cache any data, it should return `Ok(None)`.
+    fn clear_cached(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
