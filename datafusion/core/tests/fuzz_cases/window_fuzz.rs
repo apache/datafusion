@@ -144,7 +144,6 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
 // This tests whether we can generate bounded window results for each input
 // batch immediately for causal window frames.
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-#[ignore = "reason"]
 async fn bounded_window_causal_non_causal() -> Result<()> {
     let session_config = SessionConfig::new();
     let ctx = SessionContext::new_with_config(session_config);
@@ -276,6 +275,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     window_frame.is_causal()
                 };
 
+                let extended_schema =
+                    schema_add_window_fields(&args, &schema, &window_fn, fn_name)?;
+
                 let window_expr = create_window_expr(
                     &window_fn,
                     fn_name.to_string(),
@@ -283,7 +285,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &partitionby_exprs,
                     &orderby_exprs,
                     Arc::new(window_frame),
-                    schema.as_ref(),
+                    &extended_schema,
                     false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
@@ -681,25 +683,7 @@ async fn run_window_test(
         exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    // The planner has fully updated schema before calling the `create_window_expr`
-    // Replicate the same for this test
-    let data_types = args
-        .iter()
-        .map(|e| e.clone().as_ref().data_type(&schema))
-        .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types)?;
-    let mut window_fields = schema
-        .fields()
-        .iter()
-        .map(|f| f.as_ref().clone())
-        .collect_vec();
-
-    window_fields.extend_from_slice(&[Field::new(
-        &fn_name,
-        window_expr_return_type,
-        true,
-    )]);
-    let extended_schema = Arc::new(Schema::new(window_fields));
+    let extended_schema = schema_add_window_fields(&args, &schema, &window_fn, &fn_name)?;
 
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(
@@ -768,6 +752,32 @@ async fn run_window_test(
         }
     }
     Ok(())
+}
+
+// The planner has fully updated schema before calling the `create_window_expr`
+// Replicate the same for this test
+fn schema_add_window_fields(
+    args: &Vec<Arc<dyn PhysicalExpr>>,
+    schema: &Arc<Schema>,
+    window_fn: &WindowFunctionDefinition,
+    fn_name: &str,
+) -> Result<Arc<Schema>> {
+    let data_types = args
+        .iter()
+        .map(|e| e.clone().as_ref().data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+    window_fields.extend_from_slice(&[Field::new(
+        fn_name,
+        window_expr_return_type,
+        true,
+    )]);
+    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Return randomly sized record batches with:
