@@ -42,6 +42,15 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
+fn test_schema_support() {
+    quick_test(
+        "SELECT * FROM s1.test",
+        "Projection: s1.test.t_date32, s1.test.t_date64\
+             \n  TableScan: s1.test",
+    );
+}
+
+#[test]
 fn parse_decimals() {
     let test_data = [
         ("1", "Int64(1)"),
