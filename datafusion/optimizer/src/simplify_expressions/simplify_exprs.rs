@@ -19,7 +19,8 @@
 
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -58,6 +59,19 @@ impl OptimizerRule for SimplifyExpressions {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
         Ok(Some(Self::optimize_internal(plan, &execution_props)?))
+    }
+
+    fn supports_owned(&self) -> bool {
+        true
+    }
+
+    /// if supports_owned returns true, calls try_optimize_owned
+    fn try_optimize_owned(
+        &self,
+        _plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        todo!();
     }
 }
 
