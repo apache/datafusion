@@ -847,6 +847,108 @@ async fn prune_string_lt() {
 }
 
 #[tokio::test]
+async fn prune_binary_eq_match() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary = CAST('backend one' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(1))
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_expected_rows(1)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn prune_binary_eq_no_match() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary = CAST('backend nine' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        // false positive on 'all backends' batch: 'backend five' < 'backend one' < 'backend three'
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_expected_rows(0)
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary = CAST('frontend nine' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        // false positive on 'all frontends' batch: 'frontend five' < 'frontend nine' < 'frontend two'
+        // false positive on 'mixed' batch: 'backend one' < 'frontend nine' < 'frontend six'
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(2))
+        .with_expected_rows(0)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn prune_binary_neq() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary != CAST('backend one' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(3))
+        .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(3))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(14)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn prune_binary_lt() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary < CAST('backend one' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        // matches 'all backends' only
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(2))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(3)
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::ByteArray)
+        .with_query(
+            "SELECT name, service_binary FROM t WHERE service_binary < CAST('backend zero' AS bytea)",
+        )
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(2))
+        .with_pruned_by_stats(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(0))
+        // all backends from 'mixed' and 'all backends'
+        .with_expected_rows(8)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
 async fn prune_periods_in_column_names() {
     // There are three row groups for "service.name", each with 5 rows = 15 rows total
     // name = "HTTP GET / DISPATCH", service.name = ['frontend', 'frontend'],
