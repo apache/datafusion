@@ -1318,7 +1318,9 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename.as_ref()) && field == &field_rename {
+                if qualifier.eq(&qualifier_rename.as_ref())
+                    && field.as_ref() == field_rename
+                {
                     col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
                 } else {
                     col(Column::new(qualifier.cloned(), field.name()))

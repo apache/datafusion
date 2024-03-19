@@ -1571,7 +1571,7 @@ pub fn unnest_with_options(
     let fields = input_schema
         .iter()
         .map(|(q, f)| {
-            if f == &unnest_field && q == unnest_qualifier.as_ref() {
+            if f.as_ref() == unnest_field && q == unnest_qualifier.as_ref() {
                 (unnest_qualifier.clone(), unnested_field.clone())
             } else {
                 (q.cloned(), f.clone())

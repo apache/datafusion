@@ -636,16 +636,12 @@ mod tests {
                 .unwrap()
         );
 
-        let schema = DFSchema::from_qualified_fields(
-            vec![(
-                None,
-                Field::new("foo", DataType::Int32, true)
-                    .with_metadata(meta.clone())
-                    .into(),
-            )],
+        let schema = DFSchema::new_with_metadata(
+            vec![Field::new("foo", DataType::Int32, true)
+                .with_metadata(meta.clone())
+                .into()],
             HashMap::new(),
-        )
-        .unwrap();
+        );
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());

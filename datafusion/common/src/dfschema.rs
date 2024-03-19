@@ -549,16 +549,16 @@ impl DFSchema {
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
-    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
+    ) -> Result<(Option<OwnedTableReference>, &Field)> {
         match &column.relation {
             Some(r) => {
                 let field = self.field_with_qualified_name(r, &column.name)?;
-                Ok((Some(r.to_owned_reference()), field.clone().into()))
+                Ok((Some(r.to_owned_reference()), field))
             }
             None => {
                 let (qualifier, field) =
                     self.qualified_field_with_unqualified_name(&column.name)?;
-                Ok((qualifier, field.clone().into()))
+                Ok((qualifier, field))
             }
         }
     }
@@ -1159,9 +1159,6 @@ mod tests {
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let expected_help = "Valid fields are t1.c0, t1.c1.";
-        // Pertinent message parts
-        let expected_err_msg =
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1.";
         assert_contains!(
             schema
                 .field_with_qualified_name(&TableReference::bare("x"), "y")

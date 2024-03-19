@@ -402,7 +402,7 @@ mod test {
 
     fn make_schema_with_empty_metadata(
         qualifiers: Vec<Option<OwnedTableReference>>,
-        fields: Vec<&'static str>,
+        fields: Vec<&str>,
     ) -> DFSchema {
         let fields = fields
             .iter()
