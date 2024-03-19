@@ -757,7 +757,10 @@ fn exprlist_to_fields_aggregate(
 }
 
 /// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields(exprs: &[Expr], plan: &LogicalPlan) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
+pub fn exprlist_to_fields(
+    exprs: &[Expr],
+    plan: &LogicalPlan,
+) -> Result<Vec<(Option<OwnedTableReference>, Arc<Field>)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to

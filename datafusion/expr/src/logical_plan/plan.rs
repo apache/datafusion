@@ -2416,7 +2416,8 @@ impl Aggregate {
             fields.into_iter().unzip();
 
         let schema = Arc::new(Schema::new(fields));
-        let dfschema = DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
+        let dfschema =
+            DFSchema::from_field_specific_qualified_schema(qualifiers, &schema)?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(dfschema))
     }

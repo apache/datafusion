@@ -1181,7 +1181,7 @@ mod tests {
             .index_of_column_by_name(None, "t1.c0")
             .unwrap()
             .is_none());
- 
+
         Ok(())
     }
 
