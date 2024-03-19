@@ -105,6 +105,11 @@ macro_rules! get_statistic {
                         let s = std::str::from_utf8(s.$bytes_func())
                             .map(|s| s.to_string())
                             .ok();
+                        if s.is_none() {
+                            log::debug!(
+                                "Utf8 statistics is a non-UTF8 value, ignoring it."
+                            );
+                        }
                         Some(ScalarValue::Utf8(s))
                     }
                 }
@@ -122,9 +127,20 @@ macro_rules! get_statistic {
                         ))
                     }
                     Some(DataType::FixedSizeBinary(size)) => {
+                        let value = s.$bytes_func().to_vec();
+                        let value = if value.len().try_into() == Ok(*size) {
+                            Some(value)
+                        } else {
+                            log::debug!(
+                                "FixedSizeBinary({}) statistics is a binary of size {}, ignoring it.",
+                                size,
+                                value.len(),
+                            );
+                            None
+                        };
                         Some(ScalarValue::FixedSizeBinary(
                             *size,
-                            Some(s.$bytes_func().to_vec()),
+                            value,
                         ))
                     }
                     _ => None,
