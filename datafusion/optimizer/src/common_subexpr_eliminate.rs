@@ -560,7 +560,7 @@ impl ExprMask {
 /// Go through an expression tree and generate identifier.
 ///
 /// An identifier contains information of the expression itself and its sub-expression.
-/// This visitor implementation use a stack `f_down()` to track traversal, which
+/// This visitor implementation use a stack `visit_stack` to track traversal, which
 /// lets us know when a sub-tree's visiting is finished. When `pre_visit` is called
 /// (traversing to a new node), an `EnterMark` and an `ExprItem` will be pushed into stack.
 /// And try to pop out a `EnterMark` on leaving a node (`f_up()`). All `ExprItem`
