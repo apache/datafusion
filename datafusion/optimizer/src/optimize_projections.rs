@@ -921,7 +921,7 @@ fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result
         && proj_exprs.iter().all(is_expr_trivial))
 }
 
-/// Calculates the correspondinf target indices of the expressions at the `source_indices` of the `source_fields`.
+/// Calculates the corresponding target indices of the expressions at the `source_indices` of the `source_fields`.
 ///
 /// # Arguments
 ///
