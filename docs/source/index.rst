@@ -74,11 +74,11 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    user-guide/configs
    user-guide/faq
 
-.. _toc.library-user-guide:
+.. _toc.developer-guide:
 
 .. toctree::
    :maxdepth: 1
-   :caption: Library User Guide
+   :caption: Developer Guide
 
    library-user-guide/index
    library-user-guide/using-the-sql-api
@@ -89,6 +89,7 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    library-user-guide/adding-udfs
    library-user-guide/custom-table-providers
    library-user-guide/extending-operators
+   library-user-guide/profiling
 
 .. _toc.contributor-guide:
 
