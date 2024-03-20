@@ -29,8 +29,7 @@ use datafusion_common::tree_node::{
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, Result,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
@@ -729,8 +728,11 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1; // incr idx for id_array, when not jumping
             return Ok(Transformed::no(expr));
         }
+
+        // lookup previously visited expression
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
+                // if has a commonly used (a.k.a. 1+ use) expr
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
 
@@ -745,21 +747,8 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
 
                     // incr idx for id_array, when not jumping
                     self.curr_index += 1;
-                    // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
-                    let expr_set_item = self.expr_set.get(curr_id).ok_or_else(|| {
-                        internal_datafusion_err!("expr_set invalid state")
-                    })?;
-                    if *series_number < self.max_series_number
-                        || curr_id.is_empty()
-                        || expr_set_item.1 <= 1
-                    {
-                        return Ok(Transformed::new(
-                            expr,
-                            false,
-                            TreeNodeRecursion::Jump,
-                        ));
-                    }
 
+                    // series_number was the inverse number ordering (when doing f_up)
                     self.max_series_number = *series_number;
                     // step index to skip all sub-node (which has smaller series number).
                     while self.curr_index < self.id_array.len()
