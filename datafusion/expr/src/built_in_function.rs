@@ -147,20 +147,12 @@ pub enum BuiltinScalarFunction {
     Rtrim,
     /// split_part
     SplitPart,
-    /// starts_with
-    StartsWith,
     /// strpos
     Strpos,
     /// substr
     Substr,
-    /// to_hex
-    ToHex,
     /// translate
     Translate,
-    /// trim
-    Trim,
-    /// upper
-    Upper,
     /// uuid
     Uuid,
     /// overlay
@@ -276,13 +268,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
             BuiltinScalarFunction::Rtrim => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
-            BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
-            BuiltinScalarFunction::ToHex => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::Trim => Volatility::Immutable,
-            BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
@@ -365,7 +353,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
             }
-            BuiltinScalarFunction::StartsWith => Ok(Boolean),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
                 utf8_to_int_type(&input_expr_types[0], "strpos/instr/position")
@@ -373,12 +360,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Substr => {
                 utf8_to_str_type(&input_expr_types[0], "substr")
             }
-            BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
-                Int8 | Int16 | Int32 | Int64 => Utf8,
-                _ => {
-                    return plan_err!("The to_hex function can only accept integers.");
-                }
-            }),
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
@@ -387,10 +368,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
-            }
-            BuiltinScalarFunction::Trim => utf8_to_str_type(&input_expr_types[0], "trim"),
-            BuiltinScalarFunction::Upper => {
-                utf8_to_str_type(&input_expr_types[0], "upper")
             }
 
             BuiltinScalarFunction::Factorial
@@ -476,18 +453,16 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::InitCap
             | BuiltinScalarFunction::Lower
             | BuiltinScalarFunction::OctetLength
-            | BuiltinScalarFunction::Reverse
-            | BuiltinScalarFunction::Upper => {
+            | BuiltinScalarFunction::Reverse => {
                 Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
             }
             BuiltinScalarFunction::Btrim
             | BuiltinScalarFunction::Ltrim
-            | BuiltinScalarFunction::Rtrim
-            | BuiltinScalarFunction::Trim => Signature::one_of(
+            | BuiltinScalarFunction::Rtrim => Signature::one_of(
                 vec![Exact(vec![Utf8]), Exact(vec![Utf8, Utf8])],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
+            BuiltinScalarFunction::Chr => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
             BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => {
@@ -519,17 +494,17 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
-            BuiltinScalarFunction::EndsWith
-            | BuiltinScalarFunction::Strpos
-            | BuiltinScalarFunction::StartsWith => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::EndsWith | BuiltinScalarFunction::Strpos => {
+                Signature::one_of(
+                    vec![
+                        Exact(vec![Utf8, Utf8]),
+                        Exact(vec![Utf8, LargeUtf8]),
+                        Exact(vec![LargeUtf8, Utf8]),
+                        Exact(vec![LargeUtf8, LargeUtf8]),
+                    ],
+                    self.volatility(),
+                )
+            }
 
             BuiltinScalarFunction::Substr => Signature::one_of(
                 vec![
@@ -749,13 +724,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Rpad => &["rpad"],
             BuiltinScalarFunction::Rtrim => &["rtrim"],
             BuiltinScalarFunction::SplitPart => &["split_part"],
-            BuiltinScalarFunction::StartsWith => &["starts_with"],
             BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],
-            BuiltinScalarFunction::ToHex => &["to_hex"],
             BuiltinScalarFunction::Translate => &["translate"],
-            BuiltinScalarFunction::Trim => &["trim"],
-            BuiltinScalarFunction::Upper => &["upper"],
             BuiltinScalarFunction::Uuid => &["uuid"],
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
