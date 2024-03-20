@@ -27,13 +27,13 @@ Instead, edit dev/update_config_docs.sh or the docstrings in datafusion/core/src
 
 The section contains examples how to perform CPU profiling for Apache Arrow DataFusion on different operating systems.
 
-
 ## MacOS
 
 ### Building a flamegraph
 
 - [cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph)
-Example:
+  Example:
+
 ```bash
 CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --unit-test datafusion  -- dataframe::tests::test_xxx
 ```
@@ -41,6 +41,7 @@ CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --unit-test datafusion 
 Open SVG file with the browser
 
 - dtrace with DataFusion CLI
+
 ```bash
 git clone https://github.com/brendangregg/FlameGraph.git /tmp/fg
 cd datafusion-cli
@@ -49,6 +50,7 @@ echo "select * from table;" >> test.sql
 sudo dtrace -c './target/debug/datafusion-cli -f test.sql' -o out.stacks -n 'profile-997 /execname == "datafusion-cli"/ { @[ustack(100)] = count(); }'
 /tmp/fg/FlameGraph/stackcollapse.pl out.stacks | /tmp/fg/FlameGraph/flamegraph.pl > flamegraph.svg
 ```
+
 Open SVG file with the browser
 
 ### CPU profiling
@@ -58,4 +60,3 @@ Open SVG file with the browser
 ## Linux
 
 ## Windows
-
