@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Using the SQL API &#8212; Apache Arrow DataFusion  documentation</title>
+    <title>Profiling Cookbook &#8212; Apache Arrow DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Working with Exprs" href="working-with-exprs.html" />
-    <link rel="prev" title="Introduction" href="index.html" />
+    <link rel="next" title="Introduction" href="../contributor-guide/index.html" />
+    <link rel="prev" title="Extending DataFusion’s operators: custom LogicalPlan and Execution Plans" href="extending-operators.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -223,8 +223,8 @@
    Introduction
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="using-the-sql-api.html">
    Using the SQL API
   </a>
  </li>
@@ -269,8 +269,8 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="profiling.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Profiling Cookbook
   </a>
  </li>
@@ -351,9 +351,41 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#macos">
+   MacOS
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#building-a-flamegraph">
+     Building a flamegraph
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#cpu-profiling-with-xcode-instruments">
+     CPU profiling with XCode Instruments
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#linux">
+   Linux
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#windows">
+   Windows
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -361,7 +393,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/using-the-sql-api.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/profiling.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -398,9 +430,49 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="using-the-sql-api">
-<h1>Using the SQL API<a class="headerlink" href="#using-the-sql-api" title="Link to this heading">¶</a></h1>
-<p>Coming Soon</p>
+<section id="profiling-cookbook">
+<h1>Profiling Cookbook<a class="headerlink" href="#profiling-cookbook" title="Link to this heading">¶</a></h1>
+<p>The section contains examples how to perform CPU profiling for Apache Arrow DataFusion on different operating systems.</p>
+<section id="macos">
+<h2>MacOS<a class="headerlink" href="#macos" title="Link to this heading">¶</a></h2>
+<section id="building-a-flamegraph">
+<h3>Building a flamegraph<a class="headerlink" href="#building-a-flamegraph" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/flamegraph-rs/flamegraph">cargo-flamegraph</a></p></li>
+</ul>
+<p>Test:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--unit-test<span class="w"> </span>datafusion<span class="w">  </span>--<span class="w"> </span>dataframe::tests::test_array_agg
+</pre></div>
+</div>
+<p>Benchmark:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--bench<span class="w"> </span>sql_planner<span class="w"> </span>--<span class="w"> </span>--bench
+</pre></div>
+</div>
+<p>Open <code class="docutils literal notranslate"><span class="pre">flamegraph.svg</span></code> file with the browser</p>
+<ul class="simple">
+<li><p>dtrace with DataFusion CLI</p></li>
+</ul>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/brendangregg/FlameGraph.git<span class="w"> </span>/tmp/fg
+<span class="nb">cd</span><span class="w"> </span>datafusion-cli
+<span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>build<span class="w"> </span>--release
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;select * from table;&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>test.sql
+sudo<span class="w"> </span>dtrace<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;./target/debug/datafusion-cli -f test.sql&#39;</span><span class="w"> </span>-o<span class="w"> </span>out.stacks<span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;profile-997 /execname == &quot;datafusion-cli&quot;/ { @[ustack(100)] = count(); }&#39;</span>
+/tmp/fg/FlameGraph/stackcollapse.pl<span class="w"> </span>out.stacks<span class="w"> </span><span class="p">|</span><span class="w"> </span>/tmp/fg/FlameGraph/flamegraph.pl<span class="w"> </span>&gt;<span class="w"> </span>flamegraph.svg
+</pre></div>
+</div>
+<p>Open <code class="docutils literal notranslate"><span class="pre">flamegraph.svg</span></code> file with the browser</p>
+</section>
+<section id="cpu-profiling-with-xcode-instruments">
+<h3>CPU profiling with XCode Instruments<a class="headerlink" href="#cpu-profiling-with-xcode-instruments" title="Link to this heading">¶</a></h3>
+<p><a class="reference external" href="https://youtu.be/P3dXH61Kr5U">Video: how to CPU profile DataFusion with XCode Instruments</a></p>
+</section>
+</section>
+<section id="linux">
+<h2>Linux<a class="headerlink" href="#linux" title="Link to this heading">¶</a></h2>
+</section>
+<section id="windows">
+<h2>Windows<a class="headerlink" href="#windows" title="Link to this heading">¶</a></h2>
+</section>
 </section>
 
 
@@ -409,17 +481,17 @@
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="extending-operators.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Introduction</p>
+            <p class="prev-next-title">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="working-with-exprs.html" title="next page">
+    <a class='right-next' id="next-link" href="../contributor-guide/index.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</p>
+        <p class="prev-next-title">Introduction</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
