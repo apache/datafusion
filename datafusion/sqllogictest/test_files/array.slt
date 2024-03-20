@@ -5355,7 +5355,7 @@ from array_distinct_table_2D_fixed;
 query ?
 select array_intersect(column1, column2)
 from array_setop_with_NULL_table;
----
+----
 [2, 3]
 [3]
 [3]
