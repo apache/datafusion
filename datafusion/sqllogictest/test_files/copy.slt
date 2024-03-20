@@ -111,6 +111,7 @@ a
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
 
+# https://github.com/apache/arrow-datafusion/issues/9714
 ## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
 ## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
 #
