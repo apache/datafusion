@@ -41,21 +41,36 @@ use datafusion_expr::{col, Expr, ExprSchemable};
 /// - DataType of this expression.
 type ExprSet = HashMap<Identifier, (Expr, usize, DataType)>;
 
-/// An ordered map of Identifiers encountered during visitation.
+/// An ordered map of Identifiers assigned by `ExprIdentifierVisitor` in an
+/// initial expression  walk.
 ///
-/// Is created in the ExprIdentifierVisitor, which identifies the common expressions.
-/// Is consumed in the CommonSubexprRewriter, which performs mutations.
+/// Used by `CommonSubexprRewriter`, which rewrites the expressions to remove
+/// common subexpressions.
 ///
-/// Vec idx is ordered by expr nodes visited on f_down.
+/// Elements in this array are created on the walk down the expression tree
+/// during `f_down`. Thus element 0 is the root of the expression tree. The
+/// tuple contains:
 /// - series_number.
-///     - Incr in fn_up, start from 1.
-///     - the higher idx have the lower series_number.
-/// - Identifier.
-///     - is empty ("") if expr should not be considered for common elimation.
+///     - Incremented during `f_up`, start from 1.
+///     - Thus, items with higher idx have the lower series_number.
+/// - [`Identifier`]
+///     - Identifier of the expression. If empty (`""`), expr should not be considered for common elimination.
+///
+/// # Example
+/// An expression like `(a + b)` would have the following `IdArray`:
+/// ```text
+/// [
+///   (3, "a + b"),
+///   (2, "a"),
+///   (1, "b")
+/// ]
+/// ```
 type IdArray = Vec<(usize, Identifier)>;
 
-/// Identifier type. Current implementation use describe of an expression (type String) as
-/// Identifier.
+/// Identifier for each subexpression.
+///
+/// Note that the current implementation uses the `Display` of an expression
+/// (a `String`) as `Identifier`.
 ///
 /// An identifier should (ideally) be able to "hash", "accumulate", "equal" and "have no
 /// collision (as low as possible)"
