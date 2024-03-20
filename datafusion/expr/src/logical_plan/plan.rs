@@ -361,6 +361,12 @@ impl LogicalPlan {
         }
     }
 
+    /// takes all inputs of this plan, unwrapping them if they are
+    /// not shared
+    pub fn take_inputs(&self) -> Vec<LogicalPlan> {
+        todo!()
+    }
+
     /// returns all inputs of this `LogicalPlan` node. Does not
     /// include inputs to inputs, or subqueries.
     pub fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -515,6 +521,15 @@ impl LogicalPlan {
     #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         self.with_new_exprs(self.expressions(), inputs.to_vec())
+    }
+
+    /// returns a new LogicalPlan with the new inputs (potentially rewritten)
+    ///
+    pub fn with_new_inputs2(
+        mut self,
+        new_inputs: Vec<LogicalPlan>,
+    ) -> Result<LogicalPlan> {
+        todo!()
     }
 
     /// Returns a new `LogicalPlan` based on `self` with inputs and

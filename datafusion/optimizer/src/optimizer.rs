@@ -48,7 +48,7 @@ use crate::utils::log_plan;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
@@ -297,7 +297,7 @@ impl Optimizer {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
         mut observer: F,
-    ) -> Result<LogicalPlan>
+    ) -> Result<Transformed<LogicalPlan>>
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
@@ -306,6 +306,7 @@ impl Optimizer {
 
         let start_time = Instant::now();
 
+        let mut transformed = false;
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
@@ -314,21 +315,31 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
+                // if we are skipping failed rules, we need to keep a copy of the plan in case the optimizer fails
+                let prev_plan = if options.optimizer.skip_failed_rules {
+                    Some(new_plan.clone())
+                } else {
+                    None
+                };
+
+                let orig_schema = plan.schema().clone();
+
                 let result =
-                    self.optimize_recursively(rule, &new_plan, config)
+                    self.optimize_recursively(rule, new_plan, config)
                         .and_then(|plan| {
-                            if let Some(plan) = &plan {
-                                assert_schema_is_the_same(rule.name(), plan, &new_plan)?;
-                            }
+                            assert_has_schema(rule.name(), &orig_schema, &new_plan)?;
                             Ok(plan)
                         });
-                match result {
-                    Ok(Some(plan)) => {
-                        new_plan = plan;
+
+                match (result, prev_plan) {
+                    (Ok(t), _) if t.transformed => {
+                        transformed = true;
+                        new_plan = t.data;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
                     }
-                    Ok(None) => {
+                    (Ok(t), _) if !t.transformed => {
+                        new_plan = t.data;
                         observer(&new_plan, rule.as_ref());
                         debug!(
                             "Plan unchanged by optimizer rule '{}' (pass {})",
@@ -336,22 +347,22 @@ impl Optimizer {
                             i
                         );
                     }
-                    Err(e) => {
-                        if options.optimizer.skip_failed_rules {
-                            // Note to future readers: if you see this warning it signals a
-                            // bug in the DataFusion optimizer. Please consider filing a ticket
-                            // https://github.com/apache/arrow-datafusion
-                            warn!(
+
+                    (Err(e), Some(prev_plan)) => {
+                        // Note to future readers: if you see this warning it signals a
+                        // bug in the DataFusion optimizer. Please consider filing a ticket
+                        // https://github.com/apache/arrow-datafusion
+                        warn!(
                             "Skipping optimizer rule '{}' due to unexpected error: {}",
                             rule.name(),
                             e
                         );
-                        } else {
-                            return Err(DataFusionError::Context(
-                                format!("Optimizer rule '{}' failed", rule.name(),),
-                                Box::new(e),
-                            ));
-                        }
+                    }
+                    (Err(e), None) => {
+                        return Err(DataFusionError::Context(
+                            format!("Optimizer rule '{}' failed", rule.name(),),
+                            Box::new(e),
+                        ));
                     }
                 }
             }
@@ -369,45 +380,58 @@ impl Optimizer {
         }
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
-        Ok(new_plan)
+        Ok(if transformed {
+            Transformed::yes(new_plan)
+        } else {
+            Transformed::no(new_plan)
+        })
     }
 
     fn optimize_node(
         &self,
         rule: &Arc<dyn OptimizerRule + Send + Sync>,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        // TODO: future feature: We can do Batch optimize
-        rule.try_optimize(plan, config)
+    ) -> Result<Transformed<LogicalPlan>> {
+        if rule.supports_owned() {
+            rule.try_optimize_owned(plan, config)
+        } else {
+            // TODO: future feature: We can do Batch optimize
+            rule.try_optimize(&plan, config)
+                .map(|opt| {
+                    if let Some(opt_plan) = opt {
+                        Transformed::yes(opt_plan)
+                    } else {
+                        // return original plan
+                        Transformed::no(plan)
+                    }
+                })
+        }
     }
 
     fn optimize_inputs(
         &self,
         rule: &Arc<dyn OptimizerRule + Send + Sync>,
-        plan: &LogicalPlan,
+        mut plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        let inputs = plan.inputs();
-        let result = inputs
-            .iter()
+    ) -> Result<Transformed<LogicalPlan>> {
+        let inputs = plan.take_inputs();
+
+        let new_inputs = inputs
+            .into_iter()
             .map(|sub_plan| self.optimize_recursively(rule, sub_plan, config))
             .collect::<Result<Vec<_>>>()?;
-        if result.is_empty() || result.iter().all(|o| o.is_none()) {
-            return Ok(None);
-        }
 
-        let new_inputs = result
-            .into_iter()
-            .zip(inputs)
-            .map(|(new_plan, old_plan)| match new_plan {
-                Some(plan) => plan,
-                None => old_plan.clone(),
-            })
-            .collect();
+        let transformed = new_inputs.iter().any(|t| t.transformed);
+        let new_inputs = new_inputs.into_iter().map(|t| t.data).collect();
 
-        let exprs = plan.expressions();
-        plan.with_new_exprs(exprs, new_inputs).map(Some)
+        let plan = plan.with_new_inputs2(new_inputs)?;
+
+        Ok(if transformed {
+            Transformed::yes(plan)
+        } else {
+            Transformed::no(plan)
+        })
     }
 
     /// Use a rule to optimize the whole plan.
@@ -415,14 +439,19 @@ impl Optimizer {
     pub fn optimize_recursively(
         &self,
         rule: &Arc<dyn OptimizerRule + Send + Sync>,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
+    ) -> Result<Transformed<LogicalPlan>> {
         match rule.apply_order() {
             Some(order) => match order {
                 ApplyOrder::TopDown => {
-                    let optimize_self_opt = self.optimize_node(rule, plan, config)?;
-                    let optimize_inputs_opt = match &optimize_self_opt {
+                    let optimized_plan = self.optimize_node(rule, plan, config)?;
+                    let transformed = optimized_plan.transformed;
+
+                    // TODO make a nicer 'and_then' type API on Transformed
+                    let optimized_plan = self.optimize_inputs(rule, optimized_plan.data, config)?;
+
+                    let let optimize_inputs_opt = match &optimize_self_opt {
                         Some(optimized_plan) => {
                             self.optimize_inputs(rule, optimized_plan, config)?
                         }
@@ -446,22 +475,17 @@ impl Optimizer {
     }
 }
 
-/// Returns an error if plans have different schemas.
-///
-/// It ignores metadata and nullability.
-pub(crate) fn assert_schema_is_the_same(
+pub(crate) fn assert_has_schema(
     rule_name: &str,
-    prev_plan: &LogicalPlan,
+    schema: &DFSchema,
     new_plan: &LogicalPlan,
 ) -> Result<()> {
-    let equivalent = new_plan
-        .schema()
-        .equivalent_names_and_types(prev_plan.schema());
+    let equivalent = new_plan.schema().equivalent_names_and_types(schema);
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
             "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
-            prev_plan.schema(),
+            schema,
             new_plan.schema()
         ));
         Err(DataFusionError::Context(
@@ -471,6 +495,17 @@ pub(crate) fn assert_schema_is_the_same(
     } else {
         Ok(())
     }
+}
+
+/// Returns an error if plans have different schemas.
+///
+/// It ignores metadata and nullability.
+pub(crate) fn assert_schema_is_the_same(
+    rule_name: &str,
+    prev_plan: &LogicalPlan,
+    new_plan: &LogicalPlan,
+) -> Result<()> {
+    assert_has_schema(rule_name, prev_plan.schema(), new_plan)
 }
 
 #[cfg(test)]
