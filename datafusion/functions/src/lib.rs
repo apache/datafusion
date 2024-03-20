@@ -138,6 +138,8 @@ pub mod expr_fn {
     pub use super::math::expr_fn::*;
     #[cfg(feature = "regex_expressions")]
     pub use super::regex::expr_fn::*;
+    #[cfg(feature = "string_expressions")]
+    pub use super::string::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
