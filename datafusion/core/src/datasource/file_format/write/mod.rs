@@ -75,7 +75,9 @@ pub trait BatchSerializer: Sync + Send {
 }
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location
-/// with the specified compression
+/// with the specified compression.
+/// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
+/// Users can configure automatic cleanup with their cloud provider.
 pub(crate) async fn create_writer(
     file_compression_type: FileCompressionType,
     location: &Path,

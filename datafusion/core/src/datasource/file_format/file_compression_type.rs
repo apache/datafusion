@@ -149,7 +149,7 @@ impl FileCompressionType {
         })
     }
 
-    /// Wrap the given `AsyncWrite` so that it performs compressed writes
+    /// Wrap the given `BufWriter` so that it performs compressed writes
     /// according to this `FileCompressionType`.
     pub fn convert_async_writer(
         &self,
