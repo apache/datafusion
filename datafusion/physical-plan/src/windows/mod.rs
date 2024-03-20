@@ -174,20 +174,15 @@ fn create_built_in_window_expr(
     name: String,
     ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    // need to get the types into an owned vec for some reason
-    let input_types: Vec<_> = args
-        .iter()
-        .map(|arg| arg.data_type(input_schema))
-        .collect::<Result<_>>()?;
+    // derive the output datatype from incoming schema
+    let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
-    // figure out the output type
-    let data_type = &fun.return_type(&input_types)?;
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, data_type)),
-        BuiltInWindowFunction::Rank => Arc::new(rank(name, data_type)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, data_type)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, data_type)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, data_type)),
+        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, out_data_type)),
+        BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
+        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
+        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
+        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
@@ -201,13 +196,13 @@ fn create_built_in_window_expr(
 
             if n.is_unsigned() {
                 let n: u64 = n.try_into()?;
-                Arc::new(Ntile::new(name, n, data_type))
+                Arc::new(Ntile::new(name, n, out_data_type))
             } else {
                 let n: i64 = n.try_into()?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
-                Arc::new(Ntile::new(name, n as u64, data_type))
+                Arc::new(Ntile::new(name, n as u64, out_data_type))
             }
         }
         BuiltInWindowFunction::Lag => {
@@ -216,10 +211,10 @@ fn create_built_in_window_expr(
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
             Arc::new(lag(
                 name,
-                data_type.clone(),
+                out_data_type.clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -232,10 +227,10 @@ fn create_built_in_window_expr(
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
             Arc::new(lead(
                 name,
-                data_type.clone(),
+                out_data_type.clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -252,18 +247,28 @@ fn create_built_in_window_expr(
             Arc::new(NthValue::nth(
                 name,
                 arg,
-                data_type.clone(),
+                out_data_type.clone(),
                 n,
                 ignore_nulls,
             )?)
         }
         BuiltInWindowFunction::FirstValue => {
             let arg = args[0].clone();
-            Arc::new(NthValue::first(name, arg, data_type.clone(), ignore_nulls))
+            Arc::new(NthValue::first(
+                name,
+                arg,
+                out_data_type.clone(),
+                ignore_nulls,
+            ))
         }
         BuiltInWindowFunction::LastValue => {
             let arg = args[0].clone();
-            Arc::new(NthValue::last(name, arg, data_type.clone(), ignore_nulls))
+            Arc::new(NthValue::last(
+                name,
+                arg,
+                out_data_type.clone(),
+                ignore_nulls,
+            ))
         }
     })
 }
