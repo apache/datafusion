@@ -196,18 +196,18 @@ async fn main() -> Result<()> {
     // output format is null
 
     let result = ctx
-        .sql("SELECT to_char(arrow_cast(123456, 'Duration(Second)'), null)")
+        .sql("SELECT to_char(arrow_cast(123456, 'Duration(Second)'), null) as result")
         .await?
         .collect()
         .await?;
 
     assert_batches_eq!(
         &[
-            "+-----------------------------+",
-            "| to_char(Int64(123456),NULL) |",
-            "+-----------------------------+",
-            "|                             |",
-            "+-----------------------------+",
+            "+--------+",
+            "| result |",
+            "+--------+",
+            "|        |",
+            "+--------+",
         ],
         &result
     );
