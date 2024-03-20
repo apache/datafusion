@@ -2891,18 +2891,18 @@ pub enum ScalarFunction {
     /// 48 was SHA384
     /// 49 was SHA512
     SplitPart = 50,
-    StartsWith = 51,
+    /// StartsWith = 51;
     Strpos = 52,
     Substr = 53,
-    ToHex = 54,
+    /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
     Translate = 60,
-    Trim = 61,
-    Upper = 62,
+    /// Trim = 61;
+    /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
@@ -3022,13 +3022,9 @@ impl ScalarFunction {
             ScalarFunction::Rpad => "Rpad",
             ScalarFunction::Rtrim => "Rtrim",
             ScalarFunction::SplitPart => "SplitPart",
-            ScalarFunction::StartsWith => "StartsWith",
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
-            ScalarFunction::ToHex => "ToHex",
             ScalarFunction::Translate => "Translate",
-            ScalarFunction::Trim => "Trim",
-            ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
@@ -3094,13 +3090,9 @@ impl ScalarFunction {
             "Rpad" => Some(Self::Rpad),
             "Rtrim" => Some(Self::Rtrim),
             "SplitPart" => Some(Self::SplitPart),
-            "StartsWith" => Some(Self::StartsWith),
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
-            "ToHex" => Some(Self::ToHex),
             "Translate" => Some(Self::Translate),
-            "Trim" => Some(Self::Trim),
-            "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),
