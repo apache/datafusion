@@ -1624,34 +1624,19 @@ _Alias of [date_part](#date_part)._
 ### `extract`
 
 Returns a sub-field from a time value as an integer.
-Similar to `date_part`, but with different arguments.
 
 ```
 extract(field FROM source)
 ```
 
-#### Arguments
+Equivalent to calling `date_part('field', source)`. For example, these are equivalent:
 
-- **field**: Part or field of the date to return.
-  The following date fields are supported:
+```sql
+extract(day FROM '2024-04-13'::date)
+date_part('day', '2024-04-13'::date)
+```
 
-  - year
-  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
-  - month
-  - week _(week of the year)_
-  - day _(day of the month)_
-  - hour
-  - minute
-  - second
-  - millisecond
-  - microsecond
-  - nanosecond
-  - dow _(day of the week)_
-  - doy _(day of the year)_
-  - epoch _(seconds since Unix epoch)_
-
-- **source**: Source time expression to operate on.
-  Can be a constant, column, or function.
+See [date_part](#date_part).
 
 ### `make_date`
 
