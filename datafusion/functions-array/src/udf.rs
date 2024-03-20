@@ -19,157 +19,15 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow_schema::DataType::List;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
-use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-
-make_udf_function!(
-    Range,
-    range,
-    start stop step,
-    "create a list of values in the range between start and stop",
-    range_udf
-);
-#[derive(Debug)]
-pub(super) struct Range {
-    signature: Signature,
-    aliases: Vec<String>,
-}
-impl Range {
-    pub fn new() -> Self {
-        use DataType::*;
-        Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                ],
-                Volatility::Immutable,
-            ),
-            aliases: vec![String::from("range")],
-        }
-    }
-}
-impl ScalarUDFImpl for Range {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "range"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(List(Arc::new(Field::new(
-            "item",
-            arg_types[0].clone(),
-            true,
-        ))))
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        match args[0].data_type() {
-            arrow::datatypes::DataType::Int64 => {
-                crate::kernels::gen_range(&args, false).map(ColumnarValue::Array)
-            }
-            arrow::datatypes::DataType::Date32 => {
-                crate::kernels::gen_range_date(&args, false).map(ColumnarValue::Array)
-            }
-            _ => {
-                exec_err!("unsupported type for range")
-            }
-        }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-}
-
-make_udf_function!(
-    GenSeries,
-    gen_series,
-    start stop step,
-    "create a list of values in the range between start and stop, include upper bound",
-    gen_series_udf
-);
-#[derive(Debug)]
-pub(super) struct GenSeries {
-    signature: Signature,
-    aliases: Vec<String>,
-}
-impl GenSeries {
-    pub fn new() -> Self {
-        use DataType::*;
-        Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                ],
-                Volatility::Immutable,
-            ),
-            aliases: vec![String::from("generate_series")],
-        }
-    }
-}
-impl ScalarUDFImpl for GenSeries {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "generate_series"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(List(Arc::new(Field::new(
-            "item",
-            arg_types[0].clone(),
-            true,
-        ))))
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        match args[0].data_type() {
-            arrow::datatypes::DataType::Int64 => {
-                crate::kernels::gen_range(&args, true).map(ColumnarValue::Array)
-            }
-            arrow::datatypes::DataType::Date32 => {
-                crate::kernels::gen_range_date(&args, true).map(ColumnarValue::Array)
-            }
-            _ => {
-                exec_err!("unsupported type for range")
-            }
-        }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-}
 
 make_udf_function!(
     ArrayDims,
