@@ -309,10 +309,9 @@ impl RecursiveQueryStream {
         // Downstream plans should not expect any partitioning.
         let partition = 0;
 
-        self.recursive_stream = Some(
-            self.recursive_term
-                .execute(partition, self.task_context.clone())?,
-        );
+        let recursive_plan = reset_plan_states(self.recursive_term.clone())?;
+        self.recursive_stream =
+            Some(recursive_plan.execute(partition, self.task_context.clone())?);
         self.poll_next(cx)
     }
 }
@@ -338,6 +337,25 @@ fn assign_work_table(
             not_impl_err!("Recursive queries cannot be nested")
         } else {
             Ok(Transformed::no(plan))
+        }
+    })
+    .data()
+}
+
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses `ExecutionPlan::with_new_children` to fork a new plan with initial states.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(&|plan| {
+        // WorkTableExec's states have already been updated correctly.
+        if plan.as_any().is::<WorkTableExec>() {
+            Ok(Transformed::no(plan))
+        } else {
+            let new_plan = plan.clone().with_new_children(plan.children())?;
+            Ok(Transformed::yes(new_plan))
         }
     })
     .data()
