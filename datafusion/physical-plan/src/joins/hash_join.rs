@@ -800,19 +800,6 @@ impl ExecutionPlan for HashJoinExec {
         }
         Ok(stats)
     }
-
-    fn clear_cached(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(Some(Arc::new(HashJoinExec::try_new(
-            self.left().clone(),
-            self.right().clone(),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.projection.clone(),
-            self.mode,
-            self.null_equals_null,
-        )?)))
-    }
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a

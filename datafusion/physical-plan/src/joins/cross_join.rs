@@ -265,13 +265,6 @@ impl ExecutionPlan for CrossJoinExec {
             self.right.statistics()?,
         ))
     }
-
-    fn clear_cached(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(Some(Arc::new(CrossJoinExec::new(
-            self.left().clone(),
-            self.right().clone(),
-        ))))
-    }
 }
 
 /// [left/right]_col_count are required in case the column statistics are None

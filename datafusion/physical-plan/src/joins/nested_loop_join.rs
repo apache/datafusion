@@ -305,15 +305,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.schema,
         )
     }
-
-    fn clear_cached(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
-            self.left().clone(),
-            self.right().clone(),
-            self.filter.clone(),
-            &self.join_type,
-        )?)))
-    }
 }
 
 // For the nested loop join, different join type need the different distribution for

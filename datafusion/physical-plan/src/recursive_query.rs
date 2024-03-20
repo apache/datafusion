@@ -309,7 +309,7 @@ impl RecursiveQueryStream {
         // Downstream plans should not expect any partitioning.
         let partition = 0;
 
-        let recursive_plan = clear_plan_caches(self.recursive_term.clone())?;
+        let recursive_plan = clear_plan_states(self.recursive_term.clone())?;
         self.recursive_stream =
             Some(recursive_plan.execute(partition, self.task_context.clone())?);
         self.poll_next(cx)
@@ -342,13 +342,21 @@ fn assign_work_table(
     .data()
 }
 
-/// Worktable changes after each iteration, the data cached in the plan may be outdated
-/// and need to be cleared.
-fn clear_plan_caches(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    // TODO: We should only clear the caches derived from the worktable
-    plan.transform_up(&|plan| match plan.clear_cached()? {
-        Some(new_plan) => Ok(Transformed::yes(new_plan)),
-        None => Ok(Transformed::no(plan)),
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses `ExecutionPlan::with_new_children` to fork a new plan with initial states.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+fn clear_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(&|plan| {
+        // WorkTableExec's states have already been updated correctly.
+        if plan.as_any().is::<WorkTableExec>() {
+            Ok(Transformed::no(plan))
+        } else {
+            let new_plan = plan.clone().with_new_children(plan.children())?;
+            Ok(Transformed::yes(new_plan))
+        }
     })
     .data()
 }
