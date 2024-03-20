@@ -83,19 +83,9 @@ D 1 true
 E 0 false
 E 1 false
 
-# BUG: fix this
-# added to boolean expr in the projections `AND c2 % 2 = 1`
-# `Error during planning: No function matches the given name and argument types 'chr(Utf8)'`
-#
-query error DataFusion error: Optimizer rule 'common_sub_expression_eliminate' failed
-SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(upper(c1)) + 3), c2 % 2, c3 > 80 AND c2 % 2 = 1
-FROM aggregate_test_100
-WHERE c1 IN ('a', 'b')
-ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;
-
-# another boolean is fine. It's the subexpr `c2 % 2 = 1`.
+# regression test
 query TIB
-SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(upper(c1)) + 3), c2 % 2, c3 > 80 AND true
+SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(upper(c1)) + 3), c2 % 2, c3 > 80 AND c2 % 2 = 1
 FROM aggregate_test_100
 WHERE c1 IN ('a', 'b')
 ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;

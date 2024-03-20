@@ -714,16 +714,19 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         if expr.short_circuits() || is_volatile_expression(&expr)? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
+
+        let (series_number, curr_id) = &self.id_array[self.curr_index];
+
+        // halting conditions
         if self.curr_index >= self.id_array.len()
-            || self.max_series_number > self.id_array[self.curr_index].0
+            || self.max_series_number > *series_number
         {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
 
-        let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
-            self.curr_index += 1;
+            self.curr_index += 1; // incr idx for id_array, when not jumping
             return Ok(Transformed::no(expr));
         }
         match self.expr_set.get(curr_id) {
@@ -740,14 +743,14 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                         ));
                     }
 
-                    let (series_number, id) = &self.id_array[self.curr_index];
+                    // incr idx for id_array, when not jumping
                     self.curr_index += 1;
                     // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
-                    let expr_set_item = self.expr_set.get(id).ok_or_else(|| {
+                    let expr_set_item = self.expr_set.get(curr_id).ok_or_else(|| {
                         internal_datafusion_err!("expr_set invalid state")
                     })?;
                     if *series_number < self.max_series_number
-                        || id.is_empty()
+                        || curr_id.is_empty()
                         || expr_set_item.1 <= 1
                     {
                         return Ok(Transformed::new(
@@ -770,7 +773,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     // `projection_push_down` optimizer use "expr name" to eliminate useless
                     // projections.
                     Ok(Transformed::new(
-                        col(id).alias(expr_name),
+                        col(curr_id).alias(expr_name),
                         true,
                         TreeNodeRecursion::Jump,
                     ))
