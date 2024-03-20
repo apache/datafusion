@@ -106,7 +106,6 @@ impl ScalarUDFImpl for ToCharFunc {
         }
 
         match &args[1] {
-            // null format, use default formats
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
                 _to_char_scalar(args[0].clone(), None)
