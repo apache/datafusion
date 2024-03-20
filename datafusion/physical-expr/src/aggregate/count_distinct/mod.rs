@@ -270,7 +270,7 @@ impl Accumulator for DistinctCountAccumulator {
         for inner_array in list_array.iter() {
             let Some(inner_array) = inner_array else {
                 return internal_err!(
-                    "intermediate results of count distinct should always be non0null"
+                    "intermediate results of count distinct should always be non null"
                 );
             };
             self.update_batch(&[inner_array])?;
