@@ -967,21 +967,37 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::test::{assert_optimized_plan_eq, test_table_scan};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{DFSchemaRef, Result, TableReference};
+    use datafusion_common::{Column, DFSchemaRef, Result, TableReference};
     use datafusion_expr::{
         binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, when, Expr, Extension, Like, LogicalPlan, Operator,
-        UserDefinedLogicalNodeCore,
+        table_scan, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan,
+        Operator, UserDefinedLogicalNodeCore,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
     }
 
-    #[derive(Debug, PartialEq, Eq, Hash)]
+    #[derive(Debug, Hash, PartialEq, Eq)]
     struct NoOpUserDefined {
+        exprs: Vec<Expr>,
         schema: DFSchemaRef,
         input: Arc<LogicalPlan>,
+    }
+
+    impl NoOpUserDefined {
+        fn new(schema: DFSchemaRef, input: Arc<LogicalPlan>) -> Self {
+            Self {
+                exprs: vec![],
+                schema,
+                input,
+            }
+        }
+
+        fn with_exprs(mut self, exprs: Vec<Expr>) -> Self {
+            self.exprs = exprs;
+            self
+        }
     }
 
     impl UserDefinedLogicalNodeCore for NoOpUserDefined {
@@ -998,15 +1014,16 @@ mod tests {
         }
 
         fn expressions(&self) -> Vec<Expr> {
-            self.input.expressions()
+            self.exprs.clone()
         }
 
         fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
             write!(f, "NoOpUserDefined")
         }
 
-        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
             Self {
+                exprs: exprs.to_vec(),
                 input: Arc::new(inputs[0].clone()),
                 schema: self.schema.clone(),
             }
@@ -1297,10 +1314,10 @@ mod tests {
     fn test_user_defined_logical_plan_node() -> Result<()> {
         let table_scan = test_table_scan()?;
         let custom_plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(NoOpUserDefined {
-                input: Arc::new(table_scan.clone()),
-                schema: table_scan.schema().clone(),
-            }),
+            node: Arc::new(NoOpUserDefined::new(
+                table_scan.schema().clone(),
+                Arc::new(table_scan.clone()),
+            )),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
             .project(vec![col("a"), lit(0).alias("d")])?
@@ -1309,6 +1326,85 @@ mod tests {
         let expected = "Projection: test.a, Int32(0) AS d\
         \n  NoOpUserDefined\
         \n    TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    #[test]
+    fn test_user_defined_logical_plan_node2() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let exprs = vec![Expr::Column(Column::from_qualified_name("a"))];
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(
+                NoOpUserDefined::new(
+                    table_scan.schema().clone(),
+                    Arc::new(table_scan.clone()),
+                )
+                .with_exprs(exprs),
+            ),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    #[test]
+    fn test_user_defined_logical_plan_node3() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let exprs = vec![Expr::Column(Column::from_qualified_name("b"))];
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(
+                NoOpUserDefined::new(
+                    table_scan.schema().clone(),
+                    Arc::new(table_scan.clone()),
+                )
+                .with_exprs(exprs),
+            ),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a, b]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    #[test]
+    fn test_user_defined_logical_plan_node4() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left_expr = Expr::Column(Column::from_qualified_name("b"));
+        let right_expr = Expr::Column(Column::from_qualified_name("c"));
+        let binary_expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left_expr),
+            Operator::Plus,
+            Box::new(right_expr),
+        ));
+        let exprs = vec![binary_expr];
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(
+                NoOpUserDefined::new(
+                    table_scan.schema().clone(),
+                    Arc::new(table_scan.clone()),
+                )
+                .with_exprs(exprs),
+            ),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: test.a, Int32(0) AS d\
+        \n  NoOpUserDefined\
+        \n    TableScan: test projection=[a, b, c]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
