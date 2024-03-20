@@ -79,6 +79,7 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
 .. toctree::
    :maxdepth: 1
    :caption: Library User Guide
+   
    library-user-guide/index
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
