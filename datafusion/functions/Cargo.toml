@@ -35,6 +35,7 @@ string_expressions = []
 core_expressions = []
 # enable datetime functions
 datetime_expressions = []
+# Enable encoding by default so the doctests work. In general don't automatically enable all packages.
 default = [
     "core_expressions",
     "datetime_expressions",
@@ -43,7 +44,7 @@ default = [
     "regex_expressions",
     "crypto_expressions",
     "string_expressions",
-] # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
+]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
 # enable math functions
