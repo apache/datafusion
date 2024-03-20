@@ -53,6 +53,8 @@ use arrow::{
     },
 };
 use arrow_array::{ArrowNativeTypeOp, Scalar};
+use arrow_buffer::Buffer;
+use arrow_schema::{UnionFields, UnionMode};
 
 pub use struct_builder::ScalarStructBuilder;
 
@@ -275,6 +277,11 @@ pub enum ScalarValue {
     DurationMicrosecond(Option<i64>),
     /// Duration in nanoseconds
     DurationNanosecond(Option<i64>),
+    /// A nested datatype that can represent slots of differing types. Components:
+    /// `.0`: a tuple of union `type_id` and the single value held by this Scalar
+    /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
+    /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
+    Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
@@ -375,6 +382,10 @@ impl PartialEq for ScalarValue {
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
             (IntervalMonthDayNano(_), _) => false,
+            (Union(val1, fields1, mode1), Union(val2, fields2, mode2)) => {
+                val1.eq(val2) && fields1.eq(fields2) && mode1.eq(mode2)
+            }
+            (Union(_, _, _), _) => false,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
             (Dictionary(_, _), _) => false,
             (Null, Null) => true,
@@ -500,6 +511,14 @@ impl PartialOrd for ScalarValue {
             (DurationMicrosecond(_), _) => None,
             (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.partial_cmp(v2),
             (DurationNanosecond(_), _) => None,
+            (Union(v1, t1, m1), Union(v2, t2, m2)) => {
+                if t1.eq(t2) && m1.eq(m2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
+            }
+            (Union(_, _, _), _) => None,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => {
                 // Don't compare if the key types don't match (it is effectively a different datatype)
                 if k1 == k2 {
@@ -663,6 +682,11 @@ impl std::hash::Hash for ScalarValue {
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
             IntervalMonthDayNano(v) => v.hash(state),
+            Union(v, t, m) => {
+                v.hash(state);
+                t.hash(state);
+                m.hash(state);
+            }
             Dictionary(k, v) => {
                 k.hash(state);
                 v.hash(state);
@@ -1093,6 +1117,7 @@ impl ScalarValue {
             ScalarValue::DurationNanosecond(_) => {
                 DataType::Duration(TimeUnit::Nanosecond)
             }
+            ScalarValue::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
@@ -1292,6 +1317,7 @@ impl ScalarValue {
             ScalarValue::DurationMillisecond(v) => v.is_none(),
             ScalarValue::DurationMicrosecond(v) => v.is_none(),
             ScalarValue::DurationNanosecond(v) => v.is_none(),
+            ScalarValue::Union(v, _, _) => v.is_none(),
             ScalarValue::Dictionary(_, v) => v.is_null(),
         }
     }
@@ -1650,7 +1676,11 @@ impl ScalarValue {
             | DataType::Duration(_)
             | DataType::Union(_, _)
             | DataType::Map(_, _)
-            | DataType::RunEndEncoded(_, _) => {
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 return _internal_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
@@ -1746,7 +1776,7 @@ impl ScalarValue {
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
-    /// `data_type`, to a [`ListArray`].
+    /// `data_type`, to a single element [`ListArray`].
     ///
     /// Example
     /// ```
@@ -2083,6 +2113,39 @@ impl ScalarValue {
                 e,
                 size
             ),
+            ScalarValue::Union(value, fields, _mode) => match value {
+                Some((v_id, value)) => {
+                    let mut field_type_ids = Vec::<i8>::with_capacity(fields.len());
+                    let mut child_arrays =
+                        Vec::<(Field, ArrayRef)>::with_capacity(fields.len());
+                    for (f_id, field) in fields.iter() {
+                        let ar = if f_id == *v_id {
+                            value.to_array_of_size(size)?
+                        } else {
+                            let dt = field.data_type();
+                            new_null_array(dt, size)
+                        };
+                        let field = (**field).clone();
+                        child_arrays.push((field, ar));
+                        field_type_ids.push(f_id);
+                    }
+                    let type_ids = repeat(*v_id).take(size).collect::<Vec<_>>();
+                    let type_ids = Buffer::from_slice_ref(type_ids);
+                    let value_offsets: Option<Buffer> = None;
+                    let ar = UnionArray::try_new(
+                        field_type_ids.as_slice(),
+                        type_ids,
+                        value_offsets,
+                        child_arrays,
+                    )
+                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
+                    Arc::new(ar)
+                }
+                None => {
+                    let dt = self.data_type();
+                    new_null_array(&dt, size)
+                }
+            },
             ScalarValue::Dictionary(key_type, v) => {
                 // values array is one element long (the value)
                 match key_type.as_ref() {
@@ -2622,6 +2685,9 @@ impl ScalarValue {
             ScalarValue::DurationNanosecond(val) => {
                 eq_array_primitive!(array, index, DurationNanosecondArray, val)?
             }
+            ScalarValue::Union(_, _, _) => {
+                return _not_impl_err!("Union is not supported yet")
+            }
             ScalarValue::Dictionary(key_type, v) => {
                 let (values_array, values_index) = match key_type.as_ref() {
                     DataType::Int8 => get_dict_value::<Int8Type>(array, index)?,
@@ -2699,6 +2765,15 @@ impl ScalarValue {
                 ScalarValue::LargeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::FixedSizeList(arr) => arr.get_array_memory_size(),
                 ScalarValue::Struct(arr) => arr.get_array_memory_size(),
+                ScalarValue::Union(vals, fields, _mode) => {
+                    vals.as_ref()
+                        .map(|(_id, sv)| sv.size() - std::mem::size_of_val(sv))
+                        .unwrap_or_default()
+                        // `fields` is boxed, so it is NOT already included in `self`
+                        + std::mem::size_of_val(fields)
+                        + (std::mem::size_of::<Field>() * fields.len())
+                        + fields.iter().map(|(_idx, field)| field.size() - std::mem::size_of_val(field)).sum::<usize>()
+                }
                 ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
                     dt.size() + sv.size()
@@ -3044,6 +3119,9 @@ impl TryFrom<&DataType> for ScalarValue {
                     .to_owned()
                     .into(),
             ),
+            DataType::Union(fields, mode) => {
+                ScalarValue::Union(None, fields.clone(), *mode)
+            }
             DataType::Null => ScalarValue::Null,
             _ => {
                 return _not_impl_err!(
@@ -3160,6 +3238,10 @@ impl fmt::Display for ScalarValue {
                         .join(",")
                 )?
             }
+            ScalarValue::Union(val, _fields, _mode) => match val {
+                Some((id, val)) => write!(f, "{}:{}", id, val)?,
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
         };
@@ -3275,6 +3357,10 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::DurationNanosecond(_) => {
                 write!(f, "DurationNanosecond(\"{self}\")")
             }
+            ScalarValue::Union(val, _fields, _mode) => match val {
+                Some((id, val)) => write!(f, "Union {}:{}", id, val),
+                None => write!(f, "Union(NULL)"),
+            },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
             ScalarValue::Null => write!(f, "NULL"),
         }
@@ -5769,7 +5855,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
 
         #[rustfmt::skip]
-        let expected = [
+            let expected = [
             "+---+",
             "| s |",
             "+---+",
@@ -5803,7 +5889,7 @@ mod tests {
             &DataType::List(Arc::new(Field::new(
                 "item",
                 DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
-                true
+                true,
             )))
         );
     }

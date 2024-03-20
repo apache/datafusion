@@ -94,6 +94,7 @@ pub(crate) fn prune_row_groups_by_statistics(
                     metrics.predicate_evaluation_errors.add(1);
                 }
             }
+            metrics.row_groups_matched_statistics.add(1);
         }
 
         filtered.push(idx)
@@ -166,6 +167,9 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
         if prune_group {
             metrics.row_groups_pruned_bloom_filter.add(1);
         } else {
+            if !stats.column_sbbf.is_empty() {
+                metrics.row_groups_matched_bloom_filter.add(1);
+            }
             filtered.push(*idx);
         }
     }
@@ -195,6 +199,10 @@ impl PruningStatistics for BloomFilterStatistics {
         None
     }
 
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
     /// Use bloom filters to determine if we are sure this column can not
     /// possibly contain `values`
     ///
@@ -217,6 +225,8 @@ impl PruningStatistics for BloomFilterStatistics {
             .map(|value| {
                 match value {
                     ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
+                    ScalarValue::Binary(Some(v)) => sbbf.check(v),
+                    ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
                     ScalarValue::Boolean(Some(v)) => sbbf.check(v),
                     ScalarValue::Float64(Some(v)) => sbbf.check(v),
                     ScalarValue::Float32(Some(v)) => sbbf.check(v),
@@ -326,6 +336,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
         let (c, _) = self.column(&column.name)?;
         let scalar = ScalarValue::UInt64(Some(c.statistics()?.null_count()));
         scalar.to_array().ok()
+    }
+
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
     }
 
     fn contained(

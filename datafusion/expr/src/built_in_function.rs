@@ -20,12 +20,12 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use crate::type_coercion::functions::data_types;
 use crate::{FuncMonotonicity, Signature, TypeSignature, Volatility};
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
@@ -101,26 +101,6 @@ pub enum BuiltinScalarFunction {
     Trunc,
     /// cot
     Cot,
-
-    // array functions
-    /// array_position
-    ArrayPosition,
-    /// array_positions
-    ArrayPositions,
-    /// array_remove
-    ArrayRemove,
-    /// array_remove_n
-    ArrayRemoveN,
-    /// array_remove_all
-    ArrayRemoveAll,
-    /// array_replace
-    ArrayReplace,
-    /// array_replace_n
-    ArrayReplaceN,
-    /// array_replace_all
-    ArrayReplaceAll,
-    /// array_except
-    ArrayExcept,
 
     // string functions
     /// ascii
@@ -274,15 +254,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -340,24 +311,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
-            BuiltinScalarFunction::ArrayPositions => {
-                Ok(List(Arc::new(Field::new("item", UInt64, true))))
-            }
-            BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayExcept => {
-                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, _) | (_, DataType::Null) => {
-                        Ok(input_expr_types[0].clone())
-                    }
-                    (dt, _) => Ok(dt),
-                }
-            }
             BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -510,25 +463,6 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayPosition => {
-                Signature::array_and_element_and_optional_index(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayPositions => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayRemove => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayRemoveAll => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                Signature::any(3, self.volatility())
-            }
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -826,30 +760,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-
-            // hashing functions
-            BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
-            BuiltinScalarFunction::ArrayPosition => &[
-                "array_position",
-                "list_position",
-                "array_indexof",
-                "list_indexof",
-            ],
-            BuiltinScalarFunction::ArrayPositions => {
-                &["array_positions", "list_positions"]
-            }
-            BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
-            BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
-            BuiltinScalarFunction::ArrayRemoveAll => {
-                &["array_remove_all", "list_remove_all"]
-            }
-            BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-            BuiltinScalarFunction::ArrayReplaceN => {
-                &["array_replace_n", "list_replace_n"]
-            }
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                &["array_replace_all", "list_replace_all"]
-            }
             BuiltinScalarFunction::OverLay => &["overlay"],
         }
     }

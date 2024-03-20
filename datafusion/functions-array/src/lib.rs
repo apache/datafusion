@@ -31,8 +31,12 @@ pub mod macros;
 mod array_has;
 mod concat;
 mod core;
+mod except;
 mod extract;
 mod kernels;
+mod position;
+mod remove;
+mod replace;
 mod rewrite;
 mod set_ops;
 mod udf;
@@ -53,10 +57,19 @@ pub mod expr_fn {
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
     pub use super::core::make_array;
+    pub use super::except::array_except;
     pub use super::extract::array_element;
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
+    pub use super::position::array_position;
+    pub use super::position::array_positions;
+    pub use super::remove::array_remove;
+    pub use super::remove::array_remove_all;
+    pub use super::remove::array_remove_n;
+    pub use super::replace::array_replace;
+    pub use super::replace::array_replace_all;
+    pub use super::replace::array_replace_n;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
@@ -89,6 +102,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         concat::array_append_udf(),
         concat::array_prepend_udf(),
         concat::array_concat_udf(),
+        except::array_except_udf(),
         extract::array_element_udf(),
         extract::array_pop_back_udf(),
         extract::array_pop_front_udf(),
@@ -107,6 +121,14 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
+        position::array_position_udf(),
+        position::array_positions_udf(),
+        remove::array_remove_udf(),
+        remove::array_remove_all_udf(),
+        remove::array_remove_n_udf(),
+        replace::array_replace_n_udf(),
+        replace::array_replace_all_udf(),
+        replace::array_replace_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

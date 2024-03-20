@@ -18,12 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::cast::AsArray;
+use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{
+    Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
+};
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, StringArray};
-use arrow_schema::DataType::{Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8};
-use arrow_schema::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
@@ -178,7 +181,7 @@ fn _to_char_scalar(
     };
 
     let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
-    let formatted: Result<Vec<_>, arrow_schema::ArrowError> = (0..array.len())
+    let formatted: Result<Vec<_>, ArrowError> = (0..array.len())
         .map(|i| formatter.value(i).try_to_string())
         .collect();
 
@@ -236,7 +239,7 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 #[cfg(test)]
 mod tests {
     use crate::datetime::to_char::ToCharFunc;
-    use arrow_array::{
+    use arrow::array::{
         Array, ArrayRef, Date32Array, Date64Array, StringArray, Time32MillisecondArray,
         Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,

@@ -2751,3 +2751,39 @@ query I
 select to_unixtime(arrow_cast(1599523200.414, 'Float64'));
 ----
 1599523200
+
+##########
+## Tests for the "AT TIME ZONE" clause
+##########
+
+query P
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'UTC';
+----
+2000-12-01T04:04:12Z
+
+query P
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New_York';
+----
+2000-12-01T04:04:12-05:00
+
+## date-time strings that already have a explicit timezone can be used with AT TIME ZONE
+
+# same time zone as provided date-time
+query P
+SELECT '2000-12-01T04:04:12-05:00' AT TIME ZONE 'America/New_York';
+----
+2000-12-01T04:04:12-05:00
+
+# different time zone than provided date-time
+query P
+SELECT '2000-12-01T04:04:12-05:00' AT TIME ZONE 'Europe/Berlin';
+----
+2000-12-01T10:04:12+01:00
+
+# longform timezones need whitespace converted to underscore
+statement error
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New York';
+
+# abbreviated timezone is not supported
+statement error
+SELECT '2023-03-12 02:00:00' AT TIME ZONE 'EDT';

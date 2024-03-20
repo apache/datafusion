@@ -20,18 +20,18 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
-use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
-use arrow_array::temporal_conversions::{
+use arrow::array::temporal_conversions::{
     as_datetime_with_timezone, timestamp_ns_to_datetime,
 };
-use arrow_array::timezone::Tz;
-use arrow_array::types::{
+use arrow::array::timezone::Tz;
+use arrow::array::types::{
     ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_array::{Array, PrimitiveArray};
+use arrow::array::{Array, PrimitiveArray};
+use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{DataType, TimeUnit};
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
@@ -405,11 +405,11 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
 #[cfg(test)]
 mod tests {
     use crate::datetime::date_trunc::{date_trunc_coarse, DateTruncFunc};
+    use arrow::array::cast::as_primitive_array;
+    use arrow::array::types::TimestampNanosecondType;
+    use arrow::array::TimestampNanosecondArray;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
-    use arrow_array::cast::as_primitive_array;
-    use arrow_array::types::TimestampNanosecondType;
-    use arrow_array::TimestampNanosecondArray;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;

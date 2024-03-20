@@ -240,17 +240,11 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-Finally, in order to build with the `simd` optimization `cargo nightly` is required.
-
-```shell
-rustup toolchain install nightly
-```
-
 Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
 ```shell
-RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
+RUSTFLAGS='-C target-cpu=native' cargo run --release
 ```
 
 ## Enable backtraces

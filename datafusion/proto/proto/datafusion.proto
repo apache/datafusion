@@ -633,11 +633,11 @@ enum ScalarFunction {
   // 89 was ArrayRepeat
   // 90 was ArrayLength
   // 91 was ArrayNdims
-  ArrayPosition = 92;
-  ArrayPositions = 93;
+  // 92 was ArrayPosition
+  // 93 was ArrayPositions
   // 94 was ArrayPrepend
-  ArrayRemove = 95;
-  ArrayReplace = 96;
+  // 95 was ArrayRemove
+  // 96 was ArrayReplace
   // 97 was ArrayToString
   // 98 was Cardinality
   // 99 was ArrayElement
@@ -646,10 +646,10 @@ enum ScalarFunction {
   // 104 was ArrayHas
   // 105 was ArrayHasAny
   // 106 was ArrayHasAll
-  ArrayRemoveN = 107;
-  ArrayReplaceN = 108;
-  ArrayRemoveAll = 109;
-  ArrayReplaceAll = 110;
+  // 107 was ArrayRemoveN
+  // 108 was ArrayReplaceN
+  // 109 was ArrayRemoveAll
+  // 110 was ArrayReplaceAll
   Nanvl = 111;
   // 112 was Flatten
   // 113 was IsNan
@@ -662,7 +662,7 @@ enum ScalarFunction {
   // 120 was ArrayUnion
   OverLay = 121;
   // 122 is Range
-  ArrayExcept = 123;
+  // 123 is ArrayExcept
   // 124 was ArrayPopFront
   Levenshtein = 125;
   SubstrIndex = 126;
@@ -988,6 +988,20 @@ message IntervalMonthDayNanoValue {
   int64 nanos = 3;
 }
 
+message UnionField {
+  int32 field_id = 1;
+  Field field = 2;
+}
+
+message UnionValue {
+  // Note that a null union value must have one or more fields, so we
+  // encode a null UnionValue as one with value_id == 128
+  int32 value_id = 1;
+  ScalarValue value = 2;
+  repeated UnionField fields = 3;
+  UnionMode mode = 4;
+}
+
 message ScalarFixedSizeBinary{
   bytes values = 1;
   int32 length = 2;
@@ -1042,6 +1056,7 @@ message ScalarValue{
     ScalarTime64Value time64_value = 30;
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
+    UnionValue union_value = 42;
   }
 }
 
@@ -1458,6 +1473,7 @@ message PhysicalExprNode {
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
   ArrowType return_type = 4;
 }
 
