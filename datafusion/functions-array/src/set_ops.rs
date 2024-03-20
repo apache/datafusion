@@ -18,6 +18,7 @@
 //! Array Intersection, Union, and Distinct functions
 
 use crate::core::make_array_inner;
+
 use crate::utils::make_scalar_function;
 use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
@@ -58,6 +59,14 @@ make_udf_function!(
     array,
     "return distinct values from the array after removing duplicates.",
     array_distinct_udf
+);
+
+make_udf_function!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "returns an array of the elements that appear in the first array but not in the second.",
+    array_except_udf
 );
 
 #[derive(Debug)]
@@ -240,6 +249,7 @@ fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 enum SetOp {
     Union,
     Intersect,
+    Except,
 }
 
 impl Display for SetOp {
@@ -247,6 +257,7 @@ impl Display for SetOp {
         match self {
             SetOp::Union => write!(f, "array_union"),
             SetOp::Intersect => write!(f, "array_intersect"),
+            SetOp::Except => write!(f, "array_except"),
         }
     }
 }
@@ -273,55 +284,97 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];
+    let mut nulls = vec![];
 
     let converter = RowConverter::new(vec![SortField::new(dt)])?;
     for (first_arr, second_arr) in l.iter().zip(r.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+        let last_offset = match offsets.last().copied() {
+            Some(offset) => offset,
+            None => return internal_err!("offsets should not be empty"),
+        };
+        match (first_arr, second_arr) {
+            (Some(first_arr), Some(second_arr)) => {
+                let mut l_values = converter.convert_columns(&[first_arr])?;
+                let mut r_values = converter.convert_columns(&[second_arr])?;
 
-            let l_iter = l_values.iter().sorted().dedup();
-            let values_set: HashSet<_> = l_iter.clone().collect();
-            let mut rows = if set_op == SetOp::Union {
-                l_iter.collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
-            for r_val in r_values.iter().sorted().dedup() {
-                match set_op {
-                    SetOp::Union => {
-                        if !values_set.contains(&r_val) {
-                            rows.push(r_val);
+                if set_op == SetOp::Except {
+                    (l_values, r_values) = (r_values, l_values);
+                }
+
+                let l_iter = l_values.iter().sorted().dedup();
+                let values_set: HashSet<_> = l_iter.clone().collect();
+                let mut rows = if set_op == SetOp::Union {
+                    l_iter.collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
+                for r_val in r_values.iter().sorted().dedup() {
+                    match set_op {
+                        SetOp::Union | SetOp::Except => {
+                            if !values_set.contains(&r_val) {
+                                rows.push(r_val);
+                            }
                         }
-                    }
-                    SetOp::Intersect => {
-                        if values_set.contains(&r_val) {
-                            rows.push(r_val);
+                        SetOp::Intersect => {
+                            if values_set.contains(&r_val) {
+                                rows.push(r_val);
+                            }
                         }
                     }
                 }
+
+                offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+                let arrays = converter.convert_rows(rows)?;
+                let array = match arrays.first() {
+                    Some(array) => array.clone(),
+                    None => {
+                        return internal_err!("{set_op}: failed to get array from rows");
+                    }
+                };
+                new_arrays.push(array);
+                nulls.push(true);
+            }
+            (Some(_), None) if set_op == SetOp::Intersect => {
+                offsets.push(last_offset);
+                nulls.push(false);
+            }
+            (None, Some(_)) if matches!(set_op, SetOp::Intersect | SetOp::Except) => {
+                offsets.push(last_offset);
+                nulls.push(false);
+            }
+            (Some(arr), None) | (None, Some(arr)) => {
+                let l_values = converter.convert_columns(&[arr])?;
+                let l_iter = l_values.iter().sorted().dedup();
+                let rows = l_iter.collect::<Vec<_>>();
+
+                offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+                let arrays = converter.convert_rows(rows)?;
+                let array = match arrays.first() {
+                    Some(array) => array.clone(),
+                    None => {
+                        return internal_err!("{set_op}: failed to get array from rows");
+                    }
+                };
+                new_arrays.push(array);
+                nulls.push(true);
             }
 
-            let last_offset = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.first() {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!("{set_op}: failed to get array from rows");
-                }
-            };
-            new_arrays.push(array);
+            (None, None) => {
+                offsets.push(last_offset);
+                nulls.push(false);
+            }
         }
     }
 
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
     let values = compute::concat(&new_arrays_ref)?;
-    let arr = GenericListArray::<OffsetSize>::try_new(field, offsets, values, None)?;
+    let arr = GenericListArray::<OffsetSize>::try_new(
+        field,
+        offsets,
+        values,
+        Some(nulls.into()),
+    )?;
     Ok(Arc::new(arr))
 }
 
@@ -332,7 +385,7 @@ fn general_set_op(
 ) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, DataType::List(field)) => {
-            if set_op == SetOp::Intersect {
+            if matches!(set_op, SetOp::Intersect | SetOp::Except) {
                 return Ok(new_empty_array(&DataType::Null));
             }
             let array = as_list_array(&array2)?;
@@ -347,7 +400,7 @@ fn general_set_op(
             general_array_distinct::<i32>(array, field)
         }
         (DataType::Null, DataType::LargeList(field)) => {
-            if set_op == SetOp::Intersect {
+            if matches!(set_op, SetOp::Intersect | SetOp::Except) {
                 return Ok(new_empty_array(&DataType::Null));
             }
             let array = as_large_list_array(&array2)?;
@@ -437,4 +490,63 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         values,
         None,
     )?))
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayExcept {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayExcept {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::any(2, Volatility::Immutable),
+            aliases: vec!["array_except".to_string(), "list_except".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayExcept {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_except"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        match (&arg_types[0].clone(), &arg_types[1].clone()) {
+            (DataType::Null, DataType::Null) | (DataType::Null, _) => Ok(DataType::Null),
+            (DataType::List(field), _) => Ok(DataType::List(field.clone())),
+            (DataType::LargeList(field), _) => Ok(DataType::LargeList(field.clone())),
+            _ => exec_err!(
+                "Not reachable, data_type should be List, LargeList or FixedSizeList"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+        make_scalar_function(array_except_inner)(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+/// Array_except SQL function
+pub fn array_except_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_except needs two arguments");
+    }
+
+    let array1 = &args[0];
+    let array2 = &args[1];
+
+    general_set_op(array1, array2, SetOp::Except)
 }
