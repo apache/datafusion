@@ -701,12 +701,8 @@ pub async fn plan_to_parquet(
         let (_, multipart_writer) = storeref.put_multipart(&file).await?;
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let mut writer = AsyncArrowWriter::try_new(
-                multipart_writer,
-                plan.schema(),
-                10485760,
-                propclone,
-            )?;
+            let mut writer =
+                AsyncArrowWriter::try_new(multipart_writer, plan.schema(), propclone)?;
             while let Some(next_batch) = stream.next().await {
                 let batch = next_batch?;
                 writer.write(&batch).await?;
@@ -1870,7 +1866,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
+            "pruning_predicate=CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != bar OR bar != c1_max@1 END"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);

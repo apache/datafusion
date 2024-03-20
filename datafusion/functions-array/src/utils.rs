@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::{array::ArrayRef, datatypes::DataType};
+
 use arrow_array::{
     Array, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
 };
@@ -27,6 +28,7 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
@@ -202,9 +204,9 @@ pub(crate) fn compare_element_to_list(
             let element_arr = Scalar::new(element_array_row);
             // use not_distinct so we can compare NULL
             if eq {
-                arrow::compute::kernels::cmp::not_distinct(&list_array_row, &element_arr)?
+                arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
             } else {
-                arrow::compute::kernels::cmp::distinct(&list_array_row, &element_arr)?
+                arrow_ord::cmp::distinct(&list_array_row, &element_arr)?
             }
         }
     };

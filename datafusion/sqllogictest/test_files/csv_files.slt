@@ -23,7 +23,7 @@ c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
-OPTIONS ('csv.quote' '~')
+OPTIONS ('format.quote' '~')
 LOCATION '../core/tests/data/quote.csv';
 
 statement ok
@@ -33,7 +33,7 @@ c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
-OPTIONS ('csv.escape' '\')
+OPTIONS ('format.escape' '\')
 LOCATION '../core/tests/data/escape.csv';
 
 query TT
@@ -71,7 +71,7 @@ c2 VARCHAR
 ) STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
-OPTIONS ('csv.escape' '"')
+OPTIONS ('format.escape' '"')
 LOCATION '../core/tests/data/escape.csv';
 
 # TODO: Validate this with better data.
@@ -117,14 +117,14 @@ CREATE TABLE src_table_2 (
 
 query ITII
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 4
 
 
 query ITII
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 4
 

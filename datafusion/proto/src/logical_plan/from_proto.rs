@@ -48,9 +48,9 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, array_replace, array_replace_all, array_replace_n, ascii, asinh, atan, atan2,
-    atanh, bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
+    acosh, ascii, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
@@ -466,9 +466,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Trim => Self::Trim,
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
-            ScalarFunction::ArrayReplace => Self::ArrayReplace,
-            ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
-            ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::Ascii => Self::Ascii,
@@ -771,6 +768,41 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
+            Value::UnionValue(val) => {
+                let mode = match val.mode {
+                    0 => UnionMode::Sparse,
+                    1 => UnionMode::Dense,
+                    id => Err(Error::unknown("UnionMode", id))?,
+                };
+                let ids = val
+                    .fields
+                    .iter()
+                    .map(|f| f.field_id as i8)
+                    .collect::<Vec<_>>();
+                let fields = val
+                    .fields
+                    .iter()
+                    .map(|f| f.field.clone())
+                    .collect::<Option<Vec<_>>>();
+                let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
+                let fields = fields
+                    .iter()
+                    .map(Field::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let fields = UnionFields::new(ids, fields);
+                let v_id = val.value_id as i8;
+                let val = match &val.value {
+                    None => None,
+                    Some(val) => {
+                        let val: ScalarValue = val
+                            .as_ref()
+                            .try_into()
+                            .map_err(|_| Error::General("Invalid Scalar".to_string()))?;
+                        Some((v_id, Box::new(val)))
+                    }
+                };
+                Self::Union(val, fields, mode)
+            }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
             }
@@ -1362,22 +1394,6 @@ pub fn parse_expr(
                 ScalarFunction::Acosh => {
                     Ok(acosh(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::ArrayReplace => Ok(array_replace(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::ArrayReplaceN => Ok(array_replace_n(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                    parse_expr(&args[3], registry, codec)?,
-                )),
-                ScalarFunction::ArrayReplaceAll => Ok(array_replace_all(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),

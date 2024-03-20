@@ -96,7 +96,7 @@ impl ScalarUDFImpl for MakeArray {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(args)
     }
 
