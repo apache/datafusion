@@ -74,12 +74,11 @@ Please see the `developer’s guide`_ for contributing and `communication`_ for 
    user-guide/configs
    user-guide/faq
 
-.. _toc.developer-guide:
+.. _toc.library-user-guide:
 
 .. toctree::
    :maxdepth: 1
-   :caption: Developer Guide
-
+   :caption: Library User Guide
    library-user-guide/index
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
