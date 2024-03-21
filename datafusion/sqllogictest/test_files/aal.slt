@@ -12,8 +12,8 @@ query TT
 explain select column1 + column1, 2+3 from t;
 ----
 logical_plan
-Projection: t.column1 + t.column1
+Projection: t.column1 + t.column1, Int64(5) AS Int64(2) + Int64(3)
 --TableScan: t projection=[column1]
 physical_plan
-ProjectionExec: expr=[column1@0 + column1@0 as t.column1 + t.column1]
+ProjectionExec: expr=[column1@0 + column1@0 as t.column1 + t.column1, 5 as Int64(2) + Int64(3)]
 --MemoryExec: partitions=1, partition_sizes=[1]
