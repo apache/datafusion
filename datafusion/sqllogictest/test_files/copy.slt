@@ -474,6 +474,38 @@ select * from validate_arrow;
 1 Foo
 2 Bar
 
+# Legacy Format Options Support
+
+# Copy with legacy format options for Parquet
+query IT
+COPY source_table TO 'test_files/scratch/copy/format_table.parquet'
+OPTIONS (
+    compression snappy,
+    'compression::col1' 'zstd(5)'
+);
+----
+2
+
+# Copy with legacy format options for JSON
+query IT
+COPY source_table  to 'test_files/scratch/copy/format_table'
+STORED AS JSON OPTIONS (compression gzip);
+----
+2
+
+# Copy with legacy format options for CSV
+query IT
+COPY source_table to 'test_files/scratch/copy/format_table.csv'
+OPTIONS (
+    has_header false,
+    compression xz,
+    datetime_format '%FT%H:%M:%S.%9f',
+    delimiter ';',
+    null_value 'NULLVAL'
+);
+----
+2
+
 
 # Error cases:
 
