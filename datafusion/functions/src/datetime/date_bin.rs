@@ -18,17 +18,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
-use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
-use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
-use arrow_array::temporal_conversions::NANOSECONDS;
-use arrow_array::types::{
+use arrow::array::temporal_conversions::NANOSECONDS;
+use arrow::array::types::{
     ArrowTimestampType, IntervalDayTimeType, IntervalMonthDayNanoType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType,
 };
-use arrow_array::{ArrayRef, PrimitiveArray};
+use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
+use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{DataType, TimeUnit};
 use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
 
 use datafusion_common::cast::as_primitive_array;
@@ -420,10 +420,10 @@ fn date_bin_impl(
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::types::TimestampNanosecondType;
+    use arrow::array::{IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
-    use arrow_array::types::TimestampNanosecondType;
-    use arrow_array::{IntervalDayTimeArray, TimestampNanosecondArray};
     use chrono::TimeDelta;
 
     use datafusion_common::ScalarValue;
@@ -695,7 +695,7 @@ mod tests {
                         result.data_type(),
                         &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
                     );
-                    let left = arrow_array::cast::as_primitive_array::<
+                    let left = arrow::array::cast::as_primitive_array::<
                         TimestampNanosecondType,
                     >(&result);
                     assert_eq!(left, &right);

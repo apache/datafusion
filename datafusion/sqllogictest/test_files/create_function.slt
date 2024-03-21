@@ -47,7 +47,7 @@ select abs(-1);
 statement ok
 DROP FUNCTION abs;
 
-# now the the query errors
+# now the query errors
 query error Invalid function 'abs'.
 select abs(-1);
 

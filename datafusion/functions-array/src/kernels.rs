@@ -18,351 +18,30 @@
 //! implementation kernels for array functions
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Capacities, Date32Array, Float32Array, Float64Array,
-    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, LargeListArray,
-    LargeStringArray, ListArray, ListBuilder, MutableArrayData, OffsetSizeTrait,
-    StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BooleanArray, Capacities, Date32Array, GenericListArray, Int64Array,
+    LargeListArray, ListArray, MutableArrayData, OffsetSizeTrait, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
     DataType, Date32Type, Field, IntervalMonthDayNanoType, UInt64Type,
 };
-use arrow::row::{RowConverter, SortField};
 use arrow_array::new_null_array;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::FieldRef;
 use arrow_schema::SortOptions;
 
 use datafusion_common::cast::{
-    as_date32_array, as_generic_list_array, as_generic_string_array, as_int64_array,
-    as_interval_mdn_array, as_large_list_array, as_list_array, as_null_array,
-    as_string_array,
+    as_date32_array, as_generic_list_array, as_int64_array, as_interval_mdn_array,
+    as_large_list_array, as_list_array, as_null_array, as_string_array,
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_datafusion_err,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_datafusion_err, not_impl_datafusion_err, DataFusionError, Result,
+    ScalarValue,
 };
-use itertools::Itertools;
 
+use crate::utils::downcast_arg;
 use std::any::type_name;
 use std::sync::Arc;
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
-}
-
-macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        for x in arr {
-            match x {
-                Some(x) => {
-                    $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMITER);
-                }
-                None => {
-                    if $WITH_NULL_STRING {
-                        $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMITER);
-                    }
-                }
-            }
-        }
-        Ok($ARG)
-    }};
-}
-
-macro_rules! call_array_function {
-    ($DATATYPE:expr, false) => {
-        match $DATATYPE {
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
-        }
-    };
-    ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
-        match $DATATYPE {
-            DataType::List(_) => array_function!(ListArray),
-            DataType::Utf8 => array_function!(StringArray),
-            DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Boolean => array_function!(BooleanArray),
-            DataType::Float32 => array_function!(Float32Array),
-            DataType::Float64 => array_function!(Float64Array),
-            DataType::Int8 => array_function!(Int8Array),
-            DataType::Int16 => array_function!(Int16Array),
-            DataType::Int32 => array_function!(Int32Array),
-            DataType::Int64 => array_function!(Int64Array),
-            DataType::UInt8 => array_function!(UInt8Array),
-            DataType::UInt16 => array_function!(UInt16Array),
-            DataType::UInt32 => array_function!(UInt32Array),
-            DataType::UInt64 => array_function!(UInt64Array),
-            _ => unreachable!(),
-        }
-    }};
-}
-
-/// Array_to_string SQL function
-pub(super) fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
-        return exec_err!("array_to_string expects two or three arguments");
-    }
-
-    let arr = &args[0];
-
-    let delimiters = as_string_array(&args[1])?;
-    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
-
-    let mut null_string = String::from("");
-    let mut with_null_string = false;
-    if args.len() == 3 {
-        null_string = as_string_array(&args[2])?.value(0).to_string();
-        with_null_string = true;
-    }
-
-    fn compute_array_to_string(
-        arg: &mut String,
-        arr: ArrayRef,
-        delimiter: String,
-        null_string: String,
-        with_null_string: bool,
-    ) -> datafusion_common::Result<&mut String> {
-        match arr.data_type() {
-            DataType::List(..) => {
-                let list_array = as_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::LargeList(..) => {
-                let list_array = as_large_list_array(&arr)?;
-                for i in 0..list_array.len() {
-                    compute_array_to_string(
-                        arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
-                        with_null_string,
-                    )?;
-                }
-
-                Ok(arg)
-            }
-            DataType::Null => Ok(arg),
-            data_type => {
-                macro_rules! array_function {
-                    ($ARRAY_TYPE:ident) => {
-                        to_string!(
-                            arg,
-                            arr,
-                            &delimiter,
-                            &null_string,
-                            with_null_string,
-                            $ARRAY_TYPE
-                        )
-                    };
-                }
-                call_array_function!(data_type, false)
-            }
-        }
-    }
-
-    fn generate_string_array<O: OffsetSizeTrait>(
-        list_arr: &GenericListArray<O>,
-        delimiters: Vec<Option<&str>>,
-        null_string: String,
-        with_null_string: bool,
-    ) -> datafusion_common::Result<StringArray> {
-        let mut res: Vec<Option<String>> = Vec::new();
-        for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
-                let mut arg = String::from("");
-                let s = compute_array_to_string(
-                    &mut arg,
-                    arr,
-                    delimiter.to_string(),
-                    null_string.clone(),
-                    with_null_string,
-                )?
-                .clone();
-
-                if let Some(s) = s.strip_suffix(delimiter) {
-                    res.push(Some(s.to_string()));
-                } else {
-                    res.push(Some(s));
-                }
-            } else {
-                res.push(None);
-            }
-        }
-
-        Ok(StringArray::from(res))
-    }
-
-    let arr_type = arr.data_type();
-    let string_arr = match arr_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) => {
-            let list_array = as_list_array(&arr)?;
-            generate_string_array::<i32>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&arr)?;
-            generate_string_array::<i64>(
-                list_array,
-                delimiters,
-                null_string,
-                with_null_string,
-            )?
-        }
-        _ => {
-            let mut arg = String::from("");
-            let mut res: Vec<Option<String>> = Vec::new();
-            // delimiter length is 1
-            assert_eq!(delimiters.len(), 1);
-            let delimiter = delimiters[0].unwrap();
-            let s = compute_array_to_string(
-                &mut arg,
-                arr.clone(),
-                delimiter.to_string(),
-                null_string,
-                with_null_string,
-            )?
-            .clone();
-
-            if !s.is_empty() {
-                let s = s.strip_suffix(delimiter).unwrap().to_string();
-                res.push(Some(s));
-            } else {
-                res.push(Some(s));
-            }
-            StringArray::from(res)
-        }
-    };
-
-    Ok(Arc::new(string_arr))
-}
-
-/// Splits string at occurrences of delimiter and returns an array of parts
-/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
-pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() < 2 || args.len() > 3 {
-        return exec_err!("string_to_array expects two or three arguments");
-    }
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
-
-    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
-        string_array.len(),
-        string_array.get_buffer_memory_size(),
-    ));
-
-    match args.len() {
-        2 => {
-            string_array.iter().zip(delimiter_array.iter()).for_each(
-                |(string, delimiter)| {
-                    match (string, delimiter) {
-                        (Some(string), Some("")) => {
-                            list_builder.values().append_value(string);
-                            list_builder.append(true);
-                        }
-                        (Some(string), Some(delimiter)) => {
-                            string.split(delimiter).for_each(|s| {
-                                list_builder.values().append_value(s);
-                            });
-                            list_builder.append(true);
-                        }
-                        (Some(string), None) => {
-                            string.chars().map(|c| c.to_string()).for_each(|c| {
-                                list_builder.values().append_value(c);
-                            });
-                            list_builder.append(true);
-                        }
-                        _ => list_builder.append(false), // null value
-                    }
-                },
-            );
-        }
-
-        3 => {
-            let null_value_array = as_generic_string_array::<T>(&args[2])?;
-            string_array
-                .iter()
-                .zip(delimiter_array.iter())
-                .zip(null_value_array.iter())
-                .for_each(|((string, delimiter), null_value)| {
-                    match (string, delimiter) {
-                        (Some(string), Some("")) => {
-                            if Some(string) == null_value {
-                                list_builder.values().append_null();
-                            } else {
-                                list_builder.values().append_value(string);
-                            }
-                            list_builder.append(true);
-                        }
-                        (Some(string), Some(delimiter)) => {
-                            string.split(delimiter).for_each(|s| {
-                                if Some(s) == null_value {
-                                    list_builder.values().append_null();
-                                } else {
-                                    list_builder.values().append_value(s);
-                                }
-                            });
-                            list_builder.append(true);
-                        }
-                        (Some(string), None) => {
-                            string.chars().map(|c| c.to_string()).for_each(|c| {
-                                if Some(c.as_str()) == null_value {
-                                    list_builder.values().append_null();
-                                } else {
-                                    list_builder.values().append_value(c);
-                                }
-                            });
-                            list_builder.append(true);
-                        }
-                        _ => list_builder.append(false), // null value
-                    }
-                });
-        }
-        _ => {
-            return exec_err!(
-                "Expect string_to_array function to take two or three parameters"
-            )
-        }
-    }
-
-    let list_array = list_builder.finish();
-    Ok(Arc::new(list_array) as ArrayRef)
-}
 
 /// Generates an array of integers from start to stop with a given step.
 ///
@@ -1141,64 +820,71 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// array_distinct SQL function
-/// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
-pub fn array_distinct(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_distinct needs one argument");
+/// array_reverse SQL function
+pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
+    if arg.len() != 1 {
+        return exec_err!("array_reverse needs one argument");
     }
 
-    // handle null
-    if args[0].data_type() == &DataType::Null {
-        return Ok(args[0].clone());
-    }
-
-    // handle for list & largelist
-    match args[0].data_type() {
+    match &arg[0].data_type() {
         DataType::List(field) => {
-            let array = as_list_array(&args[0])?;
-            general_array_distinct(array, field)
+            let array = as_list_array(&arg[0])?;
+            general_array_reverse::<i32>(array, field)
         }
         DataType::LargeList(field) => {
-            let array = as_large_list_array(&args[0])?;
-            general_array_distinct(array, field)
+            let array = as_large_list_array(&arg[0])?;
+            general_array_reverse::<i64>(array, field)
         }
-        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
+        DataType::Null => Ok(arg[0].clone()),
+        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }
 
-pub fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
-    array: &GenericListArray<OffsetSize>,
+fn general_array_reverse<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
     field: &FieldRef,
-) -> Result<ArrayRef> {
-    let dt = array.value_type();
-    let mut offsets = Vec::with_capacity(array.len());
-    offsets.push(OffsetSize::usize_as(0));
-    let mut new_arrays = Vec::with_capacity(array.len());
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
-    // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
-        let values = converter.convert_columns(&[arr])?;
-        // sort elements in list and remove duplicates
-        let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
-        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-        let arrays = converter.convert_rows(rows)?;
-        let array = match arrays.first() {
-            Some(array) => array.clone(),
-            None => {
-                return internal_err!("array_distinct: failed to get array from rows")
-            }
-        };
-        new_arrays.push(array);
+) -> Result<ArrayRef>
+where
+    O: TryFrom<i64>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut offsets = vec![O::usize_as(0)];
+    let mut nulls = vec![];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            offsets.push(offsets[row_index] + O::one());
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+
+        let start = offset_window[0];
+        let end = offset_window[1];
+
+        let mut index = end - O::one();
+        let mut cnt = 0;
+
+        while index >= start {
+            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
+            index = index - O::one();
+            cnt += 1;
+        }
+        offsets.push(offsets[row_index] + O::usize_as(cnt));
     }
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+
+    let data = mutable.freeze();
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
-        offsets,
-        values,
-        None,
+        OffsetBuffer::<O>::new(offsets.into()),
+        arrow_array::make_array(data),
+        Some(nulls.into()),
     )?))
 }

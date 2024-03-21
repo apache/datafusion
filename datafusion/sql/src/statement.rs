@@ -813,20 +813,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
         // determine if source is table or query and handle accordingly
         let copy_source = statement.source;
-        let input = match copy_source {
+        let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
-                let table_ref =
-                    self.object_name_to_table_reference(object_name.clone())?;
-                let table_source = self.context_provider.get_table_source(table_ref)?;
-                LogicalPlanBuilder::scan(
-                    object_name_to_string(&object_name),
-                    table_source,
-                    None,
-                )?
-                .build()?
+                let table_name = object_name_to_string(&object_name);
+                let table_ref = self.object_name_to_table_reference(object_name)?;
+                let table_source =
+                    self.context_provider.get_table_source(table_ref.clone())?;
+                let plan =
+                    LogicalPlanBuilder::scan(table_name, table_source, None)?.build()?;
+                let input_schema = plan.schema().clone();
+                (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                self.query_to_plan(query, &mut PlannerContext::new())?
+                let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+                let input_schema = plan.schema().clone();
+                (plan, input_schema, None)
             }
         };
 
@@ -852,8 +853,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options.insert(key.to_lowercase(), value_string.to_lowercase());
         }
 
-        let file_type = try_infer_file_type(&mut options, &statement.target)?;
-        let partition_by = take_partition_by(&mut options);
+        let file_type = if let Some(file_type) = statement.stored_as {
+            FileType::from_str(&file_type).map_err(|_| {
+                DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
+            })?
+        } else {
+            let e = || {
+                DataFusionError::Configuration(
+                "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                    .to_string(),
+            )
+            };
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(&statement.target)
+                .extension()
+                .ok_or_else(e)?
+                .to_str()
+                .ok_or_else(e)?
+                .to_lowercase();
+
+            FileType::from_str(extension).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "{}. Use STORED AS to define file format.",
+                    e
+                ))
+            })?
+        };
+
+        let partition_by = statement
+            .partitioned_by
+            .iter()
+            .map(|col| input_schema.field_with_name(table_ref.as_ref(), col))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|f| f.name().to_owned())
+            .collect();
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
@@ -1467,84 +1501,5 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.context_provider
             .get_table_source(tables_reference)
             .is_ok()
-    }
-}
-
-/// Infers the file type for a given target based on provided options or file extension.
-///
-/// This function tries to determine the file type based on the 'format' option present
-/// in the provided options hashmap. If 'format' is not explicitly set, the function attempts
-/// to infer the file type from the file extension of the target. It returns an error if neither
-/// the format option is set nor the file extension can be determined or parsed.
-///
-/// # Arguments
-///
-/// * `options` - A mutable reference to a HashMap containing options where the file format
-/// might be specified under the 'format' key.
-/// * `target` - A string slice representing the path to the file for which the file type needs to be inferred.
-///
-/// # Returns
-///
-/// Returns `Result<FileType>` which is Ok if the file type could be successfully inferred,
-/// otherwise returns an error in case of failure to determine or parse the file format or extension.
-///
-/// # Errors
-///
-/// This function returns an error in two cases:
-/// - If the 'format' option is not set and the file extension cannot be retrieved from `target`.
-/// - If the file extension is found but cannot be converted into a valid string.
-///
-pub fn try_infer_file_type(
-    options: &mut HashMap<String, String>,
-    target: &str,
-) -> Result<FileType> {
-    let explicit_format = options.remove("format");
-    let format = match explicit_format {
-        Some(s) => FileType::from_str(&s),
-        None => {
-            // try to infer file format from file extension
-            let extension: &str = &Path::new(target)
-                .extension()
-                .ok_or(DataFusionError::Configuration(
-                    "Format not explicitly set and unable to get file extension!"
-                        .to_string(),
-                ))?
-                .to_str()
-                .ok_or(DataFusionError::Configuration(
-                    "Format not explicitly set and failed to parse file extension!"
-                        .to_string(),
-                ))?
-                .to_lowercase();
-
-            FileType::from_str(extension)
-        }
-    }?;
-
-    Ok(format)
-}
-
-/// Extracts and parses the 'partition_by' option from a provided options hashmap.
-///
-/// This function looks for a 'partition_by' key in the options hashmap. If found,
-/// it splits the value by commas, trims each resulting string, and replaces double
-/// single quotes with a single quote. It returns a vector of partition column names.
-///
-/// # Arguments
-///
-/// * `options` - A mutable reference to a HashMap containing options where 'partition_by'
-/// might be specified.
-///
-/// # Returns
-///
-/// Returns a `Vec<String>` containing partition column names. If the 'partition_by' option
-/// is not present, returns an empty vector.
-pub fn take_partition_by(options: &mut HashMap<String, String>) -> Vec<String> {
-    let partition_by = options.remove("partition_by");
-    match partition_by {
-        Some(part_cols) => part_cols
-            .split(',')
-            .map(|s| s.trim().replace("''", "'"))
-            .collect::<Vec<_>>(),
-        None => vec![],
     }
 }

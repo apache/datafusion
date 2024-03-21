@@ -21,7 +21,9 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
 
-      - name: Setup data and generate unique result names
+      - name: Setup test data
+        # Workaround for `the input device is not a TTY`, appropriated from https://github.com/actions/runner/issues/241
+        shell: 'script -q -e -c "bash -e {0}"'
         run: |
           cd benchmarks
           mkdir data
@@ -29,7 +31,8 @@ jobs:
           # Setup the TPC-H data set with a scale factor of 10
           ./bench.sh data tpch
           
-          # Generate a unique-ish identifiers for the results
+      - name: Generate unique result names
+        run: |
           echo "HEAD_LONG_SHA=$(git log -1 --format='%H')" >> "$GITHUB_ENV" 
           echo "HEAD_SHORT_SHA=$(git log -1 --format='%h' --abbrev=7)" >> "$GITHUB_ENV" 
           echo "BASE_SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_ENV"
@@ -41,6 +44,12 @@ jobs:
           cd benchmarks
 
           ./bench.sh run tpch
+          
+          # For some reason this step doesn't seem to propagate the env var down into the script
+          if [ -d "results/HEAD" ]; then
+            echo "Moving results into ${{ env.HEAD_SHORT_SHA }}"
+            mv results/HEAD results/${{ env.HEAD_SHORT_SHA }}
+          fi
 
       - name: Checkout base commit
         uses: actions/checkout@v4

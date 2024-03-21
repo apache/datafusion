@@ -820,7 +820,7 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the expression is constant according to equivalence
     /// group, `false` otherwise.
-    fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
+    pub fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
@@ -1793,7 +1793,7 @@ mod tests {
                 Operator::Plus,
                 col("b", &test_schema)?,
             )) as Arc<dyn PhysicalExpr>;
-            let exprs = vec![
+            let exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,

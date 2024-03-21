@@ -30,9 +30,16 @@ pub mod macros;
 
 mod array_has;
 mod concat;
+mod core;
+mod except;
+mod extract;
 mod kernels;
-mod make_array;
+mod position;
+mod remove;
+mod replace;
 mod rewrite;
+mod set_ops;
+mod string;
 mod udf;
 mod utils;
 
@@ -50,28 +57,44 @@ pub mod expr_fn {
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
-    pub use super::make_array::make_array;
+    pub use super::core::make_array;
+    pub use super::except::array_except;
+    pub use super::extract::array_element;
+    pub use super::extract::array_pop_back;
+    pub use super::extract::array_pop_front;
+    pub use super::extract::array_slice;
+    pub use super::position::array_position;
+    pub use super::position::array_positions;
+    pub use super::remove::array_remove;
+    pub use super::remove::array_remove_all;
+    pub use super::remove::array_remove_n;
+    pub use super::replace::array_replace;
+    pub use super::replace::array_replace_all;
+    pub use super::replace::array_replace_n;
+    pub use super::set_ops::array_distinct;
+    pub use super::set_ops::array_intersect;
+    pub use super::set_ops::array_union;
+    pub use super::string::array_to_string;
+    pub use super::string::string_to_array;
     pub use super::udf::array_dims;
-    pub use super::udf::array_distinct;
     pub use super::udf::array_empty;
     pub use super::udf::array_length;
     pub use super::udf::array_ndims;
     pub use super::udf::array_repeat;
     pub use super::udf::array_resize;
+    pub use super::udf::array_reverse;
     pub use super::udf::array_sort;
-    pub use super::udf::array_to_string;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
     pub use super::udf::gen_series;
     pub use super::udf::range;
-    pub use super::udf::string_to_array;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<ScalarUDF>> = vec![
-        udf::array_to_string_udf(),
-        udf::string_to_array_udf(),
+        string::array_to_string_udf(),
+        string::string_to_array_udf(),
         udf::range_udf(),
         udf::gen_series_udf(),
         udf::array_dims_udf(),
@@ -80,7 +103,12 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         concat::array_append_udf(),
         concat::array_prepend_udf(),
         concat::array_concat_udf(),
-        make_array::make_array_udf(),
+        except::array_except_udf(),
+        extract::array_element_udf(),
+        extract::array_pop_back_udf(),
+        extract::array_pop_front_udf(),
+        extract::array_slice_udf(),
+        core::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
@@ -88,9 +116,20 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::array_length_udf(),
         udf::flatten_udf(),
         udf::array_sort_udf(),
-        udf::array_distinct_udf(),
         udf::array_repeat_udf(),
         udf::array_resize_udf(),
+        udf::array_reverse_udf(),
+        set_ops::array_distinct_udf(),
+        set_ops::array_intersect_udf(),
+        set_ops::array_union_udf(),
+        position::array_position_udf(),
+        position::array_positions_udf(),
+        remove::array_remove_udf(),
+        remove::array_remove_all_udf(),
+        remove::array_remove_n_udf(),
+        replace::array_replace_n_udf(),
+        replace::array_replace_all_udf(),
+        replace::array_replace_udf(),
     ];
     functions.into_iter().try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

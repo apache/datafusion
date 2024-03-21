@@ -1225,6 +1225,28 @@ pub struct IntervalMonthDayNanoValue {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionField {
+    #[prost(int32, tag = "1")]
+    pub field_id: i32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<Field>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionValue {
+    /// Note that a null union value must have one or more fields, so we
+    /// encode a null UnionValue as one with value_id == 128
+    #[prost(int32, tag = "1")]
+    pub value_id: i32,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
+    #[prost(message, repeated, tag = "3")]
+    pub fields: ::prost::alloc::vec::Vec<UnionField>,
+    #[prost(enumeration = "UnionMode", tag = "4")]
+    pub mode: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarFixedSizeBinary {
     #[prost(bytes = "vec", tag = "1")]
     pub values: ::prost::alloc::vec::Vec<u8>,
@@ -1236,7 +1258,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1320,6 +1342,8 @@ pub mod scalar_value {
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "34")]
         FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
+        #[prost(message, tag = "42")]
+        UnionValue(::prost::alloc::boxed::Box<super::UnionValue>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2092,6 +2116,8 @@ pub struct PhysicalScalarUdfNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
     pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "4")]
     pub return_type: ::core::option::Option<ArrowType>,
 }
@@ -2865,18 +2891,18 @@ pub enum ScalarFunction {
     /// 48 was SHA384
     /// 49 was SHA512
     SplitPart = 50,
-    StartsWith = 51,
+    /// StartsWith = 51;
     Strpos = 52,
     Substr = 53,
-    ToHex = 54,
+    /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
     Translate = 60,
-    Trim = 61,
-    Upper = 62,
+    /// Trim = 61;
+    /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
@@ -2906,52 +2932,52 @@ pub enum ScalarFunction {
     /// 89 was ArrayRepeat
     /// 90 was ArrayLength
     /// 91 was ArrayNdims
-    ArrayPosition = 92,
-    ArrayPositions = 93,
+    /// 92 was ArrayPosition
+    /// 93 was ArrayPositions
     /// 94 was ArrayPrepend
-    ArrayRemove = 95,
-    ArrayReplace = 96,
+    /// 95 was ArrayRemove
+    /// 96 was ArrayReplace
     /// 97 was ArrayToString
     /// 98 was Cardinality
-    ArrayElement = 99,
-    ArraySlice = 100,
+    /// 99 was ArrayElement
+    /// 100 was ArraySlice
     Cot = 103,
     /// 104 was ArrayHas
     /// 105 was ArrayHasAny
     /// 106 was ArrayHasAll
-    ArrayRemoveN = 107,
-    ArrayReplaceN = 108,
-    ArrayRemoveAll = 109,
-    ArrayReplaceAll = 110,
+    /// 107 was ArrayRemoveN
+    /// 108 was ArrayReplaceN
+    /// 109 was ArrayRemoveAll
+    /// 110 was ArrayReplaceAll
     Nanvl = 111,
     /// 112 was Flatten
     /// 113 was IsNan
     Iszero = 114,
     /// 115 was ArrayEmpty
-    ArrayPopBack = 116,
+    /// 116 was ArrayPopBack
     /// 117 was StringToArray
     /// 118 was ToTimestampNanos
-    ArrayIntersect = 119,
-    ArrayUnion = 120,
+    /// 119 was ArrayIntersect
+    /// 120 was ArrayUnion
     OverLay = 121,
-    /// / 122 is Range
-    ArrayExcept = 123,
-    ArrayPopFront = 124,
+    /// 122 is Range
+    /// 123 is ArrayExcept
+    /// 124 was ArrayPopFront
     Levenshtein = 125,
     SubstrIndex = 126,
     FindInSet = 127,
-    /// / 128 was ArraySort
-    /// / 129 was ArrayDistinct
-    /// / 130 was ArrayResize
-    EndsWith = 131,
-    /// / 132 was InStr
-    /// / 133 was MakeDate
+    /// 128 was ArraySort
+    /// 129 was ArrayDistinct
+    /// 130 was ArrayResize
     ///
-    /// / 135 is RegexpLike
-    /// / 136 was ToChar
-    /// / 137 was ToDate
-    /// / 138 was ToUnixtime
-    ArrayReverse = 134,
+    /// 132 was InStr
+    /// 133 was MakeDate
+    /// 134 was ArrayReverse
+    /// 135 is RegexpLike
+    /// 136 was ToChar
+    /// 137 was ToDate
+    /// 138 was ToUnixtime
+    EndsWith = 131,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2996,13 +3022,9 @@ impl ScalarFunction {
             ScalarFunction::Rpad => "Rpad",
             ScalarFunction::Rtrim => "Rtrim",
             ScalarFunction::SplitPart => "SplitPart",
-            ScalarFunction::StartsWith => "StartsWith",
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
-            ScalarFunction::ToHex => "ToHex",
             ScalarFunction::Translate => "Translate",
-            ScalarFunction::Trim => "Trim",
-            ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
@@ -3019,30 +3041,14 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
-            ScalarFunction::ArrayPosition => "ArrayPosition",
-            ScalarFunction::ArrayPositions => "ArrayPositions",
-            ScalarFunction::ArrayRemove => "ArrayRemove",
-            ScalarFunction::ArrayReplace => "ArrayReplace",
-            ScalarFunction::ArrayElement => "ArrayElement",
-            ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Cot => "Cot",
-            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
-            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
-            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
-            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::ArrayPopBack => "ArrayPopBack",
-            ScalarFunction::ArrayIntersect => "ArrayIntersect",
-            ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::ArrayExcept => "ArrayExcept",
-            ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
-            ScalarFunction::ArrayReverse => "ArrayReverse",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3084,13 +3090,9 @@ impl ScalarFunction {
             "Rpad" => Some(Self::Rpad),
             "Rtrim" => Some(Self::Rtrim),
             "SplitPart" => Some(Self::SplitPart),
-            "StartsWith" => Some(Self::StartsWith),
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
-            "ToHex" => Some(Self::ToHex),
             "Translate" => Some(Self::Translate),
-            "Trim" => Some(Self::Trim),
-            "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),
@@ -3107,30 +3109,14 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
-            "ArrayPosition" => Some(Self::ArrayPosition),
-            "ArrayPositions" => Some(Self::ArrayPositions),
-            "ArrayRemove" => Some(Self::ArrayRemove),
-            "ArrayReplace" => Some(Self::ArrayReplace),
-            "ArrayElement" => Some(Self::ArrayElement),
-            "ArraySlice" => Some(Self::ArraySlice),
             "Cot" => Some(Self::Cot),
-            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
-            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
-            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
-            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "ArrayPopBack" => Some(Self::ArrayPopBack),
-            "ArrayIntersect" => Some(Self::ArrayIntersect),
-            "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
-            "ArrayExcept" => Some(Self::ArrayExcept),
-            "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
-            "ArrayReverse" => Some(Self::ArrayReverse),
             _ => None,
         }
     }

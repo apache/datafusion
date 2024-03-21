@@ -29,6 +29,8 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [features]
+# enable string functions
+string_expressions = []
 # enable core functions
 core_expressions = []
 # enable datetime functions
@@ -41,6 +43,7 @@ default = [
     "math_expressions",
     "regex_expressions",
     "crypto_expressions",
+    "string_expressions",
 ]
 # enable encode/decode functions
 encoding_expressions = ["base64", "hex"]
@@ -57,8 +60,6 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
