@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite, SharedBuffer};
+use super::write::{create_writer, SharedBuffer};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
@@ -56,6 +56,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
@@ -613,19 +614,13 @@ impl ParquetSink {
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
         parquet_props: WriterProperties,
-    ) -> Result<
-        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
-    > {
-        let (_, multipart_writer) = object_store
-            .put_multipart(location)
-            .await
-            .map_err(DataFusionError::ObjectStore)?;
+    ) -> Result<AsyncArrowWriter<BufWriter>> {
+        let buf_writer = BufWriter::new(object_store, location.clone());
         let writer = AsyncArrowWriter::try_new(
-            multipart_writer,
+            buf_writer,
             self.get_writer_schema(),
             Some(parquet_props),
         )?;
-
         Ok(writer)
     }
 
@@ -943,7 +938,7 @@ async fn concatenate_parallel_row_groups(
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
-    mut object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
 ) -> Result<FileMetaData> {
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
 
@@ -985,7 +980,7 @@ async fn concatenate_parallel_row_groups(
 /// task then stitches these independent RowGroups together and streams this large
 /// single parquet file to an ObjectStore in multiple parts.
 async fn output_single_parquet_file_parallelized(
-    object_store_writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
     output_schema: Arc<Schema>,
     parquet_props: &WriterProperties,

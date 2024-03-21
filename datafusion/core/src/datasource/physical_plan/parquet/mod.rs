@@ -52,6 +52,7 @@ use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
+use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -698,11 +699,11 @@ pub async fn plan_to_parquet(
         let propclone = writer_properties.clone();
 
         let storeref = store.clone();
-        let (_, multipart_writer) = storeref.put_multipart(&file).await?;
+        let buf_writer = BufWriter::new(storeref, file.clone());
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let mut writer =
-                AsyncArrowWriter::try_new(multipart_writer, plan.schema(), propclone)?;
+                AsyncArrowWriter::try_new(buf_writer, plan.schema(), propclone)?;
             while let Some(next_batch) = stream.next().await {
                 let batch = next_batch?;
                 writer.write(&batch).await?;
