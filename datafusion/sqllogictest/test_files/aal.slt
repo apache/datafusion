@@ -2,5 +2,18 @@
 statement ok
 create table t as values (1), (2);
 
-query
+query I
 select column1 + column1 from t;
+----
+2
+4
+
+query TT
+explain select column1 + column1 from t;
+----
+logical_plan
+Projection: t.column1 + t.column1
+--TableScan: t projection=[column1]
+physical_plan
+ProjectionExec: expr=[column1@0 + column1@0 as t.column1 + t.column1]
+--MemoryExec: partitions=1, partition_sizes=[1]

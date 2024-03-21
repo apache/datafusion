@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, not_impl_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -56,9 +56,7 @@ impl OptimizerRule for SimplifyExpressions {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time = config.query_execution_start_time();
-        Ok(Some(Self::optimize_internal(plan, &execution_props)?))
+        return not_impl_err!("Should use optimized owned")
     }
 
     fn supports_owned(&self) -> bool {
@@ -68,21 +66,23 @@ impl OptimizerRule for SimplifyExpressions {
     /// if supports_owned returns true, calls try_optimize_owned
     fn try_optimize_owned(
         &self,
-        _plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        todo!();
+        let mut execution_props = ExecutionProps::new();
+        execution_props.query_execution_start_time = config.query_execution_start_time();
+        Self::optimize_internal(plan, &execution_props)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         execution_props: &ExecutionProps,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
-        } else if let LogicalPlan::TableScan(scan) = plan {
+        } else if let LogicalPlan::TableScan(scan) = &plan {
             // When predicates are pushed into a table scan, there is no input
             // schema to resolve predicates against, so it must be handled specially
             //
@@ -102,11 +102,15 @@ impl SimplifyExpressions {
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
-        let new_inputs = plan
-            .inputs()
-            .iter()
-            .map(|input| Self::optimize_internal(input, execution_props))
-            .collect::<Result<Vec<_>>>()?;
+        // rewrite all inputs
+        let mut transformed = false;
+        let plan = plan.rewrite_inputs(&mut |plan| {
+            let t = Self::optimize_internal(plan, execution_props)?;
+            if t.transformed {
+                transformed = true;
+            }
+            Ok(t.data)
+        })?;
 
         let simplifier = ExprSimplifier::new(info);
 
@@ -134,8 +138,13 @@ impl SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        plan.with_new_exprs(exprs, new_inputs)
+        Ok(if transformed {
+            Transformed::yes(plan)
+        } else {
+            Transformed::no(plan)
+        })
     }
+
 }
 
 impl SimplifyExpressions {
