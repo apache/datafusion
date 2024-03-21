@@ -898,9 +898,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err(
-                    "Error during planning: cannot sort by nullable column",
-                ),
+                expected_result: Err("construct min/max statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column"),
             },
         ];
 
