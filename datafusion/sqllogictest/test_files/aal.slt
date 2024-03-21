@@ -1,0 +1,6 @@
+
+statement ok
+create table t as values (1), (2);
+
+query
+select column1 + column1 from t;

@@ -414,7 +414,6 @@ impl Optimizer {
         mut plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-
         let mut transformed = false;
         let plan = plan.rewrite_inputs(|child| {
             let t = self.optimize_recursively(rule, child, config)?;

@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -360,13 +361,120 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
+}
 
+const PLACEHOLDER: OnceCell<Arc<LogicalPlan>> = OnceCell::new();
+
+// applies f to rewrite the logical plan, replacing `node`
+//
+// ideally we would remove the Arc<LogicalPlan> nonsense entirely from LogicalPlan and have it own its inputs
+// however, for now do a horrible hack
+//
+// On rewrite the existing plan is destroyed
+fn rewrite_arc<F>(node: &mut Arc<LogicalPlan>, f: &mut F) -> Result<()>
+where
+    F: FnMut(LogicalPlan) -> Result<LogicalPlan>,
+{
+    let mut new_node = PLACEHOLDER
+        .get_or_init(|| {
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }))
+        })
+        .clone();
+
+    // take the old value out of the Arc
+    std::mem::swap(node, &mut new_node);
+
+    let new_node = match Arc::try_unwrap(new_node) {
+        Ok(node) => {
+            println!("Unwrapped arc yay");
+            node
+        }
+        Err(node) => {
+            println!("Failed to unwrap arc boo");
+            node.as_ref().clone()
+        }
+    };
+    // do the actual transform
+    let mut new_node = f(new_node).map(Arc::new)?;
+    // put the new value back into the Arc
+    std::mem::swap(node, &mut new_node);
+
+    Ok(())
+}
+
+impl LogicalPlan {
     /// applies the closure `f` to each input of this node, replacing the existing inputs
     /// with the result of the closure.
-    pub fn rewrite_inputs<F>(mut self, f: F) -> Result<Self>
-    where F: FnMut (LogicalPlan) -> Result<LogicalPlan>
+    pub fn rewrite_inputs<F>(mut self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(LogicalPlan) -> Result<LogicalPlan>,
     {
-        todo!();
+        match &mut self {
+            LogicalPlan::Projection(Projection { input, .. }) => {
+                rewrite_arc(input, &mut f)?
+            }
+            LogicalPlan::Filter(Filter { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Repartition(Repartition { input, .. }) => {
+                rewrite_arc(input, &mut f)?
+            }
+            LogicalPlan::Window(Window { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Aggregate(Aggregate { input, .. }) => {
+                rewrite_arc(input, &mut f)?
+            }
+            LogicalPlan::Sort(Sort { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Join(Join { left, right, .. }) => {
+                rewrite_arc(left, &mut f)?;
+                rewrite_arc(right, &mut f)?;
+            }
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+                rewrite_arc(left, &mut f)?;
+                rewrite_arc(right, &mut f)?;
+            }
+            LogicalPlan::Limit(Limit { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
+                rewrite_arc(subquery, &mut f)?
+            }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+                rewrite_arc(input, &mut f)?
+            }
+            LogicalPlan::Extension(extension) => todo!(),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs
+                    .iter_mut()
+                    .try_for_each(|input| rewrite_arc(input, &mut f))?;
+            }
+            LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            ) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Explain(explain) => rewrite_arc(&mut explain.plan, &mut f)?,
+            LogicalPlan::Analyze(analyze) => rewrite_arc(&mut analyze.input, &mut f)?,
+            LogicalPlan::Dml(write) => rewrite_arc(&mut write.input, &mut f)?,
+            LogicalPlan::Copy(copy) => rewrite_arc(&mut copy.input, &mut f)?,
+            LogicalPlan::Ddl(ddl) => {
+                todo!();
+            }
+            LogicalPlan::Unnest(Unnest { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::Prepare(Prepare { input, .. }) => rewrite_arc(input, &mut f)?,
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term,
+                recursive_term,
+                ..
+            }) => {
+                rewrite_arc(static_term, &mut f)?;
+                rewrite_arc(recursive_term, &mut f)?;
+            }
+            // plans without inputs
+            LogicalPlan::TableScan { .. }
+            | LogicalPlan::Statement { .. }
+            | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
+            | LogicalPlan::DescribeTable(_) => {}
+        }
+
+        Ok(self)
     }
 
     /// returns all inputs of this `LogicalPlan` node. Does not
