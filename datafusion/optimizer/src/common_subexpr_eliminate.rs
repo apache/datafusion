@@ -17,24 +17,28 @@
 
 //! Eliminate common sub-expression.
 
-use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
-
 use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_expr::Expr;
+use std::collections::{BTreeSet, HashMap};
+use std::slice::Windows;
+use std::sync::Arc;
 
 use arrow::array;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_datafusion_err, internal_err, plan_err, Column, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, Result,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, WindowFunction};
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::tree_node::plan;
+use datafusion_expr::{col, BinaryExpr, Cast, ExprSchemable};
+use hashbrown::HashSet;
 use regex_syntax::ast::print;
 
 /// A map from expression's identifier to tuple including
@@ -171,7 +175,7 @@ impl CommonSubexprEliminate {
             self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
 
         let mut new_input = self
-            .try_optimize(input, config)?
+            .common_optimize(input, config)?
             .unwrap_or_else(|| input.clone());
         if !affected_id.is_empty() {
             new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
@@ -262,9 +266,13 @@ impl CommonSubexprEliminate {
             // Since `new_expr` and `window_exprs` length are same. We can safely `.unwrap` here.
             let orig_window_expr = window_exprs.pop().unwrap();
             assert_eq!(new_window_expr.len(), orig_window_expr.len());
-
+            println!(
+                "************* \n origin window expressions {:?} \n ************** \n ",
+                orig_window_expr
+            );
             // Rename new re-written window expressions with original name (by giving alias)
             // Otherwise we may receive schema error, in subsequent operators.
+            println!("************* \n before changed window expressions {:?} \n ************** \n ", new_window_expr);
             let new_window_expr = new_window_expr
                 .into_iter()
                 .zip(orig_window_expr.iter())
@@ -274,6 +282,7 @@ impl CommonSubexprEliminate {
                     new_window_expr.alias_if_changed(original_name)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            println!("************* \n after changed window expressions {:?} \n ************** \n ", new_window_expr);
             plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
         }
         println!(
@@ -428,9 +437,8 @@ impl CommonSubexprEliminate {
         res_plan
     }
 }
-
-impl OptimizerRule for CommonSubexprEliminate {
-    fn try_optimize(
+impl CommonSubexprEliminate {
+    fn common_optimize(
         &self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
@@ -484,6 +492,10 @@ impl OptimizerRule for CommonSubexprEliminate {
                     "************** \n optimized schema {:?} \n ************",
                     optimized_plan.schema(),
                 );
+                println!(
+                    "************** \n current plan is {:?} \n ************",
+                    optimized_plan,
+                );
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
                     optimized_plan,
@@ -491,6 +503,33 @@ impl OptimizerRule for CommonSubexprEliminate {
             }
             plan => Ok(plan),
         }
+    }
+    /// currently the implemention is not optimal, Basically I just do a top-down iteration over all the
+    ///
+    fn add_extra_projection(&self, plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+        let res = plan
+            .clone()
+            .rewrite(&mut ProjectionAdder {
+                depth_map: HashMap::new(),
+                depth: 0,
+            })
+            .map(|transformed| Some(transformed.data));
+        println!("************** \n result plan is {:?} *********** \n", res);
+        res
+    }
+}
+impl OptimizerRule for CommonSubexprEliminate {
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        let optimized_plan_option = self.common_optimize(plan, config)?;
+        let plan = match optimized_plan_option {
+            Some(plan) => plan,
+            _ => plan.clone(),
+        };
+        self.add_extra_projection(&plan)
     }
 
     fn name(&self) -> &str {
@@ -557,6 +596,10 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
+                println!(
+                    "\n ********** expr is {:?} \n \n and data type is {:?} \n **************** \n",
+                    expr, data_type
+                );
                 let field = DFField::new_unqualified(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
@@ -590,8 +633,19 @@ fn build_recover_project_plan(
     let col_exprs = schema
         .fields()
         .iter()
-        .map(|field| Expr::Column(field.qualified_column()))
+        .map(|field| {
+            println!("field is {:?}", field);
+            Expr::Column(field.qualified_column())
+        })
         .collect();
+    println!(
+        "************** \n col_exprs are {:?} \n **************",
+        col_exprs
+    );
+    println!(
+        "************** \n current plan is  {:?} \n **************",
+        input
+    );
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
@@ -919,6 +973,126 @@ fn replace_common_expr(
     rewrited
 }
 
+struct ProjectionAdder {
+    depth_map: HashMap<u128, HashSet<DFField>>,
+    depth: u128,
+}
+
+impl ProjectionAdder {
+    // TODO: adding more expressions for sub query, currently only support for Simple Binary Expressions
+    fn get_complex_expressions(
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> HashSet<DFField> {
+        let mut res = HashSet::new();
+        for expr in exprs {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    left: ref l_box,
+                    op: _,
+                    right: ref r_box,
+                }) => {
+                    match (&**l_box, &**r_box) {
+                        (Expr::Column(l), Expr::Column(r)) => {
+                            // Both `left` and `right` are `Expr::Column`, so we push to `res`
+                            if schema.has_column(l) && schema.has_column(r) {
+                                res.insert(DFField::new_unqualified(
+                                    &expr.to_string(),
+                                    schema
+                                        .field_from_column(l)
+                                        .unwrap()
+                                        .data_type()
+                                        .clone(),
+                                    true,
+                                ));
+                            }
+                        }
+                        // If they are not both `Expr::Column`, you can handle other cases or do nothing
+                        _ => {}
+                    }
+                }
+                Expr::Cast(_) => {
+                    res.extend(Self::get_complex_expressions(vec![expr], schema.clone()))
+                }
+
+                Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
+                    res.extend(Self::get_complex_expressions(args, schema.clone()))
+                }
+                _ => {}
+            }
+        }
+        res
+    }
+}
+impl TreeNodeRewriter for ProjectionAdder {
+    type Node = LogicalPlan;
+    /// currently we just collect the complex bianryOP
+
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        // use depth to trace where we are in the LogicalPlan tree
+        self.depth += 1;
+        // extract all expressions + check whether it contains in depth_sets
+        let exprs = node.expressions();
+        println!("********* \n cur plan is  {:?} \n *********** \n", node);
+        println!("********* \n exprs are {:?} \n *********** \n", exprs);
+        let depth_set = self.depth_map.entry(self.depth).or_default();
+        println!("self.input schema is {:?}", node.schema());
+        depth_set.extend(Self::get_complex_expressions(exprs, node.schema().clone()));
+        Ok(Transformed::no(node))
+    }
+    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        self.depth -= 1;
+        println!("*********** \ncur plan is {:?} \n*************\n", node);
+
+        let current_depth_schema =
+            self.depth_map.get(&self.depth).cloned().unwrap_or_default();
+
+        // get the intersected part
+        let added_schema = self
+            .depth_map
+            .iter()
+            .filter(|(&depth, _)| depth < self.depth)
+            .fold(current_depth_schema, |acc, (_, fields)| {
+                acc.intersection(fields).cloned().collect()
+            });
+
+        // do not do extra things
+        if added_schema.is_empty() {
+            return Ok(Transformed::no(node));
+        }
+
+        println!("\n*************\n{:?}\n*************\n", added_schema);
+
+        match node {
+            // do not add for Projections
+            LogicalPlan::Projection(_) => Ok(Transformed::no(node)),
+            _ => {
+                let mut col_exprs: Vec<Expr> = node
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| Expr::Column(field.qualified_column()))
+                    .collect();
+
+                col_exprs.extend(
+                    added_schema
+                        .iter()
+                        .map(|field| Expr::Column(field.qualified_column())),
+                );
+
+                // adding new plan here
+                let new_plan = LogicalPlan::Projection(Projection::try_new(
+                    col_exprs.clone(),
+                    Arc::new(node.clone()),
+                )?);
+
+                Ok(Transformed::yes(
+                    node.with_new_exprs(col_exprs, [new_plan].to_vec())?,
+                ))
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod test {
     use std::iter;
@@ -943,7 +1117,7 @@ mod test {
     fn assert_optimized_plan_eq(expected: &str, plan: &LogicalPlan) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .try_optimize(plan, &OptimizerContext::new())
+            .common_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
@@ -1362,7 +1536,7 @@ mod test {
             .unwrap();
         let rule = CommonSubexprEliminate {};
         let optimized_plan = rule
-            .try_optimize(&plan, &OptimizerContext::new())
+            .common_optimize(&plan, &OptimizerContext::new())
             .unwrap()
             .unwrap();
 
