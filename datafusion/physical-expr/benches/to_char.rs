@@ -64,7 +64,7 @@ fn data(rng: &mut ThreadRng) -> Date32Array {
 }
 
 fn patterns(rng: &mut ThreadRng) -> StringArray {
-    let samples = vec![
+    let samples = [
         "%Y:%m:%d".to_string(),
         "%d-%m-%Y".to_string(),
         "%d%m%Y".to_string(),

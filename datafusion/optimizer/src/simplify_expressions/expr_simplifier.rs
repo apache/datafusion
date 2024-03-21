@@ -404,11 +404,12 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
+#[allow(dead_code)]
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
     // Expr was simplifed and contains the new expression
     Simplified(ScalarValue),
-    // Evalaution encountered an error, contains the original expression
+    // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
