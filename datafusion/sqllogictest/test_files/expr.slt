@@ -948,7 +948,17 @@ SELECT date_part('hour', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 23
 
 query R
+SELECT extract(hour from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+23
+
+query R
 SELECT date_part('minute', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 32
 
@@ -958,7 +968,17 @@ SELECT date_part('second', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 50
 
 query R
+SELECT extract(second from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50
+
+query R
 SELECT date_part('millisecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000
 
@@ -968,12 +988,27 @@ SELECT date_part('microsecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 50000000
 
 query R
+SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000
+
+query R
 SELECT date_part('nanosecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000000000
 
 query R
+SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+50000000000
+
+query R
 SELECT date_part('epoch', arrow_cast('23:32:50'::time, 'Time32(Second)'))
+----
+84770
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 84770
 
@@ -984,7 +1019,17 @@ SELECT date_part('hour', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)')
 23
 
 query R
+SELECT extract(hour from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+23
+
+query R
 SELECT date_part('minute', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 32
 
@@ -994,7 +1039,17 @@ SELECT date_part('second', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)
 50.123
 
 query R
+SELECT extract(second from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50.123
+
+query R
 SELECT date_part('millisecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123
 
@@ -1004,12 +1059,27 @@ SELECT date_part('microsecond', arrow_cast('23:32:50.123'::time, 'Time32(Millise
 50123000
 
 query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000
+
+query R
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123000000
 
 query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+50123000000
+
+query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
+----
+84770.123
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 84770.123
 
@@ -1020,7 +1090,17 @@ SELECT date_part('hour', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond
 23
 
 query R
+SELECT extract(hour from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+23
+
+query R
 SELECT date_part('minute', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 32
 
@@ -1030,7 +1110,17 @@ SELECT date_part('second', arrow_cast('23:32:50.123456'::time, 'Time64(Microseco
 50.123456
 
 query R
+SELECT extract(second from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50.123456
+
+query R
 SELECT date_part('millisecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123.456
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 50123.456
 
@@ -1040,12 +1130,27 @@ SELECT date_part('microsecond', arrow_cast('23:32:50.123456'::time, 'Time64(Micr
 50123456
 
 query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456
+
+query R
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 50123456000
 
 query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+50123456000
+
+query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
+----
+84770.123456
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 84770.123456
 
@@ -1056,7 +1161,17 @@ SELECT date_part('hour', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanoseco
 23
 
 query R
+SELECT extract(hour from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+23
+
+query R
 SELECT date_part('minute', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+32
+
+query R
+SELECT extract(minute from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 32
 
@@ -1066,7 +1181,17 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 50.123456789
 
 query R
+SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50.123456789
+
+query R
 SELECT date_part('millisecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123.456789
+
+query R
+SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50123.456789
 
@@ -1077,12 +1202,27 @@ SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(N
 50123456.789000005
 
 query R
+SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456.789000005
+
+query R
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50123456789
 
 query R
+SELECT extract(nanosecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456789
+
+query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+84770.123456789
+
+query R
+SELECT extract(epoch from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 84770.123456789
 
