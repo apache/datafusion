@@ -230,7 +230,8 @@ impl FileScanConfig {
             table_schema,
             projected_schema,
             flattened_files.iter().copied(),
-        )?;
+        )
+        .map_err(|e| e.context("construct min/max statistics"))?;
 
         let indices_sorted_by_min = {
             let mut sort: Vec<_> = statistics.min.iter().enumerate().collect();

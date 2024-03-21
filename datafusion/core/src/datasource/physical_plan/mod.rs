@@ -564,25 +564,42 @@ impl MinMaxStatistics {
             .fields()
             .iter()
             .map(|field| {
-                let (min, max) = get_min_max(table_schema.index_of(field.name())?);
+                let (min, max) =
+                    get_min_max(table_schema.index_of(field.name()).map_err(|e| {
+                        DataFusionError::ArrowError(
+                            e,
+                            Some(format!("get min/max for field: '{}'", field.name())),
+                        )
+                    })?);
                 Ok((
                     ScalarValue::iter_to_array(min)?,
                     ScalarValue::iter_to_array(max)?,
                 ))
             })
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()
+            .map_err(|e| e.context("collect min/max values"))?
             .into_iter()
             .unzip();
 
         Self::new(
             sort_order,
-            RecordBatch::try_new(Arc::clone(projected_schema), min_values)?,
-            RecordBatch::try_new(Arc::clone(projected_schema), max_values)?,
+            table_schema,
+            RecordBatch::try_new(Arc::clone(projected_schema), min_values).map_err(
+                |e| {
+                    DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
+                },
+            )?,
+            RecordBatch::try_new(Arc::clone(projected_schema), max_values).map_err(
+                |e| {
+                    DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
+                },
+            )?,
         )
     }
 
     fn new(
         sort_order: &[PhysicalSortExpr],
+        table_schema: &SchemaRef,
         min_values: RecordBatch,
         max_values: RecordBatch,
     ) -> Result<Self> {
@@ -592,10 +609,11 @@ impl MinMaxStatistics {
             .iter()
             .map(|expr| {
                 expr.expr
-                    .data_type(&min_values.schema())
+                    .data_type(table_schema)
                     .map(|data_type| SortField::new_with_options(data_type, expr.options))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+            .map_err(|e| e.context("create sort fields"))?;
         let converter = RowConverter::new(sort_fields)?;
 
         let [min, max] = [min_values, max_values].map(|values| {
@@ -627,7 +645,8 @@ impl MinMaxStatistics {
                         options: Some(sort_expr.options),
                     })
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()
+                .map_err(|e| e.context("create sorting columns"))?;
             converter
                 .convert_columns(
                     &sorting_columns
@@ -641,8 +660,8 @@ impl MinMaxStatistics {
         });
 
         Ok(Self {
-            min: min?,
-            max: max?,
+            min: min.map_err(|e| e.context("build min rows"))?,
+            max: max.map_err(|e| e.context("build max rows"))?,
         })
     }
 

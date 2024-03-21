@@ -643,17 +643,20 @@ impl TableProvider for ListingTable {
         }
 
         let output_ordering = self.try_create_output_ordering()?;
-        if let Some(new_groups) = output_ordering.first().and_then(|output_ordering| {
+        match output_ordering.first().map(|output_ordering| {
             FileScanConfig::sort_file_groups(
                 &self.table_schema,
                 &projected_schema,
                 &partitioned_file_lists,
                 output_ordering,
             )
-            .ok()
         }) {
-            partitioned_file_lists = new_groups;
-        }
+            Some(Err(e)) => log::debug!("failed to sort file groups: {e}"),
+            Some(Ok(new_groups)) => {
+                partitioned_file_lists = new_groups;
+            }
+            None => {} // no ordering required
+        };
 
         // extract types of partition columns
         let table_partition_cols = self
@@ -838,10 +841,11 @@ impl ListingTable {
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
-                let part_file = part_file?;
+                let mut part_file = part_file?;
                 if self.options.collect_stat {
                     let statistics =
                         self.do_collect_statistics(ctx, &store, &part_file).await?;
+                    part_file.statistics = Some(statistics.clone());
                     Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
                 } else {
                     Ok((part_file, Statistics::new_unknown(&self.file_schema)))
