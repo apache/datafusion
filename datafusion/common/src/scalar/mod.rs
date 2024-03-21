@@ -4534,6 +4534,8 @@ mod tests {
         // making it larger means significant more memory consumption
         // per distinct value.
         //
+        // Thus this test ensures that no code change makes ScalarValue larger
+        //
         // The alignment requirements differ across architectures and
         // thus the size of the enum appears to as well
 
