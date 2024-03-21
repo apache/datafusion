@@ -20,14 +20,17 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::{binary, cast, date_part, DatePart};
-use arrow::datatypes::DataType::{Date32, Date64, Float64, Timestamp, Utf8};
+use arrow::datatypes::DataType::{
+    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8,
+};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_int32_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array,
+    as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+    as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
@@ -68,6 +71,10 @@ impl DatePartFunc {
                     ]),
                     Exact(vec![Utf8, Date64]),
                     Exact(vec![Utf8, Date32]),
+                    Exact(vec![Utf8, Time32(Second)]),
+                    Exact(vec![Utf8, Time32(Millisecond)]),
+                    Exact(vec![Utf8, Time64(Microsecond)]),
+                    Exact(vec![Utf8, Time64(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -149,12 +156,9 @@ fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
     Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
 }
 
-/// invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
 /// nanoseconds
-///
-/// # Panics
-/// If `array` is not a temporal type such as Timestamp or Date32
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,
@@ -163,6 +167,7 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
         Nanosecond => 1_000_000_000_f64,
     };
     let secs = date_part(array, DatePart::Second)?;
+    // This assumes array is primitive and not a dictionary
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
@@ -189,6 +194,16 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         }
         Date32 => as_date32_array(array)?.unary(|x| x as f64 * SECONDS_IN_A_DAY),
         Date64 => as_date64_array(array)?.unary(|x| x as f64 / 1_000_f64),
+        Time32(Second) => as_time32_second_array(array)?.unary(|x| x as f64),
+        Time32(Millisecond) => {
+            as_time32_millisecond_array(array)?.unary(|x| x as f64 / 1_000_f64)
+        }
+        Time64(Microsecond) => {
+            as_time64_microsecond_array(array)?.unary(|x| x as f64 / 1_000_000_f64)
+        }
+        Time64(Nanosecond) => {
+            as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
+        }
         d => return exec_err!("Can not convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
