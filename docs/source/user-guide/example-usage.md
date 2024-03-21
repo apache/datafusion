@@ -23,20 +23,20 @@ In this example some simple processing is performed on the [`example.csv`](https
 
 Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
 
-## Add DataFusion as a dependency
+## Add published DataFusion dependency
 
 Find latest available Datafusion version on [DataFusion's
 crates.io] page. Add the dependency to your `Cargo.toml` file:
 
 ```toml
-datafusion = "31"
+datafusion = "latest_version"
 tokio = "1.0"
 ```
 
-## Add DataFusion latest codebase as a dependency
+## Add latest non published DataFusion dependency
 
-Cargo supports adding dependency directly from Github which allows testing out latest DataFusion codebase without waiting the code to be released to crates.io
-according to the [DataFusion release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
+DataFusion changes are published to `crates.io` according to [release schedule](https://github.com/apache/arrow-datafusion/blob/main/dev/release/README.md#release-process)
+In case if it is required to test out DataFusion changes which are merged but yet to be published, Cargo supports adding dependency directly to Github branch
 
 ```toml
 datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main"}
