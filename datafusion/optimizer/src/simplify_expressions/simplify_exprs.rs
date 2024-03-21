@@ -216,7 +216,12 @@ impl SimplifyExpressions {
                     .map(LogicalPlan::Projection)
                     .map(Transformed::yes)
             }
-            LogicalPlan::Aggregate(Aggregate { input, group_expr, aggr_expr, .. }) => {
+            LogicalPlan::Aggregate(Aggregate {
+                input,
+                group_expr,
+                aggr_expr,
+                ..
+            }) => {
                 let input = Arc::into_inner(input).unwrap();
                 let Transformed {
                     data,
@@ -226,7 +231,10 @@ impl SimplifyExpressions {
 
                 let new_input = Arc::new(data);
                 let group_expr_len = group_expr.len();
-                let expr = group_expr.into_iter().chain(aggr_expr.into_iter()).collect();
+                let expr = group_expr
+                    .into_iter()
+                    .chain(aggr_expr.into_iter())
+                    .collect();
                 let new_expr = simplify_expr(simplifier, expr)?;
 
                 // group exprs are the first expressions

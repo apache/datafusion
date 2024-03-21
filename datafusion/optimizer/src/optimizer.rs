@@ -49,7 +49,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use chrono::{DateTime, Utc};
@@ -410,7 +410,7 @@ impl Optimizer {
                         None
                     };
 
-                let cur_fields = cur_plan.schema().fields().clone();
+                let orig_schema = cur_plan.schema().clone();
 
                 let optimized = self.optimize_owned_recursively(rule, cur_plan, config);
                 match optimized {
@@ -424,7 +424,7 @@ impl Optimizer {
                             let schema = plan.schema();
                             assert_schema_is_the_same_v2(
                                 rule.name(),
-                                &cur_fields,
+                                orig_schema,
                                 schema,
                             )?;
                             observer(&plan, rule.as_ref());
@@ -684,15 +684,15 @@ pub(crate) fn assert_schema_is_the_same(
 
 pub(crate) fn assert_schema_is_the_same_v2(
     rule_name: &str,
-    prev_fields: &Vec<DFField>,
+    orig_schema: DFSchemaRef,
     new_schema: &DFSchemaRef,
 ) -> Result<()> {
-    let equivalent = new_schema.equivalent_names_and_types_v2(prev_fields);
+    let equivalent = orig_schema.equivalent_names_and_types(new_schema);
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
             "Failed due to a difference in schemas, original fields: {:?}, new fields: {:?}",
-            prev_fields,
+            orig_schema.fields(),
             new_schema.fields()
         ));
         Err(DataFusionError::Context(
