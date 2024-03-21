@@ -51,6 +51,7 @@ pub trait ExprSchemable {
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
 
+    /// given a schema, return the type and nullability of the expr
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
         -> Result<(DataType, bool)>;
 }
@@ -247,6 +248,142 @@ impl ExprSchemable for Expr {
         }
     }
 
+    /// Returns the nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
+    ///
+    /// # Errors
+    ///
+    /// This function errors when it is not possible to compute its
+    /// nullability.  This happens when the expression refers to a
+    /// column that does not exist in the schema.
+    fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
+        match self {
+            Expr::Alias(Alias { expr, .. })
+            | Expr::Not(expr)
+            | Expr::Negative(expr)
+            | Expr::Sort(Sort { expr, .. }) => expr.nullable(input_schema),
+
+            Expr::InList(InList { expr, list, .. }) => {
+                // Avoid inspecting too many expressions.
+                const MAX_INSPECT_LIMIT: usize = 6;
+                // Stop if a nullable expression is found or an error occurs.
+                let has_nullable = std::iter::once(expr.as_ref())
+                    .chain(list)
+                    .take(MAX_INSPECT_LIMIT)
+                    .find_map(|e| {
+                        e.nullable(input_schema)
+                            .map(|nullable| if nullable { Some(()) } else { None })
+                            .transpose()
+                    })
+                    .transpose()?;
+                Ok(match has_nullable {
+                    // If a nullable subexpression is found, the result may also be nullable.
+                    Some(_) => true,
+                    // If the list is too long, we assume it is nullable.
+                    None if list.len() + 1 > MAX_INSPECT_LIMIT => true,
+                    // All the subexpressions are non-nullable, so the result must be non-nullable.
+                    _ => false,
+                })
+            }
+
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => Ok(expr.nullable(input_schema)?
+                || low.nullable(input_schema)?
+                || high.nullable(input_schema)?),
+
+            Expr::Column(c) => input_schema.nullable(c),
+            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::Literal(value) => Ok(value.is_null()),
+            Expr::Case(case) => {
+                // this expression is nullable if any of the input expressions are nullable
+                let then_nullable = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, t)| t.nullable(input_schema))
+                    .collect::<Result<Vec<_>>>()?;
+                if then_nullable.contains(&true) {
+                    Ok(true)
+                } else if let Some(e) = &case.else_expr {
+                    e.nullable(input_schema)
+                } else {
+                    // CASE produces NULL if there is no `else` expr
+                    // (aka when none of the `when_then_exprs` match)
+                    Ok(true)
+                }
+            }
+            Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::ScalarVariable(_, _)
+            | Expr::TryCast { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::Unnest(_)
+            | Expr::Placeholder(_) => Ok(true),
+            Expr::IsNull(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Exists { .. } => Ok(false),
+            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
+            Expr::ScalarSubquery(subquery) => {
+                Ok(subquery.subquery.schema().field(0).is_nullable())
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                ref right,
+                ..
+            }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            Expr::Like(Like { expr, pattern, .. })
+            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
+            }
+            Expr::Wildcard { .. } => internal_err!(
+                "Wildcard expressions are not valid in a logical query plan"
+            ),
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                // If schema is nested, check if parent is nullable
+                // if it is, return early
+                if let Expr::Column(col) = expr.as_ref() {
+                    if input_schema.nullable(col)? {
+                        return Ok(true);
+                    }
+                }
+                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
+            }
+            Expr::GroupingSet(_) => {
+                // grouping sets do not really have the concept of nullable and do not appear
+                // in projections
+                Ok(true)
+            }
+        }
+    }
+
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
+        match self {
+            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
+            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            _ => Ok(HashMap::new()),
+        }
+    }
+
+    /// Returns the datatype and nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [`DFSchema`] implements [ExprSchema].
+    ///
+    /// [`DFSchema`]: datafusion_common::DFSchema
+    ///
+    /// # Errors
+    ///
+    /// This function errors when it is not possible to compute its
+    /// datatype or nullability.
     fn data_type_and_nullable(
         &self,
         schema: &dyn ExprSchema,
@@ -266,11 +403,11 @@ impl ExprSchemable for Expr {
             Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
             Expr::Case(case) => {
                 let then_nullable = case
-                .when_then_expr
-                .iter()
-                .map(|(_, t)| t.nullable(schema))
-                .collect::<Result<Vec<_>>>()?;
-            let nullable = if then_nullable.contains(&true) {
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, t)| t.nullable(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let nullable = if then_nullable.contains(&true) {
                     true
                 } else if let Some(e) = &case.else_expr {
                     e.nullable(schema)?
@@ -447,132 +584,6 @@ impl ExprSchemable for Expr {
                 })
             }
             Expr::InSubquery(InSubquery { expr, .. }) => Ok((DataType::Boolean, expr.nullable(schema)?)),
-        }
-    }
-
-    /// Returns the nullability of the expression based on [ExprSchema].
-    ///
-    /// Note: [`DFSchema`] implements [ExprSchema].
-    ///
-    /// [`DFSchema`]: datafusion_common::DFSchema
-    ///
-    /// # Errors
-    ///
-    /// This function errors when it is not possible to compute its
-    /// nullability.  This happens when the expression refers to a
-    /// column that does not exist in the schema.
-    fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
-        match self {
-            Expr::Alias(Alias { expr, .. })
-            | Expr::Not(expr)
-            | Expr::Negative(expr)
-            | Expr::Sort(Sort { expr, .. }) => expr.nullable(input_schema),
-
-            Expr::InList(InList { expr, list, .. }) => {
-                // Avoid inspecting too many expressions.
-                const MAX_INSPECT_LIMIT: usize = 6;
-                // Stop if a nullable expression is found or an error occurs.
-                let has_nullable = std::iter::once(expr.as_ref())
-                    .chain(list)
-                    .take(MAX_INSPECT_LIMIT)
-                    .find_map(|e| {
-                        e.nullable(input_schema)
-                            .map(|nullable| if nullable { Some(()) } else { None })
-                            .transpose()
-                    })
-                    .transpose()?;
-                Ok(match has_nullable {
-                    // If a nullable subexpression is found, the result may also be nullable.
-                    Some(_) => true,
-                    // If the list is too long, we assume it is nullable.
-                    None if list.len() + 1 > MAX_INSPECT_LIMIT => true,
-                    // All the subexpressions are non-nullable, so the result must be non-nullable.
-                    _ => false,
-                })
-            }
-
-            Expr::Between(Between {
-                expr, low, high, ..
-            }) => Ok(expr.nullable(input_schema)?
-                || low.nullable(input_schema)?
-                || high.nullable(input_schema)?),
-
-            Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
-            Expr::Literal(value) => Ok(value.is_null()),
-            Expr::Case(case) => {
-                // this expression is nullable if any of the input expressions are nullable
-                let then_nullable = case
-                    .when_then_expr
-                    .iter()
-                    .map(|(_, t)| t.nullable(input_schema))
-                    .collect::<Result<Vec<_>>>()?;
-                if then_nullable.contains(&true) {
-                    Ok(true)
-                } else if let Some(e) = &case.else_expr {
-                    e.nullable(input_schema)
-                } else {
-                    // CASE produces NULL if there is no `else` expr
-                    // (aka when none of the `when_then_exprs` match)
-                    Ok(true)
-                }
-            }
-            Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarVariable(_, _)
-            | Expr::TryCast { .. }
-            | Expr::ScalarFunction(..)
-            | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
-            Expr::IsNull(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. } => Ok(false),
-            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).is_nullable())
-            }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ..
-            }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like(Like { expr, pattern, .. })
-            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
-                Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
-            }
-            Expr::Wildcard { .. } => internal_err!(
-                "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                // If schema is nested, check if parent is nullable
-                // if it is, return early
-                if let Expr::Column(col) = expr.as_ref() {
-                    if input_schema.nullable(col)? {
-                        return Ok(true);
-                    }
-                }
-                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
-            }
-            Expr::GroupingSet(_) => {
-                // grouping sets do not really have the concept of nullable and do not appear
-                // in projections
-                Ok(true)
-            }
-        }
-    }
-
-    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
-        match self {
-            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
-            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
-            _ => Ok(HashMap::new()),
         }
     }
 
