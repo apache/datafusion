@@ -292,78 +292,73 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
             Some(offset) => offset,
             None => return internal_err!("offsets should not be empty"),
         };
-        match (first_arr, second_arr) {
-            (Some(first_arr), Some(second_arr)) => {
-                let mut l_values = converter.convert_columns(&[first_arr])?;
-                let mut r_values = converter.convert_columns(&[second_arr])?;
-
-                if set_op == SetOp::Except {
-                    (l_values, r_values) = (r_values, l_values);
-                }
-
-                let l_iter = l_values.iter().sorted().dedup();
-                let values_set: HashSet<_> = l_iter.clone().collect();
-                let mut rows = if set_op == SetOp::Union {
-                    l_iter.collect::<Vec<_>>()
-                } else {
-                    vec![]
-                };
-                for r_val in r_values.iter().sorted().dedup() {
-                    match set_op {
-                        SetOp::Union | SetOp::Except => {
-                            if !values_set.contains(&r_val) {
-                                rows.push(r_val);
-                            }
-                        }
-                        SetOp::Intersect => {
-                            if values_set.contains(&r_val) {
-                                rows.push(r_val);
-                            }
-                        }
-                    }
-                }
-
-                offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-                let arrays = converter.convert_rows(rows)?;
-                let array = match arrays.first() {
-                    Some(array) => array.clone(),
-                    None => {
-                        return internal_err!("{set_op}: failed to get array from rows");
-                    }
-                };
-                new_arrays.push(array);
-                nulls.push(true);
-            }
+        let (l_values, r_values) = match (first_arr, second_arr) {
             (Some(_), None) if set_op == SetOp::Intersect => {
                 offsets.push(last_offset);
                 nulls.push(false);
+                continue;
             }
             (None, Some(_)) if matches!(set_op, SetOp::Intersect | SetOp::Except) => {
                 offsets.push(last_offset);
                 nulls.push(false);
+                continue;
             }
-            (Some(arr), None) | (None, Some(arr)) => {
-                let l_values = converter.convert_columns(&[arr])?;
-                let l_iter = l_values.iter().sorted().dedup();
-                let rows = l_iter.collect::<Vec<_>>();
-
-                offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-                let arrays = converter.convert_rows(rows)?;
-                let array = match arrays.first() {
-                    Some(array) => array.clone(),
-                    None => {
-                        return internal_err!("{set_op}: failed to get array from rows");
-                    }
-                };
-                new_arrays.push(array);
-                nulls.push(true);
-            }
-
             (None, None) => {
                 offsets.push(last_offset);
                 nulls.push(false);
+                continue;
+            }
+            (Some(first_arr), Some(second_arr)) => {
+                let l_values = converter.convert_columns(&[first_arr])?;
+                let r_values = converter.convert_columns(&[second_arr])?;
+                // swap l_values and r_values if set_op is Except, because the values
+                // in the second array should be removed from the first array
+                if set_op == SetOp::Except {
+                    (l_values, r_values)
+                } else {
+                    (r_values, l_values)
+                }
+            }
+            (Some(arr), None) | (None, Some(arr)) => {
+                let r_values =
+                    converter.convert_columns(&[new_empty_array(arr.data_type())])?;
+                let l_values = converter.convert_columns(&[arr.clone()])?;
+                (l_values, r_values)
+            }
+        };
+
+        let l_iter = l_values.iter().sorted().dedup();
+        let values_set: HashSet<_> = l_iter.clone().collect();
+        let mut rows = if set_op == SetOp::Union {
+            l_iter.collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        for r_val in r_values.iter().sorted().dedup() {
+            match set_op {
+                SetOp::Union | SetOp::Except => {
+                    if !values_set.contains(&r_val) {
+                        rows.push(r_val);
+                    }
+                }
+                SetOp::Intersect => {
+                    if values_set.contains(&r_val) {
+                        rows.push(r_val);
+                    }
+                }
             }
         }
+
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.first() {
+            Some(array) => array.clone(),
+            None => {
+                return internal_err!("{set_op}: failed to get array from rows");
+            }
+        };
+        new_arrays.push(array);
+        nulls.push(true);
     }
 
     let offsets = OffsetBuffer::new(offsets.into());

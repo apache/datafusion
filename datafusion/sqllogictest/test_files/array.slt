@@ -406,7 +406,7 @@ AS VALUES
 ;
 
 statement ok
-CREATE TABLE array_setop_with_NULL_table
+CREATE TABLE array_setop_table
 AS VALUES
   ([1, 2, 2, 3], [2, 3, 4]),
   ([2, 3, 3], [3]),
@@ -3905,7 +3905,7 @@ select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello'
 
 query ?
 select array_union(column1, column2)
-from array_setop_with_NULL_table;
+from array_setop_table;
 ----
 [1, 2, 3, 4]
 [2, 3]
@@ -5354,7 +5354,7 @@ from array_distinct_table_2D_fixed;
 
 query ?
 select array_intersect(column1, column2)
-from array_setop_with_NULL_table;
+from array_setop_table;
 ----
 [2, 3]
 [3]
@@ -5782,7 +5782,7 @@ NULL
 ## array_except
 
 query ?
-select array_except(column1, column2) from array_setop_with_NULL_table;
+select array_except(column1, column2) from array_setop_table;
 ----
 [1]
 [2]
@@ -6606,4 +6606,4 @@ statement ok
 drop table test_create_array_table;
 
 statement ok
-drop table array_setop_with_NULL_table;
+drop table array_setop_table;
