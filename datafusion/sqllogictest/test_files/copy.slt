@@ -474,9 +474,9 @@ select * from validate_arrow;
 1 Foo
 2 Bar
 
-# Legacy Format Options Support
+# Format Options Support without the 'format.' prefix
 
-# Copy with legacy format options for Parquet
+# Copy with format options for Parquet without the 'format.' prefix
 query IT
 COPY source_table TO 'test_files/scratch/copy/format_table.parquet'
 OPTIONS (
@@ -486,14 +486,14 @@ OPTIONS (
 ----
 2
 
-# Copy with legacy format options for JSON
+# Copy with format options for JSON without the 'format.' prefix
 query IT
 COPY source_table  to 'test_files/scratch/copy/format_table'
 STORED AS JSON OPTIONS (compression gzip);
 ----
 2
 
-# Copy with legacy format options for CSV
+# Copy with format options for CSV without the 'format.' prefix
 query IT
 COPY source_table to 'test_files/scratch/copy/format_table.csv'
 OPTIONS (
@@ -506,7 +506,7 @@ OPTIONS (
 ----
 2
 
-# Use unknown option with legacy format options to ensure error is sensible
+# Copy with unknown format options without the 'format.' prefix to ensure error is sensible
 query error DataFusion error: Invalid or Unsupported Configuration: Config value "unknown_option" not found on CsvOptions
 COPY source_table to 'test_files/scratch/copy/format_table2.csv'
 OPTIONS (
