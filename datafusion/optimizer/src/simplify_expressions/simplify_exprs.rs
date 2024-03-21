@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, not_impl_err};
+use datafusion_common::{not_impl_err, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
@@ -56,7 +56,7 @@ impl OptimizerRule for SimplifyExpressions {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        return not_impl_err!("Should use optimized owned")
+        return not_impl_err!("Should use optimized owned");
     }
 
     fn supports_owned(&self) -> bool {
@@ -127,16 +127,22 @@ impl SimplifyExpressions {
             simplifier
         };
 
-        let exprs = plan
-            .expressions()
-            .into_iter()
-            .map(|e| {
-                // TODO: unify with `rewrite_preserving_name`
-                let original_name = e.name_for_alias()?;
-                let new_e = simplifier.simplify(e)?;
-                new_e.alias_if_changed(original_name)
+        let plan = plan.rewrite_exprs(|e| {
+            // TODO: unify with `rewrite_preserving_name`
+            // todo track if e was rewritten
+            let original_name = e.name_for_alias()?;
+            let new_e = simplifier.simplify(e)?;
+
+            // inline new_e.alias_if_changed(original_name)
+            // to figure out if the expression was transformed
+            let new_name = new_e.name_for_alias()?;
+            Ok(if new_name == original_name {
+                new_e
+            } else {
+                transformed = true;
+                new_e.alias(original_name)
             })
-            .collect::<Result<Vec<_>>>()?;
+        })?;
 
         Ok(if transformed {
             Transformed::yes(plan)
@@ -144,7 +150,6 @@ impl SimplifyExpressions {
             Transformed::no(plan)
         })
     }
-
 }
 
 impl SimplifyExpressions {

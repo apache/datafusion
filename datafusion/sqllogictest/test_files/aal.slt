@@ -9,7 +9,7 @@ select column1 + column1 from t;
 4
 
 query TT
-explain select column1 + column1 from t;
+explain select column1 + column1, 2+3 from t;
 ----
 logical_plan
 Projection: t.column1 + t.column1

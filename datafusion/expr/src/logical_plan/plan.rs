@@ -39,7 +39,7 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
+    build_join_schema, expr_vec_fmt, lit, BinaryExpr, BuiltInWindowFunction,
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
@@ -360,6 +360,138 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
+    }
+}
+
+/// writes each elemenet in the iterator using `f`
+pub fn rewrite_iter_mut<'a, F>(
+    i: impl IntoIterator<Item = &'a mut Expr>,
+    mut f: F,
+) -> Result<()>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    i.into_iter().try_for_each(|e| rewrite_expr(e, &mut f))
+}
+
+pub fn rewrite_expr<'a, F>(e: &'a mut Expr, mut f: F) -> Result<()>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    let mut t = lit(0);
+    std::mem::swap(e, &mut t);
+    // transform
+    let mut t = f(t)?;
+    // put it back
+    std::mem::swap(e, &mut t);
+    Ok(())
+}
+
+impl LogicalPlan {
+    /// applies the closure `f` to each expression of this node, potentially
+    /// rewriting it in place
+    ///
+    /// If the closure returns an error, the error is returned and the expressions
+    /// are left in a partially modified state
+    pub fn rewrite_exprs<F>(mut self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(Expr) -> Result<Expr>,
+    {
+        match &mut self {
+            LogicalPlan::Projection(Projection { expr, .. }) => {
+                rewrite_iter_mut(expr.iter_mut(), &mut f)?;
+            }
+            LogicalPlan::Values(Values { values, .. }) => {
+                rewrite_iter_mut(values.iter_mut().flatten(), &mut f)?;
+            }
+            LogicalPlan::Filter(Filter { predicate, .. }) => {
+                rewrite_expr(predicate, &mut f)?
+            }
+            LogicalPlan::Repartition(Repartition {
+                partitioning_scheme,
+                ..
+            }) => match partitioning_scheme {
+                Partitioning::Hash(expr, _) => rewrite_iter_mut(expr.iter_mut(), &mut f)?,
+                Partitioning::DistributeBy(expr) => {
+                    rewrite_iter_mut(expr.iter_mut(), &mut f)?
+                }
+                Partitioning::RoundRobinBatch(_) => {}
+            },
+            LogicalPlan::Window(Window { window_expr, .. }) => {
+                rewrite_iter_mut(window_expr.iter_mut(), &mut f)?;
+            }
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                ..
+            }) => rewrite_iter_mut(
+                group_expr.iter_mut().chain(aggr_expr.iter_mut()),
+                &mut f,
+            )?,
+            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // 2. the second part is non-equijoin(filter).
+            LogicalPlan::Join(Join { on, filter, .. }) => {
+                // don't look at the equijoin expressions as a whole
+                rewrite_iter_mut(
+                    on.iter_mut().flat_map(|(e1, e2)| {
+                        std::iter::once(e1).chain(std::iter::once(e2))
+                    }),
+                    &mut f,
+                )?;
+
+                if let Some(filter) = filter.as_mut() {
+                    rewrite_expr(filter, &mut f)?;
+                }
+            }
+            LogicalPlan::Sort(Sort { expr, .. }) => {
+                rewrite_iter_mut(expr.iter_mut(), &mut f)?
+            }
+            LogicalPlan::Extension(extension) => {
+                // would be nice to avoid this copy -- maybe can
+                // update extension to just observer Exprs
+                //extension.node.expressions().iter().try_for_each(f)
+                todo!();
+            }
+            LogicalPlan::TableScan(TableScan { filters, .. }) => {
+                rewrite_iter_mut(filters.iter_mut(), &mut f)?;
+            }
+            LogicalPlan::Unnest(Unnest { column, .. }) => {
+                //f(&Expr::Column(column.clone()))
+                todo!();
+            }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                on_expr,
+                select_expr,
+                sort_expr,
+                ..
+            })) => rewrite_iter_mut(
+                on_expr
+                    .iter_mut()
+                    .chain(select_expr.iter_mut())
+                    .chain(sort_expr.iter_mut().flat_map(|x| x.iter_mut())),
+                &mut f,
+            )?,
+            // plans without expressions
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::CrossJoin(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Prepare(_) => {}
+        }
+
+        Ok(self)
     }
 }
 
