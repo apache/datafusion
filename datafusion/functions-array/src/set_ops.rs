@@ -308,22 +308,18 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
                 nulls.push(false);
                 continue;
             }
-            (Some(first_arr), Some(second_arr)) => {
+            (first_arr, second_arr) => {
+                let first_arr = first_arr.unwrap_or(new_empty_array(&l.value_type()));
+                let second_arr = second_arr.unwrap_or(new_empty_array(&r.value_type()));
                 let l_values = converter.convert_columns(&[first_arr])?;
                 let r_values = converter.convert_columns(&[second_arr])?;
                 // swap l_values and r_values if set_op is Except, because the values
                 // in the second array should be removed from the first array
                 if set_op == SetOp::Except {
-                    (l_values, r_values)
-                } else {
                     (r_values, l_values)
+                } else {
+                    (l_values, r_values)
                 }
-            }
-            (Some(arr), None) | (None, Some(arr)) => {
-                let r_values =
-                    converter.convert_columns(&[new_empty_array(arr.data_type())])?;
-                let l_values = converter.convert_columns(&[arr.clone()])?;
-                (l_values, r_values)
             }
         };
 
