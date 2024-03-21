@@ -17,9 +17,7 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
-use crate::{
-    Accumulator, BuiltinScalarFunction, ColumnarValue, PartitionEvaluator, Signature,
-};
+use crate::{Accumulator, ColumnarValue, PartitionEvaluator};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::sync::Arc;
@@ -53,24 +51,3 @@ pub type PartitionEvaluatorFactory =
 /// its state, given its return datatype.
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
-
-/// Returns the datatype of the scalar function
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `BuiltinScalarFunction::return_type` instead"
-)]
-pub fn return_type(
-    fun: &BuiltinScalarFunction,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    fun.return_type(input_expr_types)
-}
-
-/// Return the [`Signature`] supported by the function `fun`.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `BuiltinScalarFunction::signature` instead"
-)]
-pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
-    fun.signature()
-}

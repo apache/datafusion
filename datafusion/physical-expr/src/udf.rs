@@ -20,7 +20,9 @@ use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow_schema::Schema;
 use datafusion_common::{DFSchema, Result};
 pub use datafusion_expr::ScalarUDF;
-use datafusion_expr::{type_coercion::functions::data_types, Expr};
+use datafusion_expr::{
+    type_coercion::functions::data_types, Expr, ScalarFunctionDefinition,
+};
 use std::sync::Arc;
 
 /// Create a physical expression of the UDF.
@@ -45,9 +47,10 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
+    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(fun.clone()));
     Ok(Arc::new(ScalarFunctionExpr::new(
         fun.name(),
-        fun.fun(),
+        fun_def,
         input_phy_exprs.to_vec(),
         return_type,
         fun.monotonicity()?,
