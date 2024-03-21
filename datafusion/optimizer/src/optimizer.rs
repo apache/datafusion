@@ -414,17 +414,15 @@ impl Optimizer {
         mut plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let inputs = plan.take_inputs();
 
-        let new_inputs = inputs
-            .into_iter()
-            .map(|sub_plan| self.optimize_recursively(rule, sub_plan, config))
-            .collect::<Result<Vec<_>>>()?;
-
-        let transformed = new_inputs.iter().any(|t| t.transformed);
-        let new_inputs = new_inputs.into_iter().map(|t| t.data).collect();
-
-        let plan = plan.with_new_inputs2(new_inputs)?;
+        let mut transformed = false;
+        let plan = plan.rewrite_inputs(|child| {
+            let t = self.optimize_recursively(rule, child, config)?;
+            if t.transformed {
+                transformed = true;
+            }
+            Ok(t.data)
+        })?;
 
         Ok(if transformed {
             Transformed::yes(plan)
