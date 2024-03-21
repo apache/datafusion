@@ -280,7 +280,7 @@ where
     /// # Returns
     ///
     /// The payload value for the entry, either the existing value or
-    /// the the newly inserted value
+    /// the newly inserted value
     ///
     /// # Safety:
     ///

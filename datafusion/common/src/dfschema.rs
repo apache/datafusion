@@ -97,10 +97,11 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// ```rust
 /// use datafusion_common::{DFSchema, DFField};
 /// use arrow_schema::Schema;
+/// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::new(vec![
+/// let df_schema = DFSchema::new_with_metadata(vec![
 ///    DFField::new_unqualified("c1", arrow::datatypes::DataType::Int32, false),
-/// ]).unwrap();
+/// ], HashMap::new()).unwrap();
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
@@ -122,12 +123,6 @@ impl DFSchema {
             metadata: HashMap::new(),
             functional_dependencies: FunctionalDependencies::empty(),
         }
-    }
-
-    #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
-    /// Create a new `DFSchema`
-    pub fn new(fields: Vec<DFField>) -> Result<Self> {
-        Self::new_with_metadata(fields, HashMap::new())
     }
 
     /// Create a new `DFSchema`
@@ -249,32 +244,6 @@ impl DFSchema {
     /// offset within the internal `fields` vector
     pub fn field(&self, i: usize) -> &DFField {
         &self.fields[i]
-    }
-
-    #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
-    /// Find the index of the column with the given unqualified name
-    pub fn index_of(&self, name: &str) -> Result<usize> {
-        for i in 0..self.fields.len() {
-            if self.fields[i].name() == name {
-                return Ok(i);
-            } else {
-                // Now that `index_of` is deprecated an error is thrown if
-                // a fully qualified field name is provided.
-                match &self.fields[i].qualifier {
-                    Some(qualifier) => {
-                        if (qualifier.to_string() + "." + self.fields[i].name()) == name {
-                            return _plan_err!(
-                                "Fully qualified field name '{name}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead"
-                            );
-                        }
-                    }
-                    None => (),
-                }
-            }
-        }
-
-        Err(unqualified_field_not_found(name, self))
     }
 
     pub fn index_of_column_by_name(
@@ -1146,13 +1115,10 @@ mod tests {
         Ok(())
     }
 
-    #[allow(deprecated)]
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let expected_help = "Valid fields are t1.c0, t1.c1.";
-        // Pertinent message parts
-        let expected_err_msg = "Fully qualified field name 't1.c0'";
         assert_contains!(
             schema
                 .field_with_qualified_name(&TableReference::bare("x"), "y")
@@ -1167,11 +1133,12 @@ mod tests {
                 .to_string(),
             expected_help
         );
-        assert_contains!(schema.index_of("y").unwrap_err().to_string(), expected_help);
-        assert_contains!(
-            schema.index_of("t1.c0").unwrap_err().to_string(),
-            expected_err_msg
-        );
+        assert!(schema.index_of_column_by_name(None, "y").unwrap().is_none());
+        assert!(schema
+            .index_of_column_by_name(None, "t1.c0")
+            .unwrap()
+            .is_none());
+
         Ok(())
     }
 

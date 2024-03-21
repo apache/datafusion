@@ -746,7 +746,7 @@ mod tests {
             // Generate a data that satisfies properties given
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-            let col_exprs = vec![
+            let col_exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,
@@ -815,7 +815,7 @@ mod tests {
                 Operator::Plus,
                 col("b", &test_schema)?,
             )) as Arc<dyn PhysicalExpr>;
-            let exprs = vec![
+            let exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,

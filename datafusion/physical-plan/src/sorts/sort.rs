@@ -733,16 +733,6 @@ pub struct SortExec {
 }
 
 impl SortExec {
-    /// Create a new sort execution plan
-    #[deprecated(since = "22.0.0", note = "use `new` and `with_fetch`")]
-    pub fn try_new(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        fetch: Option<usize>,
-    ) -> Result<Self> {
-        Ok(Self::new(expr, input).with_fetch(fetch))
-    }
-
     /// Create a new sort execution plan that produces a single,
     /// sorted output partition.
     pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
@@ -756,23 +746,6 @@ impl SortExec {
             fetch: None,
             cache,
         }
-    }
-
-    /// Create a new sort execution plan with the option to preserve
-    /// the partitioning of the input plan
-    #[deprecated(
-        since = "22.0.0",
-        note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
-    )]
-    pub fn new_with_partitioning(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        preserve_partitioning: bool,
-        fetch: Option<usize>,
-    ) -> Self {
-        Self::new(expr, input)
-            .with_fetch(fetch)
-            .with_preserve_partitioning(preserve_partitioning)
     }
 
     /// Whether this `SortExec` preserves partitioning of the children
