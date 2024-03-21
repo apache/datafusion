@@ -506,6 +506,13 @@ OPTIONS (
 ----
 2
 
+# Use unknown option with legacy format options to ensure error is sensible
+query error DataFusion error: Invalid or Unsupported Configuration: Config value "unknown_option" not found on CsvOptions
+COPY source_table to 'test_files/scratch/copy/format_table2.csv'
+OPTIONS (
+    unknown_option  false,
+);
+
 
 # Error cases:
 
