@@ -850,7 +850,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
             };
-            if !(&key.contains(".")) {
+            if !(&key.contains('.')) {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
