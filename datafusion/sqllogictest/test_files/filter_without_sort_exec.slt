@@ -1,0 +1,61 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# prepare table
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "date"   VARCHAR, 
+    "ticker" VARCHAR, 
+    "time"   VARCHAR,
+) STORED AS CSV
+WITH ORDER ("date", "ticker", "time")
+LOCATION './a.parquet';
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' 
+ORDER BY "date", "time";
+----
+logical_plan
+Sort: data.date ASC NULLS LAST, data.time ASC NULLS LAST
+--Filter: data.ticker = Utf8("A")
+----TableScan: data projection=[date, ticker, time]
+physical_plan
+SortPreservingMergeExec: [date@0 ASC NULLS LAST,time@2 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: ticker@1 = A
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE date = 'A' 
+ORDER BY "ticker", "time";
+----
+logical_plan
+Sort: data.ticker ASC NULLS LAST, data.time ASC NULLS LAST
+--Filter: data.date = Utf8("A")
+----TableScan: data projection=[date, ticker, time]
+physical_plan
+SortPreservingMergeExec: [ticker@1 ASC NULLS LAST,time@2 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: date@0 = A
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]

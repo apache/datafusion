@@ -36,10 +36,10 @@ mod relation;
 mod select;
 mod set_expr;
 mod statement;
+#[cfg(feature = "unparser")]
 pub mod unparser;
 pub mod utils;
 mod values;
 
 pub use datafusion_common::{ResolvedTableReference, TableReference};
-pub use expr::arrow_cast::parse_data_type;
 pub use sqlparser;

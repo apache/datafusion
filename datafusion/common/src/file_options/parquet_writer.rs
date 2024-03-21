@@ -156,6 +156,7 @@ pub(crate) fn parse_encoding_string(
         "plain" => Ok(parquet::basic::Encoding::PLAIN),
         "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
         "rle" => Ok(parquet::basic::Encoding::RLE),
+        #[allow(deprecated)]
         "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
         "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
         "delta_length_byte_array" => {

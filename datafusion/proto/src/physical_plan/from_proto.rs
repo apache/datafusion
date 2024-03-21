@@ -41,9 +41,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, GetFieldAccessExpr,
-    GetIndexedFieldExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal, NegativeExpr,
-    NotExpr, TryCastExpr,
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
@@ -60,8 +59,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
 
 use chrono::{TimeZone, Utc};
+use datafusion_expr::ScalarFunctionDefinition;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+
+use super::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -83,7 +85,8 @@ pub fn parse_physical_sort_expr(
     input_schema: &Schema,
 ) -> Result<PhysicalSortExpr> {
     if let Some(expr) = &proto.expr {
-        let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+        let codec = DefaultPhysicalExtensionCodec {};
+        let expr = parse_physical_expr(expr.as_ref(), registry, input_schema, &codec)?;
         let options = SortOptions {
             descending: !proto.asc,
             nulls_first: proto.nulls_first,
@@ -111,7 +114,9 @@ pub fn parse_physical_sort_exprs(
         .iter()
         .map(|sort_expr| {
             if let Some(expr) = &sort_expr.expr {
-                let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+                let codec = DefaultPhysicalExtensionCodec {};
+                let expr =
+                    parse_physical_expr(expr.as_ref(), registry, input_schema, &codec)?;
                 let options = SortOptions {
                     descending: !sort_expr.asc,
                     nulls_first: sort_expr.nulls_first,
@@ -138,16 +143,17 @@ pub fn parse_physical_window_expr(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
+    let codec = DefaultPhysicalExtensionCodec {};
     let window_node_expr = proto
         .args
         .iter()
-        .map(|e| parse_physical_expr(e, registry, input_schema))
+        .map(|e| parse_physical_expr(e, registry, input_schema, &codec))
         .collect::<Result<Vec<_>>>()?;
 
     let partition_by = proto
         .partition_by
         .iter()
-        .map(|p| parse_physical_expr(p, registry, input_schema))
+        .map(|p| parse_physical_expr(p, registry, input_schema, &codec))
         .collect::<Result<Vec<_>>>()?;
 
     let order_by = proto
@@ -192,6 +198,7 @@ pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = proto
         .expr_type
@@ -271,7 +278,7 @@ pub fn parse_physical_expr(
             )?,
             e.list
                 .iter()
-                .map(|x| parse_physical_expr(x, registry, input_schema))
+                .map(|x| parse_physical_expr(x, registry, input_schema, codec))
                 .collect::<Result<Vec<_>, _>>()?,
             &e.negated,
             input_schema,
@@ -279,7 +286,7 @@ pub fn parse_physical_expr(
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr
                 .as_ref()
-                .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
+                .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema, codec))
                 .transpose()?,
             e.when_then_expr
                 .iter()
@@ -302,7 +309,7 @@ pub fn parse_physical_expr(
                 .collect::<Result<Vec<_>>>()?,
             e.else_expr
                 .as_ref()
-                .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
+                .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema, codec))
                 .transpose()?,
         )?),
         ExprType::Cast(e) => Arc::new(CastExpr::new(
@@ -335,7 +342,7 @@ pub fn parse_physical_expr(
             let args = e
                 .args
                 .iter()
-                .map(|x| parse_physical_expr(x, registry, input_schema))
+                .map(|x| parse_physical_expr(x, registry, input_schema, codec))
                 .collect::<Result<Vec<_>, _>>()?;
 
             // TODO Do not create new the ExecutionProps
@@ -349,19 +356,22 @@ pub fn parse_physical_expr(
             )?
         }
         ExprType::ScalarUdf(e) => {
-            let udf = registry.udf(e.name.as_str())?;
+            let udf = match &e.fun_definition {
+                Some(buf) => codec.try_decode_udf(&e.name, buf)?,
+                None => registry.udf(e.name.as_str())?,
+            };
             let signature = udf.signature();
-            let scalar_fun = udf.fun().clone();
+            let scalar_fun_def = ScalarFunctionDefinition::UDF(udf.clone());
 
             let args = e
                 .args
                 .iter()
-                .map(|x| parse_physical_expr(x, registry, input_schema))
+                .map(|x| parse_physical_expr(x, registry, input_schema, codec))
                 .collect::<Result<Vec<_>, _>>()?;
 
             Arc::new(ScalarFunctionExpr::new(
                 e.name.as_str(),
-                scalar_fun,
+                scalar_fun_def,
                 args,
                 convert_required!(e.return_type)?,
                 None,
@@ -384,27 +394,6 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
-            let field = match &get_indexed_field_expr.field {
-                Some(protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(named_struct_field_expr)) => GetFieldAccessExpr::NamedStructField{
-                    name: convert_required!(named_struct_field_expr.name)?,
-                },
-                None =>
-                    return Err(proto_error(
-                    "Field must not be None",
-                )),
-            };
-
-            Arc::new(GetIndexedFieldExpr::new(
-                parse_required_physical_expr(
-                    get_indexed_field_expr.arg.as_deref(),
-                    registry,
-                    "arg",
-                    input_schema,
-                )?,
-                field,
-            ))
-        }
     };
 
     Ok(pexpr)
@@ -416,7 +405,8 @@ fn parse_required_physical_expr(
     field: &str,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| parse_physical_expr(e, registry, input_schema))
+    let codec = DefaultPhysicalExtensionCodec {};
+    expr.map(|e| parse_physical_expr(e, registry, input_schema, &codec))
         .transpose()?
         .ok_or_else(|| {
             DataFusionError::Internal(format!("Missing required field {field:?}"))
@@ -461,10 +451,11 @@ pub fn parse_protobuf_hash_partitioning(
 ) -> Result<Option<Partitioning>> {
     match partitioning {
         Some(hash_part) => {
+            let codec = DefaultPhysicalExtensionCodec {};
             let expr = hash_part
                 .hash_expr
                 .iter()
-                .map(|e| parse_physical_expr(e, registry, input_schema))
+                .map(|e| parse_physical_expr(e, registry, input_schema, &codec))
                 .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
 
             Ok(Some(Partitioning::Hash(
@@ -525,6 +516,7 @@ pub fn parse_protobuf_file_scan_config(
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
+        let codec = DefaultPhysicalExtensionCodec {};
         let sort_expr = node_collection
             .physical_sort_expr_nodes
             .iter()
@@ -532,7 +524,7 @@ pub fn parse_protobuf_file_scan_config(
                 let expr = node
                     .expr
                     .as_ref()
-                    .map(|e| parse_physical_expr(e.as_ref(), registry, &schema))
+                    .map(|e| parse_physical_expr(e.as_ref(), registry, &schema, &codec))
                     .unwrap()?;
                 Ok(PhysicalSortExpr {
                     expr,

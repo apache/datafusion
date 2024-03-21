@@ -207,10 +207,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-            let expr = create_physical_name(expr, false)?;
-            let name = match field {
-                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
+        Expr::GetIndexedField(GetIndexedField { expr: _, field }) => {
+            match field {
+                GetFieldAccess::NamedStructField { name: _ } => {
+                    unreachable!(
+                        "NamedStructField should have been rewritten in OperatorToFunction"
+                    )
+                }
                 GetFieldAccess::ListIndex { key: _ } => {
                     unreachable!(
                         "ListIndex should have been rewritten in OperatorToFunction"
@@ -222,12 +225,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                     stride: _,
                 } => {
                     unreachable!(
-                        "ListIndex should have been rewritten in OperatorToFunction"
+                        "ListRange should have been rewritten in OperatorToFunction"
                     )
                 }
             };
-
-            Ok(name)
         }
         Expr::ScalarFunction(fun) => {
             // function should be resolved during `AnalyzerRule`s
@@ -594,7 +595,7 @@ impl DefaultPhysicalPlanner {
                         table_partition_cols,
                         overwrite: false,
                     };
-                    let mut table_options = session_state.default_table_options().clone();
+                    let mut table_options = session_state.default_table_options();
                     let sink_format: Arc<dyn FileFormat> = match format_options {
                         FormatOptions::CSV(options) => {
                             table_options.csv = options.clone();
@@ -741,13 +742,13 @@ impl DefaultPhysicalPlanner {
                         );
                     }
 
-                    let logical_input_schema = input.schema();
+                    let logical_schema = logical_plan.schema();
                     let window_expr = window_expr
                         .iter()
                         .map(|e| {
                             create_window_expr(
                                 e,
-                                logical_input_schema,
+                                logical_schema,
                                 session_state.execution_props(),
                             )
                         })
@@ -1577,11 +1578,11 @@ pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
 pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
-    logical_input_schema: &DFSchema,
+    logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
-    let physical_input_schema: &Schema = &logical_input_schema.into();
+    let physical_schema: &Schema = &logical_schema.into();
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1593,17 +1594,15 @@ pub fn create_window_expr_with_name(
         }) => {
             let args = args
                 .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
+                .map(|e| create_physical_expr(e, logical_schema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
             let partition_by = partition_by
                 .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
+                .map(|e| create_physical_expr(e, logical_schema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
             let order_by = order_by
                 .iter()
-                .map(|e| {
-                    create_physical_sort_expr(e, logical_input_schema, execution_props)
-                })
+                .map(|e| create_physical_sort_expr(e, logical_schema, execution_props))
                 .collect::<Result<Vec<_>>>()?;
 
             if !is_window_frame_bound_valid(window_frame) {
@@ -1624,7 +1623,7 @@ pub fn create_window_expr_with_name(
                 &partition_by,
                 &order_by,
                 window_frame,
-                physical_input_schema,
+                physical_schema,
                 ignore_nulls,
             )
         }
@@ -1635,7 +1634,7 @@ pub fn create_window_expr_with_name(
 /// Create a window expression from a logical expression or an alias
 pub fn create_window_expr(
     e: &Expr,
-    logical_input_schema: &DFSchema,
+    logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
@@ -1643,7 +1642,7 @@ pub fn create_window_expr(
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.display_name()?, e),
     };
-    create_window_expr_with_name(e, name, logical_input_schema, execution_props)
+    create_window_expr_with_name(e, name, logical_schema, execution_props)
 }
 
 type AggregateExprWithOptionalArgs = (

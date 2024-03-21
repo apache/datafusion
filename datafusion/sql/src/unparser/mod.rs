@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod ast;
 mod expr;
+mod plan;
+mod utils;
 
 pub use expr::expr_to_sql;
+pub use plan::plan_to_sql;
 
 use self::dialect::{DefaultDialect, Dialect};
 pub mod dialect;

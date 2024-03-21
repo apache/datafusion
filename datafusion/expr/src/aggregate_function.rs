@@ -218,19 +218,6 @@ impl FromStr for AggregateFunction {
     }
 }
 
-/// Returns the datatype of the aggregate function.
-/// This is used to get the returned data type for aggregate expr.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `AggregateFunction::return_type` instead"
-)]
-pub fn return_type(
-    fun: &AggregateFunction,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    fun.return_type(input_expr_types)
-}
-
 impl AggregateFunction {
     /// Returns the datatype of the aggregate function given its argument types
     ///
@@ -326,15 +313,6 @@ pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
         &fun.signature(),
     )?;
     avg_sum_type(&coerced_data_types[0])
-}
-
-/// the signatures supported by the function `fun`.
-#[deprecated(
-    since = "27.0.0",
-    note = "please use `AggregateFunction::signature` instead"
-)]
-pub fn signature(fun: &AggregateFunction) -> Signature {
-    fun.signature()
 }
 
 impl AggregateFunction {

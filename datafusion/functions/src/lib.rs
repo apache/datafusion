@@ -84,6 +84,10 @@ use log::debug;
 #[macro_use]
 pub mod macros;
 
+#[cfg(feature = "string_expressions")]
+pub mod string;
+make_stub_package!(string, "string_expressions");
+
 /// Core datafusion expressions
 /// Enabled via feature flag `core_expressions`
 #[cfg(feature = "core_expressions")]
@@ -116,10 +120,16 @@ make_stub_package!(math, "math_expressions");
 pub mod regex;
 make_stub_package!(regex, "regex_expressions");
 
+#[cfg(feature = "crypto_expressions")]
+pub mod crypto;
+make_stub_package!(crypto, "crypto_expressions");
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
+    #[cfg(feature = "crypto_expressions")]
+    pub use super::crypto::expr_fn::*;
     #[cfg(feature = "datetime_expressions")]
     pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
@@ -128,6 +138,8 @@ pub mod expr_fn {
     pub use super::math::expr_fn::*;
     #[cfg(feature = "regex_expressions")]
     pub use super::regex::expr_fn::*;
+    #[cfg(feature = "string_expressions")]
+    pub use super::string::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -137,7 +149,9 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .chain(datetime::functions())
         .chain(encoding::functions())
         .chain(math::functions())
-        .chain(regex::functions());
+        .chain(regex::functions())
+        .chain(crypto::functions())
+        .chain(string::functions());
 
     all_functions.try_for_each(|udf| {
         let existing_udf = registry.register_udf(udf)?;

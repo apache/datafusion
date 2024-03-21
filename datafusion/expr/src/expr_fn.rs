@@ -575,122 +575,8 @@ scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
 scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
-scalar_expr!(
-    ToHex,
-    to_hex,
-    num,
-    "returns the hexdecimal representation of an integer"
-);
 scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
-
-scalar_expr!(
-    ArrayPopBack,
-    array_pop_back,
-    array,
-    "returns the array without the last element."
-);
-
-scalar_expr!(
-    ArrayPopFront,
-    array_pop_front,
-    array,
-    "returns the array without the first element."
-);
-
-scalar_expr!(
-    ArrayElement,
-    array_element,
-    array element,
-    "extracts the element with the index n from the array."
-);
-scalar_expr!(
-    ArrayExcept,
-    array_except,
-    first_array second_array,
-    "Returns an array of the elements that appear in the first array but not in the second."
-);
-scalar_expr!(
-    ArrayPosition,
-    array_position,
-    array element index,
-    "searches for an element in the array, returns first occurrence."
-);
-scalar_expr!(
-    ArrayPositions,
-    array_positions,
-    array element,
-    "searches for an element in the array, returns all occurrences."
-);
-scalar_expr!(
-    ArrayRepeat,
-    array_repeat,
-    element count,
-    "returns an array containing element `count` times."
-);
-scalar_expr!(
-    ArrayRemove,
-    array_remove,
-    array element,
-    "removes the first element from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveN,
-    array_remove_n,
-    array element max,
-    "removes the first `max` elements from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayRemoveAll,
-    array_remove_all,
-    array element,
-    "removes all elements from the array equal to the given value."
-);
-scalar_expr!(
-    ArrayReplace,
-    array_replace,
-    array from to,
-    "replaces the first occurrence of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceN,
-    array_replace_n,
-    array from to max,
-    "replaces the first `max` occurrences of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReplaceAll,
-    array_replace_all,
-    array from to,
-    "replaces all occurrences of the specified element with another specified element."
-);
-scalar_expr!(
-    ArrayReverse,
-    array_reverse,
-    array,
-    "reverses the order of elements in the array."
-);
-scalar_expr!(
-    ArraySlice,
-    array_slice,
-    array begin end stride,
-    "returns a slice of the array."
-);
-scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
-
-scalar_expr!(
-    ArrayResize,
-    array_resize,
-    array size value,
-    "returns an array with the specified size filled with the given value."
-);
-
-scalar_expr!(
-    ArrayIntersect,
-    array_intersect,
-    first_array second_array,
-    "Returns an array of the elements in the intersection of array1 and array2."
-);
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
@@ -712,7 +598,6 @@ scalar_expr!(
     code_point,
     "converts the Unicode code point to a UTF8 character"
 );
-scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
@@ -722,7 +607,6 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the beginning of a string"
 );
-scalar_expr!(MD5, md5, string, "returns the MD5 hash of a string");
 scalar_expr!(
     OctetLength,
     octet_length,
@@ -739,24 +623,12 @@ scalar_expr!(
     string,
     "removes all characters, spaces by default, from the end of a string"
 );
-scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
-scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
-scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
-scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
-scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
-scalar_expr!(
-    Trim,
-    trim,
-    string,
-    "removes all characters, space by default from the string"
-);
-scalar_expr!(Upper, upper, string, "converts the string to upper case");
 //use vec as parameter
 nary_scalar_expr!(
     Lpad,
@@ -787,23 +659,6 @@ nary_scalar_expr!(
     "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
 );
 
-// date functions
-scalar_expr!(
-    ToChar,
-    to_char,
-    datetime format,
-    "converts a date, time, timestamp or duration to a string based on the provided format"
-);
-scalar_expr!(
-    FromUnixtime,
-    from_unixtime,
-    unixtime,
-    "returns the unix time in format"
-);
-scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
-scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
-scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
-scalar_expr!(MakeDate, make_date, year month day, "make a date from year, month and day component parts");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 scalar_expr!(
     Iszero,
@@ -1127,7 +982,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{lit, ScalarFunctionDefinition};
+    use crate::ScalarFunctionDefinition;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -1231,7 +1086,6 @@ mod test {
         test_nary_scalar_expr!(Btrim, btrim, string, characters);
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
-        test_scalar_expr!(Digest, digest, string, algorithm);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
@@ -1240,7 +1094,6 @@ mod test {
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
         test_scalar_expr!(Ltrim, ltrim, string);
-        test_scalar_expr!(MD5, md5, string);
         test_scalar_expr!(OctetLength, octet_length, string);
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
@@ -1249,35 +1102,12 @@ mod test {
         test_nary_scalar_expr!(Rpad, rpad, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
         test_scalar_expr!(Rtrim, rtrim, string);
-        test_scalar_expr!(SHA224, sha224, string);
-        test_scalar_expr!(SHA256, sha256, string);
-        test_scalar_expr!(SHA384, sha384, string);
-        test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
-        test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
         test_scalar_expr!(Substr, substring, string, position, count);
-        test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
-        test_scalar_expr!(Trim, trim, string);
-        test_scalar_expr!(Upper, upper, string);
-
-        test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
-
-        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
-        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
-        test_scalar_expr!(ArrayPosition, array_position, array, element, index);
-        test_scalar_expr!(ArrayPositions, array_positions, array, element);
-        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
-        test_scalar_expr!(ArrayRemove, array_remove, array, element);
-        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
-        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
-        test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
-        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
-        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
-
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
@@ -1295,21 +1125,6 @@ mod test {
             let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
-        } else {
-            unreachable!();
-        }
-    }
-
-    #[test]
-    fn digest_function_definitions() {
-        if let Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
-            args,
-        }) = digest(col("tableA.a"), lit("md5"))
-        {
-            let name = BuiltinScalarFunction::Digest;
-            assert_eq!(name, fun);
-            assert_eq!(2, args.len());
         } else {
             unreachable!();
         }

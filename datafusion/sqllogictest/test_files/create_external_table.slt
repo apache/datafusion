@@ -101,8 +101,8 @@ statement error DataFusion error: SQL error: ParserError\("Unexpected token FOOB
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo.csv';
 
 # Conflicting options
-statement error DataFusion error: Invalid or Unsupported Configuration: Key "parquet.column_index_truncate_length" is not applicable for CSV format
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "column_index_truncate_length" not found on CsvOptions
 CREATE EXTERNAL TABLE csv_table (column1 int)
 STORED AS CSV
 LOCATION 'foo.csv'
-OPTIONS ('csv.delimiter' ';', 'parquet.column_index_truncate_length' '123')
+OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')

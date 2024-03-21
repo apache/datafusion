@@ -146,3 +146,100 @@ macro_rules! downcast_arg {
         })?
     }};
 }
+
+/// Macro to create a unary math UDF.
+///
+/// A unary math function takes an argument of type Float32 or Float64,
+/// applies a unary floating function to the argument, and returns a value of the same type.
+///
+/// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
+/// $GNAME: a singleton instance of the UDF
+/// $NAME: the name of the function
+/// $UNARY_FUNC: the unary function to apply to the argument
+macro_rules! make_math_unary_udf {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident) => {
+        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+
+        mod $NAME {
+            use arrow::array::{ArrayRef, Float32Array, Float64Array};
+            use arrow::datatypes::DataType;
+            use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use std::any::Any;
+            use std::sync::Arc;
+
+            #[derive(Debug)]
+            pub struct $UDF {
+                signature: Signature,
+            }
+
+            impl $UDF {
+                pub fn new() -> Self {
+                    use DataType::*;
+                    Self {
+                        signature: Signature::uniform(
+                            1,
+                            vec![Float64, Float32],
+                            Volatility::Immutable,
+                        ),
+                    }
+                }
+            }
+
+            impl ScalarUDFImpl for $UDF {
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+                fn name(&self) -> &str {
+                    stringify!($NAME)
+                }
+
+                fn signature(&self) -> &Signature {
+                    &self.signature
+                }
+
+                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                    let arg_type = &arg_types[0];
+
+                    match arg_type {
+                        DataType::Float32 => Ok(DataType::Float32),
+                        // For other types (possible values float64/null/int), use Float64
+                        _ => Ok(DataType::Float64),
+                    }
+                }
+
+                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                    let args = ColumnarValue::values_to_arrays(args)?;
+
+                    let arr: ArrayRef = match args[0].data_type() {
+                        DataType::Float64 => {
+                            Arc::new(make_function_scalar_inputs_return_type!(
+                                &args[0],
+                                self.name(),
+                                Float64Array,
+                                Float64Array,
+                                { f64::$UNARY_FUNC }
+                            ))
+                        }
+                        DataType::Float32 => {
+                            Arc::new(make_function_scalar_inputs_return_type!(
+                                &args[0],
+                                self.name(),
+                                Float32Array,
+                                Float32Array,
+                                { f32::$UNARY_FUNC }
+                            ))
+                        }
+                        other => {
+                            return exec_err!(
+                                "Unsupported data type {other:?} for function {}",
+                                self.name()
+                            )
+                        }
+                    };
+                    Ok(ColumnarValue::Array(arr))
+                }
+            }
+        }
+    };
+}

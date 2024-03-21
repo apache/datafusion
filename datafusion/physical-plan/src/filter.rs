@@ -159,6 +159,27 @@ impl FilterExec {
         })
     }
 
+    fn extend_constants(
+        input: &Arc<dyn ExecutionPlan>,
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut res_constants = Vec::new();
+        let input_eqs = input.equivalence_properties();
+
+        let conjunctions = split_conjunction(predicate);
+        for conjunction in conjunctions {
+            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
+                if binary.op() == &Operator::Eq {
+                    if input_eqs.is_expr_constant(binary.left()) {
+                        res_constants.push(binary.right().clone())
+                    } else if input_eqs.is_expr_constant(binary.right()) {
+                        res_constants.push(binary.left().clone())
+                    }
+                }
+            }
+        }
+        res_constants
+    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -181,8 +202,12 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _);
+        // this is for statistics
         eq_properties = eq_properties.add_constants(constants);
-
+        // this is for logical constant (for example: a = '1', then a could be marked as a constant)
+        // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
+        eq_properties =
+            eq_properties.add_constants(Self::extend_constants(input, predicate));
         Ok(PlanProperties::new(
             eq_properties,
             input.output_partitioning().clone(), // Output Partitioning
@@ -416,7 +441,9 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use crate::ExecutionPlan;
 
+    use crate::empty::EmptyExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::{UnionFields, UnionMode};
     use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_expr::Operator;
 
@@ -1063,6 +1090,39 @@ mod tests {
         let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
+
+    #[test]
+    fn test_equivalence_properties_union_type() -> Result<()> {
+        let union_type = DataType::Union(
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("f1", DataType::Int32, true),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", union_type, true),
+        ]));
+
+        let exec = FilterExec::try_new(
+            binary(
+                binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
+                Operator::And,
+                binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
+                &schema,
+            )?,
+            Arc::new(EmptyExec::new(schema.clone())),
+        )?;
+
+        exec.statistics().unwrap();
+
         Ok(())
     }
 }

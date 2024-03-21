@@ -90,6 +90,7 @@ use uuid::Uuid;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
 
 mod avro;
 mod csv;
@@ -383,9 +384,9 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Return a copied version of config for this Session
+    /// Return a copied version of table options for this Session
     pub fn copied_table_options(&self) -> TableOptions {
-        self.state.read().default_table_options().clone()
+        self.state.read().default_table_options()
     }
 
     /// Creates a [`DataFrame`] from SQL query text.
@@ -1180,49 +1181,6 @@ impl SessionContext {
         }
     }
 
-    /// Returns the set of available tables in the default catalog and
-    /// schema.
-    ///
-    /// Use [`table`] to get a specific table.
-    ///
-    /// [`table`]: SessionContext::table
-    #[deprecated(
-        since = "23.0.0",
-        note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
-    )]
-    pub fn tables(&self) -> Result<HashSet<String>> {
-        Ok(self
-            .state
-            .read()
-            // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "".into() })?
-            .table_names()
-            .iter()
-            .cloned()
-            .collect())
-    }
-
-    /// Optimizes the logical plan by applying optimizer rules.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
-    )]
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.read().optimize(plan)
-    }
-
-    /// Creates a physical plan from a logical plan.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
-    )]
-    pub async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.state().create_physical_plan(logical_plan).await
-    }
-
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
@@ -1284,6 +1242,13 @@ impl FunctionRegistry for SessionContext {
     }
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         self.state.write().register_udwf(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.state.write().register_function_rewrite(rewrite)
     }
 }
 
@@ -1785,11 +1750,7 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::CopyTo(CopyToStatement {
-                    source,
-                    target: _,
-                    options: _,
-                }) => match source {
+                DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                     CopyToSource::Relation(table_name) => {
                         visitor.insert(table_name);
                     }
@@ -1998,8 +1959,9 @@ impl SessionState {
     }
 
     /// return the TableOptions options with its extensions
-    pub fn default_table_options(&self) -> &TableOptions {
-        &self.table_option_namespace
+    pub fn default_table_options(&self) -> TableOptions {
+        self.table_option_namespace
+            .combine_with_session_config(self.config_options())
     }
 
     /// Get a new TaskContext to run in this session
@@ -2208,6 +2170,14 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
     }
 }
 

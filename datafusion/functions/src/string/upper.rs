@@ -15,40 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Math function: `acos()`.
-
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+
+use crate::string::utf8_to_str_type;
+
+use super::handle;
 
 #[derive(Debug)]
-pub struct AcosFunc {
+pub(super) struct UpperFunc {
     signature: Signature,
 }
 
-impl AcosFunc {
+impl UpperFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Float64, Float32],
+                vec![Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
     }
 }
 
-impl ScalarUDFImpl for AcosFunc {
+impl ScalarUDFImpl for UpperFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
-        "acos"
+        "upper"
     }
 
     fn signature(&self) -> &Signature {
@@ -56,42 +57,10 @@ impl ScalarUDFImpl for AcosFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_type = &arg_types[0];
-
-        match arg_type {
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Float32 => Ok(DataType::Float32),
-
-            // For other types (possible values null/int), use Float 64
-            _ => Ok(DataType::Float64),
-        }
+        utf8_to_str_type(&arg_types[0], "upper")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-
-        let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => Arc::new(make_function_scalar_inputs_return_type!(
-                &args[0],
-                self.name(),
-                Float64Array,
-                Float64Array,
-                { f64::acos }
-            )),
-            DataType::Float32 => Arc::new(make_function_scalar_inputs_return_type!(
-                &args[0],
-                self.name(),
-                Float32Array,
-                Float32Array,
-                { f32::acos }
-            )),
-            other => {
-                return exec_err!(
-                    "Unsupported data type {other:?} for function {}",
-                    self.name()
-                )
-            }
-        };
-        Ok(ColumnarValue::Array(arr))
+        handle(args, |string| string.to_uppercase(), "upper")
     }
 }

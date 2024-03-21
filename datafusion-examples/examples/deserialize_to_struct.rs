@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::AsArray;
+use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use serde::Deserialize;
+use futures::StreamExt;
 
 /// This example shows that it is possible to convert query results into Rust structs .
-/// It will collect the query results into RecordBatch, then convert it to serde_json::Value.
-/// Then, serde_json::Value is turned into Rust's struct.
-/// Any datatype with `Deserialize` implemeneted works.
 #[tokio::main]
 async fn main() -> Result<()> {
     let data_list = Data::new().await?;
@@ -30,10 +29,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 struct Data {
     #[allow(dead_code)]
-    int_col: i64,
+    int_col: i32,
     #[allow(dead_code)]
     double_col: f64,
 }
@@ -41,35 +40,36 @@ struct Data {
 impl Data {
     pub async fn new() -> Result<Vec<Self>> {
         // this group is almost the same as the one you find it in parquet_sql.rs
-        let batches = {
-            let ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
-            let testdata = datafusion::test_util::parquet_test_data();
+        let testdata = datafusion::test_util::parquet_test_data();
 
-            ctx.register_parquet(
-                "alltypes_plain",
-                &format!("{testdata}/alltypes_plain.parquet"),
-                ParquetReadOptions::default(),
-            )
+        ctx.register_parquet(
+            "alltypes_plain",
+            &format!("{testdata}/alltypes_plain.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        let df = ctx
+            .sql("SELECT int_col, double_col FROM alltypes_plain")
             .await?;
 
-            let df = ctx
-                .sql("SELECT int_col, double_col FROM alltypes_plain")
-                .await?;
+        df.clone().show().await?;
 
-            df.clone().show().await?;
+        let mut stream = df.execute_stream().await?;
+        let mut list = vec![];
+        while let Some(b) = stream.next().await.transpose()? {
+            let int_col = b.column(0).as_primitive::<Int32Type>();
+            let float_col = b.column(1).as_primitive::<Float64Type>();
 
-            df.collect().await?
-        };
-        let batches: Vec<_> = batches.iter().collect();
-
-        // converts it to serde_json type and then convert that into Rust type
-        let list = arrow::json::writer::record_batches_to_json_rows(&batches[..])?
-            .into_iter()
-            .map(|val| serde_json::from_value(serde_json::Value::Object(val)))
-            .take_while(|val| val.is_ok())
-            .map(|val| val.unwrap())
-            .collect();
+            for (i, f) in int_col.values().iter().zip(float_col.values()) {
+                list.push(Data {
+                    int_col: *i,
+                    double_col: *f,
+                })
+            }
+        }
 
         Ok(list)
     }
