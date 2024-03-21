@@ -1793,7 +1793,7 @@ mod tests {
                 Operator::Plus,
                 col("b", &test_schema)?,
             )) as Arc<dyn PhysicalExpr>;
-            let exprs = vec![
+            let exprs = [
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
                 col("c", &test_schema)?,
