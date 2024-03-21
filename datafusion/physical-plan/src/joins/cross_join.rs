@@ -366,53 +366,14 @@ impl CrossJoinStream {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => Poll::Ready(None),
             Some(Ok(right_batch)) => {
-                let mut result_batch = RecordBatch::new_empty(self.schema.clone());
-                let mut right_index = 0;
-                let join_timer = self.join_metrics.join_time.timer();
-                while right_index < right_batch.num_rows() {
-                    let right_copies: Vec<Arc<dyn Array>> = right_batch
-                        .columns()
-                        .iter()
-                        .map(|right_column| {
-                            compute::take(
-                                right_column.as_ref(),
-                                &PrimitiveArray::<UInt64Type>::from_value(
-                                    right_index as u64,
-                                    left_data.num_rows(),
-                                ),
-                                None,
-                            )
-                            .map_err(|e| {
-                                datafusion_common::DataFusionError::ArrowError(e, None)
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let new_matches = RecordBatch::try_new_with_options(
-                        self.schema.clone(),
-                        left_data
-                            .columns()
-                            .iter()
-                            .cloned()
-                            .chain(right_copies.into_iter())
-                            .collect(),
-                        &RecordBatchOptions::new()
-                            .with_row_count(Some(left_data.num_rows())),
-                    )?;
-
-                    let total_number_of_rows =
-                        result_batch.num_rows() + new_matches.num_rows();
-                    result_batch = concat_batches(
-                        &self.schema,
-                        &[result_batch, new_matches],
-                        total_number_of_rows,
-                    )?;
-                    right_index += 1;
-                }
-                join_timer.done();
-
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(right_batch.num_rows());
+
+                let join_timer = self.join_metrics.join_time.timer();
+                let result_batch =
+                    build_batch(self.schema.clone(), left_data, right_batch)?;
+                join_timer.done();
+
                 self.join_metrics.output_batches.add(1);
                 self.join_metrics.output_rows.add(result_batch.num_rows());
 
@@ -421,6 +382,52 @@ impl CrossJoinStream {
             Some(Err(err)) => Poll::Ready(Some(Err(err))),
         }
     }
+}
+
+/// Joins the left and right batches by iterating over right (probe) side one by one.
+/// Since the rows of right batch are processed in order, right order is preserved.
+fn build_batch(
+    schema: Arc<Schema>,
+    left_data: &RecordBatch,
+    right_batch: RecordBatch,
+) -> Result<RecordBatch> {
+    let mut result_batch = RecordBatch::new_empty(schema.clone());
+    let mut right_index = 0;
+    while right_index < right_batch.num_rows() {
+        let right_copies: Vec<Arc<dyn Array>> = right_batch
+            .columns()
+            .iter()
+            .map(|right_column| {
+                compute::take(
+                    right_column.as_ref(),
+                    &PrimitiveArray::<UInt64Type>::from_value(
+                        right_index as u64,
+                        left_data.num_rows(),
+                    ),
+                    None,
+                )
+                .map_err(|e| datafusion_common::DataFusionError::ArrowError(e, None))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_matches = RecordBatch::try_new_with_options(
+            schema.clone(),
+            left_data
+                .columns()
+                .iter()
+                .cloned()
+                .chain(right_copies.into_iter())
+                .collect(),
+            &RecordBatchOptions::new().with_row_count(Some(left_data.num_rows())),
+        )?;
+
+        let total_number_of_rows = result_batch.num_rows() + new_matches.num_rows();
+        result_batch =
+            concat_batches(&schema, &[result_batch, new_matches], total_number_of_rows)?;
+        right_index += 1;
+    }
+
+    Ok(result_batch)
 }
 
 #[cfg(test)]
