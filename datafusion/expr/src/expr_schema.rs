@@ -391,125 +391,22 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
-                    None => schema.data_type_and_nullable(&Column::from_name(name)).map(|(d, n)| (d.clone(), n)),
+                    None => schema
+                        .data_type_and_nullable(&Column::from_name(name))
+                        .map(|(d, n)| (d.clone(), n)),
                     Some(dt) => Ok((dt.clone(), expr.nullable(schema)?)),
                 },
                 _ => expr.data_type_and_nullable(schema),
             },
-            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.data_type_and_nullable(schema),
-            Expr::Column(c) => schema.data_type_and_nullable(c).map(|(d, n)| (d.clone(), n)),
+            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => {
+                expr.data_type_and_nullable(schema)
+            }
+            Expr::Column(c) => schema
+                .data_type_and_nullable(c)
+                .map(|(d, n)| (d.clone(), n)),
             Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
             Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
             Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
-            Expr::Case(case) => {
-                let then_nullable = case
-                    .when_then_expr
-                    .iter()
-                    .map(|(_, t)| t.nullable(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                let nullable = if then_nullable.contains(&true) {
-                    true
-                } else if let Some(e) = &case.else_expr {
-                    e.nullable(schema)?
-                } else {
-                    // CASE produces NULL if there is no `else` expr
-                    // (aka when none of the `when_then_exprs` match)
-                    true
-                };
-                Ok((case.when_then_expr[0].1.get_type(schema)?, nullable))
-            },
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok((data_type.clone(), true)),
-            Expr::Unnest(Unnest { exprs }) => {
-                let arg_data_types = exprs
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                let arg_data_type = arg_data_types[0].clone();
-                // Unnest's output type is the inner type of the list
-                match arg_data_type{
-                    DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) =>{
-                        Ok((field.data_type().clone(), true))
-                    }
-                    DataType::Struct(_) => {
-                        not_impl_err!("unnest() does not support struct yet")
-                    }
-                    DataType::Null => {
-                        not_impl_err!("unnest() does not support null yet")
-                    }
-                    _ => {
-                        plan_err!("unnest() can only be applied to array, struct and null")
-                    }
-                }
-            }
-            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                let arg_data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
-                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, &fun.signature()).map_err(|_| {
-                            plan_datafusion_err!(
-                                "{}",
-                                utils::generate_signature_error_msg(
-                                    &format!("{fun}"),
-                                    fun.signature(),
-                                    &arg_data_types,
-                                )
-                            )
-                        })?;
-                        // perform additional function arguments validation (due to limited
-                        // expressiveness of `TypeSignature`), then infer return type
-                        Ok((fun.return_type(&arg_data_types)?, true))
-                    }
-                    ScalarFunctionDefinition::UDF(fun) => {
-                        // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                        data_types(&arg_data_types, fun.signature()).map_err(|_| {
-                            plan_datafusion_err!(
-                                "{}",
-                                utils::generate_signature_error_msg(
-                                    fun.name(),
-                                    fun.signature().clone(),
-                                    &arg_data_types,
-                                )
-                            )
-                        })?;
-
-                        // perform additional function arguments validation (due to limited
-                        // expressiveness of `TypeSignature`), then infer return type
-                        Ok((fun.return_type_from_exprs(args, schema, &arg_data_types)?, true))
-                    }
-                    ScalarFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
-                }
-            }
-            Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok((fun.return_type(&data_types)?, true))
-            }
-            Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => {
-                        Ok((fun.return_type(&data_types)?, true))
-                    }
-                    AggregateFunctionDefinition::UDF(fun) => {
-                        Ok((fun.return_type(&data_types)?, true))
-                    }
-                    AggregateFunctionDefinition::Name(_) => {
-                        internal_err!("Function `Expr` with name should be resolved.")
-                    }
-                }
-            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -519,9 +416,10 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok((DataType::Boolean, false)),
-            Expr::ScalarSubquery(subquery) => {
-                Ok((subquery.subquery.schema().field(0).data_type().clone(), subquery.subquery.schema().field(0).is_nullable()))
-            }
+            Expr::ScalarSubquery(subquery) => Ok((
+                subquery.subquery.schema().field(0).data_type().clone(),
+                subquery.subquery.schema().field(0).is_nullable(),
+            )),
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 ref right,
@@ -530,60 +428,8 @@ impl ExprSchemable for Expr {
                 let left = left.data_type_and_nullable(schema)?;
                 let right = right.data_type_and_nullable(schema)?;
                 Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
-            },
-            Expr::Like(Like { expr, pattern, .. })
-            | Expr::SimilarTo(Like { expr, pattern, .. }) => Ok((DataType::Boolean, expr.nullable(schema)? || pattern.nullable(schema)?)),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                match data_type {
-                    Some(dt) => Ok((dt.clone(), true)),
-                    None => Err(plan_datafusion_err!("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."))
-                }
             }
-            Expr::Wildcard { .. } =>  internal_err!(
-                "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::GroupingSet(_) => {
-                // grouping sets do not really have a type and do not appear in projections
-                Ok((DataType::Null, true))
-            }
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let data_type = field_for_index(expr, field, schema).map(|x| x.data_type().clone())?;
-                if let Expr::Column(col) = expr.as_ref() {
-                    if schema.nullable(col)? {
-                        return Ok((data_type, true));
-                    }
-                }
-                Ok((data_type, field_for_index(expr, field, schema).map(|x| x.is_nullable())?))
-            }
-            Expr::Not(expr) => Ok((DataType::Boolean, expr.nullable(schema)?)),
-            Expr::Between(Between {
-                expr, low, high, ..
-            }) => Ok((DataType::Boolean, expr.nullable(schema)?
-                || low.nullable(schema)?
-                || high.nullable(schema)?)),
-            Expr::InList(InList { expr, list, .. }) => {
-                // Avoid inspecting too many expressions.
-                const MAX_INSPECT_LIMIT: usize = 6;
-                // Stop if a nullable expression is found or an error occurs.
-                let has_nullable = std::iter::once(expr.as_ref())
-                    .chain(list)
-                    .take(MAX_INSPECT_LIMIT)
-                    .find_map(|e| {
-                        e.nullable(schema)
-                            .map(|nullable| if nullable { Some(()) } else { None })
-                            .transpose()
-                    })
-                    .transpose()?;
-                Ok(match has_nullable {
-                    // If a nullable subexpression is found, the result may also be nullable.
-                    Some(_) => (DataType::Boolean, true),
-                    // If the list is too long, we assume it is nullable.
-                    None if list.len() + 1 > MAX_INSPECT_LIMIT => (DataType::Boolean, true),
-                    // All the subexpressions are non-nullable, so the result must be non-nullable.
-                    _ => (DataType::Boolean, false),
-                })
-            }
-            Expr::InSubquery(InSubquery { expr, .. }) => Ok((DataType::Boolean, expr.nullable(schema)?)),
+            _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }
     }
 
