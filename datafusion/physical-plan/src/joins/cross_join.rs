@@ -33,11 +33,12 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::compute;
+use arrow::datatypes::{Fields, Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
+use arrow_array::{Array, PrimitiveArray, RecordBatchOptions};
 use datafusion_common::stats::Precision;
-use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_common::{JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -253,8 +254,6 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_fut,
             right: stream,
-            right_batch: Arc::new(parking_lot::Mutex::new(None)),
-            left_index: 0,
             join_metrics,
         }))
     }
@@ -264,6 +263,10 @@ impl ExecutionPlan for CrossJoinExec {
             self.left.statistics()?,
             self.right.statistics()?,
         ))
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![false, true]
     }
 }
 
@@ -311,19 +314,16 @@ fn stats_cartesian_product(
     }
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// A stream that issues [RecordBatch]es as they arrive from the right of the join.
+/// Right column orders are preserved.
 struct CrossJoinStream {
     /// Input schema
     schema: Arc<Schema>,
-    /// future for data from left side
+    /// Future for data from left side
     left_fut: OnceFut<JoinLeftData>,
-    /// right
+    /// Right stream
     right: SendableRecordBatchStream,
-    /// Current value on the left
-    left_index: usize,
-    /// Current batch being processed from the right side
-    right_batch: Arc<parking_lot::Mutex<Option<RecordBatch>>>,
-    /// join execution metrics
+    /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
 }
 
@@ -331,34 +331,6 @@ impl RecordBatchStream for CrossJoinStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-}
-
-fn build_batch(
-    left_index: usize,
-    batch: &RecordBatch,
-    left_data: &RecordBatch,
-    schema: &Schema,
-) -> Result<RecordBatch> {
-    // Repeat value on the left n times
-    let arrays = left_data
-        .columns()
-        .iter()
-        .map(|arr| {
-            let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            scalar.to_array_of_size(batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    RecordBatch::try_new_with_options(
-        Arc::new(schema.clone()),
-        arrays
-            .iter()
-            .chain(batch.columns().iter())
-            .cloned()
-            .collect(),
-        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-    )
-    .map_err(Into::into)
 }
 
 #[async_trait]
@@ -391,47 +363,63 @@ impl CrossJoinStream {
             return Poll::Ready(None);
         }
 
-        if self.left_index > 0 && self.left_index < left_data.num_rows() {
-            let join_timer = self.join_metrics.join_time.timer();
-            let right_batch = {
-                let right_batch = self.right_batch.lock();
-                right_batch.clone().unwrap()
-            };
-            let result =
-                build_batch(self.left_index, &right_batch, left_data, &self.schema);
-            self.join_metrics.input_rows.add(right_batch.num_rows());
-            if let Ok(ref batch) = result {
-                join_timer.done();
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
-            }
-            self.left_index += 1;
-            return Poll::Ready(Some(result));
-        }
-        self.left_index = 0;
-        self.right
-            .poll_next_unpin(cx)
-            .map(|maybe_batch| match maybe_batch {
-                Some(Ok(batch)) => {
-                    let join_timer = self.join_metrics.join_time.timer();
-                    let result =
-                        build_batch(self.left_index, &batch, left_data, &self.schema);
-                    self.join_metrics.input_batches.add(1);
-                    self.join_metrics.input_rows.add(batch.num_rows());
-                    if let Ok(ref batch) = result {
-                        join_timer.done();
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
-                    }
-                    self.left_index = 1;
+        match ready!(self.right.poll_next_unpin(cx)) {
+            None => Poll::Ready(None),
+            Some(Ok(right_batch)) => {
+                let mut result_batch = RecordBatch::new_empty(self.schema.clone());
+                let mut right_index = 0;
+                let join_timer = self.join_metrics.join_time.timer();
+                while right_index < right_batch.num_rows() {
+                    let right_copies: Vec<Arc<dyn Array>> = right_batch
+                        .columns()
+                        .iter()
+                        .map(|right_column| {
+                            compute::take(
+                                right_column.as_ref(),
+                                &PrimitiveArray::<UInt64Type>::from_value(
+                                    right_index as u64,
+                                    left_data.num_rows(),
+                                ),
+                                None,
+                            )
+                            .map_err(|e| {
+                                datafusion_common::DataFusionError::ArrowError(e, None)
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
-                    let mut right_batch = self.right_batch.lock();
-                    *right_batch = Some(batch);
+                    let new_matches = RecordBatch::try_new_with_options(
+                        self.schema.clone(),
+                        left_data
+                            .columns()
+                            .iter()
+                            .cloned()
+                            .chain(right_copies.into_iter())
+                            .collect(),
+                        &RecordBatchOptions::new()
+                            .with_row_count(Some(left_data.num_rows())),
+                    )?;
 
-                    Some(result)
+                    let total_number_of_rows =
+                        result_batch.num_rows() + new_matches.num_rows();
+                    result_batch = concat_batches(
+                        &self.schema,
+                        &[result_batch, new_matches],
+                        total_number_of_rows,
+                    )?;
+                    right_index += 1;
                 }
-                other => other,
-            })
+                join_timer.done();
+
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(right_batch.num_rows());
+                self.join_metrics.output_batches.add(1);
+                self.join_metrics.output_rows.add(result_batch.num_rows());
+
+                Poll::Ready(Some(Ok(result_batch)))
+            }
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+        }
     }
 }
 
@@ -441,7 +429,7 @@ mod tests {
     use crate::common;
     use crate::test::build_table_scan_i32;
 
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains};
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
