@@ -521,11 +521,11 @@ where
 
     let new_node = match Arc::try_unwrap(new_node) {
         Ok(node) => {
-            println!("Unwrapped arc yay");
+            //println!("Unwrapped arc yay");
             node
         }
         Err(node) => {
-            println!("Failed to unwrap arc boo");
+            //println!("Failed to unwrap arc boo");
             node.as_ref().clone()
         }
     };

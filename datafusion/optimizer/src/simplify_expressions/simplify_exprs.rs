@@ -127,7 +127,14 @@ impl SimplifyExpressions {
             simplifier
         };
 
+        let is_filter = matches!(plan, LogicalPlan::Filter(_));
+
         let plan = plan.rewrite_exprs(|e| {
+            // no aliasing for filters
+            if is_filter {
+                return simplifier.simplify(e);
+            }
+
             // TODO: unify with `rewrite_preserving_name`
             // todo track if e was rewritten
             let original_name = e.name_for_alias()?;
