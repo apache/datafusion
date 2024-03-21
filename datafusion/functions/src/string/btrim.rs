@@ -15,38 +15,50 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::{handle, utf8_to_str_type};
-use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use arrow::array::{ArrayRef, OffsetSizeTrait};
 use std::any::Any;
 
-#[derive(Debug)]
-pub(super) struct UpperFunc {
-    signature: Signature,
+use arrow::datatypes::DataType;
+
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
+
+use crate::string::common::*;
+
+/// Returns the longest string with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
+/// btrim('xyxtrimyyx', 'xyz') = 'trim'
+fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_trim::<T>(args, TrimType::Both)
 }
 
-impl UpperFunc {
+#[derive(Debug)]
+pub(super) struct TrimFunc {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl TrimFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8],
+            signature: Signature::one_of(
+                vec![Exact(vec![Utf8]), Exact(vec![Utf8, Utf8])],
                 Volatility::Immutable,
             ),
+            aliases: vec![String::from("trim")],
         }
     }
 }
 
-impl ScalarUDFImpl for UpperFunc {
+impl ScalarUDFImpl for TrimFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "upper"
+        "btrim"
     }
 
     fn signature(&self) -> &Signature {
@@ -54,10 +66,18 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "upper")
+        utf8_to_str_type(&arg_types[0], "btrim")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_uppercase(), "upper")
+        match args[0].data_type() {
+            DataType::Utf8 => make_scalar_function(btrim::<i32>, vec![])(args),
+            DataType::LargeUtf8 => make_scalar_function(btrim::<i64>, vec![])(args),
+            other => exec_err!("Unsupported data type {other:?} for function btrim"),
+        }
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }

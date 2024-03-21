@@ -602,12 +602,6 @@ scalar_expr!(InitCap, initcap, string, "converts the first letter of each word i
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
 scalar_expr!(
-    Ltrim,
-    ltrim,
-    string,
-    "removes all characters, spaces by default, from the beginning of a string"
-);
-scalar_expr!(
     OctetLength,
     octet_length,
     string,
@@ -617,12 +611,6 @@ scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `fro
 scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");
 scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
-scalar_expr!(
-    Rtrim,
-    rtrim,
-    string,
-    "removes all characters, spaces by default, from the end of a string"
-);
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
@@ -639,11 +627,6 @@ nary_scalar_expr!(
     Rpad,
     rpad,
     "fill up a string to the length by appending the characters"
-);
-nary_scalar_expr!(
-    Btrim,
-    btrim,
-    "removes all characters, spaces by default, from both sides of a string"
 );
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
@@ -1082,8 +1065,6 @@ mod test {
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);
-        test_nary_scalar_expr!(Btrim, btrim, string);
-        test_nary_scalar_expr!(Btrim, btrim, string, characters);
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
@@ -1093,7 +1074,6 @@ mod test {
         test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
-        test_scalar_expr!(Ltrim, ltrim, string);
         test_scalar_expr!(OctetLength, octet_length, string);
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
@@ -1101,7 +1081,6 @@ mod test {
         test_scalar_expr!(Right, right, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
-        test_scalar_expr!(Rtrim, rtrim, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
