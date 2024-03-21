@@ -18,16 +18,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::types::ArrowTemporalType;
-use arrow::array::{Array, ArrayRef, ArrowNumericType, Float64Array, PrimitiveArray};
-use arrow::compute::cast;
-use arrow::compute::kernels::temporal;
+use arrow::array::{Array, ArrayRef, Float64Array};
+use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{Date32, Date64, Float64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
+    as_date32_array, as_date64_array, as_int32_array, as_timestamp_microsecond_array,
     as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
     as_timestamp_second_array,
 };
@@ -78,46 +76,6 @@ impl DatePartFunc {
     }
 }
 
-macro_rules! extract_date_part {
-    ($ARRAY: expr, $FN:expr) => {
-        match $ARRAY.data_type() {
-            DataType::Date32 => {
-                let array = as_date32_array($ARRAY)?;
-                Ok($FN(array)
-                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-            }
-            DataType::Date64 => {
-                let array = as_date64_array($ARRAY)?;
-                Ok($FN(array)
-                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-            }
-            DataType::Timestamp(time_unit, _) => match time_unit {
-                TimeUnit::Second => {
-                    let array = as_timestamp_second_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Millisecond => {
-                    let array = as_timestamp_millisecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Microsecond => {
-                    let array = as_timestamp_microsecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-                TimeUnit::Nanosecond => {
-                    let array = as_timestamp_nanosecond_array($ARRAY)?;
-                    Ok($FN(array)
-                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
-                }
-            },
-            datatype => exec_err!("Extract does not support datatype {:?}", datatype),
-        }
-    };
-}
-
 impl ScalarUDFImpl for DatePartFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -139,16 +97,15 @@ impl ScalarUDFImpl for DatePartFunc {
         if args.len() != 2 {
             return exec_err!("Expected two arguments in DATE_PART");
         }
-        let (date_part, array) = (&args[0], &args[1]);
+        let (part, array) = (&args[0], &args[1]);
 
-        let date_part =
-            if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = date_part {
-                v
-            } else {
-                return exec_err!(
-                    "First argument of `DATE_PART` must be non-null scalar Utf8"
-                );
-            };
+        let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
+            v
+        } else {
+            return exec_err!(
+                "First argument of `DATE_PART` must be non-null scalar Utf8"
+            );
+        };
 
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
 
@@ -157,28 +114,28 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let arr = match date_part.to_lowercase().as_str() {
-            "year" => extract_date_part!(&array, temporal::year),
-            "quarter" => extract_date_part!(&array, temporal::quarter),
-            "month" => extract_date_part!(&array, temporal::month),
-            "week" => extract_date_part!(&array, temporal::week),
-            "day" => extract_date_part!(&array, temporal::day),
-            "doy" => extract_date_part!(&array, temporal::doy),
-            "dow" => extract_date_part!(&array, temporal::num_days_from_sunday),
-            "hour" => extract_date_part!(&array, temporal::hour),
-            "minute" => extract_date_part!(&array, temporal::minute),
-            "second" => extract_date_part!(&array, seconds),
-            "millisecond" => extract_date_part!(&array, millis),
-            "microsecond" => extract_date_part!(&array, micros),
-            "nanosecond" => extract_date_part!(&array, nanos),
-            "epoch" => extract_date_part!(&array, epoch),
-            _ => exec_err!("Date part '{date_part}' not supported"),
-        }?;
+        let arr = match part.to_lowercase().as_str() {
+            "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
+            "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
+            "month" => date_part_f64(array.as_ref(), DatePart::Month)?,
+            "week" => date_part_f64(array.as_ref(), DatePart::Week)?,
+            "day" => date_part_f64(array.as_ref(), DatePart::Day)?,
+            "doy" => date_part_f64(array.as_ref(), DatePart::DayOfYear)?,
+            "dow" => date_part_f64(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+            "hour" => date_part_f64(array.as_ref(), DatePart::Hour)?,
+            "minute" => date_part_f64(array.as_ref(), DatePart::Minute)?,
+            "second" => seconds(array.as_ref(), Second)?,
+            "millisecond" => seconds(array.as_ref(), Millisecond)?,
+            "microsecond" => seconds(array.as_ref(), Microsecond)?,
+            "nanosecond" => seconds(array.as_ref(), Nanosecond)?,
+            "epoch" => epoch(array.as_ref())?,
+            _ => return exec_err!("Date part '{part}' not supported"),
+        };
 
         Ok(if is_scalar {
-            ColumnarValue::Scalar(ScalarValue::try_from_array(&arr?, 0)?)
+            ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)
         } else {
-            ColumnarValue::Array(arr?)
+            ColumnarValue::Array(arr)
         })
     }
 
@@ -187,83 +144,52 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 }
 
-fn to_ticks<T>(array: &PrimitiveArray<T>, frac: i32) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    let zipped = temporal::second(array)?
-        .values()
-        .iter()
-        .zip(temporal::nanosecond(array)?.values().iter())
-        .map(|o| (*o.0 as f64 + (*o.1 as f64) / 1_000_000_000.0) * (frac as f64))
-        .collect::<Vec<f64>>();
-
-    Ok(Float64Array::from(zipped))
+/// Invoke [`date_part`] and cast the result to Float64
+fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
+    Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
 }
 
-fn seconds<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1)
-}
-
-fn millis<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000)
-}
-
-fn micros<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000_000)
-}
-
-fn nanos<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    to_ticks(array, 1_000_000_000)
-}
-
-fn epoch<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: From<T::Native>,
-{
-    let b = match array.data_type() {
-        Timestamp(tu, _) => {
-            let scale = match tu {
-                Second => 1,
-                Millisecond => 1_000,
-                Microsecond => 1_000_000,
-                Nanosecond => 1_000_000_000,
-            } as f64;
-            array.unary(|n| {
-                let n: i64 = n.into();
-                n as f64 / scale
-            })
-        }
-        Date32 => {
-            let seconds_in_a_day = 86400_f64;
-            array.unary(|n| {
-                let n: i64 = n.into();
-                n as f64 * seconds_in_a_day
-            })
-        }
-        Date64 => array.unary(|n| {
-            let n: i64 = n.into();
-            n as f64 / 1_000_f64
-        }),
-        _ => return exec_err!("Can not convert {:?} to epoch", array.data_type()),
+/// invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of seconds, milliseconds, microseconds or
+/// nanoseconds
+///
+/// # Panics
+/// If `array` is not a temporal type such as Timestamp or Date32
+fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
+    let sf = match unit {
+        Second => 1_f64,
+        Millisecond => 1_000_f64,
+        Microsecond => 1_000_000_f64,
+        Nanosecond => 1_000_000_000_f64,
     };
-    Ok(b)
+    let secs = date_part(array, DatePart::Second)?;
+    let secs = as_int32_array(secs.as_ref())?;
+    let subsecs = date_part(array, DatePart::Nanosecond)?;
+    let subsecs = as_int32_array(subsecs.as_ref())?;
+
+    let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
+        (secs as f64 + (subsecs as f64 / 1_000_000_000_f64)) * sf
+    })?;
+    Ok(Arc::new(r))
+}
+
+fn epoch(array: &dyn Array) -> Result<ArrayRef> {
+    const SECONDS_IN_A_DAY: f64 = 86400_f64;
+
+    let f: Float64Array = match array.data_type() {
+        Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
+        Timestamp(Millisecond, _) => {
+            as_timestamp_millisecond_array(array)?.unary(|x| x as f64 / 1_000_f64)
+        }
+        Timestamp(Microsecond, _) => {
+            as_timestamp_microsecond_array(array)?.unary(|x| x as f64 / 1_000_000_f64)
+        }
+        Timestamp(Nanosecond, _) => {
+            as_timestamp_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
+        }
+        Date32 => as_date32_array(array)?.unary(|x| x as f64 * SECONDS_IN_A_DAY),
+        Date64 => as_date64_array(array)?.unary(|x| x as f64 / 1_000_f64),
+        d => return exec_err!("Can not convert {d:?} to epoch"),
+    };
+    Ok(Arc::new(f))
 }

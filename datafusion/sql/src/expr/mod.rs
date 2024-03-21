@@ -747,7 +747,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(TrimWhereField::Leading) => BuiltinScalarFunction::Ltrim,
             Some(TrimWhereField::Trailing) => BuiltinScalarFunction::Rtrim,
             Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
-            None => BuiltinScalarFunction::Trim,
+            None => BuiltinScalarFunction::Btrim,
         };
 
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;

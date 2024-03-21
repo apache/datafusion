@@ -47,7 +47,7 @@ use crate::binary_map::OutputType;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 
-/// Expression for a COUNT(DISTINCT) aggregation.
+/// Expression for a `COUNT(DISTINCT)` aggregation.
 #[derive(Debug)]
 pub struct DistinctCount {
     /// Column name
@@ -100,6 +100,7 @@ impl AggregateExpr for DistinctCount {
         use TimeUnit::*;
 
         Ok(match &self.state_data_type {
+            // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new()),
             Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new()),
             Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new()),
@@ -157,6 +158,7 @@ impl AggregateExpr for DistinctCount {
                 OutputType::Binary,
             )),
 
+            // Use the generic accumulator based on `ScalarValue` for all other types
             _ => Box::new(DistinctCountAccumulator {
                 values: HashSet::default(),
                 state_data_type: self.state_data_type.clone(),
@@ -183,7 +185,11 @@ impl PartialEq<dyn Any> for DistinctCount {
 }
 
 /// General purpose distinct accumulator that works for any DataType by using
-/// [`ScalarValue`]. Some types have specialized accumulators that are (much)
+/// [`ScalarValue`].
+///
+/// It stores intermediate results as a `ListArray`
+///
+/// Note that many types have specialized accumulators that are (much)
 /// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
 /// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
@@ -193,8 +199,9 @@ struct DistinctCountAccumulator {
 }
 
 impl DistinctCountAccumulator {
-    // calculating the size for fixed length values, taking first batch size * number of batches
-    // This method is faster than .full_size(), however it is not suitable for variable length values like strings or complex types
+    // calculating the size for fixed length values, taking first batch size *
+    // number of batches This method is faster than .full_size(), however it is
+    // not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
@@ -207,7 +214,8 @@ impl DistinctCountAccumulator {
             + std::mem::size_of::<DataType>()
     }
 
-    // calculates the size as accurate as possible, call to this method is expensive
+    // calculates the size as accurately as possible. Note that calling this
+    // method is expensive
     fn full_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
@@ -221,6 +229,7 @@ impl DistinctCountAccumulator {
 }
 
 impl Accumulator for DistinctCountAccumulator {
+    /// Returns the distinct values seen so far as (one element) ListArray.
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
         let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
@@ -246,6 +255,11 @@ impl Accumulator for DistinctCountAccumulator {
         })
     }
 
+    /// Merges multiple sets of distinct values into the current set.
+    ///
+    /// The input to this function is a `ListArray` with **multiple** rows,
+    /// where each row contains the values from a partial aggregate's phase (e.g.
+    /// the result of calling `Self::state` on multiple accumulators).
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
@@ -253,8 +267,12 @@ impl Accumulator for DistinctCountAccumulator {
         assert_eq!(states.len(), 1, "array_agg states must be singleton!");
         let array = &states[0];
         let list_array = array.as_list::<i32>();
-        let inner_array = list_array.value(0);
-        self.update_batch(&[inner_array])
+        for inner_array in list_array.iter() {
+            let inner_array = inner_array
+                .expect("counts are always non null, so are intermediate results");
+            self.update_batch(&[inner_array])?;
+        }
+        Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
