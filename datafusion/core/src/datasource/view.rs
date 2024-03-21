@@ -141,7 +141,7 @@ impl TableProvider for ViewTable {
             plan = plan.limit(0, Some(limit))?;
         }
 
-        state.create_physical_plan(&plan.build()?).await
+        state.create_physical_plan(plan.build()?).await
     }
 }
 

@@ -82,6 +82,7 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::tree_node::Transformed;
 use parking_lot::RwLock;
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
@@ -530,7 +531,7 @@ impl SessionContext {
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-        let input = self.state().optimize(&input)?;
+        let input = self.state().optimize(input)?;
         let table = self.table(&name).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -1839,13 +1840,22 @@ impl SessionState {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        if let LogicalPlan::Explain(e) = plan {
-            let mut stringified_plans = e.stringified_plans.clone();
+    pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        if let LogicalPlan::Explain(Explain {
+            verbose,
+            plan,
+            mut stringified_plans,
+            schema,
+            logical_optimization_succeeded,
+        }) = plan
+        {
+            // TODO this could be a dummy plan
+            let original_plan = plan.clone(); // keep original plan in case there is an error
 
             // analyze & capture output of each rule
+            // TODO avoid this copy
             let analyzer_result = self.analyzer.execute_and_check(
-                e.plan.as_ref(),
+                &plan,
                 self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
@@ -1861,10 +1871,10 @@ impl SessionState {
                         .push(StringifiedPlan::new(plan_type, err.to_string()));
 
                     return Ok(LogicalPlan::Explain(Explain {
-                        verbose: e.verbose,
-                        plan: e.plan.clone(),
+                        verbose,
+                        plan,
                         stringified_plans,
-                        schema: e.schema.clone(),
+                        schema,
                         logical_optimization_succeeded: false,
                     }));
                 }
@@ -1885,29 +1895,33 @@ impl SessionState {
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
             );
+
             let (plan, logical_optimization_succeeded) = match optimized_plan {
-                Ok(plan) => (Arc::new(plan), true),
+                Ok(plan) => (Arc::new(plan.data), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
+                    // TODO show explain error
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans
                         .push(StringifiedPlan::new(plan_type, err.to_string()));
-                    (e.plan.clone(), false)
+                    (original_plan, false)
                 }
                 Err(e) => return Err(e),
             };
 
             Ok(LogicalPlan::Explain(Explain {
-                verbose: e.verbose,
+                verbose,
                 plan,
                 stringified_plans,
-                schema: e.schema.clone(),
+                schema,
                 logical_optimization_succeeded,
             }))
         } else {
             let analyzed_plan =
                 self.analyzer
-                    .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+                    .execute_and_check(&plan, self.options(), |_, _| {})?;
+            self.optimizer
+                .optimize(analyzed_plan, self, |_, _| {})
+                .map(|t| t.data)
         }
     }
 
@@ -1920,7 +1934,7 @@ impl SessionState {
     /// DDL `CREATE TABLE` must be handled by another layer.
     pub async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
         self.query_planner

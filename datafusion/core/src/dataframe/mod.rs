@@ -175,7 +175,7 @@ impl DataFrame {
 
     /// Consume the DataFrame and produce a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.session_state.create_physical_plan(&self.plan).await
+        self.session_state.create_physical_plan(self.plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
@@ -989,7 +989,7 @@ impl DataFrame {
     /// [`Self::into_optimized_plan`] for more details.
     pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
-        self.session_state.optimize(&self.plan)
+        self.session_state.optimize(self.plan)
     }
 
     /// Converts this [`DataFrame`] into a [`TableProvider`] that can be registered
@@ -1466,7 +1466,7 @@ impl TableProvider for DataFrameTableProvider {
             expr = expr.limit(0, Some(l))?
         }
         let plan = expr.build()?;
-        state.create_physical_plan(&plan).await
+        state.create_physical_plan(plan).await
     }
 }
 

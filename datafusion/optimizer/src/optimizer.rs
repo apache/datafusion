@@ -327,7 +327,7 @@ impl Optimizer {
                 let result =
                     self.optimize_recursively(rule, new_plan, config)
                         .and_then(|plan| {
-                            assert_has_schema(rule.name(), &orig_schema, &new_plan)?;
+                            assert_has_schema(rule.name(), &orig_schema, &plan.data)?;
                             Ok(plan)
                         });
 
@@ -338,7 +338,7 @@ impl Optimizer {
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
                     }
-                    (Ok(t), _) if !t.transformed => {
+                    (Ok(t), _) => {
                         new_plan = t.data;
                         observer(&new_plan, rule.as_ref());
                         debug!(
@@ -347,7 +347,6 @@ impl Optimizer {
                             i
                         );
                     }
-
                     (Err(e), Some(prev_plan)) => {
                         // Note to future readers: if you see this warning it signals a
                         // bug in the DataFusion optimizer. Please consider filing a ticket
@@ -357,6 +356,7 @@ impl Optimizer {
                             rule.name(),
                             e
                         );
+                        new_plan = prev_plan;
                     }
                     (Err(e), None) => {
                         return Err(DataFusionError::Context(
@@ -397,15 +397,14 @@ impl Optimizer {
             rule.try_optimize_owned(plan, config)
         } else {
             // TODO: future feature: We can do Batch optimize
-            rule.try_optimize(&plan, config)
-                .map(|opt| {
-                    if let Some(opt_plan) = opt {
-                        Transformed::yes(opt_plan)
-                    } else {
-                        // return original plan
-                        Transformed::no(plan)
-                    }
-                })
+            rule.try_optimize(&plan, config).map(|opt| {
+                if let Some(opt_plan) = opt {
+                    Transformed::yes(opt_plan)
+                } else {
+                    // return original plan
+                    Transformed::no(plan)
+                }
+            })
         }
     }
 
@@ -449,28 +448,28 @@ impl Optimizer {
                     let transformed = optimized_plan.transformed;
 
                     // TODO make a nicer 'and_then' type API on Transformed
-                    let optimized_plan = self.optimize_inputs(rule, optimized_plan.data, config)?;
-
-                    let let optimize_inputs_opt = match &optimize_self_opt {
-                        Some(optimized_plan) => {
-                            self.optimize_inputs(rule, optimized_plan, config)?
-                        }
-                        _ => self.optimize_inputs(rule, plan, config)?,
-                    };
-                    Ok(optimize_inputs_opt.or(optimize_self_opt))
+                    let optimized_plan =
+                        self.optimize_inputs(rule, optimized_plan.data, config)?;
+                    Ok(if transformed || optimized_plan.transformed {
+                        Transformed::yes(optimized_plan.data)
+                    } else {
+                        Transformed::no(optimized_plan.data)
+                    })
                 }
                 ApplyOrder::BottomUp => {
-                    let optimize_inputs_opt = self.optimize_inputs(rule, plan, config)?;
-                    let optimize_self_opt = match &optimize_inputs_opt {
-                        Some(optimized_plan) => {
-                            self.optimize_node(rule, optimized_plan, config)?
-                        }
-                        _ => self.optimize_node(rule, plan, config)?,
-                    };
-                    Ok(optimize_self_opt.or(optimize_inputs_opt))
+                    let optimized_plan = self.optimize_inputs(rule, plan, config)?;
+                    let transformed = optimized_plan.transformed;
+                    let optimized_plan =
+                        self.optimize_node(rule, optimized_plan.data, config)?;
+
+                    Ok(if transformed || optimized_plan.transformed {
+                        Transformed::yes(optimized_plan.data)
+                    } else {
+                        Transformed::no(optimized_plan.data)
+                    })
                 }
             },
-            _ => rule.try_optimize(plan, config),
+            _ => self.optimize_node(rule, plan, config),
         }
     }
 }
