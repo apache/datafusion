@@ -866,33 +866,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             FileType::from_str(&file_type).map_err(|_| {
                 DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
             })?
+        } else if let Some(format) = options.remove("format") {
+            // try to infer file format from the "format" key in options
+            FileType::from_str(&format)
+                .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
         } else {
-            if let Some(format) = options.remove("format") {
-                // try to infer file format from the "format" key in options
-                FileType::from_str(&format)
-                    .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
-            } else {
-                let e = || {
-                    DataFusionError::Configuration(
+            let e = || {
+                DataFusionError::Configuration(
                     "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
                         .to_string(),
                 )
-                };
-                // try to infer file format from file extension
-                let extension: &str = &Path::new(&statement.target)
-                    .extension()
-                    .ok_or_else(e)?
-                    .to_str()
-                    .ok_or_else(e)?
-                    .to_lowercase();
+            };
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(&statement.target)
+                .extension()
+                .ok_or_else(e)?
+                .to_str()
+                .ok_or_else(e)?
+                .to_lowercase();
 
-                FileType::from_str(extension).map_err(|e| {
-                    DataFusionError::Configuration(format!(
-                        "{}. Use STORED AS to define file format.",
-                        e
-                    ))
-                })?
-            }
+            FileType::from_str(extension).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "{}. Use STORED AS to define file format.",
+                    e
+                ))
+            })?
         };
 
         let partition_by = statement
