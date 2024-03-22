@@ -740,7 +740,7 @@ mod tests {
         let col_e = &col("e", &schema)?;
         let col_f = &col("f", &schema)?;
         let options = SortOptions::default();
-        let test_cases = vec![
+        let test_cases = [
             //-----------TEST CASE 1----------//
             (
                 // First child orderings

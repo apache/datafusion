@@ -268,10 +268,7 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
 fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
-) -> Option<(
-    DFFieldRef<'schema>,
-    &'ids [String],
-)> {
+) -> Option<(DFFieldRef<'schema>, &'ids [String])> {
     let res = generate_schema_search_terms(ids).find_map(
         |(qualifier, column, nested_names)| {
             let qualifier_and_field = schema
