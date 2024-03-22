@@ -353,6 +353,7 @@ impl CrossJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<RecordBatch>>> {
         let schema = self.schema();
+
         let build_timer = self.join_metrics.build_time.timer();
         let (left_data, _) = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
@@ -360,7 +361,7 @@ impl CrossJoinStream {
         };
         build_timer.done();
 
-        // if the left batch is empty, we can return `Poll::Ready(None)` immediately.
+        // If the left batch is empty, we can return `Poll::Ready(None)` immediately.
         if left_data
             .first()
             .map_or(true, |first_batch| first_batch.num_rows() == 0)
@@ -459,7 +460,7 @@ fn build_batch(
         join_metrics.output_batches.add(1);
         join_metrics.output_rows.add(result.num_rows());
 
-        // Increment the left batch index. If it reaches the end, reset it to 0 and increment the probe row index.
+        // Increment the left batch index. If it reaches the end, reset it to 0 and increment the right row index.
         *left_batch_index = if *left_batch_index == left_data.len() - 1 {
             *right_row_index += 1;
             0
