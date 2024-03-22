@@ -50,6 +50,12 @@ select struct(1, 3.14, 'e');
 ----
 {c0: 1, c1: 3.14, c2: e}
 
+# struct scalar function #1 with alias
+query ?
+select struct(1 as "name0", 3.14 as name1, 'e', true as 'name3');
+----
+{name0: 1, name1: 3.14, c2: e, name3: true}
+
 # struct scalar function with columns #1
 query ?
 select struct(a, b, c) from values;
@@ -63,10 +69,10 @@ query TT
 explain select struct(a, b, c) from values;
 ----
 logical_plan
-Projection: struct(values.a, values.b, values.c)
+Projection: named_struct(Utf8("c0"), values.a, Utf8("c1"), values.b, Utf8("c2"), values.c)
 --TableScan: values projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
+ProjectionExec: expr=[named_struct(c0, a@0, c1, b@1, c2, c@2) as named_struct(Utf8("c0"),values.a,Utf8("c1"),values.b,Utf8("c2"),values.c)]
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
