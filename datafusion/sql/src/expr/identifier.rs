@@ -65,10 +65,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                 Ok(Expr::OuterReferenceColumn(
                                     field.data_type().clone(),
-                                    Column::new(
-                                        qualifier.map(|q| q.to_owned_reference()),
-                                        field.name(),
-                                    ),
+                                    Column::from((qualifier, field)),
                                 ))
                             }
                             Err(_) => Ok(Expr::Column(Column {
@@ -132,25 +129,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     if nested_names.len() > 1 {
                         return internal_err!(
                             "Nested identifiers not yet supported for column {}",
-                            Column::new(
-                                qualifier.map(|q| q.to_owned_reference()),
-                                field.name()
-                            )
-                            .quoted_flat_name()
+                            Column::from((qualifier, field)).quoted_flat_name()
                         );
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::Column(Column::new(
-                        qualifier.map(|q| q.to_owned_reference()),
-                        field.name(),
-                    ))
-                    .field(nested_name))
+                    Ok(Expr::Column(Column::from((qualifier, field))).field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
-                Some((field, qualifier, _nested_names)) => Ok(Expr::Column(Column::new(
-                    qualifier.map(|q| q.to_owned_reference()),
-                    field.name(),
-                ))),
+                Some((field, qualifier, _nested_names)) => {
+                    Ok(Expr::Column(Column::from((qualifier, field))))
+                }
                 None => {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -168,7 +156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
                                     internal_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        Column::new(qualifier.map(|q| q.to_owned_reference()), field.name()).quoted_flat_name()
+                                        Column::from((qualifier, field)).quoted_flat_name()
                                     )
                                 }
                                 // found matching field with no spare identifier(s)
@@ -176,10 +164,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         field.data_type().clone(),
-                                        Column::new(
-                                            qualifier.map(|q| q.to_owned_reference()),
-                                            field.name(),
-                                        ),
+                                        Column::from((qualifier, field)),
                                     ))
                                 }
                                 // found no matching field, will return a default

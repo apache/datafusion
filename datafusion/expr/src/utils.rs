@@ -344,10 +344,7 @@ fn get_excluded_columns(
         let col_name = ident.value.as_str();
         let (qualifier, field) =
             schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
-        result.push(Column::new(
-            qualifier.map(|q| q.to_owned_reference()),
-            field.name(),
-        ));
+        result.push(Column::from((qualifier, field)));
     }
     Ok(result)
 }
@@ -361,7 +358,7 @@ fn get_exprs_except_skipped(
         schema
             .iter()
             .map(|(qualifier, field)| {
-                Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                Expr::Column(Column::from((qualifier, field.as_ref())))
             })
             .collect::<Vec<Expr>>()
     } else {
@@ -817,10 +814,9 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         _ => match e.display_name() {
             Ok(name) => {
                 match input_schema.qualified_field_with_unqualified_name(&name) {
-                    Ok((qualifier, field)) => Expr::Column(Column::new(
-                        qualifier.map(|q| q.to_owned_reference()),
-                        field.name(),
-                    )),
+                    Ok((qualifier, field)) => {
+                        Expr::Column(Column::from((qualifier, field)))
+                    }
                     // expression not provided as input, do not convert to a column reference
                     Err(_) => e,
                 }
@@ -858,7 +854,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
-            Ok(Expr::Column(Column::new(qualifier.cloned(), field.name())))
+            Ok(Expr::Column(Column::from((qualifier, field))))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }

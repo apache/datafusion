@@ -185,10 +185,7 @@ impl Column {
             match qualified_fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(Column::new(
-                        qualified_fields[0].0.cloned(),
-                        qualified_fields[0].1.name(),
-                    ));
+                    return Ok(Column::from(qualified_fields[0]));
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -275,12 +272,7 @@ impl Column {
                 .collect::<Vec<_>>();
             match qualified_fields.len() {
                 0 => continue,
-                1 => {
-                    return Ok(Column::new(
-                        qualified_fields[0].0.cloned(),
-                        qualified_fields[0].1.name(),
-                    ))
-                }
+                1 => return Ok(Column::from(qualified_fields[0])),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //

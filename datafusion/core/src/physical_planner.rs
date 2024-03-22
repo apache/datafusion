@@ -1030,7 +1030,7 @@ impl DefaultPhysicalPlanner {
                             let final_join_result = join_schema
                                 .iter()
                                 .map(|(qualifier, field)| {
-                                    Expr::Column(datafusion_common::Column::new(qualifier.cloned(), field.name()))
+                                    Expr::Column(datafusion_common::Column::from((qualifier, field.as_ref())))
                                 })
                                 .collect::<Vec<_>>();
                             let projection =

@@ -1328,9 +1328,8 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                 right_field.data_type(),
                 left_field.name(),
                 left_field.data_type()
-            )
+                )
                     })?;
-
                     Ok((
                         left_qualifier.cloned(),
                         Arc::new(Field::new(left_field.name(), data_type, nullable)),
@@ -1575,10 +1574,7 @@ pub fn unnest_with_options(
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-    let column = Column::new(
-        unnest_qualifier.map(|q| q.to_owned_reference()),
-        unnested_field.name(),
-    );
+    let column = Column::from((unnest_qualifier, unnested_field.as_ref()));
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),

@@ -1278,10 +1278,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 field.name(),
                             ))
                         } else {
-                            datafusion_expr::Expr::Column(Column::new(
-                                qualifier.cloned(),
-                                field.name(),
-                            ))
+                            datafusion_expr::Expr::Column(Column::from((
+                                qualifier,
+                                field.as_ref(),
+                            )))
                         }
                     }
                 };

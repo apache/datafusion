@@ -202,13 +202,8 @@ impl DataFrame {
             })
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
-            .iter()
-            .map(|(qualifier, field)| {
-                Expr::Column(Column::new(
-                    qualifier.map(|q| q.to_owned_reference()),
-                    field.name(),
-                ))
-            })
+            .into_iter()
+            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
             .collect();
         self.select(expr)
     }
@@ -1255,7 +1250,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(Column::new(qualifier.cloned(), field.name()))
+                    col(Column::from((qualifier, field.as_ref())))
                 }
             })
             .collect();
@@ -1322,9 +1317,9 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
+                    col(Column::from((qualifier, field.as_ref()))).alias(new_name)
                 } else {
-                    col(Column::new(qualifier.cloned(), field.name()))
+                    col(Column::from((qualifier, field.as_ref())))
                 }
             })
             .collect::<Vec<_>>();

@@ -39,10 +39,9 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
                 Expr::Column(col) => {
                     let (qualifier, field) =
                         plan.schema().qualified_field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(Column::new(
-                        qualifier.map(|q| q.to_owned_reference()),
-                        field.name(),
-                    ))))
+                    Ok(Transformed::yes(Expr::Column(Column::from((
+                        qualifier, field,
+                    )))))
                 }
                 _ => {
                     // keep recursing

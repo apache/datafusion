@@ -214,7 +214,7 @@ pub fn coerce_plan_expr_for_schema(
                 .schema()
                 .iter()
                 .map(|(qualifier, field)| {
-                    Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                    Expr::Column(Column::from((qualifier, field.as_ref())))
                 })
                 .collect();
 

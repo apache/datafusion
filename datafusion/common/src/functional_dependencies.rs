@@ -73,12 +73,12 @@ impl Constraints {
                     is_primary,
                     ..
                 } => {
+                    let field_names = df_schema.field_names();
                     // Get primary key and/or unique indices in the schema:
                     let indices = columns
                         .iter()
                         .map(|pk| {
-                            let idx = df_schema
-                                .field_names()
+                            let idx = field_names
                                 .iter()
                                 .position(|item| *item == pk.value)
                                 .ok_or_else(|| {
