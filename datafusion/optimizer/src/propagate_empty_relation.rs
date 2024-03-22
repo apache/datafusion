@@ -378,7 +378,7 @@ mod tests {
         let empty = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualifed_fields(
-                fields,
+                fields.into(),
                 Default::default(),
             )?),
         });

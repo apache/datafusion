@@ -789,7 +789,7 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::from_unqualifed_fields(
-                    vec![Field::new("a", data_type, true)],
+                    vec![Field::new("a", data_type, true)].into(),
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -1050,7 +1050,7 @@ mod test {
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualifed_fields(
-                vec![Field::new("a", DataType::Decimal128(12, 4), true)],
+                vec![Field::new("a", DataType::Decimal128(12, 4), true)].into(),
                 std::collections::HashMap::new(),
             )?),
         }));
@@ -1255,7 +1255,7 @@ mod test {
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
         let schema = Arc::new(DFSchema::from_unqualifed_fields(
-            vec![Field::new("a", DataType::Int64, true)],
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1266,7 +1266,7 @@ mod test {
 
         // eq
         let schema = Arc::new(DFSchema::from_unqualifed_fields(
-            vec![Field::new("a", DataType::Int64, true)],
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1277,7 +1277,7 @@ mod test {
 
         // lt
         let schema = Arc::new(DFSchema::from_unqualifed_fields(
-            vec![Field::new("a", DataType::Int64, true)],
+            vec![Field::new("a", DataType::Int64, true)].into(),
             std::collections::HashMap::new(),
         )?);
         let mut rewriter = TypeCoercionRewriter { schema };
@@ -1368,7 +1368,8 @@ mod test {
                 Field::new("binary", DataType::Binary, true),
                 Field::new("string", DataType::Utf8, true),
                 Field::new("decimal", DataType::Decimal128(10, 10), true),
-            ],
+            ]
+            .into(),
             std::collections::HashMap::new(),
         )?);
 

@@ -875,7 +875,8 @@ mod test {
             vec![
                 Field::new("a", DataType::Int64, false),
                 Field::new("c", DataType::Int64, false),
-            ],
+            ]
+            .into(),
             Default::default(),
         )?);
 
@@ -1334,7 +1335,8 @@ mod test {
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
                 Field::new("c", DataType::Int32, false),
-            ],
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1351,7 +1353,8 @@ mod test {
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
-            ],
+            ]
+            .into(),
             HashMap::default(),
         )?;
         extract_expressions(&grouping, &schema, &mut result)?;
@@ -1364,7 +1367,7 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         let schema = DFSchema::from_unqualifed_fields(
-            vec![Field::new("a", DataType::Int32, false)],
+            vec![Field::new("a", DataType::Int32, false)].into(),
             HashMap::default(),
         )?;
         extract_expressions(&col("a"), &schema, &mut result)?;

@@ -273,14 +273,14 @@ fn expression_type_demo() -> Result<()> {
     // a schema. In this case we create a schema where the column `c` is of
     // type Utf8 (a String / VARCHAR)
     let schema = DFSchema::from_unqualifed_fields(
-        vec![Field::new("c", DataType::Utf8, true)],
+        vec![Field::new("c", DataType::Utf8, true)].into(),
         HashMap::new(),
     )?;
     assert_eq!("Utf8", format!("{}", expr.get_type(&schema).unwrap()));
 
     // Using a schema where the column `foo` is of type Int32
     let schema = DFSchema::from_unqualifed_fields(
-        vec![Field::new("c", DataType::Int32, true)],
+        vec![Field::new("c", DataType::Int32, true)].into(),
         HashMap::new(),
     )?;
     assert_eq!("Int32", format!("{}", expr.get_type(&schema).unwrap()));
@@ -292,7 +292,8 @@ fn expression_type_demo() -> Result<()> {
         vec![
             Field::new("c1", DataType::Int32, true),
             Field::new("c2", DataType::Float32, true),
-        ],
+        ]
+        .into(),
         HashMap::new(),
     )?;
     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));

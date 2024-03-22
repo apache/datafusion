@@ -101,7 +101,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// let df_schema = DFSchema::from_unqualifed_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
-/// ],HashMap::new()).unwrap();
+/// ].into(),HashMap::new()).unwrap();
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
@@ -147,7 +147,7 @@ impl DFSchema {
 
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     pub fn from_unqualifed_fields(
-        fields: Vec<Field>,
+        fields: Fields,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
         let field_count = fields.len();

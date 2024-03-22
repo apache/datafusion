@@ -750,7 +750,8 @@ mod tests {
                     Field::new("c6", DataType::UInt32, false),
                     Field::new("ts_nano_none", timestamp_nano_none_type(), false),
                     Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
-                ],
+                ]
+                .into(),
                 HashMap::new(),
             )
             .unwrap(),

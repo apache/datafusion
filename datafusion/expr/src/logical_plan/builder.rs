@@ -208,7 +208,7 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let dfschema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
+        let dfschema = DFSchema::from_unqualifed_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }

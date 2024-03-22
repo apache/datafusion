@@ -2545,7 +2545,7 @@ mod tests {
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::from_unqualifed_fields(
-                        vec![Field::new("a", DataType::Int32, false)],
+                        vec![Field::new("a", DataType::Int32, false)].into(),
                         HashMap::new(),
                     )
                     .unwrap(),

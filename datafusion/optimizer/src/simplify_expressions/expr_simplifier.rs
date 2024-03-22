@@ -3095,7 +3095,8 @@ mod tests {
                     Field::new("c2_non_null", DataType::Boolean, false),
                     Field::new("c3_non_null", DataType::Int64, false),
                     Field::new("c4_non_null", DataType::UInt32, false),
-                ],
+                ]
+                .into(),
                 HashMap::new(),
             )
             .unwrap(),

@@ -84,7 +84,7 @@ impl ExprSchemable for Expr {
     ///     vec![
     ///       Field::new("c1", DataType::Int32, true),
     ///       Field::new("c2", DataType::Float32, true),
-    ///       ],
+    ///       ].into(),
     ///       HashMap::new(),
     ///   ).unwrap();
     ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
@@ -693,7 +693,8 @@ mod tests {
         );
 
         let schema = DFSchema::from_unqualifed_fields(
-            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())],
+            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
+                .into(),
             HashMap::new(),
         )
         .unwrap();
