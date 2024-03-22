@@ -19,25 +19,22 @@
 
 use crate::utils::is_volatile_expression;
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, Operator};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
-use std::slice::Windows;
+
 use std::sync::Arc;
 
-use arrow::array;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, Result,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{Alias, WindowFunction};
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
-use datafusion_expr::tree_node::plan;
 use datafusion_expr::{col, BinaryExpr, Cast, ExprSchemable};
 use hashbrown::HashSet;
 use regex_syntax::ast::print;
@@ -127,24 +124,14 @@ impl CommonSubexprEliminate {
             .iter()
             .zip(arrays_list.iter())
             .map(|(exprs, arrays)| {
-                println!("************ \n expr is {:?} \n ************ \n", exprs);
                 let res = exprs
                     .iter()
                     .cloned()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
-                        println!(
-                            "************ \n current expr is {:?} \n ************ \n",
-                            expr
-                        );
-                        println!(
-                            "************ \n current id_array is {:?} \n ************ \n",
-                            id_array
-                        );
                         replace_common_expr(expr, id_array, expr_set, affected_id)
                     })
                     .collect::<Result<Vec<_>>>();
-                println!("************ \n expr is {:?} \n ************ \n", res);
                 res
             })
             .collect::<Result<Vec<_>>>()
@@ -158,18 +145,6 @@ impl CommonSubexprEliminate {
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-        println!(
-            "************ \n current plan is {:?} \n *********** \n",
-            input
-        );
-        println!(
-            "************ \n exprs list are {:?} \n *********** \n",
-            exprs_list
-        );
-        println!(
-            "************ \n array list are {:?} \n *********** \n",
-            arrays_list
-        );
         let mut affected_id = BTreeSet::<Identifier>::new();
 
         let rewrite_exprs =
@@ -181,14 +156,6 @@ impl CommonSubexprEliminate {
         if !affected_id.is_empty() {
             new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
         }
-        println!(
-            "\n *********** \n rewrite expressions are {:?} \n *********** \n",
-            rewrite_exprs
-        );
-        println!(
-            "\n *********** \n new input is {:?} \n *********** \n",
-            new_input
-        );
         Ok((rewrite_exprs, new_input))
     }
 
@@ -224,10 +191,6 @@ impl CommonSubexprEliminate {
             window_exprs.push(window_expr);
             arrays_per_window.push(arrays);
         }
-        println!(
-            "\n *********** \n window exprs are {:?} \n *********** \n",
-            window_exprs
-        );
         let mut window_exprs = window_exprs
             .iter()
             .map(|expr| expr.as_slice())
@@ -236,10 +199,6 @@ impl CommonSubexprEliminate {
             .iter()
             .map(|arrays| arrays.as_slice())
             .collect::<Vec<_>>();
-        println!(
-            "\n *********** \n arrays per windows are  {:?} \n *********** \n",
-            arrays_per_window
-        );
         assert_eq!(window_exprs.len(), arrays_per_window.len());
         let (mut new_expr, new_input) = self.rewrite_expr(
             &window_exprs,
@@ -248,48 +207,25 @@ impl CommonSubexprEliminate {
             &expr_set,
             config,
         )?;
-        println!(
-            "\n *********** \n new exprs are  {:?} \n *********** \n",
-            new_expr
-        );
-        println!(
-            "\n *********** \n new input are  {:?} \n *********** \n",
-            new_input
-        );
         assert_eq!(window_exprs.len(), new_expr.len());
-        println!(
-            "\n *********** \n before plan are  {:?} \n *********** \n",
-            plan
-        );
         // Construct consecutive window operator, with their corresponding new window expressions.
         plan = new_input;
         while let Some(new_window_expr) = new_expr.pop() {
             // Since `new_expr` and `window_exprs` length are same. We can safely `.unwrap` here.
             let orig_window_expr = window_exprs.pop().unwrap();
             assert_eq!(new_window_expr.len(), orig_window_expr.len());
-            println!(
-                "************* \n origin window expressions {:?} \n ************** \n ",
-                orig_window_expr
-            );
             // Rename new re-written window expressions with original name (by giving alias)
             // Otherwise we may receive schema error, in subsequent operators.
-            println!("************* \n before changed window expressions {:?} \n ************** \n ", new_window_expr);
             let new_window_expr = new_window_expr
                 .into_iter()
                 .zip(orig_window_expr.iter())
                 .map(|(new_window_expr, window_expr)| {
-                    println!("new_window_expr is {:?}", new_window_expr);
                     let original_name = window_expr.name_for_alias()?;
                     new_window_expr.alias_if_changed(original_name)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            println!("************* \n after changed window expressions {:?} \n ************** \n ", new_window_expr);
             plan = LogicalPlan::Window(Window::try_new(new_window_expr, Arc::new(plan))?);
         }
-        println!(
-            "\n *********** \n final plan are  {:?} \n *********** \n",
-            plan
-        );
         Ok(plan)
     }
 
@@ -416,8 +352,6 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let expr = plan.expressions();
-        println!("********** \n expressions are {:?} \n ********* \n", expr);
-        println!("********** \n ur plan is {:?} \n ********* \n", plan);
         let inputs = plan.inputs();
         let input = inputs[0];
         let input_schema = Arc::clone(input.schema());
@@ -425,16 +359,9 @@ impl CommonSubexprEliminate {
 
         // Visit expr list and build expr identifier to occuring count map (`expr_set`).
         let arrays = to_arrays(&expr, input_schema, &mut expr_set, ExprMask::Normal)?;
-        println!("********* \n arrays {:?} \n ********* \n", arrays);
-        println!("********* \n expr_set {:?} \n ********* \n", expr_set);
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[&expr], &[&arrays], input, &expr_set, config)?;
-        println!(
-            "********* \n new expr is {:?} \n and new input is {:?} ********* \n",
-            new_expr, new_input
-        );
         let res_plan = plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input]);
-        println!("********* \n res plan is {:?} \n ********* \n", res_plan);
         res_plan
     }
 }
@@ -482,21 +409,9 @@ impl CommonSubexprEliminate {
         };
 
         let original_schema = plan.schema().clone();
-        println!(
-            "***************** \n original schema is {:?} \n ***************",
-            original_schema
-        );
         match optimized_plan {
             Some(LogicalPlan::Projection(_)) => Ok(optimized_plan),
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
-                println!(
-                    "************** \n optimized schema {:?} \n ************",
-                    optimized_plan.schema(),
-                );
-                println!(
-                    "************** \n current plan is {:?} \n ************",
-                    optimized_plan,
-                );
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
                     optimized_plan,
@@ -516,7 +431,6 @@ impl CommonSubexprEliminate {
                 depth: 0,
             })
             .map(|transformed| Some(transformed.data));
-        println!("************** \n result plan is {:?} *********** \n", res);
         res
     }
 }
@@ -534,7 +448,6 @@ impl OptimizerRule for CommonSubexprEliminate {
             _ => plan.clone(),
         };
         let res = self.add_extra_projection(&plan);
-        println!("res is {:?}", res);
         res
     }
 
@@ -568,12 +481,10 @@ fn to_arrays(
     expr_set: &mut ExprSet,
     expr_mask: ExprMask,
 ) -> Result<Vec<Vec<(usize, String)>>> {
-    println!("schema is {:?}", input_schema);
     let res = expr
         .iter()
         .map(|e| {
             let mut id_array = vec![];
-            println!("current expression is {:?}", e);
             expr_to_identifier(
                 e,
                 expr_set,
@@ -585,7 +496,6 @@ fn to_arrays(
             Ok(id_array)
         })
         .collect::<Result<Vec<_>>>();
-    println!("res is {:?}", res);
     res
 }
 
@@ -602,11 +512,6 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
-                println!(
-                    "\n ********** expr is {:?} \n \n and data type is {:?} \n **************** \n",
-                    expr, data_type
-                );
-                println!("********* \n {:?} ***********\n", expr);
                 let field = DFField::new_unqualified(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
@@ -622,11 +527,6 @@ fn build_common_expr_project_plan(
             project_exprs.push(Expr::Column(field.qualified_column()));
         }
     }
-    println!(
-        "************** \n exprs are {:?} \n ************** \n",
-        project_exprs
-    );
-    println!("********** \n input are {:?} \n ************** \n", input);
     Ok(LogicalPlan::Projection(Projection::try_new(
         project_exprs,
         Arc::new(input),
@@ -644,19 +544,8 @@ fn build_recover_project_plan(
     let col_exprs = schema
         .fields()
         .iter()
-        .map(|field| {
-            println!("field is {:?}", field);
-            Expr::Column(field.qualified_column())
-        })
+        .map(|field| Expr::Column(field.qualified_column()))
         .collect();
-    println!(
-        "************** \n col_exprs are {:?} \n **************",
-        col_exprs
-    );
-    println!(
-        "************** \n current plan is  {:?} \n **************",
-        input
-    );
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
@@ -813,7 +702,6 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     }
 
     fn f_up(&mut self, expr: &Expr) -> Result<TreeNodeRecursion> {
-        println!("********* \n expr is {:?} \n *********", expr);
         self.series_number += 1;
 
         let (idx, sub_expr_identifier) = self.pop_enter_mark();
@@ -833,7 +721,6 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
 
         let data_type = expr.get_type(&self.input_schema)?;
-        print!("data type is {:?}", data_type);
         self.expr_set
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
@@ -887,10 +774,6 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
         // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
         // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
         // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        println!(
-            "****************** \n expr is {:?} \n ****************** \n ",
-            expr
-        );
         if expr.short_circuits() || is_volatile_expression(&expr)? {
             return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
         }
@@ -963,11 +846,6 @@ fn replace_common_expr(
     expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
-    println!("************ \n expr are {:?} \n ************", expr);
-    println!(
-        "************ \n id_array are {:?} \n ************",
-        id_array
-    );
     let rewrited = expr
         .rewrite(&mut CommonSubexprRewriter {
             expr_set,
@@ -977,10 +855,6 @@ fn replace_common_expr(
             curr_index: 0,
         })
         .data();
-    println!(
-        "************ \n rewrited values are {:?} \n ************",
-        rewrited
-    );
     rewrited
 }
 
@@ -989,7 +863,12 @@ struct ProjectionAdder {
     depth: u128,
     data_type_map: HashMap<Expr, DataType>,
 }
-
+pub fn is_not_complex(op: &Operator) -> bool {
+    matches!(
+        op,
+        &Operator::Eq | &Operator::NotEq | &Operator::And | &Operator::Lt | &Operator::Gt
+    )
+}
 impl ProjectionAdder {
     // TODO: adding more expressions for sub query, currently only support for Simple Binary Expressions
     fn get_complex_expressions(
@@ -998,35 +877,32 @@ impl ProjectionAdder {
     ) -> (HashSet<Expr>, HashMap<Expr, DataType>) {
         let mut res = HashSet::new();
         let mut expr_data_type: HashMap<Expr, DataType> = HashMap::new();
-        println!(
-            "********** \n current schema is {:?} \n ******** \n",
-            schema
-        );
         for expr in exprs {
-            println!("current expr is {:?}", expr);
             match expr {
                 Expr::BinaryExpr(BinaryExpr {
                     left: ref l_box,
-                    op: _,
+                    op,
                     right: ref r_box,
-                }) => match (&**l_box, &**r_box) {
-                    (Expr::Column(l), Expr::Column(r)) => {
-                        let l_field = schema
-                            .field_from_column(l)
-                            .expect("Field not found for left column");
+                }) if !is_not_complex(&op) => {
+                    match (&**l_box, &**r_box) {
+                        (Expr::Column(l), Expr::Column(_r)) => {
+                            let l_field = schema
+                                .field_from_column(l)
+                                .expect("Field not found for left column");
 
-                        // res.insert(DFField::new_unqualified(
-                        //     &expr.to_string(),
-                        //     l_field.data_type().clone(),
-                        //     true,
-                        // ));
-                        expr_data_type
-                            .entry(expr.clone())
-                            .or_insert(l_field.data_type().clone());
-                        res.insert(expr.clone());
+                            // res.insert(DFField::new_unqualified(
+                            //     &expr.to_string(),
+                            //     l_field.data_type().clone(),
+                            //     true,
+                            // ));
+                            expr_data_type
+                                .entry(expr.clone())
+                                .or_insert(l_field.data_type().clone());
+                            res.insert(expr.clone());
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 Expr::Cast(Cast { expr, data_type }) => {
                     let (expr_set, type_map) =
                         Self::get_complex_expressions(vec![*expr], schema.clone());
@@ -1055,27 +931,18 @@ impl TreeNodeRewriter for ProjectionAdder {
         self.depth += 1;
         // extract all expressions + check whether it contains in depth_sets
         let exprs = node.expressions();
-        println!("********* \n cur plan is  {:?} \n *********** \n", node);
-        println!("********* \n exprs are {:?} \n *********** \n", exprs);
         let depth_set = self.depth_map.entry(self.depth).or_default();
-        println!("self.input schema is {:?}", node.schema());
         let mut schema = node.schema().deref().clone();
         for ip in node.inputs() {
             schema.merge(ip.schema());
         }
         let (extended_set, data_map) =
             Self::get_complex_expressions(exprs, Arc::new(schema));
-        println!(
-            "*********** \n extened set is {:?} \n ********** \n",
-            extended_set
-        );
         depth_set.extend(extended_set);
         self.data_type_map.extend(data_map);
         Ok(Transformed::no(node))
     }
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        println!("*********** \n cur plan is {:?} \n*************\n", node);
-
         let current_depth_schema =
             self.depth_map.get(&self.depth).cloned().unwrap_or_default();
 
@@ -1087,26 +954,11 @@ impl TreeNodeRewriter for ProjectionAdder {
             .fold(current_depth_schema, |acc, (_, expr)| {
                 acc.intersection(expr).cloned().collect()
             });
-        println!(
-            "******** \n intersected parts are {:?} \n ***********",
-            added_expr
-        );
-        println!(
-            "******** \n depth map is {:?} \n ***********",
-            self.depth_map
-        );
-        println!(
-            "************ \n data type map is {:?} \n *********** \n",
-            self.data_type_map
-        );
         self.depth -= 1;
         // do not do extra things
         if added_expr.is_empty() {
             return Ok(Transformed::no(node));
         }
-
-        println!("\n*************\n{:?}\n*************\n", added_expr);
-
         match node {
             // do not add for Projections
             LogicalPlan::Projection(_) | LogicalPlan::TableScan(_) => {
@@ -1138,16 +990,11 @@ impl TreeNodeRewriter for ProjectionAdder {
                         project_exprs.push(Expr::Column(field.qualified_column()));
                     }
                 }
-                println!(
-                    "************* \n project expressions are {:?} \n ********** \n",
-                    project_exprs
-                );
                 // adding new plan here
                 let new_plan = LogicalPlan::Projection(Projection::try_new(
                     project_exprs,
                     Arc::new(node.inputs()[0].clone()),
                 )?);
-                println!("new plan is {:?}", new_plan);
                 Ok(Transformed::yes(
                     node.with_new_exprs(node.expressions(), [new_plan].to_vec())?,
                 ))

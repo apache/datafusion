@@ -2013,6 +2013,7 @@ mod tests {
             .await?
             .select_columns(&["c1", "c3"])?;
         let left_rows = left.clone().collect().await?;
+        println!("hehehehehehehhehehehhehe");
         let right_rows = right.clone().collect().await?;
         let join = left.join(right, JoinType::Inner, &["c1"], &["c1"], None)?;
         let join_rows = join.collect().await?;

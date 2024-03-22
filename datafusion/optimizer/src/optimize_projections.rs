@@ -26,15 +26,16 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::common_subexpr_eliminate::is_not_complex;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFField, DFSchema, DFSchemaRef,
-    JoinType, Result,
+    get_required_group_by_exprs_indices, Column, DFSchemaRef, JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
+
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -71,10 +72,6 @@ impl OptimizerRule for OptimizeProjections {
     ) -> Result<Option<LogicalPlan>> {
         // All output fields are necessary:
         let indices = (0..plan.schema().fields().len()).collect::<Vec<_>>();
-        println!(
-            "\n ************ \n plan.schema is {:?} \n ************ \n",
-            plan.schema()
-        );
         optimize_projections(plan, config, &indices)
     }
 
@@ -111,8 +108,6 @@ fn optimize_projections(
     config: &dyn OptimizerConfig,
     indices: &[usize],
 ) -> Result<Option<LogicalPlan>> {
-    println!("**********\n cur plan is {:?} \n ********* \n", plan);
-    println!("**********\n indices is {:?} \n ********* \n", indices);
     // `child_required_indices` stores
     // - indices of the columns required for each child
     // - a flag indicating whether putting a projection above children is beneficial for the parent.
@@ -284,10 +279,6 @@ fn optimize_projections(
             // Only use window expressions that are absolutely necessary according
             // to parent requirements:
             let new_window_expr = get_at_indices(&window.window_expr, &window_reqs);
-            println!(
-                "************ \n new_window_expr is {:?} \n *********** \n",
-                new_window_expr
-            );
             // Get all the required column indices at the input, either by the
             // parent or window expression requirements.
             let required_indices = get_all_required_indices(
@@ -302,10 +293,6 @@ fn optimize_projections(
             } else {
                 window.input.as_ref().clone()
             };
-            println!(
-                "************ \n window child is {:?} *********** \n",
-                window_child
-            );
             return if new_window_expr.is_empty() {
                 // When no window expression is necessary, use the input directly:
                 Ok(Some(window_child))
@@ -315,16 +302,8 @@ fn optimize_projections(
                 // refers to `old_child`.
                 let required_exprs =
                     get_required_exprs(window.input.schema(), &required_indices);
-                println!(
-                    "\n ************** \n required exprs {:?} \n ***********\n",
-                    required_exprs
-                );
                 let (window_child, _) =
                     add_projection_on_top_if_helpful(window_child, required_exprs)?;
-                println!(
-                    "\n ************** \nwindow child is {:?} \n ************ \n",
-                    window_child
-                );
                 Window::try_new(new_window_expr, Arc::new(window_child))
                     .map(|window| Some(LogicalPlan::Window(window)))
             };
@@ -443,7 +422,6 @@ where
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occured during the function call.
 fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>> {
-    println!("******** \n proj is {:?} \n ********** \n", proj);
     let LogicalPlan::Projection(prev_projection) = proj.input.as_ref() else {
         return Ok(None);
     };
@@ -684,10 +662,6 @@ fn indices_referred_by_exprs<'a>(
     input_schema: &DFSchemaRef,
     exprs: impl Iterator<Item = &'a Expr>,
 ) -> Result<Vec<usize>> {
-    println!(
-        "************ \n current schema is {:?} \n *********** \n",
-        input_schema
-    );
     let indices = exprs
         .map(|expr| indices_referred_by_expr(input_schema, expr))
         .collect::<Result<Vec<_>>>()?;
@@ -725,7 +699,7 @@ fn indices_referred_by_expr(
         .flat_map(|col| input_schema.index_of_column(col))
         .collect();
     match expr {
-        Expr::BinaryExpr(_) => {
+        Expr::BinaryExpr(BinaryExpr { op, .. }) if is_not_complex(op) => {
             if let Some(index) =
                 input_schema.index_of_column_by_name(None, &expr.to_string())?
             {
@@ -796,7 +770,6 @@ fn get_all_required_indices<'a>(
 ///
 /// A vector of expressions corresponding to specified indices.
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
-    println!("************* \n expr is {:?} \n ************ \n", exprs);
     indices
         .iter()
         // Indices may point to further places than `exprs` len.
@@ -925,35 +898,17 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &[usize],
 ) -> Result<Option<LogicalPlan>> {
-    println!("************ \n proj is {:?} \n *********** \n", proj);
     let exprs_used = get_at_indices(&proj.expr, indices);
-    println!(
-        "************ \n exprs_used is {:?} \n *********** \n",
-        exprs_used
-    );
     let required_indices =
         indices_referred_by_exprs(proj.input.schema(), exprs_used.iter())?;
-    println!(
-        "************ \n required_indices is {:?} \n *********** \n",
-        required_indices
-    );
     return if let Some(input) =
         optimize_projections(&proj.input, config, &required_indices)?
     {
         if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {
-            println!(
-                "************ \n exprs_used is {:?} \n *********** \n",
-                exprs_used
-            );
-            println!("************ \n input is {:?} \n *********** \n", input);
             let res = Projection::try_new(exprs_used, Arc::new(input))
                 .map(|proj| Some(LogicalPlan::Projection(proj)));
-            println!(
-                "************ \n new expressions is {:?} \n *********** \n",
-                res
-            );
             res
         }
     } else if exprs_used.len() < proj.expr.len() {
@@ -976,11 +931,6 @@ fn rewrite_projection_given_requirements(
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
-    println!(
-        "*************** \n projections schema is {:?} \n input schema is {:?} \n ********** \n",
-        &projection_schema(input, proj_exprs)?,
-        input.schema()
-    );
     Ok(&projection_schema(input, proj_exprs)? == input.schema()
         && proj_exprs.iter().all(is_expr_trivial))
 }
