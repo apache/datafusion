@@ -367,7 +367,7 @@ async fn test_fn_lpad_with_string() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_ltrim() -> Result<()> {
-    let expr = ltrim(lit("      a b c             "));
+    let expr = ltrim(vec![lit("      a b c             ")]);
 
     let expected = [
         "+-----------------------------------------+",
@@ -384,7 +384,7 @@ async fn test_fn_ltrim() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_ltrim_with_columns() -> Result<()> {
-    let expr = ltrim(col("a"));
+    let expr = ltrim(vec![col("a")]);
 
     let expected = [
         "+---------------+",

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::string::common::make_scalar_function;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
@@ -26,8 +27,6 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-
-use super::make_scalar_function;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'

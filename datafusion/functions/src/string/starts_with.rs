@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::string::common::make_scalar_function;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::{cast::as_generic_string_array, internal_err, Result};
@@ -23,8 +24,6 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::string::make_scalar_function;
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'

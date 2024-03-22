@@ -2863,7 +2863,7 @@ pub enum ScalarFunction {
     /// 20 was Array
     /// RegexpMatch = 21;
     BitLength = 22,
-    Btrim = 23,
+    /// 23 was Btrim
     CharacterLength = 24,
     Chr = 25,
     Concat = 26,
@@ -2874,7 +2874,7 @@ pub enum ScalarFunction {
     Left = 31,
     Lpad = 32,
     Lower = 33,
-    Ltrim = 34,
+    /// 34 was Ltrim
     /// 35 was MD5
     ///   36 was NullIf
     OctetLength = 37,
@@ -2885,7 +2885,7 @@ pub enum ScalarFunction {
     Reverse = 42,
     Right = 43,
     Rpad = 44,
-    Rtrim = 45,
+    /// 45 was Rtrim
     /// 46 was SHA224
     /// 47 was SHA256
     /// 48 was SHA384
@@ -3003,7 +3003,6 @@ impl ScalarFunction {
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::BitLength => "BitLength",
-            ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
             ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
@@ -3012,7 +3011,6 @@ impl ScalarFunction {
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
             ScalarFunction::Lower => "Lower",
-            ScalarFunction::Ltrim => "Ltrim",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::Repeat => "Repeat",
@@ -3020,7 +3018,6 @@ impl ScalarFunction {
             ScalarFunction::Reverse => "Reverse",
             ScalarFunction::Right => "Right",
             ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::Rtrim => "Rtrim",
             ScalarFunction::SplitPart => "SplitPart",
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
@@ -3071,7 +3068,6 @@ impl ScalarFunction {
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
             "BitLength" => Some(Self::BitLength),
-            "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),
             "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
@@ -3080,7 +3076,6 @@ impl ScalarFunction {
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
             "Lower" => Some(Self::Lower),
-            "Ltrim" => Some(Self::Ltrim),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "Repeat" => Some(Self::Repeat),
@@ -3088,7 +3083,6 @@ impl ScalarFunction {
             "Reverse" => Some(Self::Reverse),
             "Right" => Some(Self::Right),
             "Rpad" => Some(Self::Rpad),
-            "Rtrim" => Some(Self::Rtrim),
             "SplitPart" => Some(Self::SplitPart),
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
