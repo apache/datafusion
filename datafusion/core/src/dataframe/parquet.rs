@@ -171,7 +171,7 @@ mod tests {
     async fn write_parquet_with_small_rg_size() -> Result<()> {
         let mut test_df = test_util::test_table().await?;
         // make the test data larger so there are multiple batches
-        for _ in 0..7{
+        for _ in 0..7 {
             test_df = test_df.clone().union(test_df)?;
         }
         let output_path = "file://local/test.parquet";
@@ -202,8 +202,7 @@ mod tests {
 
             let parquet_metadata = reader.metadata();
 
-            let written_rows =
-                parquet_metadata.row_group(0).num_rows();
+            let written_rows = parquet_metadata.row_group(0).num_rows();
 
             assert_eq!(written_rows as usize, rg_size);
         }
