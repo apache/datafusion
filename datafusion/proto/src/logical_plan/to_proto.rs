@@ -1483,7 +1483,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Lower => Self::Lower,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::Ascii => Self::Ascii,
             BuiltinScalarFunction::BitLength => Self::BitLength,
             BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
             BuiltinScalarFunction::Chr => Self::Chr,

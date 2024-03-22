@@ -22915,7 +22915,6 @@ impl serde::Serialize for ScalarFunction {
         let variant = match self {
             Self::Unknown => "unknown",
             Self::Atan => "Atan",
-            Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
             Self::Cos => "Cos",
             Self::Exp => "Exp",
@@ -22986,7 +22985,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
         const FIELDS: &[&str] = &[
             "unknown",
             "Atan",
-            "Ascii",
             "Ceil",
             "Cos",
             "Exp",
@@ -23086,7 +23084,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
                     "Atan" => Ok(ScalarFunction::Atan),
-                    "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
                     "Cos" => Ok(ScalarFunction::Cos),
                     "Exp" => Ok(ScalarFunction::Exp),
