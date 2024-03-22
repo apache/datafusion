@@ -380,8 +380,7 @@ mod test {
         let expr = col("a") + col("b");
         let schema_a =
             make_schema_with_empty_metadata(vec![Some("\"tableA\"".into())], vec!["a"]);
-        let schemas = vec![schema_a];
-        let schemas = schemas.iter().collect::<Vec<_>>();
+        let schemas = vec![&schema_a];
 
         let error =
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
