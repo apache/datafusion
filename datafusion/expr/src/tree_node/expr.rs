@@ -79,7 +79,6 @@ impl TreeNode for Expr {
             | Expr::Wildcard {..}
             | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                println!("left is {:?}, right is {:?}", left, right);
                 vec![left.as_ref(), right.as_ref()]
             }
             Expr::Like(Like { expr, pattern, .. })
@@ -123,7 +122,6 @@ impl TreeNode for Expr {
                 let mut expr_vec = args.iter().collect::<Vec<_>>();
                 expr_vec.extend(partition_by);
                 expr_vec.extend(order_by);
-                println!("expressions vector is {:?}", expr_vec);
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
