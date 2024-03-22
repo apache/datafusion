@@ -37,7 +37,6 @@ use datafusion_expr::expr::{Alias, WindowFunction};
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection, Window};
 use datafusion_expr::{col, BinaryExpr, Cast, ExprSchemable};
 use hashbrown::HashSet;
-use regex_syntax::ast::print;
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -903,14 +902,14 @@ impl ProjectionAdder {
                         _ => {}
                     }
                 }
-                Expr::Cast(Cast { expr, data_type }) => {
-                    let (expr_set, type_map) =
+                Expr::Cast(Cast { expr, data_type: _ }) => {
+                    let (expr_set, type_data_map) =
                         Self::get_complex_expressions(vec![*expr], schema.clone());
                     res.extend(expr_set);
-                    expr_data_type.extend(type_map);
+                    expr_data_type.extend(type_data_map);
                 }
 
-                Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
+                Expr::WindowFunction(WindowFunction { fun: _, args, .. }) => {
                     let (expr_set, type_map) =
                         Self::get_complex_expressions(args, schema.clone());
                     res.extend(expr_set);

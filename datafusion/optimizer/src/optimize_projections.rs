@@ -32,7 +32,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFSchemaRef, JoinType, Result,
+    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
 
