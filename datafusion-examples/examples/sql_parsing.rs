@@ -18,12 +18,16 @@
 use std::fmt::Display;
 
 use datafusion::error::Result;
-use datafusion_sql::{parser::{CopyToSource, CopyToStatement, DFParser, Statement}, sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token}};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement, DFParser, Statement},
+    sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token},
+};
 
 /// This example demonstrates how to use the DFParser to parse a statement in a custom way
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut my_parser = MyParser::new("COPY source_table TO 'file.fasta' STORED AS FASTA")?;
+    let mut my_parser =
+        MyParser::new("COPY source_table TO 'file.fasta' STORED AS FASTA")?;
 
     let my_statement = my_parser.parse_statement()?;
 
@@ -72,7 +76,6 @@ impl MyParser<'_> {
             }
         }
     }
-
 }
 
 enum MyStatement {
@@ -121,6 +124,10 @@ impl From<CopyToStatement> for MyCopyToStatement {
 
 impl Display for MyCopyToStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "COPY {} TO '{}' STORED AS FASTA", self.source, self.target)
+        write!(
+            f,
+            "COPY {} TO '{}' STORED AS FASTA",
+            self.source, self.target
+        )
     }
 }

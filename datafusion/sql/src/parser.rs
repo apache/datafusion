@@ -18,10 +18,14 @@
 //! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::fmt::{self, Debug, Display};
+use std::ops::ControlFlow;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::DataFusionError;
+use datafusion_expr::LogicalPlan;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
@@ -230,6 +234,51 @@ impl fmt::Display for CreateExternalTable {
     }
 }
 
+
+pub trait UserDefinedStatement: Debug + Display {
+    fn to_logical_plan(&self) -> Result<LogicalPlan, DataFusionError>;
+
+    fn visit(&self, visitor: &mut RelationVisitor) -> ControlFlow<sqlparser::ast::Visitor>;
+}
+
+// Implement Debug, Clone, and PartialEq for ExtensionStatement manually if needed.
+#[derive(Debug, Clone)]
+pub struct ExtensionStatement {
+    pub statement: Arc<dyn UserDefinedStatement>,
+}
+
+impl ExtensionStatement {
+    pub fn new(statement: Arc<dyn UserDefinedStatement>) -> Self {
+        Self { statement }
+    }
+
+    pub fn to_logical_plan(&self) -> Result<LogicalPlan, DataFusionError> {
+        self.statement.to_logical_plan()
+    }
+}
+
+impl Display for ExtensionStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.statement)
+    }
+}
+
+// Implement PartialEq manually to handle comparison logic since dyn UserDefinedStatement
+// cannot directly use PartialEq due to object safety.
+impl PartialEq for ExtensionStatement {
+    fn eq(&self, other: &Self) -> bool {
+        // Implement your logic to compare two ExtensionStatement instances.
+        // This might involve downcasting Arc<dyn UserDefinedStatement> if you need
+        // to compare the statements and if such a comparison is meaningful.
+        // Note: Actual comparison logic would depend on your specific use case.
+        Arc::ptr_eq(&self.statement, &other.statement)
+    }
+}
+
+// Eq requires PartialEq but has no additional requirements.
+impl Eq for ExtensionStatement {}
+
+
 /// DataFusion SQL Statement.
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
@@ -247,6 +296,8 @@ pub enum Statement {
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
     Explain(ExplainStatement),
+    /// User defined extension statement
+    Extension(ExtensionStatement),
 }
 
 impl fmt::Display for Statement {
@@ -256,6 +307,7 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
+            Statement::Extension(stmt) => write!(f, "{stmt}"),
         }
     }
 }
