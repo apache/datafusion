@@ -486,20 +486,12 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
-            LogicalPlan::Union(union) => {
-                let (qualifier, field) = union.schema.qualified_field(0);
-                Ok(Some(Expr::Column(Column::new(
-                    qualifier.cloned(),
-                    field.name(),
-                ))))
-            }
-            LogicalPlan::TableScan(table) => {
-                let (qualifier, field) = table.projected_schema.qualified_field(0);
-                Ok(Some(Expr::Column(Column::new(
-                    qualifier.cloned(),
-                    field.name(),
-                ))))
-            }
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(Column::from(
+                union.schema.qualified_field(0),
+            )))),
+            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(Column::from(
+                table.projected_schema.qualified_field(0),
+            )))),
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
                 expr_opt

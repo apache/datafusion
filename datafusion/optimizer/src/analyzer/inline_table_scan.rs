@@ -119,8 +119,9 @@ fn generate_projection_expr(
     let mut exprs = vec![];
     if let Some(projection) = projection {
         for i in projection {
-            let (qualifier, field) = sub_plan.schema().qualified_field(*i);
-            exprs.push(Expr::Column(Column::new(qualifier.cloned(), field.name())));
+            exprs.push(Expr::Column(Column::from(
+                sub_plan.schema().qualified_field(*i),
+            )));
         }
     } else {
         exprs.push(Expr::Wildcard { qualifier: None });

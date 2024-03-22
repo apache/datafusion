@@ -127,9 +127,9 @@ impl TableProvider for ViewTable {
                 let fields: Vec<Expr> = projection
                     .iter()
                     .map(|i| {
-                        let (qualifier, field) =
-                            self.logical_plan.schema().qualified_field(*i);
-                        Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                        Expr::Column(Column::from(
+                            self.logical_plan.schema().qualified_field(*i),
+                        ))
                     })
                     .collect();
                 plan.project(fields)?

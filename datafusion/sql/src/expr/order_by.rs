@@ -60,8 +60,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         );
                     }
 
-                    let (qualifier, field) = schema.qualified_field(field_index - 1);
-                    Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                    Expr::Column(Column::from(schema.qualified_field(field_index - 1)))
                 }
                 e => self.sql_expr_to_logical_expr(e.clone(), schema, planner_context)?,
             };

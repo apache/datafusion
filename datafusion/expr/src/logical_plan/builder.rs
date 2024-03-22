@@ -354,10 +354,7 @@ impl LogicalPlanBuilder {
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
         let exprs: Vec<_> = indices
             .into_iter()
-            .map(|x| {
-                let (qualifier, field) = self.plan.schema().qualified_field(x);
-                Expr::Column(Column::new(qualifier.cloned(), field.name()))
-            })
+            .map(|x| Expr::Column(Column::from(self.plan.schema().qualified_field(x))))
             .collect();
         self.project(exprs)
     }
@@ -1244,8 +1241,7 @@ fn add_group_by_exprs_from_dependencies(
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
-            let (qualifier, field) = schema.qualified_field(idx);
-            let expr = Expr::Column(Column::new(qualifier.cloned(), field.name()));
+            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
             let expr_name = expr.display_name()?;
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);

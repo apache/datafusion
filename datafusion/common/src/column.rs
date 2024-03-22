@@ -17,6 +17,8 @@
 
 //! Column
 
+use arrow_schema::Field;
+
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
@@ -342,6 +344,13 @@ impl From<&String> for Column {
 impl From<String> for Column {
     fn from(c: String) -> Self {
         Self::from_qualified_name(c)
+    }
+}
+
+/// Create a column, use qualifier and field name
+impl From<(Option<&OwnedTableReference>, &Field)> for Column {
+    fn from((relation, field): (Option<&OwnedTableReference>, &Field)) -> Self {
+        Self::new(relation.cloned(), field.name())
     }
 }
 

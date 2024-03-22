@@ -640,10 +640,7 @@ fn outer_columns_helper_multi<'a>(
 fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Expr> {
     indices
         .iter()
-        .map(|&idx| {
-            let (qualifer, field) = input_schema.qualified_field(idx);
-            Expr::Column(Column::new(qualifer.cloned(), field.name()))
-        })
+        .map(|&idx| Expr::Column(Column::from(input_schema.qualified_field(idx))))
         .collect()
 }
 
