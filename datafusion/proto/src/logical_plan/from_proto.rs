@@ -48,12 +48,8 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-<<<<<<< HEAD
-    acosh, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length,
-=======
-    acosh, ascii, asinh, atan, atan2, atanh, bit_length, cbrt, ceil, character_length,
->>>>>>> apache/main
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
+    acosh, asinh, atan, atan2, atanh, bit_length, cbrt, ceil, character_length, chr,
+    coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
@@ -1437,17 +1433,6 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Lower => {
                     Ok(lower(parse_expr(&args[0], registry, codec)?))
-                }
-<<<<<<< HEAD
-                ScalarFunction::Ltrim => {
-                    Ok(ltrim(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Rtrim => {
-                    Ok(rtrim(parse_expr(&args[0], registry, codec)?))
-=======
-                ScalarFunction::Ascii => {
-                    Ok(ascii(parse_expr(&args[0], registry, codec)?))
->>>>>>> apache/main
                 }
                 ScalarFunction::BitLength => {
                     Ok(bit_length(parse_expr(&args[0], registry, codec)?))
