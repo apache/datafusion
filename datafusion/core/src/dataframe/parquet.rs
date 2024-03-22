@@ -166,4 +166,43 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn write_parquet_with_small_rg_size() -> Result<()> {
+        let test_df = test_util::test_table().await?;
+        let output_path = "file://local/test.parquet";
+
+        for rg_size in 1..10 {
+            let df = test_df.clone();
+            let tmp_dir = TempDir::new()?;
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local_url = Url::parse("file://local").unwrap();
+            let ctx = &test_df.session_state;
+            ctx.runtime_env().register_object_store(&local_url, local);
+            let mut options = TableParquetOptions::default();
+            options.global.max_row_group_size = rg_size;
+            df.write_parquet(
+                output_path,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(options),
+            )
+            .await?;
+
+            // Check that file actually used the specified compression
+            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+
+            let reader =
+                parquet::file::serialized_reader::SerializedFileReader::new(file)
+                    .unwrap();
+
+            let parquet_metadata = reader.metadata();
+
+            let written_rows =
+                parquet_metadata.row_group(0).num_rows();
+
+            assert_eq!(written_rows as usize, rg_size);
+        }
+
+        Ok(())
+    }
 }
