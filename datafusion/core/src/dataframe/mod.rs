@@ -201,8 +201,7 @@ impl DataFrame {
                     .qualified_field_with_unqualified_name(name)
             })
             .collect::<Result<Vec<_>>>()?;
-        let expr: Vec<Expr> =
-            fields.iter().map(|f| Expr::Column(f.to_column())).collect();
+        let expr: Vec<Expr> = fields.into_iter().map(col).collect();
         self.select(expr)
     }
 
@@ -1248,7 +1247,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(dffield.to_column())
+                    col(dffield)
                 }
             })
             .collect();
@@ -1317,9 +1316,9 @@ impl DataFrame {
                 if dffield.qualifier() == rename_field.qualifier()
                     && dffield.field() == rename_field.field()
                 {
-                    col(dffield.to_column()).alias(new_name)
+                    col(dffield).alias(new_name)
                 } else {
-                    col(dffield.to_column())
+                    col(dffield)
                 }
             })
             .collect::<Vec<_>>();

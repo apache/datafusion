@@ -27,7 +27,7 @@ use datafusion::logical_expr::{
     Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
+    col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, ScalarUDF, Subquery, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
@@ -1394,8 +1394,7 @@ fn from_substrait_field_reference(
                 ),
                 None => {
                     let dffield = input_schema.qualified_field(x.field as usize);
-
-                    Ok(Expr::Column(dffield.to_column()))
+                    Ok(col(dffield))
                 }
             },
             _ => not_impl_err!(

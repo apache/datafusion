@@ -19,7 +19,7 @@
 
 use crate::expr::{Alias, Sort};
 use crate::expr_rewriter::normalize_col;
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
+use crate::{col, Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
@@ -89,8 +89,7 @@ fn rewrite_in_terms_of_projection(
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let field = found.to_field(input.schema())?;
             let dffield = found.to_dffield(&field)?;
-            let col = Expr::Column(dffield.to_column());
-            return Ok(Transformed::yes(col));
+            return Ok(Transformed::yes(col(dffield)));
         }
 
         // if that doesn't work, try to match the expression as an

@@ -343,7 +343,7 @@ fn get_excluded_columns(
     for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let f = schema.qualified_field_with_name(qualifier.as_ref(), col_name)?;
-        result.push(f.to_column());
+        result.push(f.into());
     }
     Ok(result)
 }

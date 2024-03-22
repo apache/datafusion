@@ -36,8 +36,8 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    ScalarFunctionDefinition, TableProviderFilterPushDown,
+    and, build_join_schema, col, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder,
+    Operator, ScalarFunctionDefinition, TableProviderFilterPushDown,
 };
 
 use itertools::Itertools;
@@ -201,9 +201,9 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
         .iter()
         .flat_map(|dffield| {
             [
-                dffield.to_column(),
                 // we need to push down filter using unqualified column as well
                 Column::new_unqualified(dffield.name()),
+                dffield.into(),
             ]
         })
         .collect::<HashSet<_>>();
@@ -307,9 +307,9 @@ fn extract_or_clauses_for_join<'a>(
         .iter()
         .flat_map(|dffield| {
             [
-                dffield.to_column(),
                 // we need to push down filter using unqualified column as well
                 Column::new_unqualified(dffield.name()),
+                dffield.into(),
             ]
         })
         .collect::<HashSet<_>>();
@@ -672,10 +672,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut replace_map = HashMap::new();
                 for (i, dffield) in subquery_alias.input.schema().iter().enumerate() {
                     let sub_dffield = subquery_alias.schema.qualified_field(i);
-                    replace_map.insert(
-                        sub_dffield.qualified_name(),
-                        Expr::Column(dffield.to_column()),
-                    );
+                    replace_map.insert(sub_dffield.qualified_name(), col(dffield));
                 }
                 let new_predicate =
                     replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
@@ -753,10 +750,7 @@ impl OptimizerRule for PushDownFilter {
                     let mut replace_map = HashMap::new();
                     for (i, dffield) in input.schema().iter().enumerate() {
                         let union_field = union.schema.qualified_field(i);
-                        replace_map.insert(
-                            union_field.qualified_name(),
-                            Expr::Column(dffield.to_column()),
-                        );
+                        replace_map.insert(union_field.qualified_name(), col(dffield));
                     }
 
                     let push_predicate =

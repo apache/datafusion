@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
+use datafusion_expr::{col, LogicalPlanBuilder, TableProviderFilterPushDown};
 
 use crate::{
     error::Result,
@@ -127,7 +127,7 @@ impl TableProvider for ViewTable {
                     .iter()
                     .map(|i| {
                         let dffield = self.logical_plan.schema().qualified_field(*i);
-                        Expr::Column(dffield.to_column())
+                        col(dffield)
                     })
                     .collect();
                 plan.project(fields)?

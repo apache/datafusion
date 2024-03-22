@@ -19,7 +19,9 @@
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
+use crate::{
+    DFFieldRef, DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError,
+};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -178,12 +180,13 @@ impl Column {
         }
 
         for schema in schemas {
-            let qualified_fields =
+            let mut qualified_fields =
                 schema.qualified_fields_with_unqualified_name(&self.name);
             match qualified_fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(qualified_fields[0].to_column());
+                    let dffield = qualified_fields.swap_remove(0);
+                    return Ok(dffield.into());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -319,6 +322,12 @@ impl Column {
                 .flat_map(|s| s.columns())
                 .collect(),
         })
+    }
+}
+
+impl<'a> From<DFFieldRef<'a>> for Column {
+    fn from(f: DFFieldRef<'a>) -> Self {
+        Column::new(f.owned_qualifier(), f.name())
     }
 }
 

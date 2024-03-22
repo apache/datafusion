@@ -24,6 +24,7 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_expr::col;
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{
     logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,
@@ -119,8 +120,8 @@ fn generate_projection_expr(
     let mut exprs = vec![];
     if let Some(projection) = projection {
         for i in projection {
-            let field = sub_plan.schema().qualified_field(*i);
-            exprs.push(Expr::Column(field.to_column()));
+            let dffield = sub_plan.schema().qualified_field(*i);
+            exprs.push(col(dffield));
         }
     } else {
         exprs.push(Expr::Wildcard { qualifier: None });

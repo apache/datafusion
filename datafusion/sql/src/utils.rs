@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{expr_vec_fmt, Expr, LogicalPlan};
+use datafusion_expr::{col, expr_vec_fmt, Expr, LogicalPlan};
 use sqlparser::ast::Ident;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -36,9 +36,9 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone()
         .transform_up(&|nested_expr| {
             match nested_expr {
-                Expr::Column(col) => {
-                    let field = plan.schema().qualified_field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(field.to_column())))
+                Expr::Column(c) => {
+                    let dffield = plan.schema().qualified_field_from_column(&c)?;
+                    Ok(Transformed::yes(col(dffield)))
                 }
                 _ => {
                     // keep recursing

@@ -498,10 +498,8 @@ fn build_common_expr_project_plan(
 
     for field in input.schema().iter() {
         let name = field.qualified_name();
-        let col = field.to_column();
-
         if fields_set.insert(name) {
-            project_exprs.push(Expr::Column(col));
+            project_exprs.push(col(field));
         }
     }
 
@@ -519,13 +517,7 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let col_exprs = schema
-        .iter()
-        .map(|field| {
-            let col = field.to_column();
-            Expr::Column(col)
-        })
-        .collect();
+    let col_exprs = schema.iter().map(col).collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
         col_exprs,
         Arc::new(input),
@@ -541,14 +533,12 @@ fn extract_expressions(
         for e in groupings.distinct_expr() {
             let field = e.to_field(schema)?;
             let dffield = e.to_dffield(&field)?;
-            let col = dffield.to_column();
-            result.push(Expr::Column(col))
+            result.push(col(dffield))
         }
     } else {
         let field = expr.to_field(schema)?;
         let dffield = expr.to_dffield(&field)?;
-        let col = dffield.to_column();
-        result.push(Expr::Column(col));
+        result.push(col(dffield))
     }
 
     Ok(())

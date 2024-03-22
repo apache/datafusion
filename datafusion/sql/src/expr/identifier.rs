@@ -20,7 +20,7 @@ use datafusion_common::{
     internal_err, plan_datafusion_err, Column, DFFieldRef, DFSchema, DataFusionError,
     Result, TableReference,
 };
-use datafusion_expr::{Case, Expr};
+use datafusion_expr::{col, Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -64,7 +64,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                 Ok(Expr::OuterReferenceColumn(
                                     field.data_type().clone(),
-                                    field.to_column(),
+                                    field.into(),
                                 ))
                             }
                             Err(_) => Ok(Expr::Column(Column {
@@ -123,19 +123,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
-                Some((field, nested_names)) if !nested_names.is_empty() => {
+                Some((dffield, nested_names)) if !nested_names.is_empty() => {
                     // TODO: remove when can support multiple nested identifiers
                     if nested_names.len() > 1 {
+                        let col: Column = dffield.into();
                         return internal_err!(
                             "Nested identifiers not yet supported for column {}",
-                            field.to_column().quoted_flat_name()
+                            col.quoted_flat_name()
                         );
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::Column(field.to_column()).field(nested_name))
+                    Ok(col(dffield).field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
-                Some((field, _nested_names)) => Ok(Expr::Column(field.to_column())),
+                Some((dffield, _nested_names)) => Ok(col(dffield)),
                 None => {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -151,9 +152,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     if !nested_names.is_empty() =>
                                 {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                    let col: Column = field.into();
                                     internal_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        field.to_column().quoted_flat_name()
+                                        col.quoted_flat_name()
                                     )
                                 }
                                 // found matching field with no spare identifier(s)
@@ -161,7 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         field.data_type().clone(),
-                                        field.to_column(),
+                                        field.into(),
                                     ))
                                 }
                                 // found no matching field, will return a default

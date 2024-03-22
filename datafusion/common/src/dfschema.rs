@@ -1067,10 +1067,6 @@ impl<'a> DFFieldRef<'a> {
             self.name().to_owned()
         }
     }
-
-    pub fn to_column(&self) -> Column {
-        Column::new(self.owned_qualifier(), self.name())
-    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
+use datafusion_expr::col;
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
@@ -642,7 +643,7 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
         .iter()
         .map(|&idx| {
             let dffield = input_schema.qualified_field(idx);
-            Expr::Column(dffield.to_column())
+            col(dffield)
         })
         .collect()
 }

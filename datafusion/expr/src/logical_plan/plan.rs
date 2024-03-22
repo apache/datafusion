@@ -38,7 +38,7 @@ use crate::utils::{
     inspect_expr_pre, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
+    build_join_schema, col, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
@@ -488,13 +488,11 @@ impl LogicalPlan {
             }
             LogicalPlan::Union(union) => {
                 let dffield = union.schema.qualified_field(0);
-                let col = dffield.to_column();
-                Ok(Some(Expr::Column(col)))
+                Ok(Some(col(dffield)))
             }
             LogicalPlan::TableScan(table) => {
                 let dffield = table.projected_schema.qualified_field(0);
-                let col = dffield.to_column();
-                Ok(Some(Expr::Column(col)))
+                Ok(Some(col(dffield)))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;

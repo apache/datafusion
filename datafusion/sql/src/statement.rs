@@ -1390,10 +1390,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
                     Some(v) => {
-                        let field = source.schema().qualified_field(v);
-                        let col = field.to_column();
-                        datafusion_expr::Expr::Column(col)
-                            .cast_to(target_field.data_type(), source.schema())?
+                        let dffield = source.schema().qualified_field(v);
+                        col(dffield).cast_to(target_field.data_type(), source.schema())?
                     }
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source

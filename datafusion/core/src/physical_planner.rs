@@ -87,7 +87,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
+    col, DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
@@ -1030,7 +1030,7 @@ impl DefaultPhysicalPlanner {
                             let final_join_result = join_schema
                                 .iter()
                                 .map(|dffield| {
-                                    Expr::Column(dffield.to_column())
+                                    col(dffield)
                                 })
                                 .collect::<Vec<_>>();
                             let projection =

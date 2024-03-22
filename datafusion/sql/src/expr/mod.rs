@@ -140,7 +140,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         _ => false,
                     }) {
-                        Some(f) => Expr::Column(f.to_column()),
+                        Some(dffield) => Expr::Column(dffield.into()),
                         None => Expr::Column(col),
                     }
                 }
