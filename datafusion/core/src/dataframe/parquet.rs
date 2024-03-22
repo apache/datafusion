@@ -74,6 +74,7 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::super::Result;
@@ -81,9 +82,10 @@ mod tests {
     use crate::arrow::util::pretty;
     use crate::execution::context::SessionContext;
     use crate::execution::options::ParquetReadOptions;
-    use crate::test_util;
+    use crate::test_util::{self, register_aggregate_csv};
 
     use datafusion_common::file_options::parquet_writer::parse_compression_string;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
 
     use object_store::local::LocalFileSystem;
@@ -169,11 +171,16 @@ mod tests {
 
     #[tokio::test]
     async fn write_parquet_with_small_rg_size() -> Result<()> {
-        let mut test_df = test_util::test_table().await?;
-        // make the test data larger so there are multiple batches
-        for _ in 0..7 {
-            test_df = test_df.clone().union(test_df)?;
-        }
+        let mut ctx = SessionContext::new_with_config(
+            SessionConfig::from_string_hash_map(HashMap::from_iter(
+                [("datafusion.execution.batch_size", "10")]
+                    .iter()
+                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+            ))?,
+        );
+        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let test_df = ctx.table("aggregate_test_100").await?;
+
         let output_path = "file://local/test.parquet";
 
         for rg_size in (1..7).step_by(5) {
