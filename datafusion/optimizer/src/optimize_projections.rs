@@ -699,7 +699,7 @@ fn indices_referred_by_expr(
         .flat_map(|col| input_schema.index_of_column(col))
         .collect();
     match expr {
-        Expr::BinaryExpr(BinaryExpr { op, .. }) if is_not_complex(op) => {
+        Expr::BinaryExpr(BinaryExpr { op, .. }) if !is_not_complex(op) => {
             if let Some(index) =
                 input_schema.index_of_column_by_name(None, &expr.to_string())?
             {
@@ -907,9 +907,8 @@ fn rewrite_projection_given_requirements(
         if is_projection_unnecessary(&input, &exprs_used)? {
             Ok(Some(input))
         } else {
-            let res = Projection::try_new(exprs_used, Arc::new(input))
-                .map(|proj| Some(LogicalPlan::Projection(proj)));
-            res
+            Projection::try_new(exprs_used, Arc::new(input))
+                .map(|proj| Some(LogicalPlan::Projection(proj)))
         }
     } else if exprs_used.len() < proj.expr.len() {
         // Projection expression used is different than the existing projection.

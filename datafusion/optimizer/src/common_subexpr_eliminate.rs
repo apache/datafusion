@@ -360,8 +360,7 @@ impl CommonSubexprEliminate {
         let arrays = to_arrays(&expr, input_schema, &mut expr_set, ExprMask::Normal)?;
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[&expr], &[&arrays], input, &expr_set, config)?;
-        let res_plan = plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input]);
-        res_plan
+        plan.with_new_exprs(pop_expr(&mut new_expr)?, vec![new_input])
     }
 }
 impl CommonSubexprEliminate {
@@ -422,15 +421,13 @@ impl CommonSubexprEliminate {
     /// currently the implemention is not optimal, Basically I just do a top-down iteration over all the
     ///
     fn add_extra_projection(&self, plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-        let res = plan
-            .clone()
+        plan.clone()
             .rewrite(&mut ProjectionAdder {
                 data_type_map: HashMap::new(),
                 depth_map: HashMap::new(),
                 depth: 0,
             })
-            .map(|transformed| Some(transformed.data));
-        res
+            .map(|transformed| Some(transformed.data))
     }
 }
 impl OptimizerRule for CommonSubexprEliminate {
@@ -865,7 +862,7 @@ struct ProjectionAdder {
 pub fn is_not_complex(op: &Operator) -> bool {
     matches!(
         op,
-        &Operator::Eq | &Operator::NotEq | &Operator::And | &Operator::Lt | &Operator::Gt
+        &Operator::Eq | &Operator::NotEq | &Operator::Lt | &Operator::Gt | &Operator::And
     )
 }
 impl ProjectionAdder {
@@ -960,9 +957,9 @@ impl TreeNodeRewriter for ProjectionAdder {
         }
         match node {
             // do not add for Projections
-            LogicalPlan::Projection(_) | LogicalPlan::TableScan(_) => {
-                Ok(Transformed::no(node))
-            }
+            LogicalPlan::Projection(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::Join(_) => Ok(Transformed::no(node)),
             _ => {
                 // avoid recursive add projections
                 if added_expr.iter().any(|expr| {
