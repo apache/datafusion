@@ -290,7 +290,7 @@ fn gen_range_iter(
     }
 }
 
-pub fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
+fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!("arguments length does not match");
     }
