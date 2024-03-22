@@ -21,11 +21,8 @@
 
 //! String expressions
 
+use std::iter;
 use std::sync::Arc;
-use std::{
-    fmt::{Display, Formatter},
-    iter,
-};
 
 use arrow::{
     array::{
@@ -344,95 +341,6 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// lower('TOM') = 'tom'
 pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle(args, |string| string.to_lowercase(), "lower")
-}
-
-enum TrimType {
-    Left,
-    Right,
-    Both,
-}
-
-impl Display for TrimType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TrimType::Left => write!(f, "ltrim"),
-            TrimType::Right => write!(f, "rtrim"),
-            TrimType::Both => write!(f, "btrim"),
-        }
-    }
-}
-
-fn general_trim<T: OffsetSizeTrait>(
-    args: &[ArrayRef],
-    trim_type: TrimType,
-) -> Result<ArrayRef> {
-    let func = match trim_type {
-        TrimType::Left => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Right => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Both => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(
-                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
-                pattern.as_ref(),
-            )
-        },
-    };
-
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-
-    match args.len() {
-        1 => {
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
-        )
-        }
-    }
-}
-
-/// Returns the longest string  with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
-/// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Both)
-}
-
-/// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
-/// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Left)
-}
-
-/// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
-/// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Right)
 }
 
 /// Repeats string the specified number of times.
