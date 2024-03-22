@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::data_types;
-use crate::{utils, LogicalPlan, Projection, Subquery};
+use crate::{col, utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
@@ -51,8 +51,6 @@ pub trait ExprSchemable {
     fn to_dffield<'a>(
         &'a self,
         field: &'a Field,
-        // input_schema: &dyn ExprSchema,
-        // is_nullable: Option<bool>,
     ) -> Result<DFFieldRef>;
 
     /// cast to a type with respect to a schema
@@ -547,10 +545,9 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
             )?)
         }
         _ => {
-            let field = plan.schema().qualified_field(0);
+            let dffield = plan.schema().qualified_field(0);
             let cast_expr =
-                Expr::Column(Column::new(field.owned_qualifier(), field.name()))
-                    .cast_to(cast_to_type, subquery.subquery.schema())?;
+                col(dffield).cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,

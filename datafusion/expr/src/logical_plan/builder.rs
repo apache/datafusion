@@ -43,7 +43,7 @@ use crate::utils::{
     expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    and, binary_expr, col, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
@@ -355,8 +355,8 @@ impl LogicalPlanBuilder {
         let exprs: Vec<_> = indices
             .into_iter()
             .map(|x| {
-                let field = self.plan.schema().qualified_field(x);
-                Expr::Column(Column::new(field.owned_qualifier(), field.name()))
+                let dffield = self.plan.schema().qualified_field(x);
+                col(dffield)
             })
             .collect();
         self.project(exprs)
@@ -1221,149 +1221,6 @@ pub fn build_join_schema(
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
-/// Creates a schema for a join operation.
-/// The fields from the left side are first
-// pub fn build_join_schema_v2(
-//     left: &DFSchema,
-//     right: &DFSchema,
-//     join_type: &JoinType,
-// ) -> Result<DFSchema> {
-//     let (nullify_left_fields, nullify_right_fields) = match join_type {
-//         JoinType::Inner => (vec![], vec![]),
-//         JoinType::Left => {
-//             let nullify_right_fields = right
-//                 .iter()
-//                 .map(|f| f.owned_field().with_nullable(true))
-//                 .collect::<Vec<Field>>();
-
-//             (vec![], nullify_right_fields)
-//         }
-//         JoinType::Right => {
-//             let nullify_left_fields = left
-//                 .iter()
-//                 .map(|f| f.owned_field().with_nullable(true))
-//                 .collect::<Vec<Field>>();
-
-//             (nullify_left_fields, vec![])
-//         }
-//         JoinType::Full => {
-//             let nullify_left_fields = left
-//                 .iter()
-//                 .map(|f| f.owned_field().with_nullable(true))
-//                 .collect::<Vec<Field>>();
-
-//             let nullify_right_fields = right
-//                 .iter()
-//                 .map(|f| f.owned_field().with_nullable(true))
-//                 .collect::<Vec<Field>>();
-
-//             (nullify_left_fields, nullify_right_fields)
-//         }
-//         JoinType::LeftSemi | JoinType::LeftAnti => (vec![], vec![]),
-//         JoinType::RightSemi | JoinType::RightAnti => (vec![], vec![]),
-//     };
-
-//     let func_dependencies = left.functional_dependencies().join(
-//         right.functional_dependencies(),
-//         join_type,
-//         left.fields().len(),
-//     );
-//     let mut metadata = left.metadata().clone();
-//     metadata.extend(right.metadata().clone());
-
-//     // let qualified_fields: Vec<DFFieldRef> =
-//     match join_type {
-//         JoinType::Inner => {
-//             let dffields = left.iter().chain(right.iter()).collect::<Vec<DFFieldRef>>();
-//             DFSchema::from_qualified_fields(dffields, metadata)?
-//                 .with_functional_dependencies(func_dependencies)
-//         }
-//         JoinType::Left => {
-//             // left then right, right set to nullable in case of not matched scenario
-
-//             let qualifiers = right.iter_qualifier().collect::<Vec<_>>();
-
-//             let nullify_right = qualifiers.iter()
-//                 .zip(nullify_right_fields.iter())
-//                 .map(|(q, field)| DFFieldRef::new(q.as_ref().copied(), field))
-//                 .collect::<Vec<DFFieldRef>>();
-
-//             let dffields = left.iter().chain(nullify_right.into_iter()).collect();
-
-//             DFSchema::from_qualified_fields(dffields, metadata)?
-//                 .with_functional_dependencies(func_dependencies)
-//         }
-//         JoinType::Right => {
-//             // left then right, left set to nullable in case of not matched scenario
-
-//             // let nullify_left = left
-//             //     .iter_qualifier()
-//             //     .zip(nullify_left_fields.into())
-//             //     .map(|(q, field)| DFFieldRef::new(q, field))
-//             //     .collect::<Vec<DFFieldRef>>();
-
-//             // let nullify_left = left
-//             //     .iter()
-//             //     .zip(nullify_left_fields.iter())
-//             //     .map(|(dffield, field)| DFFieldRef::new(dffield.qualifier(), field))
-//             //     .collect::<Vec<DFFieldRef>>();
-
-//             // let dffields = nullify_left
-//             //     .into_iter()
-//             //     .chain(right.iter())
-//             //     .collect::<Vec<DFFieldRef>>();
-//             // DFSchema::from_qualified_fields(dffields, metadata)?
-//             //     .with_functional_dependencies(func_dependencies)
-//             todo!("nyi")
-//         }
-//         JoinType::Full => {
-//             // left then right, all set to nullable in case of not matched scenario
-//             // let nullify_left_fields = left
-//             //     .iter()
-//             //     .map(|f| f.owned_field().with_nullable(true))
-//             //     .collect::<Vec<Field>>();
-//             // let nullify_left = left
-//             //     .iter()
-//             //     .zip(nullify_left_fields.iter())
-//             //     .map(|(dffield, field)| DFFieldRef::new(dffield.qualifier(), field))
-//             //     .collect::<Vec<DFFieldRef>>();
-
-//             // let nullify_right_fields = right
-//             //     .iter()
-//             //     .map(|f| f.owned_field().with_nullable(true))
-//             //     .collect::<Vec<Field>>();
-//             // let nullify_right = right
-//             //     .iter()
-//             //     .zip(nullify_right_fields.iter())
-//             //     .map(|(dffield, field)| DFFieldRef::new(dffield.qualifier(), field))
-//             //     .collect::<Vec<DFFieldRef>>();
-
-//             // let dffields = nullify_left
-//             //     .into_iter()
-//             //     .chain(nullify_right.into_iter())
-//             //     .collect::<Vec<DFFieldRef>>();
-
-//             // DFSchema::from_qualified_fields(dffields, metadata)?
-//             //     .with_functional_dependencies(func_dependencies)
-//             todo!("nyi")
-//         }
-//         JoinType::LeftSemi | JoinType::LeftAnti => {
-//             // Only use the left side for the schema
-//             let dffields = left.iter().collect::<Vec<DFFieldRef>>();
-//             DFSchema::from_qualified_fields(dffields, metadata)?
-//                 .with_functional_dependencies(func_dependencies)
-//         }
-//         JoinType::RightSemi | JoinType::RightAnti => {
-//             // Only use the right side for the schema
-//             let dffields = right.iter().collect::<Vec<DFFieldRef>>();
-//             DFSchema::from_qualified_fields(dffields, metadata)?
-//                 .with_functional_dependencies(func_dependencies)
-//         }
-//     }
-
-//     // dfschema.with_functional_dependencies(func_dependencies)
-// }
-
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
@@ -1388,8 +1245,8 @@ fn add_group_by_exprs_from_dependencies(
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
-            let field = schema.qualified_field(idx);
-            let expr = Expr::Column(Column::new(field.owned_qualifier(), field.name()));
+            let dffield = schema.qualified_field(idx);
+            let expr = col(dffield);
             let expr_name = expr.display_name()?;
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
@@ -1462,7 +1319,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     let union_fields = zip(left_plan.schema().iter(), right_plan.schema().iter())
         .map(|(left_field, right_field)| {
             let nullable =
-                left_field.is_field_nullable() || right_field.is_field_nullable();
+                left_field.is_nullable() || right_field.is_nullable();
             let data_type =
                 comparison_coercion(left_field.data_type(), right_field.data_type())
                     .ok_or_else(|| {
@@ -1483,8 +1340,6 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     let union_qualified_fields = left_plan
         .schema()
         .iter_with_new_field(union_fields.as_slice())
-        // .zip(union_fields.iter())
-        // .map(|(qualifier, field)| DFFieldRef::new(qualifier, field))
         .collect::<Vec<_>>();
     let union_schema =
         DFSchema::from_qualified_fields(union_qualified_fields, HashMap::new())?;
@@ -1697,7 +1552,7 @@ pub fn unnest_with_options(
         | DataType::LargeList(field) => Field::new(
             unnest_field.name(),
             field.data_type().clone(),
-            unnest_field.is_field_nullable(),
+            unnest_field.is_nullable(),
         ),
         _ => {
             // If the unnest field is not a list type return the input plan.

@@ -273,6 +273,7 @@ impl DFSchema {
 
         let self_fields: HashSet<String> =
             self.iter().map(|f| f.qualified_name()).collect();
+
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
         let mut qualifiers = Vec::new();
         for f in other_schema.iter() {
@@ -432,15 +433,13 @@ impl DFSchema {
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
         self.iter()
             .filter(|f| f.name() == name)
-            .map(|f| Column::new(f.owned_qualifier(), f.name()))
+            .map(|f| f.into())
             .collect()
     }
 
     /// Return all `Column`s for the schema
     pub fn columns(&self) -> Vec<Column> {
-        self.iter()
-            .map(|f| Column::new(f.owned_qualifier(), f.name()))
-            .collect()
+        self.iter().map(|f| f.into()).collect()
     }
 
     /// Find the qualified field with the given unqualified name
@@ -607,7 +606,7 @@ impl DFSchema {
         let self_fields = self.iter();
         let other_fields = other.iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
-            f1.owned_qualifier() == f2.owned_qualifier()
+            f1.qualifier() == f2.qualifier()
                 && f1.name() == f2.name()
                 && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
         })
@@ -1044,7 +1043,7 @@ impl<'a> DFFieldRef<'a> {
         self.field.name()
     }
 
-    pub fn is_field_nullable(&self) -> bool {
+    pub fn is_nullable(&self) -> bool {
         self.field.is_nullable()
     }
 

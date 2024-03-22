@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::col;
 use crate::expr::{Alias, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
@@ -210,13 +211,7 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan
-                .schema()
-                .iter()
-                .map(|field| {
-                    Expr::Column(Column::new(field.owned_qualifier(), field.name()))
-                })
-                .collect();
+            let exprs: Vec<Expr> = plan.schema().iter().map(col).collect();
 
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());

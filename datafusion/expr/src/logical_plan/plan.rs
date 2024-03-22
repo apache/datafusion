@@ -868,15 +868,16 @@ impl LogicalPlan {
             }) => {
                 // Update schema with unnested column type.
                 let input = Arc::new(inputs.swap_remove(0));
-                let input_field = input.schema().qualified_field_from_column(column)?;
+                let nested_dffield = input.schema().qualified_field_from_column(column)?;
 
                 let qualifiers_and_fields = input
                     .schema()
                     .iter()
                     .map(|f| {
-                        if f.qualifier().eq(&input_field.qualifier())
-                            && f.field() == input_field.field()
+                        if f.qualifier().eq(&nested_dffield.qualifier())
+                            && f.field() == nested_dffield.field()
                         {
+                            // TODO: avoid recompute
                             schema.qualified_field_from_column(column)
                         } else {
                             Ok(f)
@@ -1808,11 +1809,11 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    // TODO: merge these two functions
     let fields = exprlist_to_fields(exprs, input)?;
-
-    let fields = exprlist_to_dffields(exprs, input, fields.as_slice())?;
+    let dffields = exprlist_to_dffields(exprs, input, fields.as_slice())?;
     let mut schema =
-        DFSchema::from_qualified_fields(fields, input.schema().metadata().clone())?;
+        DFSchema::from_qualified_fields(dffields, input.schema().metadata().clone())?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
     )?)?;

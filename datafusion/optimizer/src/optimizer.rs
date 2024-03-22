@@ -619,7 +619,7 @@ mod tests {
             .map(|(i, dfffield)| {
                 let metadata =
                     [("key".into(), format!("value {i}"))].into_iter().collect();
-                dfffield.field().clone().with_metadata(metadata)
+                dfffield.owned_field().with_metadata(metadata)
             })
             .collect::<Vec<_>>();
 

@@ -26,7 +26,7 @@ use crate::expr_rewriter::strip_outer_reference;
 use crate::logical_plan::Aggregate;
 use crate::signature::{Signature, TypeSignature};
 use crate::{
-    and, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
+    and, col, BinaryExpr, Cast, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan,
     Operator, TryCast,
 };
 
@@ -354,10 +354,7 @@ fn get_exprs_except_skipped(
     columns_to_skip: HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema
-            .iter()
-            .map(|f| Expr::Column(Column::new(f.owned_qualifier(), f.name())))
-            .collect::<Vec<Expr>>()
+        schema.iter().map(col).collect::<Vec<Expr>>()
     } else {
         schema
             .columns()
@@ -857,7 +854,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         _ => match e.display_name() {
             Ok(name) => {
                 match input_schema.qualified_field_with_unqualified_name(&name) {
-                    Ok(f) => Expr::Column(Column::new(f.owned_qualifier(), f.name())),
+                    Ok(f) => col(f),
                     // expression not provided as input, do not convert to a column reference
                     Err(_) => e,
                 }
@@ -893,9 +890,9 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
 /// Convert any `Expr` to an `Expr::Column`.
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(col) => {
-            let f = plan.schema().qualified_field_from_column(col)?;
-            Ok(Expr::Column(Column::new(f.owned_qualifier(), f.name())))
+        Expr::Column(c) => {
+            let f = plan.schema().qualified_field_from_column(c)?;
+            Ok(col(f))
         }
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
