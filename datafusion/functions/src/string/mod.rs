@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
 
+mod ascii;
 mod btrim;
 mod common;
 mod ltrim;
@@ -30,6 +31,7 @@ mod to_hex;
 mod upper;
 
 // create UDFs
+make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
@@ -39,6 +41,11 @@ make_udf_function!(upper::UpperFunc, UPPER, upper);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
+
+    #[doc = "Returns the numeric code of the first character of the argument."]
+    pub fn ascii(arg1: Expr) -> Expr {
+        super::ascii().call(vec![arg1])
+    }
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
     pub fn btrim(args: Vec<Expr>) -> Expr {
@@ -73,5 +80,13 @@ pub mod expr_fn {
 
 ///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![btrim(), ltrim(), rtrim(), starts_with(), to_hex(), upper()]
+    vec![
+        ascii(),
+        btrim(),
+        ltrim(),
+        rtrim(),
+        starts_with(),
+        to_hex(),
+        upper(),
+    ]
 }
