@@ -739,19 +739,22 @@ mod tests {
     }
 
     fn expr_test_schema() -> DFSchemaRef {
-        Arc::new(DFSchema::new_with_metadata(
-            vec![
-                Field::new("c1", DataType::Int32, false),
-                Field::new("c2", DataType::Int64, false),
-                Field::new("c3", DataType::Decimal128(18, 2), false),
-                Field::new("c4", DataType::Decimal128(38, 37), false),
-                Field::new("c5", DataType::Float32, false),
-                Field::new("c6", DataType::UInt32, false),
-                Field::new("ts_nano_none", timestamp_nano_none_type(), false),
-                Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
-            ],
-            HashMap::new(),
-        ))
+        Arc::new(
+            DFSchema::from_unqualifed_fields(
+                vec![
+                    Field::new("c1", DataType::Int32, false),
+                    Field::new("c2", DataType::Int64, false),
+                    Field::new("c3", DataType::Decimal128(18, 2), false),
+                    Field::new("c4", DataType::Decimal128(38, 37), false),
+                    Field::new("c5", DataType::Float32, false),
+                    Field::new("c6", DataType::UInt32, false),
+                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    Field::new("ts_nano_utf", timestamp_nano_utc_type(), false),
+                ],
+                HashMap::new(),
+            )
+            .unwrap(),
+        )
     }
 
     fn null_i8() -> Expr {

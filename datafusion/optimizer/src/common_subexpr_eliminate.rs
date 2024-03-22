@@ -871,13 +871,13 @@ mod test {
     fn id_array_visitor() -> Result<()> {
         let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
 
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![
                 Field::new("a", DataType::Int64, false),
                 Field::new("c", DataType::Int64, false),
             ],
             Default::default(),
-        ));
+        )?);
 
         // skip aggregates
         let mut id_array = vec![];
@@ -1329,14 +1329,14 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
                 Field::new("c", DataType::Int32, false),
             ],
             HashMap::default(),
-        );
+        )?;
         extract_expressions(&grouping, &schema, &mut result)?;
 
         assert!(result.len() == 3);
@@ -1347,13 +1347,13 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
             ],
             HashMap::default(),
-        );
+        )?;
         extract_expressions(&grouping, &schema, &mut result)?;
 
         assert!(result.len() == 2);
@@ -1363,10 +1363,10 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![Field::new("a", DataType::Int32, false)],
             HashMap::default(),
-        );
+        )?;
         extract_expressions(&col("a"), &schema, &mut result)?;
 
         assert!(result.len() == 1);

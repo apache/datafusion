@@ -80,13 +80,13 @@ impl ExprSchemable for Expr {
     ///
     /// fn main() {
     ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::new_with_metadata(
+    ///   let schema = DFSchema::from_unqualifed_fields(
     ///     vec![
     ///       Field::new("c1", DataType::Int32, true),
     ///       Field::new("c2", DataType::Float32, true),
     ///       ],
     ///       HashMap::new(),
-    ///   );
+    ///   ).unwrap();
     ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
@@ -693,10 +693,11 @@ mod tests {
                 .unwrap()
         );
 
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::from_unqualifed_fields(
             vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())],
             HashMap::new(),
-        );
+        )
+        .unwrap();
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());

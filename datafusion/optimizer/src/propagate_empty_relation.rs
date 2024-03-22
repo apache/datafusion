@@ -377,7 +377,10 @@ mod tests {
 
         let empty = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::new_with_metadata(fields, Default::default())),
+            schema: Arc::new(DFSchema::from_unqualifed_fields(
+                fields,
+                Default::default(),
+            )?),
         });
 
         let one = LogicalPlanBuilder::from(empty.clone()).build()?;

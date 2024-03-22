@@ -896,7 +896,7 @@ impl LogicalPlan {
                     .collect::<Vec<_>>();
 
                 let schema = Arc::new(
-                    DFSchema::from_qualified_fields(
+                    DFSchema::new_with_metadata(
                         qualifiers_and_fields,
                         input.schema().metadata().clone(),
                     )?
@@ -1819,7 +1819,7 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::from_qualified_fields(
+    let mut schema = DFSchema::new_with_metadata(
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
     )?;
@@ -1850,7 +1850,7 @@ impl SubqueryAlias {
         let alias = alias.into();
         let fields = change_redundant_column(plan.schema().fields());
         let meta_data = plan.schema().as_ref().metadata().clone();
-        let schema: Schema = DFSchema::new_with_metadata(fields, meta_data).into();
+        let schema: Schema = DFSchema::from_unqualifed_fields(fields, meta_data)?.into();
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
@@ -2055,7 +2055,7 @@ impl Window {
             input,
             window_expr,
             schema: Arc::new(
-                DFSchema::from_qualified_fields(window_fields, metadata)?
+                DFSchema::new_with_metadata(window_fields, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
         })
@@ -2127,7 +2127,7 @@ impl TableScan {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
 
-                let df_schema = DFSchema::from_qualified_fields(
+                let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
                             (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
@@ -2329,7 +2329,7 @@ impl DistinctOn {
             .into_iter()
             .collect();
 
-        let dfschema = DFSchema::from_qualified_fields(
+        let dfschema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
         )?;
@@ -2421,7 +2421,7 @@ impl Aggregate {
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = DFSchema::from_qualified_fields(qualified_fields, HashMap::new())?;
+        let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

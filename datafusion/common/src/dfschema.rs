@@ -99,9 +99,9 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// use arrow::datatypes::Field;
 /// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::new_with_metadata(vec![
+/// let df_schema = DFSchema::from_unqualifed_fields(vec![
 ///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
-/// ],HashMap::new());
+/// ],HashMap::new()).unwrap();
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
@@ -126,18 +126,39 @@ impl DFSchema {
         }
     }
 
-    /// Create a new `DFSchema` from an Arrow schema
+    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
+        qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
+            qualified_fields.into_iter().unzip();
+
+        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+
+        let dfschema = Self {
+            inner: schema,
+            field_qualifiers: qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        dfschema.check_names()?;
+        Ok(dfschema)
+    }
+
+    /// Create a new `DFSchema` from a list of Arrow [Field]s
+    pub fn from_unqualifed_fields(
         fields: Vec<Field>,
         metadata: HashMap<String, String>,
-    ) -> Self {
+    ) -> Result<Self> {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-        Self {
+        let dfschema = Self {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
-        }
+        };
+        dfschema.check_names()?;
+        Ok(dfschema)
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
@@ -171,25 +192,6 @@ impl DFSchema {
         let dfschema = Self {
             inner: schema.clone(),
             field_qualifiers: owned_qualifiers,
-            functional_dependencies: FunctionalDependencies::empty(),
-        };
-        dfschema.check_names()?;
-        Ok(dfschema)
-    }
-
-    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
-    pub fn from_qualified_fields(
-        qualified_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)>,
-        metadata: HashMap<String, String>,
-    ) -> Result<Self> {
-        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Arc<Field>>) =
-            qualified_fields.into_iter().unzip();
-
-        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-
-        let dfschema = Self {
-            inner: schema,
-            field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
         dfschema.check_names()?;
@@ -1075,7 +1077,7 @@ mod tests {
 
     #[test]
     fn test_from_qualified_fields() -> Result<()> {
-        let schema = DFSchema::from_qualified_fields(
+        let schema = DFSchema::new_with_metadata(
             vec![
                 (
                     Some("t0".into()),

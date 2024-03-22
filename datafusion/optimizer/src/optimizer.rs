@@ -626,7 +626,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let new_metadata = schema.metadata().clone();
-        Arc::new(DFSchema::from_qualified_fields(new_fields, new_metadata).unwrap())
+        Arc::new(DFSchema::new_with_metadata(new_fields, new_metadata).unwrap())
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

@@ -233,7 +233,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .chain(inner_aggr_exprs.iter())
                         .map(|expr| expr.to_field(input.schema()))
                         .collect::<Result<Vec<_>>>()?;
-                    let inner_schema = DFSchema::from_qualified_fields(
+                    let inner_schema = DFSchema::new_with_metadata(
                         inner_fields,
                         input.schema().metadata().clone(),
                     )?;
@@ -248,7 +248,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .chain(outer_aggr_exprs.iter())
                         .map(|expr| expr.to_field(&inner_schema))
                         .collect::<Result<Vec<_>>>()?;
-                    let outer_aggr_schema = Arc::new(DFSchema::from_qualified_fields(
+                    let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
                         outer_fields,
                         input.schema().metadata().clone(),
                     )?);

@@ -495,12 +495,11 @@ pub async fn from_substrait_rel(
                                         .collect();
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
-                                    scan.projected_schema = DFSchemaRef::new(
-                                        DFSchema::from_qualified_fields(
+                                    scan.projected_schema =
+                                        DFSchemaRef::new(DFSchema::new_with_metadata(
                                             fields,
                                             HashMap::new(),
-                                        )?,
-                                    );
+                                        )?);
                                     Ok(LogicalPlan::TableScan(scan))
                                 }
                                 _ => plan_err!("unexpected plan for table"),

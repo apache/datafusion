@@ -269,13 +269,13 @@ async fn prune_partitions(
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
-    let df_schema = DFSchema::new_with_metadata(
+    let df_schema = DFSchema::from_unqualifed_fields(
         partition_cols
             .iter()
             .map(|(n, d)| Field::new(n, d.clone(), true))
             .collect(),
         Default::default(),
-    );
+    )?;
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
 

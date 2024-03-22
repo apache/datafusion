@@ -787,10 +787,13 @@ mod test {
     fn empty_with_type(data_type: DataType) -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::new_with_metadata(
-                vec![Field::new("a", data_type, true)],
-                std::collections::HashMap::new(),
-            )),
+            schema: Arc::new(
+                DFSchema::from_unqualifed_fields(
+                    vec![Field::new("a", data_type, true)],
+                    std::collections::HashMap::new(),
+                )
+                .unwrap(),
+            ),
         }))
     }
 
@@ -1046,10 +1049,10 @@ mod test {
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
-            schema: Arc::new(DFSchema::new_with_metadata(
+            schema: Arc::new(DFSchema::from_unqualifed_fields(
                 vec![Field::new("a", DataType::Decimal128(12, 4), true)],
                 std::collections::HashMap::new(),
-            )),
+            )?),
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
@@ -1251,10 +1254,10 @@ mod test {
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
         // gt
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![Field::new("a", DataType::Int64, true)],
             std::collections::HashMap::new(),
-        ));
+        )?);
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
@@ -1262,10 +1265,10 @@ mod test {
         assert_eq!(expected, result);
 
         // eq
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![Field::new("a", DataType::Int64, true)],
             std::collections::HashMap::new(),
-        ));
+        )?);
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
@@ -1273,10 +1276,10 @@ mod test {
         assert_eq!(expected, result);
 
         // lt
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![Field::new("a", DataType::Int64, true)],
             std::collections::HashMap::new(),
-        ));
+        )?);
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
@@ -1346,7 +1349,7 @@ mod test {
 
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
-        let schema = Arc::new(DFSchema::new_with_metadata(
+        let schema = Arc::new(DFSchema::from_unqualifed_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
                 Field::new("integer", DataType::Int32, true),
@@ -1367,7 +1370,7 @@ mod test {
                 Field::new("decimal", DataType::Decimal128(10, 10), true),
             ],
             std::collections::HashMap::new(),
-        ));
+        )?);
 
         let case = Case {
             expr: None,

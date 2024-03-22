@@ -3084,19 +3084,22 @@ mod tests {
     }
 
     fn expr_test_schema() -> DFSchemaRef {
-        Arc::new(DFSchema::new_with_metadata(
-            vec![
-                Field::new("c1", DataType::Utf8, true),
-                Field::new("c2", DataType::Boolean, true),
-                Field::new("c3", DataType::Int64, true),
-                Field::new("c4", DataType::UInt32, true),
-                Field::new("c1_non_null", DataType::Utf8, false),
-                Field::new("c2_non_null", DataType::Boolean, false),
-                Field::new("c3_non_null", DataType::Int64, false),
-                Field::new("c4_non_null", DataType::UInt32, false),
-            ],
-            HashMap::new(),
-        ))
+        Arc::new(
+            DFSchema::from_unqualifed_fields(
+                vec![
+                    Field::new("c1", DataType::Utf8, true),
+                    Field::new("c2", DataType::Boolean, true),
+                    Field::new("c3", DataType::Int64, true),
+                    Field::new("c4", DataType::UInt32, true),
+                    Field::new("c1_non_null", DataType::Utf8, false),
+                    Field::new("c2_non_null", DataType::Boolean, false),
+                    Field::new("c3_non_null", DataType::Int64, false),
+                    Field::new("c4_non_null", DataType::UInt32, false),
+                ],
+                HashMap::new(),
+            )
+            .unwrap(),
+        )
     }
 
     #[test]

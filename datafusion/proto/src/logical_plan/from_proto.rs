@@ -189,7 +189,7 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(DFSchema::from_qualified_fields(
+        Ok(DFSchema::new_with_metadata(
             qualifiers_and_fields,
             df_schema.metadata.clone(),
         )?)

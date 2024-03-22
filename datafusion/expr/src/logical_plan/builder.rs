@@ -208,7 +208,7 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let dfschema = DFSchema::new_with_metadata(fields, HashMap::new());
+        let dfschema = DFSchema::from_unqualifed_fields(fields, HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
@@ -1216,7 +1216,7 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    let dfschema = DFSchema::from_qualified_fields(qualified_fields, metadata)?;
+    let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
@@ -1343,7 +1343,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             )
             .collect::<Result<Vec<_>>>()?;
     let union_schema =
-        DFSchema::from_qualified_fields(union_qualified_fields, HashMap::new())?;
+        DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
@@ -1575,7 +1575,7 @@ pub fn unnest_with_options(
         .collect::<Vec<_>>();
 
     let metadata = input_schema.metadata().clone();
-    let df_schema = DFSchema::from_qualified_fields(fields, metadata)?;
+    let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);

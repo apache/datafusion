@@ -1110,7 +1110,7 @@ impl DefaultPhysicalPlanner {
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
-                            let filter_df_schema = DFSchema::from_qualified_fields(filter_df_fields, HashMap::new())?;
+                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
                             let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
                             let filter_expr = create_physical_expr(
                                 expr,
@@ -2543,10 +2543,13 @@ mod tests {
     impl Default for NoOpExtensionNode {
         fn default() -> Self {
             Self {
-                schema: DFSchemaRef::new(DFSchema::new_with_metadata(
-                    vec![Field::new("a", DataType::Int32, false)],
-                    HashMap::new(),
-                )),
+                schema: DFSchemaRef::new(
+                    DFSchema::from_unqualifed_fields(
+                        vec![Field::new("a", DataType::Int32, false)],
+                        HashMap::new(),
+                    )
+                    .unwrap(),
+                ),
             }
         }
     }

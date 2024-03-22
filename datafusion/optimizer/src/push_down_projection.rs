@@ -223,7 +223,7 @@ mod tests {
         let optimized_join = optimized_plan;
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::from_qualified_fields(
+            DFSchema::new_with_metadata(
                 vec![
                     (
                         Some("test".into()),
@@ -275,7 +275,7 @@ mod tests {
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::from_qualified_fields(
+            DFSchema::new_with_metadata(
                 vec![
                     (
                         Some("test".into()),
@@ -325,7 +325,7 @@ mod tests {
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::from_qualified_fields(
+            DFSchema::new_with_metadata(
                 vec![
                     (
                         Some("test".into()),
