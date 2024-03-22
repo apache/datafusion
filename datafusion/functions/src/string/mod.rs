@@ -30,7 +30,7 @@ mod to_hex;
 mod upper;
 
 // create UDFs
-make_udf_function!(btrim::TrimFunc, BTRIM, btrim);
+make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
 make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);

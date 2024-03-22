@@ -34,12 +34,12 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[derive(Debug)]
-pub(super) struct TrimFunc {
+pub(super) struct BTrimFunc {
     signature: Signature,
     aliases: Vec<String>,
 }
 
-impl TrimFunc {
+impl BTrimFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
@@ -52,7 +52,7 @@ impl TrimFunc {
     }
 }
 
-impl ScalarUDFImpl for TrimFunc {
+impl ScalarUDFImpl for BTrimFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
