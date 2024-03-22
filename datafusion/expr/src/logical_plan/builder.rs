@@ -1318,8 +1318,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 
     let union_fields = zip(left_plan.schema().iter(), right_plan.schema().iter())
         .map(|(left_field, right_field)| {
-            let nullable =
-                left_field.is_nullable() || right_field.is_nullable();
+            let nullable = left_field.is_nullable() || right_field.is_nullable();
             let data_type =
                 comparison_coercion(left_field.data_type(), right_field.data_type())
                     .ok_or_else(|| {

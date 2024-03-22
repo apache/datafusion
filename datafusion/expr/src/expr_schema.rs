@@ -48,10 +48,7 @@ pub trait ExprSchemable {
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_dffield<'a>(
-        &'a self,
-        field: &'a Field,
-    ) -> Result<DFFieldRef>;
+    fn to_dffield<'a>(&'a self, field: &'a Field) -> Result<DFFieldRef>;
 
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
