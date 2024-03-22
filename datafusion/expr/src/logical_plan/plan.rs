@@ -234,9 +234,17 @@ impl LogicalPlan {
         ])
     }
 
-    /// returns all expressions (non-recursively) in the current
-    /// logical plan node. This does not include expressions in any
-    /// children
+    /// Returns all expressions (non-recursively) evaluated by the current
+    /// logical plan node. This does not include expressions in any children
+    ///
+    /// The returned expressions do not necessarily represent or even
+    /// contributed to the output schema of this node. For example,
+    /// `LogicalPlan::Filter` returns the filter expression even though the
+    /// output of a Filter has the same columns as the input.
+    ///
+    /// The expressions do contain all the columns that are used by this plan,
+    /// so if there are columns not referenced by these expressions then
+    /// DataFusion's optimizer attempts to optimize them away.
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {

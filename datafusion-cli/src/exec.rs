@@ -40,6 +40,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
+use datafusion_common::FileType;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -257,15 +258,23 @@ async fn create_plan(
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
     if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
-        register_object_store_and_config_extensions(ctx, &cmd.location, &cmd.options)
-            .await?;
+        register_object_store_and_config_extensions(
+            ctx,
+            &cmd.location,
+            &cmd.options,
+            None,
+        )
+        .await?;
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
+        let format: FileType = (&copy_to.format_options).into();
+
         register_object_store_and_config_extensions(
             ctx,
             &copy_to.output_url,
             &copy_to.options,
+            Some(format),
         )
         .await?;
     }
@@ -303,6 +312,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     ctx: &SessionContext,
     location: &String,
     options: &HashMap<String, String>,
+    format: Option<FileType>,
 ) -> Result<()> {
     // Parse the location URL to extract the scheme and other components
     let table_path = ListingTableUrl::parse(location)?;
@@ -318,6 +328,9 @@ pub(crate) async fn register_object_store_and_config_extensions(
 
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.state().default_table_options().clone();
+    if let Some(format) = format {
+        table_options.set_file_format(format);
+    }
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
@@ -347,6 +360,7 @@ mod tests {
                 &ctx,
                 &cmd.location,
                 &cmd.options,
+                None,
             )
             .await?;
         } else {
@@ -367,10 +381,12 @@ mod tests {
         let plan = ctx.state().create_logical_plan(sql).await?;
 
         if let LogicalPlan::Copy(cmd) = &plan {
+            let format: FileType = (&cmd.format_options).into();
             register_object_store_and_config_extensions(
                 &ctx,
                 &cmd.output_url,
                 &cmd.options,
+                Some(format),
             )
             .await?;
         } else {
