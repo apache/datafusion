@@ -265,17 +265,23 @@ where
     })
 }
 
+mod ascii;
 mod starts_with;
 mod to_hex;
 mod trim;
 mod upper;
 // create UDFs
+make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
 make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
 make_udf_function!(trim::TrimFunc, TRIM, trim);
 make_udf_function!(upper::UpperFunc, UPPER, upper);
 
 export_functions!(
+    (
+        ascii,
+        arg1,
+        "Returns the numeric code of the first character of the argument."),
     (
     starts_with,
     arg1 arg2,

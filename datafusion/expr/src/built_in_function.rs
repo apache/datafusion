@@ -103,8 +103,6 @@ pub enum BuiltinScalarFunction {
     Cot,
 
     // string functions
-    /// ascii
-    Ascii,
     /// bit_length
     BitLength,
     /// btrim
@@ -246,7 +244,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
             BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
@@ -299,7 +296,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
             }
@@ -447,8 +443,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::Ascii
-            | BuiltinScalarFunction::BitLength
+            BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
             | BuiltinScalarFunction::InitCap
             | BuiltinScalarFunction::Lower
@@ -701,7 +696,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => &["coalesce"],
 
             // string functions
-            BuiltinScalarFunction::Ascii => &["ascii"],
             BuiltinScalarFunction::BitLength => &["bit_length"],
             BuiltinScalarFunction::Btrim => &["btrim"],
             BuiltinScalarFunction::CharacterLength => {

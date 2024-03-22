@@ -118,24 +118,6 @@ where
     }
 }
 
-/// Returns the numeric code of the first character of the argument.
-/// ascii('x') = 120
-pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-
-    let result = string_array
-        .iter()
-        .map(|string| {
-            string.map(|string: &str| {
-                let mut chars = string.chars();
-                chars.next().map_or(0, |v| v as i32)
-            })
-        })
-        .collect::<Int32Array>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {

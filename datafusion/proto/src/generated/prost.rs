@@ -2844,7 +2844,7 @@ pub enum ScalarFunction {
     ///   1 was Acos
     ///   2 was Asin
     Atan = 3,
-    Ascii = 4,
+    ///   4 was Ascii,
     Ceil = 5,
     Cos = 6,
     /// 7 was Digest
@@ -2988,7 +2988,6 @@ impl ScalarFunction {
         match self {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Atan => "Atan",
-            ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
@@ -3056,7 +3055,6 @@ impl ScalarFunction {
         match value {
             "unknown" => Some(Self::Unknown),
             "Atan" => Some(Self::Atan),
-            "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),

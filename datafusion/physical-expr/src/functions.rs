@@ -252,15 +252,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
-        BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::ascii::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::ascii::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function ascii"),
-        }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
@@ -708,33 +699,6 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        test_function!(Ascii, &[lit("x")], Ok(Some(120)), i32, Int32, Int32Array);
-        test_function!(Ascii, &[lit("ésoj")], Ok(Some(233)), i32, Int32, Int32Array);
-        test_function!(
-            Ascii,
-            &[lit("💯")],
-            Ok(Some(128175)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            Ascii,
-            &[lit("💯a")],
-            Ok(Some(128175)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(Ascii, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
-        test_function!(
-            Ascii,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
         test_function!(
             BitLength,
             &[lit("chars")],
