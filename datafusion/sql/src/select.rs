@@ -567,8 +567,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Wrap a plan in a projection
     fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
-        println!("*********** \n input is {:?} \n *********** \n", input);
-        println!("*********** \n expr is {:?} \n *********** \n", expr);
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
