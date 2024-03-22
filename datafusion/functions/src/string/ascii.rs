@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::string::common::make_scalar_function;
 use arrow::array::Int32Array;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -23,8 +24,6 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::string::make_scalar_function;
 
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120

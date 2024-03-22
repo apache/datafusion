@@ -564,7 +564,7 @@ enum ScalarFunction {
   // 20 was Array
   // RegexpMatch = 21;
   BitLength = 22;
-  Btrim = 23;
+  // 23 was Btrim
   CharacterLength = 24;
   Chr = 25;
   Concat = 26;
@@ -575,7 +575,7 @@ enum ScalarFunction {
   Left = 31;
   Lpad = 32;
   Lower = 33;
-  Ltrim = 34;
+  // 34 was Ltrim
   // 35 was MD5
   //  36 was NullIf
   OctetLength = 37;
@@ -586,7 +586,7 @@ enum ScalarFunction {
   Reverse = 42;
   Right = 43;
   Rpad = 44;
-  Rtrim = 45;
+  // 45 was Rtrim
   // 46 was SHA224
   // 47 was SHA256
   // 48 was SHA384

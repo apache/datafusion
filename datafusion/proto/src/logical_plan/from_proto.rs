@@ -48,16 +48,20 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
+<<<<<<< HEAD
     acosh, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil, character_length,
+=======
+    acosh, ascii, asinh, atan, atan2, atanh, bit_length, cbrt, ceil, character_length,
+>>>>>>> apache/main
     chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, nanvl, octet_length, overlay, pi, power, radians, random, repeat,
-    replace, reverse, right, round, rpad, rtrim, signum, sin, sinh, split_part, sqrt,
-    strpos, substr, substr_index, substring, translate, trunc, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    lower, lpad, nanvl, octet_length, overlay, pi, power, radians, random, repeat,
+    replace, reverse, right, round, rpad, signum, sin, sinh, split_part, sqrt, strpos,
+    substr, substr_index, substring, translate, trunc, uuid, AggregateFunction, Between,
+    BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
     GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
@@ -460,12 +464,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::OctetLength => Self::OctetLength,
             ScalarFunction::Concat => Self::Concat,
             ScalarFunction::Lower => Self::Lower,
-            ScalarFunction::Ltrim => Self::Ltrim,
-            ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::BitLength => Self::BitLength,
-            ScalarFunction::Btrim => Self::Btrim,
             ScalarFunction::CharacterLength => Self::CharacterLength,
             ScalarFunction::Chr => Self::Chr,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
@@ -1437,11 +1438,16 @@ pub fn parse_expr(
                 ScalarFunction::Lower => {
                     Ok(lower(parse_expr(&args[0], registry, codec)?))
                 }
+<<<<<<< HEAD
                 ScalarFunction::Ltrim => {
                     Ok(ltrim(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Rtrim => {
                     Ok(rtrim(parse_expr(&args[0], registry, codec)?))
+=======
+                ScalarFunction::Ascii => {
+                    Ok(ascii(parse_expr(&args[0], registry, codec)?))
+>>>>>>> apache/main
                 }
                 ScalarFunction::BitLength => {
                     Ok(bit_length(parse_expr(&args[0], registry, codec)?))
@@ -1502,12 +1508,6 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Rpad => Ok(rpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::Btrim => Ok(btrim(
                     args.to_owned()
                         .iter()
                         .map(|expr| parse_expr(expr, registry, codec))
