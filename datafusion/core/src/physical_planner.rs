@@ -1029,8 +1029,8 @@ impl DefaultPhysicalPlanner {
                         let join_plan = if added_project {
                             let final_join_result = join_schema
                                 .iter()
-                                .map(|(qualifier, field)| {
-                                    Expr::Column(datafusion_common::Column::new(qualifier.cloned(), field.name()))
+                                .map(|dffield| {
+                                    Expr::Column(dffield.to_column())
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
@@ -1106,7 +1106,6 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
-                            let filter_df_fields = filter_df_fields.into_iter().map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone()))).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema

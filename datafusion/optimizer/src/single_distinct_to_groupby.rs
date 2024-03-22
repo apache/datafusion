@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{qualified_name, DFSchema, Result};
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::{
     aggregate_function::AggregateFunction::{Max, Min, Sum},
@@ -149,13 +149,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 // Second aggregate refers to the `test.a + Int32(1)` expression However, its input do not have `test.a` expression in it.
                                 let alias_str = format!("group_alias_{i}");
                                 let alias_expr = group_expr.clone().alias(&alias_str);
-                                let (qualifier, field) = schema.qualified_field(i);
+                                let dffield = schema.qualified_field(i);
                                 (
                                     alias_expr,
-                                    (
-                                        col(alias_str),
-                                        Some(qualified_name(qualifier, field.name())),
-                                    ),
+                                    (col(alias_str), Some(dffield.qualified_name())),
                                 )
                             }
                         })
@@ -233,8 +230,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .chain(inner_aggr_exprs.iter())
                         .map(|expr| expr.to_field(input.schema()))
                         .collect::<Result<Vec<_>>>()?;
+
+                    let inner_dffields = inner_group_exprs
+                        .iter()
+                        .chain(inner_aggr_exprs.iter())
+                        .zip(inner_fields.iter())
+                        .map(|(expr, field)| expr.to_dffield(field))
+                        .collect::<Result<Vec<_>>>()?;
+
                     let inner_schema = DFSchema::from_qualified_fields(
-                        inner_fields,
+                        inner_dffields,
                         input.schema().metadata().clone(),
                     )?;
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
@@ -248,8 +253,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .chain(outer_aggr_exprs.iter())
                         .map(|expr| expr.to_field(&inner_schema))
                         .collect::<Result<Vec<_>>>()?;
+
+                    let outer_dffields = outer_group_exprs
+                        .iter()
+                        .chain(outer_aggr_exprs.iter())
+                        .zip(outer_fields.iter())
+                        .map(|(expr, field)| expr.to_dffield(field))
+                        .collect::<Result<Vec<_>>>()?;
+
                     let outer_aggr_schema = Arc::new(DFSchema::from_qualified_fields(
-                        outer_fields,
+                        outer_dffields,
                         input.schema().metadata().clone(),
                     )?);
 
@@ -269,8 +282,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         })
                         .chain(outer_aggr_exprs.iter().enumerate().map(|(idx, expr)| {
                             let idx = idx + group_size;
-                            let (qualifier, field) = schema.qualified_field(idx);
-                            let name = qualified_name(qualifier, field.name());
+                            let field = schema.qualified_field(idx);
+                            let name = field.qualified_name();
                             columnize_expr(expr.clone().alias(name), &outer_aggr_schema)
                         }))
                         .collect();

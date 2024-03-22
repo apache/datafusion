@@ -641,8 +641,8 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
     indices
         .iter()
         .map(|&idx| {
-            let (qualifer, field) = input_schema.qualified_field(idx);
-            Expr::Column(Column::new(qualifer.cloned(), field.name()))
+            let dffield = input_schema.qualified_field(idx);
+            Expr::Column(dffield.to_column())
         })
         .collect()
 }

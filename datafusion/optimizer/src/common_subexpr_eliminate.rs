@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
     TreeNodeVisitor,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, qualified_name, Column, DFSchema, DFSchemaRef,
+    internal_datafusion_err, internal_err, Column, DFSchema, DFSchemaRef,
     DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
@@ -273,10 +273,11 @@ impl CommonSubexprEliminate {
                     } else {
                         let id =
                             ExprIdentifierVisitor::<'static>::desc_expr(&expr_rewritten);
-                        let (qualifier, field) =
-                            expr_rewritten.to_field(&new_input_schema)?;
-                        let out_name = qualified_name(qualifier.as_ref(), field.name());
 
+                        let field = expr_rewritten.to_field(&new_input_schema)?;
+                        let dffield = expr_rewritten.to_dffield(&field)?;
+
+                        let out_name = dffield.qualified_name();
                         agg_exprs.push(expr_rewritten.alias(&id));
                         proj_exprs
                             .push(Expr::Column(Column::from_name(id)).alias(out_name));
@@ -445,10 +446,12 @@ fn build_common_expr_project_plan(
         }
     }
 
-    for (qualifier, field) in input.schema().iter() {
-        if fields_set.insert(qualified_name(qualifier, field.name())) {
-            project_exprs
-                .push(Expr::Column(Column::new(qualifier.cloned(), field.name())));
+    for field in input.schema().iter() {
+        let name = field.qualified_name();
+        let col = field.to_column();
+
+        if fields_set.insert(name) {
+            project_exprs.push(Expr::Column(col));
         }
     }
 
@@ -468,8 +471,9 @@ fn build_recover_project_plan(
 ) -> Result<LogicalPlan> {
     let col_exprs = schema
         .iter()
-        .map(|(qualifier, field)| {
-            Expr::Column(Column::new(qualifier.cloned(), field.name()))
+        .map(|field| {
+            let col = field.to_column();
+            Expr::Column(col)
         })
         .collect();
     Ok(LogicalPlan::Projection(Projection::try_new(
@@ -485,13 +489,15 @@ fn extract_expressions(
 ) -> Result<()> {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
-            let (qualifier, field) = e.to_field(schema)?;
-            let col = Column::new(qualifier, field.name());
+            let field = e.to_field(schema)?;
+            let dffield = e.to_dffield(&field)?;
+            let col = dffield.to_column();
             result.push(Expr::Column(col))
         }
     } else {
-        let (qualifier, field) = expr.to_field(schema)?;
-        let col = Column::new(qualifier, field.name());
+        let field = expr.to_field(schema)?;
+        let dffield = expr.to_dffield(&field)?;
+        let col = dffield.to_column();
         result.push(Expr::Column(col));
     }
 

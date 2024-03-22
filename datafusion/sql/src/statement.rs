@@ -1251,7 +1251,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Build updated values for each column, using the previous value if not modified
         let exprs = table_schema
             .iter()
-            .map(|(qualifier, field)| {
+            .map(|field| {
                 let expr = match assign_map.remove(field.name()) {
                     Some(new_value) => {
                         let mut expr = self.sql_to_expr(
@@ -1279,7 +1279,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ))
                         } else {
                             datafusion_expr::Expr::Column(Column::new(
-                                qualifier.cloned(),
+                                field.owned_qualifier(),
                                 field.name(),
                             ))
                         }
@@ -1390,12 +1390,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
                     Some(v) => {
-                        let (qulifiar, source_field) = source.schema().qualified_field(v);
-                        datafusion_expr::Expr::Column(Column::new(
-                            qulifiar.cloned(),
-                            source_field.name(),
-                        ))
-                        .cast_to(target_field.data_type(), source.schema())?
+                        let field = source.schema().qualified_field(v);
+                        let col = field.to_column();
+                        datafusion_expr::Expr::Column(col)
+                            .cast_to(target_field.data_type(), source.schema())?
                     }
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source

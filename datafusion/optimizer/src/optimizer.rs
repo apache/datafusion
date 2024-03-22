@@ -613,16 +613,18 @@ mod tests {
     }
 
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
-        let new_fields = schema
+        let fields = schema
             .iter()
             .enumerate()
-            .map(|(i, (qualifier, field))| {
+            .map(|(i, dfffield)| {
                 let metadata =
                     [("key".into(), format!("value {i}"))].into_iter().collect();
-
-                let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
-                (qualifier.cloned(), Arc::new(new_arrow_field))
+                dfffield.field().clone().with_metadata(metadata)
             })
+            .collect::<Vec<_>>();
+
+        let new_fields = schema
+            .iter_with_new_field(fields.as_slice())
             .collect::<Vec<_>>();
 
         let new_metadata = schema.metadata().clone();

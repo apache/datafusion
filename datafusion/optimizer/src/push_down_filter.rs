@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    JoinConstraint, Result,
+    internal_err, plan_datafusion_err, Column, DFSchema, DFSchemaRef, JoinConstraint,
+    Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -199,11 +199,11 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
 fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bool> {
     let schema_columns = schema
         .iter()
-        .flat_map(|(qualifier, field)| {
+        .flat_map(|dffield| {
             [
-                Column::new(qualifier.cloned(), field.name()),
+                dffield.to_column(),
                 // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
+                Column::new_unqualified(dffield.name()),
             ]
         })
         .collect::<HashSet<_>>();
@@ -305,11 +305,11 @@ fn extract_or_clauses_for_join<'a>(
 ) -> impl Iterator<Item = Expr> + 'a {
     let schema_columns = schema
         .iter()
-        .flat_map(|(qualifier, field)| {
+        .flat_map(|dffield| {
             [
-                Column::new(qualifier.cloned(), field.name()),
+                dffield.to_column(),
                 // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
+                Column::new_unqualified(dffield.name()),
             ]
         })
         .collect::<HashSet<_>>();
@@ -670,14 +670,11 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
-                for (i, (qualifier, field)) in
-                    subquery_alias.input.schema().iter().enumerate()
-                {
-                    let (sub_qualifier, sub_field) =
-                        subquery_alias.schema.qualified_field(i);
+                for (i, dffield) in subquery_alias.input.schema().iter().enumerate() {
+                    let sub_dffield = subquery_alias.schema.qualified_field(i);
                     replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                        sub_dffield.qualified_name(),
+                        Expr::Column(dffield.to_column()),
                     );
                 }
                 let new_predicate =
@@ -697,14 +694,14 @@ impl OptimizerRule for PushDownFilter {
                         .schema
                         .iter()
                         .enumerate()
-                        .map(|(i, (qualifier, field))| {
+                        .map(|(i, dffield)| {
                             // strip alias, as they should not be part of filters
                             let expr = match &projection.expr[i] {
                                 Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
                                 expr => expr.clone(),
                             };
 
-                            (qualified_name(qualifier, field.name()), expr)
+                            (dffield.qualified_name(), expr)
                         })
                         .partition(|(_, value)| {
                             is_volatile_expression(value).unwrap_or(true)
@@ -754,12 +751,11 @@ impl OptimizerRule for PushDownFilter {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
                     let mut replace_map = HashMap::new();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
-                        let (union_qualifier, union_field) =
-                            union.schema.qualified_field(i);
+                    for (i, dffield) in input.schema().iter().enumerate() {
+                        let union_field = union.schema.qualified_field(i);
                         replace_map.insert(
-                            qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                            union_field.qualified_name(),
+                            Expr::Column(dffield.to_column()),
                         );
                     }
 

@@ -30,8 +30,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
-    Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::AggregateFunctionDefinition;
 use datafusion_expr::expr::InList;
@@ -133,16 +133,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match expr {
             Expr::Column(col) => match &col.relation {
                 Some(q) => {
-                    match schema.iter().find(|(qualifier, field)| match qualifier {
+                    match schema.iter().find(|f| match f.qualifier() {
                         Some(field_q) => {
-                            field.name() == &col.name
+                            f.name() == &col.name
                                 && field_q.to_string().ends_with(&format!(".{q}"))
                         }
                         _ => false,
                     }) {
-                        Some((qualifier, df_field)) => {
-                            Expr::Column(Column::new(qualifier.cloned(), df_field.name()))
-                        }
+                        Some(f) => Expr::Column(f.to_column()),
                         None => Expr::Column(col),
                     }
                 }

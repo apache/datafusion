@@ -184,8 +184,8 @@ impl Column {
                 0 => continue,
                 1 => {
                     return Ok(Column::new(
-                        qualified_fields[0].0.cloned(),
-                        qualified_fields[0].1.name(),
+                        qualified_fields[0].owned_qualifier(),
+                        qualified_fields[0].name(),
                     ));
                 }
                 _ => {
@@ -275,8 +275,8 @@ impl Column {
                 0 => continue,
                 1 => {
                     return Ok(Column::new(
-                        qualified_fields[0].0.cloned(),
-                        qualified_fields[0].1.name(),
+                        qualified_fields[0].owned_qualifier(),
+                        qualified_fields[0].name(),
                     ))
                 }
                 _ => {

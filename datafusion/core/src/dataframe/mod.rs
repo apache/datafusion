@@ -201,15 +201,8 @@ impl DataFrame {
                     .qualified_field_with_unqualified_name(name)
             })
             .collect::<Result<Vec<_>>>()?;
-        let expr: Vec<Expr> = fields
-            .iter()
-            .map(|(qualifier, field)| {
-                Expr::Column(Column::new(
-                    qualifier.map(|q| q.to_owned_reference()),
-                    field.name(),
-                ))
-            })
-            .collect();
+        let expr: Vec<Expr> =
+            fields.iter().map(|f| Expr::Column(f.to_column())).collect();
         self.select(expr)
     }
 
@@ -1250,12 +1243,12 @@ impl DataFrame {
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
-                if field.name() == name {
+            .map(|dffield| {
+                if dffield.name() == name {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(Column::new(qualifier.cloned(), field.name()))
+                    col(dffield.to_column())
                 }
             })
             .collect();
@@ -1306,7 +1299,7 @@ impl DataFrame {
             Column::from_qualified_name_ignore_case(old_name)
         };
 
-        let (qualifier_rename, field_rename) =
+        let rename_field =
             match self.plan.schema().qualified_field_from_column(&old_column) {
                 Ok(qualifier_and_field) => qualifier_and_field,
                 // no-op if field not found
@@ -1320,11 +1313,13 @@ impl DataFrame {
             .plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::new(qualifier.cloned(), field.name())).alias(new_name)
+            .map(|dffield| {
+                if dffield.qualifier() == rename_field.qualifier()
+                    && dffield.field() == rename_field.field()
+                {
+                    col(dffield.to_column()).alias(new_name)
                 } else {
-                    col(Column::new(qualifier.cloned(), field.name()))
+                    col(dffield.to_column())
                 }
             })
             .collect::<Vec<_>>();

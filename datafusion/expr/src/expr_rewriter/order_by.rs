@@ -87,11 +87,9 @@ fn rewrite_in_terms_of_projection(
     expr.transform(&|expr| {
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
-            let col = Expr::Column(
-                found
-                    .to_field(input.schema())
-                    .map(|(qualifier, field)| Column::new(qualifier, field.name()))?,
-            );
+            let field = found.to_field(input.schema())?;
+            let dffield = found.to_dffield(&field)?;
+            let col = Expr::Column(dffield.to_column());
             return Ok(Transformed::yes(col));
         }
 

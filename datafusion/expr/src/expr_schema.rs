@@ -28,14 +28,16 @@ use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema,
-    OwnedTableReference, Result,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFFieldRef,
+    ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
+    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<Field>;
+
     /// given a schema, return the type of the expr
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
@@ -46,10 +48,12 @@ pub trait ExprSchemable {
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
-    fn to_field(
-        &self,
-        input_schema: &dyn ExprSchema,
-    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)>;
+    fn to_dffield<'a>(
+        &'a self,
+        field: &'a Field,
+        // input_schema: &dyn ExprSchema,
+        // is_nullable: Option<bool>,
+    ) -> Result<DFFieldRef>;
 
     /// cast to a type with respect to a schema
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr>;
@@ -372,48 +376,46 @@ impl ExprSchemable for Expr {
         }
     }
 
+    fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<Field> {
+        let is_nullable = self.nullable(input_schema)?;
+        let metadata = self.metadata(input_schema)?;
+        match self {
+            Expr::Column(c) => {
+                let field =
+                    Field::new(c.name.clone(), self.get_type(input_schema)?, is_nullable)
+                        .with_metadata(metadata);
+                Ok(field)
+            }
+            Expr::Alias(alias) => {
+                let field = Field::new(
+                    alias.name.clone(),
+                    self.get_type(input_schema)?,
+                    is_nullable,
+                )
+                .with_metadata(metadata);
+                Ok(field)
+            }
+            _ => {
+                let field = Field::new(
+                    self.display_name()?,
+                    self.get_type(input_schema)?,
+                    is_nullable,
+                )
+                .with_metadata(metadata);
+                Ok(field)
+            }
+        }
+    }
+
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
-    fn to_field(
-        &self,
-        input_schema: &dyn ExprSchema,
-    ) -> Result<(Option<OwnedTableReference>, Arc<Field>)> {
+    fn to_dffield<'a>(&'a self, field: &'a Field) -> Result<DFFieldRef> {
         match self {
-            Expr::Column(c) => Ok((
-                c.relation.clone(),
-                Arc::new(
-                    Field::new(
-                        &c.name,
-                        self.get_type(input_schema)?,
-                        self.nullable(input_schema)?,
-                    )
-                    .with_metadata(self.metadata(input_schema)?),
-                ),
-            )),
-            Expr::Alias(Alias { relation, name, .. }) => Ok((
-                relation.clone(),
-                Arc::new(
-                    Field::new(
-                        name,
-                        self.get_type(input_schema)?,
-                        self.nullable(input_schema)?,
-                    )
-                    .with_metadata(self.metadata(input_schema)?),
-                ),
-            )),
-            _ => Ok((
-                None,
-                Arc::new(
-                    Field::new(
-                        self.display_name()?,
-                        self.get_type(input_schema)?,
-                        self.nullable(input_schema)?,
-                    )
-                    .with_metadata(self.metadata(input_schema)?),
-                ),
-            )),
+            Expr::Column(c) => Ok(DFFieldRef::new(c.relation.as_ref(), field)),
+            Expr::Alias(alias) => Ok(DFFieldRef::new(alias.relation.as_ref(), field)),
+            _ => Ok(DFFieldRef::new(None, field)),
         }
     }
 
@@ -491,9 +493,10 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
             )?)
         }
         _ => {
-            let (qualifier, field) = plan.schema().qualified_field(0);
-            let cast_expr = Expr::Column(Column::new(qualifier.cloned(), field.name()))
-                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let field = plan.schema().qualified_field(0);
+            let cast_expr =
+                Expr::Column(Column::new(field.owned_qualifier(), field.name()))
+                    .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,
@@ -642,7 +645,8 @@ mod tests {
         );
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
+        let field = expr.to_field(&schema).unwrap();
+        assert_eq!(&meta, expr.to_dffield(&field).unwrap().field().metadata());
     }
 
     #[test]

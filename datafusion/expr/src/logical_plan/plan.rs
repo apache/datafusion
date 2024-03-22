@@ -33,9 +33,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
-    split_conjunction,
+    enumerate_grouping_sets, exprlist_to_dffields, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    inspect_expr_pre, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
@@ -49,7 +49,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
+    DFFieldRef, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
     FunctionalDependencies, OwnedTableReference, ParamValues, Result, UnnestOptions,
 };
 
@@ -479,18 +479,14 @@ impl LogicalPlan {
                 static_term.head_output_expr()
             }
             LogicalPlan::Union(union) => {
-                let (qualifier, field) = union.schema.qualified_field(0);
-                Ok(Some(Expr::Column(Column::new(
-                    qualifier.cloned(),
-                    field.name(),
-                ))))
+                let dffield = union.schema.qualified_field(0);
+                let col = dffield.to_column();
+                Ok(Some(Expr::Column(col)))
             }
             LogicalPlan::TableScan(table) => {
-                let (qualifier, field) = table.projected_schema.qualified_field(0);
-                Ok(Some(Expr::Column(Column::new(
-                    qualifier.cloned(),
-                    field.name(),
-                ))))
+                let dffield = table.projected_schema.qualified_field(0);
+                let col = dffield.to_column();
+                Ok(Some(Expr::Column(col)))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
@@ -866,26 +862,23 @@ impl LogicalPlan {
             }) => {
                 // Update schema with unnested column type.
                 let input = Arc::new(inputs.swap_remove(0));
-                let (nested_qualifier, nested_field) =
-                    input.schema().qualified_field_from_column(column)?;
-                let (unnested_qualifier, unnested_field) =
-                    schema.qualified_field_from_column(column)?;
+                let input_field = input.schema().qualified_field_from_column(column)?;
+
                 let qualifiers_and_fields = input
                     .schema()
                     .iter()
-                    .map(|(qualifier, field)| {
-                        if qualifier.eq(&nested_qualifier)
-                            && field.as_ref() == nested_field
+                    .map(|f| {
+                        if f.qualifier().eq(&input_field.qualifier())
+                            && f.field() == input_field.field()
                         {
-                            (
-                                unnested_qualifier.cloned(),
-                                Arc::new(unnested_field.clone()),
-                            )
+                            // DFFieldRef::new(unnested_qualifier, unnested_field)
+                            schema.qualified_field_from_column(column)
                         } else {
-                            (qualifier.cloned(), field.clone())
+                            Ok(f)
+                            // DFFieldRef::new(qualifier, field)
                         }
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<DFFieldRef>>>()?;
 
                 let schema = Arc::new(
                     DFSchema::from_qualified_fields(
@@ -1811,10 +1804,11 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::from_qualified_fields(
-        exprlist_to_fields(exprs, input)?,
-        input.schema().metadata().clone(),
-    )?;
+    let fields = exprlist_to_fields(exprs, input)?;
+
+    let fields = exprlist_to_dffields(exprs, input, fields.as_slice())?;
+    let mut schema =
+        DFSchema::from_qualified_fields(fields, input.schema().metadata().clone())?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
     )?)?;
@@ -1987,15 +1981,14 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> = input
-            .schema()
-            .iter()
-            .map(|(q, f)| (q.cloned(), f.clone()))
-            .collect();
+        let fields: Vec<DFFieldRef> = input.schema().iter().collect();
         let input_len = fields.len();
         let mut window_fields = fields;
         let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
-        window_fields.extend_from_slice(expr_fields.as_slice());
+        let expr_fields =
+            exprlist_to_dffields(window_expr.as_slice(), &input, &expr_fields)?;
+        window_fields.extend(expr_fields);
+        // window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2043,13 +2036,15 @@ impl Window {
             window_func_dependencies.extend(new_deps);
         }
 
+        let schema = Arc::new(
+            DFSchema::from_qualified_fields(window_fields, metadata)?
+                .with_functional_dependencies(window_func_dependencies)?,
+        );
+
         Ok(Window {
             input,
             window_expr,
-            schema: Arc::new(
-                DFSchema::from_qualified_fields(window_fields, metadata)?
-                    .with_functional_dependencies(window_func_dependencies)?,
-            ),
+            schema,
         })
     }
 }
@@ -2119,14 +2114,13 @@ impl TableScan {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
 
-                let df_schema = DFSchema::from_qualified_fields(
-                    p.iter()
-                        .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
-                        })
-                        .collect(),
-                    schema.metadata.clone(),
-                )?;
+                let dffields: Vec<DFFieldRef> = p
+                    .iter()
+                    .map(|i| DFFieldRef::new(Some(&table_name), schema.field(*i)))
+                    .collect();
+
+                let df_schema =
+                    DFSchema::from_qualified_fields(dffields, schema.metadata.clone())?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
             })
             .unwrap_or_else(|| {
@@ -2317,9 +2311,10 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
-        let qualified_fields = exprlist_to_fields(select_expr.as_slice(), &input)?
-            .into_iter()
-            .collect();
+
+        let expr_fields = exprlist_to_fields(select_expr.as_slice(), &input)?;
+        let qualified_fields =
+            exprlist_to_dffields(select_expr.as_slice(), &input, &expr_fields)?;
 
         let dfschema = DFSchema::from_qualified_fields(
             qualified_fields,
@@ -2401,19 +2396,29 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut qualified_fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
+        let grouping_expr_fields = exprlist_to_fields(&grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
-        if is_grouping_set {
-            qualified_fields = qualified_fields
+        let grouping_expr_fields = if is_grouping_set {
+            grouping_expr_fields
                 .into_iter()
-                .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
-                .collect::<Vec<_>>();
-        }
+                .map(|f| f.with_nullable(true))
+                .collect::<Vec<_>>()
+        } else {
+            grouping_expr_fields
+        };
 
-        qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
+        let mut grouping_expr_dffields =
+            exprlist_to_dffields(&grouping_expr, &input, &grouping_expr_fields)?;
 
-        let schema = DFSchema::from_qualified_fields(qualified_fields, HashMap::new())?;
+        let aggr_expr_fields = exprlist_to_fields(&aggr_expr, &input)?;
+        let aggr_expr_dffields =
+            exprlist_to_dffields(&aggr_expr, &input, &aggr_expr_fields)?;
+
+        grouping_expr_dffields.extend(aggr_expr_dffields);
+
+        let schema =
+            DFSchema::from_qualified_fields(grouping_expr_dffields, HashMap::new())?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

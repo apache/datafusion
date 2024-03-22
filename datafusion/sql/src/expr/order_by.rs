@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{plan_datafusion_err, plan_err, Column, DFSchema, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
@@ -60,8 +60,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         );
                     }
 
-                    let (qualifier, field) = schema.qualified_field(field_index - 1);
-                    Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                    let field = schema.qualified_field(field_index - 1);
+                    Expr::Column(field.to_column())
                 }
                 e => self.sql_expr_to_logical_expr(e.clone(), schema, planner_context)?,
             };

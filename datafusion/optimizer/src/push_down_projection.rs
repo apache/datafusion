@@ -29,6 +29,8 @@ mod tests {
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DFFieldRef;
+    use datafusion_common::OwnedTableReference;
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::builder::table_scan_with_filters;
     use datafusion_expr::expr::{self, Cast};
@@ -221,22 +223,20 @@ mod tests {
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan;
+
+        let field_a = Field::new("a", DataType::UInt32, false);
+        let field_b = Field::new("b", DataType::UInt32, false);
+        let field_c1 = Field::new("c1", DataType::UInt32, true);
+        let qualifier_test: OwnedTableReference = "test".into();
+        let qualifier_test2: OwnedTableReference = "test2".into();
+
         assert_eq!(
             **optimized_join.schema(),
             DFSchema::from_qualified_fields(
                 vec![
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test2".into()),
-                        Arc::new(Field::new("c1", DataType::UInt32, true))
-                    ),
+                    DFFieldRef::new(Some(&qualifier_test), &field_a),
+                    DFFieldRef::new(Some(&qualifier_test), &field_b),
+                    DFFieldRef::new(Some(&qualifier_test2), &field_c1),
                 ],
                 HashMap::new()
             )?,
@@ -273,22 +273,18 @@ mod tests {
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
+        let field_a = Field::new("a", DataType::UInt32, false);
+        let field_b = Field::new("b", DataType::UInt32, false);
+        let field_c1 = Field::new("c1", DataType::UInt32, true);
+        let qualifier_test: OwnedTableReference = "test".into();
+        let qualifier_test2: OwnedTableReference = "test2".into();
         assert_eq!(
             **optimized_join.schema(),
             DFSchema::from_qualified_fields(
                 vec![
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test2".into()),
-                        Arc::new(Field::new("c1", DataType::UInt32, true))
-                    ),
+                    DFFieldRef::new(Some(&qualifier_test), &field_a),
+                    DFFieldRef::new(Some(&qualifier_test), &field_b),
+                    DFFieldRef::new(Some(&qualifier_test2), &field_c1),
                 ],
                 HashMap::new()
             )?,
@@ -323,22 +319,18 @@ mod tests {
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
+        let field_a = Field::new("a", DataType::UInt32, false);
+        let field_a_nullable = Field::new("a", DataType::UInt32, true);
+        let field_b = Field::new("b", DataType::UInt32, false);
+        let qualifier_test: OwnedTableReference = "test".into();
+        let qualifier_test2: OwnedTableReference = "test2".into();
         assert_eq!(
             **optimized_join.schema(),
             DFSchema::from_qualified_fields(
                 vec![
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test".into()),
-                        Arc::new(Field::new("b", DataType::UInt32, false))
-                    ),
-                    (
-                        Some("test2".into()),
-                        Arc::new(Field::new("a", DataType::UInt32, true))
-                    ),
+                    DFFieldRef::new(Some(&qualifier_test), &field_a),
+                    DFFieldRef::new(Some(&qualifier_test), &field_b),
+                    DFFieldRef::new(Some(&qualifier_test2), &field_a_nullable),
                 ],
                 HashMap::new()
             )?,

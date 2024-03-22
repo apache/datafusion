@@ -18,7 +18,7 @@
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{Column, Result};
+use datafusion_common::Result;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
     aggregate_function::AggregateFunction as AggregateFunctionFunc, col,
@@ -125,9 +125,9 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .iter()
                     .skip(on_expr.len())
                     .zip(schema.iter())
-                    .map(|((new_qualifier, new_field), (old_qualifier, old_field))| {
-                        Ok(col(Column::new(new_qualifier.cloned(), new_field.name()))
-                            .alias_qualified(old_qualifier.cloned(), old_field.name()))
+                    .map(|(new_dffield, dffield)| {
+                        Ok(col(new_dffield.to_column())
+                            .alias_qualified(dffield.owned_qualifier(), dffield.name()))
                     })
                     .collect::<Result<Vec<Expr>>>()?;
 

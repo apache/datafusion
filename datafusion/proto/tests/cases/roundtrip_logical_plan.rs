@@ -35,8 +35,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef, DataFusionError,
-    FileType, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFFieldRef, DFSchema, DFSchemaRef,
+    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -1411,17 +1411,15 @@ fn roundtrip_schema() {
 
 #[test]
 fn roundtrip_dfschema() {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Decimal128(15, 2), true)
+        .with_metadata(HashMap::from([(String::from("k1"), String::from("v1"))]));
+    let qualifier_t: OwnedTableReference = "t".into();
+
     let dfschema = DFSchema::from_qualified_fields(
         vec![
-            (None, Arc::new(Field::new("a", DataType::Int64, false))),
-            (
-                Some("t".into()),
-                Arc::new(
-                    Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
-                        HashMap::from([(String::from("k1"), String::from("v1"))]),
-                    ),
-                ),
-            ),
+            DFFieldRef::new(None, &field_a),
+            DFFieldRef::new(Some(&qualifier_t), &field_b),
         ],
         HashMap::from([
             (String::from("k2"), String::from("v2")),

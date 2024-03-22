@@ -489,9 +489,6 @@ pub async fn from_substrait_rel(
                                         .map(|i| {
                                             scan.projected_schema.qualified_field(*i)
                                         })
-                                        .map(|(qualifier, field)| {
-                                            (qualifier.cloned(), Arc::new(field.clone()))
-                                        })
                                         .collect();
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
@@ -1396,12 +1393,9 @@ fn from_substrait_field_reference(
                     "Direct reference StructField with child is not supported"
                 ),
                 None => {
-                    let (qualifier, field) =
-                        input_schema.qualified_field(x.field as usize);
-                    Ok(Expr::Column(Column {
-                        relation: qualifier.cloned(),
-                        name: field.name().to_string(),
-                    }))
+                    let dffield = input_schema.qualified_field(x.field as usize);
+
+                    Ok(Expr::Column(dffield.to_column()))
                 }
             },
             _ => not_impl_err!(

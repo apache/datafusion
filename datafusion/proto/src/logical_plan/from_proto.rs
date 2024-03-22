@@ -41,8 +41,8 @@ use arrow::{
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    Constraints, DFFieldRef, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Result, ScalarValue,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
@@ -175,20 +175,31 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
 
     fn try_from(df_schema: &protobuf::DfSchema) -> Result<Self, Self::Error> {
         let df_fields = df_schema.columns.clone();
-        let qualifiers_and_fields: Vec<(Option<OwnedTableReference>, Arc<Field>)> =
-            df_fields
-                .iter()
-                .map(|df_field| {
-                    let field: Field = df_field.field.as_ref().required("field")?;
-                    Ok((
-                        df_field
-                            .qualifier
-                            .as_ref()
-                            .map(|q| q.relation.clone().into()),
-                        Arc::new(field),
-                    ))
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
+
+        let fields = df_fields
+            .iter()
+            .map(|df_field| {
+                let field: Result<Field, Error> =
+                    df_field.field.as_ref().required("field");
+                field
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        let qualifiers = df_fields
+            .iter()
+            .map(|df_field| {
+                df_field
+                    .qualifier
+                    .as_ref()
+                    .map(|q| q.relation.clone().into())
+            })
+            .collect::<Vec<_>>();
+
+        let qualifiers_and_fields = qualifiers
+            .iter()
+            .zip(fields.iter())
+            .map(|(q, field)| Ok(DFFieldRef::new(q.as_ref(), field)))
+            .collect::<Result<Vec<_>, Error>>()?;
 
         Ok(DFSchema::from_qualified_fields(
             qualifiers_and_fields,
