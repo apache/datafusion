@@ -24,6 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::{ConcreteTreeNode, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::LogicalPlan;
 use sqlparser::{
@@ -235,13 +236,10 @@ impl fmt::Display for CreateExternalTable {
 }
 
 
-pub trait UserDefinedStatement: Debug + Display {
+pub trait UserDefinedStatement: Debug + Display + TreeNode {
     fn to_logical_plan(&self) -> Result<LogicalPlan, DataFusionError>;
-
-    fn visit(&self, visitor: &mut RelationVisitor) -> ControlFlow<sqlparser::ast::Visitor>;
 }
 
-// Implement Debug, Clone, and PartialEq for ExtensionStatement manually if needed.
 #[derive(Debug, Clone)]
 pub struct ExtensionStatement {
     pub statement: Arc<dyn UserDefinedStatement>,
@@ -254,6 +252,12 @@ impl ExtensionStatement {
 
     pub fn to_logical_plan(&self) -> Result<LogicalPlan, DataFusionError> {
         self.statement.to_logical_plan()
+    }
+
+    pub fn visit<V>(&self, visitor: &mut V) -> ControlFlow<V::Break>
+    where
+        V: sqlparser::ast::Visitor {
+        self.statement.visit(visitor)
     }
 }
 
