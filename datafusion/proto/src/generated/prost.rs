@@ -2844,7 +2844,7 @@ pub enum ScalarFunction {
     ///   1 was Acos
     ///   2 was Asin
     Atan = 3,
-    /// 4 was Ascii,
+    /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
     /// 7 was Digest
