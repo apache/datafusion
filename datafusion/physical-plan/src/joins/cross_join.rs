@@ -23,7 +23,6 @@ use std::{any::Any, sync::Arc, task::Poll};
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
-use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::ExecutionPlanProperties;
@@ -33,11 +32,11 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::compute;
-use arrow::datatypes::{Fields, Schema, SchemaRef, UInt64Type};
+use arrow::datatypes::{Fields, Schema, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, PrimitiveArray, RecordBatchOptions};
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::get_arrayref_at_indices;
 use datafusion_common::{JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -47,7 +46,7 @@ use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side
-type JoinLeftData = (RecordBatch, MemoryReservation);
+type JoinLeftData = (Vec<RecordBatch>, MemoryReservation);
 
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
@@ -146,7 +145,6 @@ async fn load_left_input(
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
-    let left_schema = left.schema();
     let merge = if left.output_partitioning().partition_count() != 1 {
         Arc::new(CoalescePartitionsExec::new(left))
     } else {
@@ -155,29 +153,22 @@ async fn load_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, _, reservation) = stream
-        .try_fold(
-            (Vec::new(), 0usize, metrics, reservation),
-            |mut acc, batch| async {
-                let batch_size = batch.get_array_memory_size();
-                // Reserve memory for incoming batch
-                acc.3.try_grow(batch_size)?;
-                // Update metrics
-                acc.2.build_mem_used.add(batch_size);
-                acc.2.build_input_batches.add(1);
-                acc.2.build_input_rows.add(batch.num_rows());
-                // Update rowcount
-                acc.1 += batch.num_rows();
-                // Push batch to output
-                acc.0.push(batch);
-                Ok(acc)
-            },
-        )
+    let (batches, _, reservation) = stream
+        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
+            let batch_size = batch.get_array_memory_size();
+            // Reserve memory for incoming batch
+            acc.2.try_grow(batch_size)?;
+            // Update metrics
+            acc.1.build_mem_used.add(batch_size);
+            acc.1.build_input_batches.add(1);
+            acc.1.build_input_rows.add(batch.num_rows());
+            // Push batch to output
+            acc.0.push(batch);
+            Ok(acc)
+        })
         .await?;
 
-    let merged_batch = concat_batches(&left_schema, &batches, num_rows)?;
-
-    Ok((merged_batch, reservation))
+    Ok((batches, reservation))
 }
 
 impl DisplayAs for CrossJoinExec {
@@ -255,6 +246,9 @@ impl ExecutionPlan for CrossJoinExec {
             left_fut,
             right: stream,
             join_metrics,
+            left_batch_index: 0,
+            right_row_index: 0,
+            curr_probe_batch: None,
         }))
     }
 
@@ -325,6 +319,12 @@ struct CrossJoinStream {
     right: SendableRecordBatchStream,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
+    /// Indexes the next processed build side batch
+    left_batch_index: usize,
+    /// Indexes the next processed probe side row
+    right_row_index: usize,
+    /// Currently processed probe batch
+    curr_probe_batch: Option<RecordBatch>,
 }
 
 impl RecordBatchStream for CrossJoinStream {
@@ -346,12 +346,13 @@ impl Stream for CrossJoinStream {
 }
 
 impl CrossJoinStream {
-    /// Separate implementation function that unpins the [`CrossJoinStream`] so
-    /// that partial borrows work correctly
+    /// Separate implementation function that unpins the [`CrossJoinStream`]
+    /// so that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+        let schema = self.schema();
         let build_timer = self.join_metrics.build_time.timer();
         let (left_data, _) = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
@@ -359,75 +360,116 @@ impl CrossJoinStream {
         };
         build_timer.done();
 
-        if left_data.num_rows() == 0 {
+        // if the left batch is empty, we can return `Poll::Ready(None)` immediately.
+        if left_data
+            .first()
+            .map_or(true, |first_batch| first_batch.num_rows() == 0)
+        {
             return Poll::Ready(None);
         }
 
-        match ready!(self.right.poll_next_unpin(cx)) {
-            None => Poll::Ready(None),
-            Some(Ok(right_batch)) => {
-                self.join_metrics.input_batches.add(1);
-                self.join_metrics.input_rows.add(right_batch.num_rows());
-
-                let join_timer = self.join_metrics.join_time.timer();
-                let result_batch =
-                    build_batch(self.schema.clone(), left_data, right_batch)?;
-                join_timer.done();
-
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(result_batch.num_rows());
-
+        match &self.curr_probe_batch {
+            Some(curr_probe_batch)
+                if self.right_row_index < curr_probe_batch.num_rows() =>
+            {
+                // Right batch has some unpaired rows, continue with the next row.
+                let result_batch = build_batch(
+                    &mut self.left_batch_index,
+                    &mut self.right_row_index,
+                    &mut self.join_metrics,
+                    left_data,
+                    curr_probe_batch,
+                    schema,
+                )?;
                 Poll::Ready(Some(Ok(result_batch)))
             }
-            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            // If it is the first poll or the right batch is fully processed:
+            _ => match ready!(self.right.poll_next_unpin(cx)) {
+                None => Poll::Ready(None),
+                Some(Ok(right_batch)) => {
+                    // New batch arrives, reset the indices.
+                    self.left_batch_index = 0;
+                    self.right_row_index = 0;
+                    let result_batch = build_batch(
+                        &mut self.left_batch_index,
+                        &mut self.right_row_index,
+                        &mut self.join_metrics,
+                        left_data,
+                        &right_batch,
+                        schema,
+                    )?;
+                    // Update the metrics.
+                    self.join_metrics.input_batches.add(1);
+                    self.join_metrics.input_rows.add(
+                        self.curr_probe_batch.as_ref().map_or(0, |rb| rb.num_rows()),
+                    );
+                    // Store the new batch into the state.
+                    self.curr_probe_batch = Some(right_batch);
+                    Poll::Ready(Some(Ok(result_batch)))
+                }
+                Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            },
         }
     }
 }
 
-/// Joins the left and right batches by iterating over right (probe) side one by one.
-/// Since the rows of right batch are processed in order, right order is preserved.
+/// This function constructs a new `RecordBatch` by joining the left and right batches
+/// based on the current indices. It also updates the metrics.
+///
+/// # Arguments
+/// * `left_batch_index` - Index of the current left batch being processed.
+/// * `right_row_index` - Index of the current row in the right batch to be joined.
+/// * `join_metrics` - Metrics container to track performance of the join operation.
+/// * `left_data` - Array of `RecordBatch`es from the left side to be joined.
+/// * `probe_batch` - The current `RecordBatch` from the right side to be joined.
+/// * `schema` - `Arc<Schema>` describing the schema of the resulting `RecordBatch`.
 fn build_batch(
+    left_batch_index: &mut usize,
+    right_row_index: &mut usize,
+    join_metrics: &mut BuildProbeJoinMetrics,
+    left_data: &[RecordBatch],
+    probe_batch: &RecordBatch,
     schema: Arc<Schema>,
-    left_data: &RecordBatch,
-    right_batch: RecordBatch,
 ) -> Result<RecordBatch> {
-    let mut result_batch = RecordBatch::new_empty(schema.clone());
-    let mut right_index = 0;
-    while right_index < right_batch.num_rows() {
-        let right_copies: Vec<Arc<dyn Array>> = right_batch
-            .columns()
-            .iter()
-            .map(|right_column| {
-                compute::take(
-                    right_column.as_ref(),
-                    &PrimitiveArray::<UInt64Type>::from_value(
-                        right_index as u64,
-                        left_data.num_rows(),
-                    ),
-                    None,
-                )
-                .map_err(|e| datafusion_common::DataFusionError::ArrowError(e, None))
-            })
-            .collect::<Result<Vec<_>>>()?;
+    if probe_batch.num_rows() != 0 {
+        let join_timer = join_metrics.join_time.timer();
+        // Create copies of the indexed right-side row for joining.
+        let right_copies: Vec<Arc<dyn Array>> = get_arrayref_at_indices(
+            probe_batch.columns(),
+            &PrimitiveArray::<UInt32Type>::from_value(
+                *right_row_index as u32,
+                left_data[*left_batch_index].num_rows(),
+            ),
+        )?;
 
-        let new_matches = RecordBatch::try_new_with_options(
+        // Combine columns from the current left batch and the right copies.
+        let result = RecordBatch::try_new_with_options(
             schema.clone(),
-            left_data
+            left_data[*left_batch_index]
                 .columns()
                 .iter()
                 .cloned()
                 .chain(right_copies.into_iter())
                 .collect(),
-            &RecordBatchOptions::new().with_row_count(Some(left_data.num_rows())),
+            &RecordBatchOptions::new()
+                .with_row_count(Some(left_data[*left_batch_index].num_rows())),
         )?;
+        join_timer.done();
+        // Update the metrics.
+        join_metrics.output_batches.add(1);
+        join_metrics.output_rows.add(result.num_rows());
 
-        let total_number_of_rows = result_batch.num_rows() + new_matches.num_rows();
-        result_batch =
-            concat_batches(&schema, &[result_batch, new_matches], total_number_of_rows)?;
-        right_index += 1;
+        // Increment the left batch index. If it reaches the end, reset it to 0 and increment the probe row index.
+        *left_batch_index = if *left_batch_index == left_data.len() - 1 {
+            *right_row_index += 1;
+            0
+        } else {
+            *left_batch_index + 1
+        };
+        Ok(result)
+    } else {
+        Ok(RecordBatch::new_empty(schema))
     }
-
-    Ok(result_batch)
 }
 
 #[cfg(test)]
