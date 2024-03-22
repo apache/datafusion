@@ -527,11 +527,7 @@ impl Unparser<'_> {
 #[cfg(test)]
 mod tests {
     use datafusion_common::TableReference;
-    use datafusion_expr::{
-        col,
-        expr::{self, AggregateFunction},
-        lit,
-    };
+    use datafusion_expr::{col, expr::AggregateFunction, lit};
 
     use crate::unparser::dialect::CustomDialect;
 
