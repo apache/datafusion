@@ -169,10 +169,14 @@ mod tests {
 
     #[tokio::test]
     async fn write_parquet_with_small_rg_size() -> Result<()> {
-        let test_df = test_util::test_table().await?;
+        let mut test_df = test_util::test_table().await?;
+        // make the test data larger so there are multiple batches
+        for _ in 0..7{
+            test_df = test_df.clone().union(test_df)?;
+        }
         let output_path = "file://local/test.parquet";
 
-        for rg_size in 1..10 {
+        for rg_size in (1..7).step_by(5) {
             let df = test_df.clone();
             let tmp_dir = TempDir::new()?;
             let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
@@ -181,6 +185,7 @@ mod tests {
             ctx.runtime_env().register_object_store(&local_url, local);
             let mut options = TableParquetOptions::default();
             options.global.max_row_group_size = rg_size;
+            options.global.allow_single_file_parallelism = true;
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
@@ -188,7 +193,7 @@ mod tests {
             )
             .await?;
 
-            // Check that file actually used the specified compression
+            // Check that file actually used the correct rg size
             let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
 
             let reader =
