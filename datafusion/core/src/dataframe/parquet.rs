@@ -171,6 +171,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_parquet_with_small_rg_size() -> Result<()> {
+        // This test verifies writing a parquet file with small rg size
+        // relative to datafusion.execution.batch_size does not panic
         let mut ctx = SessionContext::new_with_config(
             SessionConfig::from_string_hash_map(HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
@@ -183,7 +185,7 @@ mod tests {
 
         let output_path = "file://local/test.parquet";
 
-        for rg_size in (1..7).step_by(5) {
+        for rg_size in 1..10 {
             let df = test_df.clone();
             let tmp_dir = TempDir::new()?;
             let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
