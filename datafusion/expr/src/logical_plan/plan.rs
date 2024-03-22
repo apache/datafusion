@@ -871,11 +871,9 @@ impl LogicalPlan {
                         if f.qualifier().eq(&input_field.qualifier())
                             && f.field() == input_field.field()
                         {
-                            // DFFieldRef::new(unnested_qualifier, unnested_field)
                             schema.qualified_field_from_column(column)
                         } else {
                             Ok(f)
-                            // DFFieldRef::new(qualifier, field)
                         }
                     })
                     .collect::<Result<Vec<DFFieldRef>>>()?;
@@ -1988,7 +1986,6 @@ impl Window {
         let expr_fields =
             exprlist_to_dffields(window_expr.as_slice(), &input, &expr_fields)?;
         window_fields.extend(expr_fields);
-        // window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:

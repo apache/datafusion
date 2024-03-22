@@ -183,10 +183,7 @@ impl Column {
             match qualified_fields.len() {
                 0 => continue,
                 1 => {
-                    return Ok(Column::new(
-                        qualified_fields[0].owned_qualifier(),
-                        qualified_fields[0].name(),
-                    ));
+                    return Ok(qualified_fields[0].to_column());
                 }
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.

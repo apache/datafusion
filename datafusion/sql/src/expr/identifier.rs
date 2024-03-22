@@ -269,10 +269,6 @@ fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
-    // TODO: change to DFField
-    // &'schema Field,
-    // Option<&'schema OwnedTableReference>,
-    // &'schema DFFieldRef,
     DFFieldRef<'schema>,
     &'ids [String],
 )> {

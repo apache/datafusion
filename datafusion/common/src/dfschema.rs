@@ -199,28 +199,6 @@ impl DFSchema {
         Ok(dfschema)
     }
 
-    // pub fn from_owned_qualified_fields(
-    //     dffields: Vec<DFField>,
-    //     metadata: HashMap<String, String>,
-    // ) -> Result<Self> {
-    //     let mut fields = Vec::with_capacity(dffields.len());
-    //     let mut qualifiers = Vec::with_capacity(dffields.len());
-    //     for f in dffields {
-    //         fields.push(f.field);
-    //         qualifiers.push(f.qualifier);
-    //     }
-
-    //     let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-
-    //     let dfschema = Self {
-    //         inner: schema,
-    //         field_qualifiers: qualifiers,
-    //         functional_dependencies: FunctionalDependencies::empty(),
-    //     };
-    //     dfschema.check_names()?;
-    //     Ok(dfschema)
-    // }
-
     /// Check if the schema have some fields with the same name
     fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
@@ -410,8 +388,6 @@ impl DFSchema {
                 self.field_qualifiers[idx].as_ref(),
                 self.field(idx),
             ))
-
-            // Ok((self.field_qualifiers[idx].as_ref(), self.field(idx)))
         } else {
             self.qualified_field_with_unqualified_name(name)
         }
@@ -1022,13 +998,6 @@ impl SchemaExt for Schema {
     }
 }
 
-// pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-//     match qualifier {
-//         Some(q) => format!("{}.{}", q, name),
-//         None => name.to_string(),
-//     }
-// }
-
 pub struct DFFieldRef<'a> {
     /// Optional qualifier (usually a table or relation name)
     qualifier: Option<&'a OwnedTableReference>,
@@ -1091,43 +1060,6 @@ impl<'a> DFFieldRef<'a> {
         Column::new(self.owned_qualifier(), self.name())
     }
 }
-
-// pub struct DFField {
-//     /// Optional qualifier (usually a table or relation name)
-//     qualifier: Option<OwnedTableReference>,
-//     /// Arrow field definition
-//     field: Field,
-// }
-
-// impl DFField {
-//     pub fn new(qualifier: Option<OwnedTableReference>, field: Field) -> Self {
-//         Self { qualifier, field }
-//     }
-
-//     pub fn field(&self) -> Field {
-//         self.field.clone()
-//     }
-
-//     pub fn name(&self) -> &String {
-//         self.field.name()
-//     }
-
-//     pub fn qualifier(&self) -> Option<OwnedTableReference> {
-//         self.qualifier.clone()
-//     }
-
-//     pub fn to_column(self) -> Column {
-//         Column::new(self.qualifier, self.field.name())
-//     }
-
-//     pub fn qualified_name(&self) -> String {
-//         if let Some(q) = &self.qualifier {
-//             format!("{}.{}", q, self.name())
-//         } else {
-//             self.name().to_owned()
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -1196,22 +1128,22 @@ mod tests {
         Ok(())
     }
 
-    // TODO: Fix this test
-    // #[test]
-    // fn test_from_qualified_fields() -> Result<()> {
-    //     let schema = DFSchema::from_qualified_fields(
-    //         vec![
-    //             (
-    //                 Some("t0".into()),
-    //                 Arc::new(Field::new("c0", DataType::Boolean, true)),
-    //             ),
-    //             (None, Arc::new(Field::new("c1", DataType::Boolean, true))),
-    //         ],
-    //         HashMap::new(),
-    //     )?;
-    //     assert_eq!("fields:[t0.c0, c1], metadata:{}", schema.to_string());
-    //     Ok(())
-    // }
+    #[test]
+    fn test_from_qualified_fields() -> Result<()> {
+        let qualifier: OwnedTableReference = "t0".into();
+        let field_c0 = Field::new("c0", DataType::Boolean, true);
+        let field_c1 = Field::new("c1", DataType::Boolean, true);
+
+        let schema = DFSchema::from_qualified_fields(
+            vec![
+                DFFieldRef::new(Some(&qualifier), &field_c0),
+                DFFieldRef::new(None, &field_c1),
+            ],
+            HashMap::new(),
+        )?;
+        assert_eq!("fields:[t0.c0, c1], metadata:{}", schema.to_string());
+        Ok(())
+    }
 
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {

@@ -1687,10 +1687,7 @@ pub fn unnest_with_options(
     column: Column,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    // let (unnest_qualifier, unnest_field) =
-
     let input_schema = input.schema();
-
     let unnest_field = input_schema.qualified_field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1708,6 +1705,7 @@ pub fn unnest_with_options(
         }
     };
 
+    // TODO: Avoid clone if possible
     let qualifier = unnest_field.owned_qualifier();
 
     // Update the schema with the unnest column type changed to contain the nested type.
