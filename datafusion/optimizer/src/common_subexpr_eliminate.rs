@@ -443,8 +443,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             Some(plan) => plan,
             _ => plan.clone(),
         };
-        let res = self.add_extra_projection(&plan);
-        res
+        self.add_extra_projection(&plan)
     }
 
     fn name(&self) -> &str {
@@ -842,16 +841,14 @@ fn replace_common_expr(
     expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
-    let rewrited = expr
-        .rewrite(&mut CommonSubexprRewriter {
-            expr_set,
-            id_array,
-            affected_id,
-            max_series_number: 0,
-            curr_index: 0,
-        })
-        .data();
-    rewrited
+    expr.rewrite(&mut CommonSubexprRewriter {
+        expr_set,
+        id_array,
+        affected_id,
+        max_series_number: 0,
+        curr_index: 0,
+    })
+    .data()
 }
 
 struct ProjectionAdder {
@@ -880,23 +877,20 @@ impl ProjectionAdder {
                     op,
                     right: ref r_box,
                 }) if !is_not_complex(&op) => {
-                    match (&**l_box, &**r_box) {
-                        (Expr::Column(l), Expr::Column(_r)) => {
-                            let l_field = schema
-                                .field_from_column(l)
-                                .expect("Field not found for left column");
+                    if let (Expr::Column(l), Expr::Column(_r)) = (&**l_box, &**r_box) {
+                        let l_field = schema
+                            .field_from_column(l)
+                            .expect("Field not found for left column");
 
-                            // res.insert(DFField::new_unqualified(
-                            //     &expr.to_string(),
-                            //     l_field.data_type().clone(),
-                            //     true,
-                            // ));
-                            expr_data_type
-                                .entry(expr.clone())
-                                .or_insert(l_field.data_type().clone());
-                            res.insert(expr.clone());
-                        }
-                        _ => {}
+                        // res.insert(DFField::new_unqualified(
+                        //     &expr.to_string(),
+                        //     l_field.data_type().clone(),
+                        //     true,
+                        // ));
+                        expr_data_type
+                            .entry(expr.clone())
+                            .or_insert(l_field.data_type().clone());
+                        res.insert(expr.clone());
                     }
                 }
                 Expr::Cast(Cast { expr, data_type: _ }) => {
