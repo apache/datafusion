@@ -152,7 +152,7 @@ mod tests {
             .await?;
 
             // Check that file actually used the specified compression
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
 
             let reader =
                 parquet::file::serialized_reader::SerializedFileReader::new(file)
@@ -203,7 +203,7 @@ mod tests {
             .await?;
 
             // Check that file actually used the correct rg size
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
 
             let reader =
                 parquet::file::serialized_reader::SerializedFileReader::new(file)
