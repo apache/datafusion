@@ -43,6 +43,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
+use object_store::buffered::BufWriter;
 use object_store::{self, GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
@@ -338,21 +339,18 @@ pub async fn plan_to_json(
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buf_writer = BufWriter::new(storeref, file.clone());
 
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = json::LineDelimitedWriter::new(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
+                buf_writer.write_all(&buffer).await?;
                 buffer.clear();
             }
 
-            multipart_writer
-                .shutdown()
-                .await
-                .map_err(DataFusionError::from)
+            buf_writer.shutdown().await.map_err(DataFusionError::from)
         });
     }
 

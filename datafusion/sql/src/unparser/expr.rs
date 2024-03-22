@@ -456,6 +456,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
     }
@@ -491,11 +492,15 @@ impl Unparser<'_> {
             DataType::Binary => todo!(),
             DataType::FixedSizeBinary(_) => todo!(),
             DataType::LargeBinary => todo!(),
+            DataType::BinaryView => todo!(),
             DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
             DataType::LargeUtf8 => Ok(ast::DataType::Text),
+            DataType::Utf8View => todo!(),
             DataType::List(_) => todo!(),
             DataType::FixedSizeList(_, _) => todo!(),
             DataType::LargeList(_) => todo!(),
+            DataType::ListView(_) => todo!(),
+            DataType::LargeListView(_) => todo!(),
             DataType::Struct(_) => todo!(),
             DataType::Union(_, _) => todo!(),
             DataType::Dictionary(_, _) => todo!(),
