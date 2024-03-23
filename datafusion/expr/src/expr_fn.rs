@@ -599,13 +599,6 @@ scalar_expr!(
 );
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
-scalar_expr!(Lower, lower, string, "convert the string to lower case");
-scalar_expr!(
-    OctetLength,
-    octet_length,
-    string,
-    "returns the number of bytes of a string"
-);
 scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
 scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");
@@ -1069,10 +1062,8 @@ mod test {
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(Left, left, string, count);
-        test_scalar_expr!(Lower, lower, string);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
-        test_scalar_expr!(OctetLength, octet_length, string);
         test_scalar_expr!(Replace, replace, string, from, to);
         test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);

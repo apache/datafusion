@@ -24,7 +24,9 @@ use datafusion_expr::ScalarUDF;
 mod ascii;
 mod btrim;
 mod common;
+mod lower;
 mod ltrim;
+mod octet_length;
 mod rtrim;
 mod starts_with;
 mod to_hex;
@@ -34,6 +36,8 @@ mod upper;
 make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
+make_udf_function!(lower::LowerFunc, LOWER, lower);
+make_udf_function!(octet_length::OctetLengthFunc, OCTET_LENGTH, octet_length);
 make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
 make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
 make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
@@ -52,9 +56,19 @@ pub mod expr_fn {
         super::btrim().call(args)
     }
 
+    #[doc = "Converts a string to lowercase."]
+    pub fn lower(arg1: Expr) -> Expr {
+        super::lower().call(vec![arg1])
+    }
+
     #[doc = "Removes all characters, spaces by default, from the beginning of a string"]
     pub fn ltrim(args: Vec<Expr>) -> Expr {
         super::ltrim().call(args)
+    }
+
+    #[doc = "returns the number of bytes of a string"]
+    pub fn octet_length(args: Vec<Expr>) -> Expr {
+        super::octet_length().call(args)
     }
 
     #[doc = "Removes all characters, spaces by default, from the end of a string"]
@@ -88,7 +102,9 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         ascii(),
         btrim(),
+        lower(),
         ltrim(),
+        octet_length(),
         rtrim(),
         starts_with(),
         to_hex(),

@@ -37,7 +37,7 @@ use crate::{
 };
 use arrow::{
     array::ArrayRef,
-    compute::kernels::length::{bit_length, length},
+    compute::kernels::length::bit_length,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
@@ -317,7 +317,6 @@ pub fn create_physical_fun(
             }
             other => exec_err!("Unsupported data type {other:?} for function left"),
         }),
-        BuiltinScalarFunction::Lower => Arc::new(string_expressions::lower),
         BuiltinScalarFunction::Lpad => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(lpad, i32, "lpad");
@@ -328,18 +327,6 @@ pub fn create_physical_fun(
                 make_scalar_function_inner(func)(args)
             }
             other => exec_err!("Unsupported data type {other:?} for function lpad"),
-        }),
-        BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
-            ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| x.len() as i32),
-                ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64)),
-                )),
-                _ => unreachable!(),
-            },
         }),
         BuiltinScalarFunction::Repeat => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -1159,31 +1146,6 @@ mod tests {
             &str,
             Utf8,
             StringArray
-        );
-        test_function!(
-            OctetLength,
-            &[lit("chars")],
-            Ok(Some(5)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            OctetLength,
-            &[lit("josé")],
-            Ok(Some(5)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(OctetLength, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
-        test_function!(
-            OctetLength,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
         );
         test_function!(
             Repeat,
