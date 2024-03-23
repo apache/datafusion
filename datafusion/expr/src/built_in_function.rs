@@ -121,10 +121,6 @@ pub enum BuiltinScalarFunction {
     Left,
     /// lpad
     Lpad,
-    /// lower
-    Lower,
-    /// octet_length
-    OctetLength,
     /// random
     Random,
     /// repeat
@@ -247,8 +243,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
-            BuiltinScalarFunction::Lower => Volatility::Immutable,
-            BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -305,13 +299,7 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
-            BuiltinScalarFunction::Lower => {
-                utf8_to_str_type(&input_expr_types[0], "lower")
-            }
             BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
-            BuiltinScalarFunction::OctetLength => {
-                utf8_to_int_type(&input_expr_types[0], "octet_length")
-            }
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
@@ -428,8 +416,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
             | BuiltinScalarFunction::InitCap
-            | BuiltinScalarFunction::Lower
-            | BuiltinScalarFunction::OctetLength
             | BuiltinScalarFunction::Reverse => {
                 Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
             }
@@ -682,9 +668,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
             BuiltinScalarFunction::Left => &["left"],
-            BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],
-            BuiltinScalarFunction::OctetLength => &["octet_length"],
             BuiltinScalarFunction::Repeat => &["repeat"],
             BuiltinScalarFunction::Replace => &["replace"],
             BuiltinScalarFunction::Reverse => &["reverse"],

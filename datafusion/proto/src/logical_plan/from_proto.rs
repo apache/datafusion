@@ -54,11 +54,11 @@ use datafusion_expr::{
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
     log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, nanvl, octet_length, overlay, pi, power, radians, random, repeat,
-    replace, reverse, right, round, rpad, signum, sin, sinh, split_part, sqrt, strpos,
-    substr, substr_index, substring, translate, trunc, uuid, AggregateFunction, Between,
-    BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetFieldAccess, GetIndexedField, GroupingSet,
+    lpad, nanvl, overlay, pi, power, radians, random, repeat, replace, reverse, right,
+    round, rpad, signum, sin, sinh, split_part, sqrt, strpos, substr, substr_index,
+    substring, translate, trunc, uuid, AggregateFunction, Between, BinaryExpr,
+    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
+    GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -457,9 +457,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
-            ScalarFunction::OctetLength => Self::OctetLength,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Lower => Self::Lower,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::BitLength => Self::BitLength,
@@ -1427,12 +1425,6 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::Signum => {
                     Ok(signum(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::OctetLength => {
-                    Ok(octet_length(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Lower => {
-                    Ok(lower(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::BitLength => {
                     Ok(bit_length(parse_expr(&args[0], registry, codec)?))

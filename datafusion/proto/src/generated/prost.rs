@@ -2873,11 +2873,11 @@ pub enum ScalarFunction {
     InitCap = 30,
     Left = 31,
     Lpad = 32,
-    Lower = 33,
+    /// 33 was Lower
     /// 34 was Ltrim
     /// 35 was MD5
     ///   36 was NullIf
-    OctetLength = 37,
+    /// 37 was OctetLength
     Random = 38,
     /// 39 was RegexpReplace
     Repeat = 40,
@@ -3009,8 +3009,6 @@ impl ScalarFunction {
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
-            ScalarFunction::Lower => "Lower",
-            ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::Repeat => "Repeat",
             ScalarFunction::Replace => "Replace",
@@ -3073,8 +3071,6 @@ impl ScalarFunction {
             "InitCap" => Some(Self::InitCap),
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
-            "Lower" => Some(Self::Lower),
-            "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "Repeat" => Some(Self::Repeat),
             "Replace" => Some(Self::Replace),
