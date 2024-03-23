@@ -42,6 +42,15 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
+fn test_schema_support() {
+    quick_test(
+        "SELECT * FROM s1.test",
+        "Projection: s1.test.t_date32, s1.test.t_date64\
+             \n  TableScan: s1.test",
+    );
+}
+
+#[test]
 fn parse_decimals() {
     let test_data = [
         ("1", "Int64(1)"),
@@ -428,6 +437,18 @@ CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
     Projection: test_decimal.id, test_decimal.price
       TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_stored_as_priority() {
+    let sql = "COPY (select * from (values (1))) to 'output/' STORED AS CSV OPTIONS (format json)";
+    let plan = r#"
+CopyTo: format=csv output_url=output/ options: (format json)
+  Projection: column1
+    Values: (Int64(1))
     "#
     .trim();
     quick_test(sql, plan);

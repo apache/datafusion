@@ -74,6 +74,7 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::super::Result;
@@ -81,9 +82,10 @@ mod tests {
     use crate::arrow::util::pretty;
     use crate::execution::context::SessionContext;
     use crate::execution::options::ParquetReadOptions;
-    use crate::test_util;
+    use crate::test_util::{self, register_aggregate_csv};
 
     use datafusion_common::file_options::parquet_writer::parse_compression_string;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
 
     use object_store::local::LocalFileSystem;
@@ -150,7 +152,7 @@ mod tests {
             .await?;
 
             // Check that file actually used the specified compression
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
 
             let reader =
                 parquet::file::serialized_reader::SerializedFileReader::new(file)
@@ -162,6 +164,56 @@ mod tests {
                 parquet_metadata.row_group(0).column(0).compression();
 
             assert_eq!(written_compression, parse_compression_string(compression)?);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_with_small_rg_size() -> Result<()> {
+        // This test verifies writing a parquet file with small rg size
+        // relative to datafusion.execution.batch_size does not panic
+        let mut ctx = SessionContext::new_with_config(
+            SessionConfig::from_string_hash_map(HashMap::from_iter(
+                [("datafusion.execution.batch_size", "10")]
+                    .iter()
+                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+            ))?,
+        );
+        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let test_df = ctx.table("aggregate_test_100").await?;
+
+        let output_path = "file://local/test.parquet";
+
+        for rg_size in 1..10 {
+            let df = test_df.clone();
+            let tmp_dir = TempDir::new()?;
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local_url = Url::parse("file://local").unwrap();
+            let ctx = &test_df.session_state;
+            ctx.runtime_env().register_object_store(&local_url, local);
+            let mut options = TableParquetOptions::default();
+            options.global.max_row_group_size = rg_size;
+            options.global.allow_single_file_parallelism = true;
+            df.write_parquet(
+                output_path,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(options),
+            )
+            .await?;
+
+            // Check that file actually used the correct rg size
+            let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
+
+            let reader =
+                parquet::file::serialized_reader::SerializedFileReader::new(file)
+                    .unwrap();
+
+            let parquet_metadata = reader.metadata();
+
+            let written_rows = parquet_metadata.row_group(0).num_rows();
+
+            assert_eq!(written_rows as usize, rg_size);
         }
 
         Ok(())

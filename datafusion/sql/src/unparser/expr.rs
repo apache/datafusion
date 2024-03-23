@@ -181,6 +181,18 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::IsNotNull(expr) => {
+                Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsTrue(expr) => {
+                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsFalse(expr) => {
+                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsUnknown(expr) => {
+                Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }
     }
@@ -456,6 +468,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Null))
             }
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
     }
@@ -491,11 +504,15 @@ impl Unparser<'_> {
             DataType::Binary => todo!(),
             DataType::FixedSizeBinary(_) => todo!(),
             DataType::LargeBinary => todo!(),
+            DataType::BinaryView => todo!(),
             DataType::Utf8 => Ok(ast::DataType::Varchar(None)),
             DataType::LargeUtf8 => Ok(ast::DataType::Text),
+            DataType::Utf8View => todo!(),
             DataType::List(_) => todo!(),
             DataType::FixedSizeList(_, _) => todo!(),
             DataType::LargeList(_) => todo!(),
+            DataType::ListView(_) => todo!(),
+            DataType::LargeListView(_) => todo!(),
             DataType::Struct(_) => todo!(),
             DataType::Union(_, _) => todo!(),
             DataType::Dictionary(_, _) => todo!(),
@@ -593,6 +610,19 @@ mod tests {
                     null_treatment: None,
                 }),
                 "COUNT(DISTINCT *)",
+            ),
+            (Expr::IsNotNull(Box::new(col("a"))), r#""a" IS NOT NULL"#),
+            (
+                Expr::IsTrue(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS TRUE"#,
+            ),
+            (
+                Expr::IsFalse(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                Expr::IsUnknown(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
         ];
 

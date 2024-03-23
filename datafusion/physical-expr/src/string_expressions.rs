@@ -21,27 +21,22 @@
 
 //! String expressions
 
+use std::iter;
 use std::sync::Arc;
-use std::{
-    fmt::{Display, Formatter},
-    iter,
-};
 
 use arrow::{
     array::{
         Array, ArrayRef, GenericStringArray, Int32Array, Int64Array, OffsetSizeTrait,
         StringArray,
     },
-    datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
+    datatypes::DataType,
 };
 use uuid::Uuid;
 
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::{
-        as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
-    },
+    cast::{as_generic_string_array, as_int64_array, as_string_array},
     exec_err, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
@@ -118,24 +113,6 @@ where
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
-}
-
-/// Returns the numeric code of the first character of the argument.
-/// ascii('x') = 120
-pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-
-    let result = string_array
-        .iter()
-        .map(|string| {
-            string.map(|string: &str| {
-                let mut chars = string.chars();
-                chars.next().map_or(0, |v| v as i32)
-            })
-        })
-        .collect::<Int32Array>();
-
-    Ok(Arc::new(result) as ArrayRef)
 }
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
@@ -348,95 +325,6 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle(args, |string| string.to_lowercase(), "lower")
 }
 
-enum TrimType {
-    Left,
-    Right,
-    Both,
-}
-
-impl Display for TrimType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TrimType::Left => write!(f, "ltrim"),
-            TrimType::Right => write!(f, "rtrim"),
-            TrimType::Both => write!(f, "btrim"),
-        }
-    }
-}
-
-fn general_trim<T: OffsetSizeTrait>(
-    args: &[ArrayRef],
-    trim_type: TrimType,
-) -> Result<ArrayRef> {
-    let func = match trim_type {
-        TrimType::Left => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Right => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
-        },
-        TrimType::Both => |input, pattern: &str| {
-            let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(
-                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
-                pattern.as_ref(),
-            )
-        },
-    };
-
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-
-    match args.len() {
-        1 => {
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        2 => {
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
-        )
-        }
-    }
-}
-
-/// Returns the longest string  with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
-/// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Both)
-}
-
-/// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
-/// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Left)
-}
-
-/// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
-/// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Right)
-}
-
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
 pub fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -522,34 +410,6 @@ pub fn ends_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let right = as_generic_string_array::<T>(&args[1])?;
 
     let result = arrow::compute::kernels::comparison::ends_with(left, right)?;
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Converts the number to its equivalent hexadecimal representation.
-/// to_hex(2147483647) = '7fffffff'
-pub fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    T::Native: OffsetSizeTrait,
-{
-    let integer_array = as_primitive_array::<T>(&args[0])?;
-
-    let result = integer_array
-        .iter()
-        .map(|integer| {
-            if let Some(value) = integer {
-                if let Some(value_usize) = value.to_usize() {
-                    Ok(Some(format!("{value_usize:x}")))
-                } else if let Some(value_isize) = value.to_isize() {
-                    Ok(Some(format!("{value_isize:x}")))
-                } else {
-                    exec_err!("Unsupported data type {integer:?} for function to_hex")
-                }
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<GenericStringArray<i32>>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -709,53 +569,12 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::Int32Array, datatypes::Int32Type};
+    use arrow::array::Int32Array;
     use arrow_array::Int64Array;
 
     use datafusion_common::cast::as_int32_array;
 
-    use crate::string_expressions;
-
     use super::*;
-
-    #[test]
-    // Test to_hex function for zero
-    fn to_hex_zero() -> Result<()> {
-        let array = vec![0].into_iter().collect::<Int32Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("0")]);
-        assert_eq!(&expected, hex_value);
-
-        Ok(())
-    }
-
-    #[test]
-    // Test to_hex function for positive number
-    fn to_hex_positive_number() -> Result<()> {
-        let array = vec![100].into_iter().collect::<Int32Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("64")]);
-        assert_eq!(&expected, hex_value);
-
-        Ok(())
-    }
-
-    #[test]
-    // Test to_hex function for negative number
-    fn to_hex_negative_number() -> Result<()> {
-        let array = vec![-1].into_iter().collect::<Int32Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
-        assert_eq!(&expected, hex_value);
-
-        Ok(())
-    }
 
     #[test]
     fn to_overlay() -> Result<()> {

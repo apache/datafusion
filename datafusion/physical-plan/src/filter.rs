@@ -441,7 +441,9 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use crate::ExecutionPlan;
 
+    use crate::empty::EmptyExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::{UnionFields, UnionMode};
     use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_expr::Operator;
 
@@ -1088,6 +1090,39 @@ mod tests {
         let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
+
+    #[test]
+    fn test_equivalence_properties_union_type() -> Result<()> {
+        let union_type = DataType::Union(
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("f1", DataType::Int32, true),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", union_type, true),
+        ]));
+
+        let exec = FilterExec::try_new(
+            binary(
+                binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
+                Operator::And,
+                binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
+                &schema,
+            )?,
+            Arc::new(EmptyExec::new(schema.clone())),
+        )?;
+
+        exec.statistics().unwrap();
+
         Ok(())
     }
 }

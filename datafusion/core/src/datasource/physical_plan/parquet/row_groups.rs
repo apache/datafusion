@@ -225,6 +225,8 @@ impl PruningStatistics for BloomFilterStatistics {
             .map(|value| {
                 match value {
                     ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
+                    ScalarValue::Binary(Some(v)) => sbbf.check(v),
+                    ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
                     ScalarValue::Boolean(Some(v)) => sbbf.check(v),
                     ScalarValue::Float64(Some(v)) => sbbf.check(v),
                     ScalarValue::Float32(Some(v)) => sbbf.check(v),
