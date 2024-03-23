@@ -32,7 +32,7 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use arrow_schema::SchemaBuilder;
+use arrow_schema::{FieldRef, SchemaBuilder};
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -789,6 +789,13 @@ impl DFSchema {
             .map(|(qualifier, field)| DFFieldRef::new(qualifier.as_ref(), field))
     }
 
+    pub fn iter_with_fieldref(&self) -> impl Iterator<Item = DFFieldRefWithArc<'_>> {
+        self.field_qualifiers
+            .iter()
+            .zip(self.inner.fields())
+            .map(|(qualifier, field)| DFFieldRefWithArc::new(qualifier.as_ref(), field))
+    }
+
     /// Iterate over the qualifiers in the DFSchema and return TableReference.
     pub fn iter_qualifier(&self) -> impl Iterator<Item = Option<&TableReference<'_>>> {
         self.field_qualifiers
@@ -1030,6 +1037,35 @@ pub struct DFFieldRef<'a> {
     qualifier: Option<&'a OwnedTableReference>,
     /// Arrow field definition
     field: &'a Field,
+}
+
+pub struct DFFieldRefWithArc<'a> {
+    /// Optional qualifier (usually a table or relation name)
+    qualifier: Option<&'a OwnedTableReference>,
+    /// Arrow field definition
+    field: &'a FieldRef,
+}
+
+impl<'a> DFFieldRefWithArc<'a> {
+    pub fn new(qualifier: Option<&'a OwnedTableReference>, field: &'a FieldRef) -> Self {
+        Self { qualifier, field }
+    }
+
+    pub fn owned_field(&self) -> FieldRef {
+        self.field.to_owned()
+    }
+
+    pub fn field(&self) -> &FieldRef {
+        self.field
+    }
+
+    pub fn owned_qualifier(&self) -> Option<OwnedTableReference> {
+        self.qualifier.cloned()
+    }
+
+    pub fn qualifier(&self) -> Option<&TableReference> {
+        self.qualifier
+    }
 }
 
 impl<'a> DFFieldRef<'a> {

@@ -47,7 +47,7 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::config::FormatOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
@@ -1548,11 +1548,11 @@ pub fn unnest_with_options(
     let unnested_field = match unnest_field.data_type() {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => Field::new(
+        | DataType::LargeList(field) => Arc::new(Field::new(
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
-        ),
+        )),
         _ => {
             // If the unnest field is not a list type return the input plan.
             return Ok(input);
@@ -1560,12 +1560,12 @@ pub fn unnest_with_options(
     };
 
     // Update the schema with the unnest column type changed to contain the nested type.
-    let (field_qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Field>) =
+    let (field_qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
         input_schema
-            .iter()
+            .iter_with_fieldref()
             .map(|f| {
                 if f.qualifier() == unnest_field.qualifier()
-                    && f.field() == unnest_field.field()
+                    && f.field().as_ref() == unnest_field.field()
                 {
                     (f.owned_qualifier(), unnested_field.clone())
                 } else {
