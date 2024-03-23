@@ -1143,73 +1143,55 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
-    let (nullify_left_fields, nullify_right_fields) = match join_type {
-        JoinType::Inner => (vec![], vec![]),
-        JoinType::Left => {
-            let nullify_right_fields = right
-                .iter()
-                .map(|f| f.owned_field().with_nullable(true))
-                .collect::<Vec<Field>>();
+    fn nullify_feilds<'a>(
+        fields: impl Iterator<Item = DFFieldRef<'a>>,
+    ) -> Vec<(Option<OwnedTableReference>, FieldRef)> {
+        fields
+            .map(|dffield| {
+                let field = dffield.owned_field().with_nullable(true);
+                (dffield.owned_qualifier(), Arc::new(field))
+            })
+            .collect()
+    }
 
-            (vec![], nullify_right_fields)
-        }
-        JoinType::Right => {
-            let nullify_left_fields = left
-                .iter()
-                .map(|f| f.owned_field().with_nullable(true))
-                .collect::<Vec<Field>>();
-
-            (nullify_left_fields, vec![])
-        }
-        JoinType::Full => {
-            let nullify_left_fields = left
-                .iter()
-                .map(|f| f.owned_field().with_nullable(true))
-                .collect::<Vec<Field>>();
-
-            let nullify_right_fields = right
-                .iter()
-                .map(|f| f.owned_field().with_nullable(true))
-                .collect::<Vec<Field>>();
-
-            (nullify_left_fields, nullify_right_fields)
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => (vec![], vec![]),
-        JoinType::RightSemi | JoinType::RightAnti => (vec![], vec![]),
-    };
-
-    let qualified_fields: Vec<DFFieldRef> = match join_type {
-        JoinType::Inner => {
-            // left then right
-            left.iter().chain(right.iter()).collect()
-        }
-        JoinType::Left => {
-            // left then right, right set to nullable in case of not matched scenario
-            left.iter()
-                .chain(right.iter_with_new_field(nullify_right_fields.as_slice()))
-                .collect()
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            left.iter_with_new_field(nullify_left_fields.as_slice())
-                .chain(right.iter())
-                .collect()
-        }
-        JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            left.iter_with_new_field(nullify_left_fields.as_slice())
-                .chain(right.iter_with_new_field(nullify_right_fields.as_slice()))
-                .collect()
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema
-            left.iter().collect()
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema
-            right.iter().collect()
-        }
-    };
+    let (field_qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
+        match join_type {
+            JoinType::Inner => {
+                // left then right
+                left.iter_with_fieldref()
+                    .chain(right.iter_with_fieldref())
+                    .map(|f| (f.owned_qualifier(), f.owned_field()))
+                    .unzip()
+            }
+            JoinType::Left => {
+                // left then right, right set to nullable in case of not matched scenario
+                left.iter_owned()
+                    .chain(nullify_feilds(right.iter()))
+                    .unzip()
+            }
+            JoinType::Right => {
+                // left then right, left set to nullable in case of not matched scenario
+                nullify_feilds(left.iter())
+                    .into_iter()
+                    .chain(right.iter_owned())
+                    .unzip()
+            }
+            JoinType::Full => {
+                // left then right, all set to nullable in case of not matched scenario
+                nullify_feilds(left.iter())
+                    .into_iter()
+                    .chain(nullify_feilds(right.iter()))
+                    .unzip()
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                // Only use the left side for the schema
+                left.iter_owned().unzip()
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                // Only use the right side for the schema
+                right.iter_owned().unzip()
+            }
+        };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,
@@ -1217,7 +1199,8 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    let dfschema = DFSchema::from_qualified_fields(qualified_fields, metadata)?;
+    let dfschema =
+        DFSchema::from_owned_qualified_fields(field_qualifiers, fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
 

@@ -33,6 +33,7 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow_schema::{FieldRef, SchemaBuilder};
+use sqlparser::ast::Table;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -787,6 +788,15 @@ impl DFSchema {
             .iter()
             .zip(self.inner.fields())
             .map(|(qualifier, field)| DFFieldRef::new(qualifier.as_ref(), field))
+    }
+
+    pub fn iter_owned(
+        &self,
+    ) -> impl Iterator<Item = (Option<OwnedTableReference>, FieldRef)> + '_ {
+        self.field_qualifiers
+            .iter()
+            .zip(self.inner.fields())
+            .map(|(qualifier, field)| (qualifier.as_ref().cloned(), field.to_owned()))
     }
 
     pub fn iter_with_fieldref(&self) -> impl Iterator<Item = DFFieldRefWithArc<'_>> {
