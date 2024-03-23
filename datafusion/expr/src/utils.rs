@@ -30,12 +30,12 @@ use crate::{
     Operator, TryCast,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFFieldRef, DFSchema,
-    DFSchemaRef, Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
+    OwnedTableReference, Result, ScalarValue, TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
@@ -732,89 +732,79 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
-fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<Field>> {
-    let agg_cols = agg_cols(agg);
-    let mut fields = vec![];
-    for expr in exprs {
-        match expr {
-            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                // resolve against schema of input to aggregate
-                fields.push(expr.to_field(agg.input.schema())?);
-            }
-            _ => fields.push(expr.to_field(&agg.schema)?),
-        }
-    }
-    Ok(fields)
-}
-
-fn exprlist_to_dffields_aggregate<'a>(
-    exprs: &'a [Expr],
+fn exprlist_to_qualified_fields_aggregate(
+    exprs: &[Expr],
     agg: &Aggregate,
-    fields: &'a [Field],
-) -> Result<Vec<DFFieldRef<'a>>> {
+    is_nullable: Option<bool>,
+) -> Result<Vec<(Option<OwnedTableReference>, Field)>> {
     let agg_cols = agg_cols(agg);
-    let mut dffields = vec![];
-    for (expr, field) in exprs.iter().zip(fields.iter()) {
-        match expr {
+    exprs
+        .iter()
+        .map(|expr| match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
                 // resolve against schema of input to aggregate
-
-                dffields.push(expr.to_dffield(field)?)
+                expr.to_qualifers_and_fields(agg.input.schema(), is_nullable)
             }
-            _ => dffields.push(expr.to_dffield(field)?),
-        }
-    }
-
-    Ok(dffields)
+            _ => expr.to_qualifers_and_fields(&agg.schema, is_nullable),
+        })
+        .collect()
 }
 
-/// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_dffields<'a>(
-    exprs: &'a [Expr],
+fn exprlist_to_qualified_fieldrefs_aggregate(
+    exprs: &[Expr],
+    agg: &Aggregate,
+) -> Result<Vec<(Option<OwnedTableReference>, FieldRef)>> {
+    let agg_cols = agg_cols(agg);
+    exprs
+        .iter()
+        .map(|expr| match expr {
+            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
+                // resolve against schema of input to aggregate
+                expr.to_qualifers_and_fieldrefs(agg.input.schema())
+            }
+            _ => expr.to_qualifers_and_fieldrefs(&agg.schema),
+        })
+        .collect()
+}
+
+pub fn exprlist_to_qualified_fields(
+    exprs: &[Expr],
     plan: &LogicalPlan,
-    fields: &'a [Field],
-) -> Result<Vec<DFFieldRef<'a>>> {
+    is_nullable: Option<bool>,
+) -> Result<Vec<(Option<OwnedTableReference>, Field)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
-    let dffields = match plan {
+
+    match plan {
         LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_dffields_aggregate(exprs, agg, fields))
+            exprlist_to_qualified_fields_aggregate(exprs, agg, is_nullable)
         }
-        _ => None,
-    };
-    if let Some(fields) = dffields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        exprs
+        _ => exprs
             .iter()
-            .zip(fields.iter())
-            .map(|(e, field)| e.to_dffield(field))
-            .collect()
+            .map(|e| e.to_qualifers_and_fields(plan.schema(), is_nullable))
+            .collect(),
     }
 }
 
-/// Create field from an expression, for `exprlist_to_dffields`
-///
-/// The reason for this function is a result of fighting the borrow checker, so we can
-/// borrow `field` easily.
-pub fn exprlist_to_fields(exprs: &[Expr], plan: &LogicalPlan) -> Result<Vec<Field>> {
+pub fn exprlist_to_qualified_fieldrefs(
+    exprs: &[Expr],
+    plan: &LogicalPlan,
+) -> Result<Vec<(Option<OwnedTableReference>, FieldRef)>> {
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
     // because it will contain columns representing complex expressions (such a column named
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
-    let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(exprs, agg)),
-        _ => None,
-    };
-    if let Some(fields) = fields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        let input_schema = &plan.schema();
-        exprs.iter().map(|e| e.to_field(input_schema)).collect()
+
+    match plan {
+        LogicalPlan::Aggregate(agg) => {
+            exprlist_to_qualified_fieldrefs_aggregate(exprs, agg)
+        }
+        _ => exprs
+            .iter()
+            .map(|e| e.to_qualifers_and_fieldrefs(plan.schema()))
+            .collect(),
     }
 }
 

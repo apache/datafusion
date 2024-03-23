@@ -33,9 +33,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_dffields, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    inspect_expr_pre, split_conjunction,
+    enumerate_grouping_sets, exprlist_to_qualified_fieldrefs,
+    exprlist_to_qualified_fields, find_out_reference_exprs, grouping_set_expr_count,
+    grouping_set_to_exprlist, inspect_expr_pre, split_conjunction,
 };
 use crate::{
     build_join_schema, col, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
@@ -43,7 +43,7 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
@@ -1810,14 +1810,18 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    // TODO: merge these two functions
-    let fields = exprlist_to_fields(exprs, input)?;
-    let dffields = exprlist_to_dffields(exprs, input, fields.as_slice())?;
-    let mut schema =
-        DFSchema::from_qualified_fields(dffields, input.schema().metadata().clone())?;
-    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
-        exprs, input,
-    )?)?;
+    let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Field>) =
+        exprlist_to_qualified_fields(exprs, input, None)?
+            .into_iter()
+            .unzip();
+
+    let schema = DFSchema::from_owned_qualified_fields(
+        qualifiers,
+        fields,
+        input.schema().metadata().clone(),
+    )?
+    .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?)?;
+
     Ok(Arc::new(schema))
 }
 
@@ -1987,19 +1991,22 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let fields: Vec<DFFieldRef> = input.schema().iter().collect();
+        let fields: Vec<(Option<OwnedTableReference>, FieldRef)> =
+            input.schema().iter_owned().collect();
         let input_len = fields.len();
-        let mut window_fields = fields;
-        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
-        let expr_fields =
-            exprlist_to_dffields(window_expr.as_slice(), &input, &expr_fields)?;
-        window_fields.extend(expr_fields);
+
+        let window_fields = exprlist_to_qualified_fieldrefs(&window_expr, &input)?;
+        let window_len = window_fields.len();
+
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
+            fields.into_iter().chain(window_fields).unzip();
+
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
         let mut window_func_dependencies =
             input.schema().functional_dependencies().clone();
-        window_func_dependencies.extend_target_indices(window_fields.len());
+        window_func_dependencies.extend_target_indices(window_len);
 
         // Since we know that ROW_NUMBER outputs will be unique (i.e. it consists
         // of consecutive numbers per partition), we can represent this fact with
@@ -2034,7 +2041,7 @@ impl Window {
 
         if !new_dependencies.is_empty() {
             for dependence in new_dependencies.iter_mut() {
-                dependence.target_indices = (0..window_fields.len()).collect();
+                dependence.target_indices = (0..window_len).collect();
             }
             // Add the dependency introduced because of ROW_NUMBER window function to the functional dependency
             let new_deps = FunctionalDependencies::new(new_dependencies);
@@ -2042,7 +2049,7 @@ impl Window {
         }
 
         let schema = Arc::new(
-            DFSchema::from_qualified_fields(window_fields, metadata)?
+            DFSchema::from_owned_qualified_fields(qualifiers, fields, metadata)?
                 .with_functional_dependencies(window_func_dependencies)?,
         );
 
@@ -2317,12 +2324,14 @@ impl DistinctOn {
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
-        let expr_fields = exprlist_to_fields(select_expr.as_slice(), &input)?;
-        let qualified_fields =
-            exprlist_to_dffields(select_expr.as_slice(), &input, &expr_fields)?;
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
+            exprlist_to_qualified_fieldrefs(&select_expr, &input)?
+                .into_iter()
+                .unzip();
 
-        let dfschema = DFSchema::from_qualified_fields(
-            qualified_fields,
+        let dfschema = DFSchema::from_owned_qualified_fields(
+            qualifiers,
+            fields,
             input.schema().metadata().clone(),
         )?;
 
@@ -2396,34 +2405,22 @@ impl Aggregate {
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
         let group_expr = enumerate_grouping_sets(group_expr)?;
-
-        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
-
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let grouping_expr_fields = exprlist_to_fields(&grouping_expr, &input)?;
-
         // Even columns that cannot be null will become nullable when used in a grouping set.
-        let grouping_expr_fields = if is_grouping_set {
-            grouping_expr_fields
-                .into_iter()
-                .map(|f| f.with_nullable(true))
-                .collect::<Vec<_>>()
+        let is_nullable = if matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+            Some(true)
         } else {
-            grouping_expr_fields
+            None
         };
-
-        let mut grouping_expr_dffields =
-            exprlist_to_dffields(&grouping_expr, &input, &grouping_expr_fields)?;
-
-        let aggr_expr_fields = exprlist_to_fields(&aggr_expr, &input)?;
-        let aggr_expr_dffields =
-            exprlist_to_dffields(&aggr_expr, &input, &aggr_expr_fields)?;
-
-        grouping_expr_dffields.extend(aggr_expr_dffields);
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Field>) =
+            exprlist_to_qualified_fields(&grouping_expr, &input, is_nullable)?
+                .into_iter()
+                .chain(exprlist_to_qualified_fields(&aggr_expr, &input, None)?)
+                .unzip();
 
         let schema =
-            DFSchema::from_qualified_fields(grouping_expr_dffields, HashMap::new())?;
+            DFSchema::from_owned_qualified_fields(qualifiers, fields, HashMap::new())?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

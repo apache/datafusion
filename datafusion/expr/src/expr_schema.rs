@@ -26,16 +26,28 @@ use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::data_types;
 use crate::{col, utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFFieldRef,
-    ExprSchema, Result,
+    ExprSchema, OwnedTableReference, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
+    // TODO: merge these two?
+    fn to_qualifers_and_fields(
+        &self,
+        input_schema: &dyn ExprSchema,
+        is_nullable: Option<bool>,
+    ) -> Result<(Option<OwnedTableReference>, Field)>;
+
+    fn to_qualifers_and_fieldrefs(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<OwnedTableReference>, FieldRef)>;
+
     fn to_field(&self, input_schema: &dyn ExprSchema) -> Result<Field>;
 
     /// given a schema, return the type of the expr
@@ -372,6 +384,62 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
+        }
+    }
+
+    fn to_qualifers_and_fields(
+        &self,
+        input_schema: &dyn ExprSchema,
+        is_nullable: Option<bool>,
+    ) -> Result<(Option<OwnedTableReference>, Field)> {
+        let (data_type, is_nullable) = if let Some(is_nullable) = is_nullable {
+            (self.get_type(input_schema)?, is_nullable)
+        } else {
+            self.data_type_and_nullable(input_schema)?
+        };
+
+        let metadata = self.metadata(input_schema)?;
+        match self {
+            Expr::Column(c) => {
+                let field = Field::new(c.name.clone(), data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((c.relation.clone(), field))
+            }
+            Expr::Alias(alias) => {
+                let field = Field::new(alias.name.clone(), data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((alias.relation.clone(), field))
+            }
+            _ => {
+                let field = Field::new(self.display_name()?, data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((None, field))
+            }
+        }
+    }
+
+    fn to_qualifers_and_fieldrefs(
+        &self,
+        input_schema: &dyn ExprSchema,
+    ) -> Result<(Option<OwnedTableReference>, FieldRef)> {
+        let (data_type, is_nullable) = self.data_type_and_nullable(input_schema)?;
+        let metadata = self.metadata(input_schema)?;
+        match self {
+            Expr::Column(c) => {
+                let field = Field::new(c.name.clone(), data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((c.relation.clone(), field.into()))
+            }
+            Expr::Alias(alias) => {
+                let field = Field::new(alias.name.clone(), data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((alias.relation.clone(), field.into()))
+            }
+            _ => {
+                let field = Field::new(self.display_name()?, data_type, is_nullable)
+                    .with_metadata(metadata);
+                Ok((None, field.into()))
+            }
         }
     }
 
