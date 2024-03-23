@@ -1552,7 +1552,7 @@ pub fn unnest_with_options(
     // Update the schema with the unnest column type changed to contain the nested type.
     let (field_qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
         input_schema
-            .iter_with_fieldref()
+            .iter_dffield_with_arc()
             .map(|f| {
                 if f.qualifier() == unnest_field.qualifier()
                     && f.field().as_ref() == unnest_field.field()

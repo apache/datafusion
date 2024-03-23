@@ -294,7 +294,6 @@ impl DFSchema {
         let mut qualifiers = Vec::new();
         for f in other_schema.iter() {
             // skip duplicate columns
-
             let duplicated_field = self_fields.contains(&f.qualified_name());
             if !duplicated_field {
                 schema_builder.push(f.owned_field());
@@ -644,7 +643,7 @@ impl DFSchema {
         let self_fields = self.iter();
         let other_fields = other.iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
-            f1.owned_qualifier() == f2.owned_qualifier()
+            f1.qualifier() == f2.qualifier()
                 && f1.name() == f2.name()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
@@ -798,7 +797,8 @@ impl DFSchema {
             .map(|(qualifier, field)| (qualifier.as_ref().cloned(), field.to_owned()))
     }
 
-    pub fn iter_with_fieldref(&self) -> impl Iterator<Item = DFFieldRefWithArc<'_>> {
+    /// Special cases for FieldRef that we need Arc to avoid too many clone
+    pub fn iter_dffield_with_arc(&self) -> impl Iterator<Item = DFFieldRefWithArc<'_>> {
         self.field_qualifiers
             .iter()
             .zip(self.inner.fields())

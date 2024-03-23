@@ -1242,12 +1242,12 @@ impl DataFrame {
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .map(|dffield| {
-                if dffield.name() == name {
+            .map(|f| {
+                if f.name() == name {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    col(dffield)
+                    col(f)
                 }
             })
             .collect();

@@ -17,6 +17,7 @@
 
 //! Column
 
+use crate::dfschema::DFFieldRefWithArc;
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{
