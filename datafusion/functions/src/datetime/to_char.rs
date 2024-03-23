@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, StringArray};
+use arrow_array::{new_null_array, Array, ArrayRef, StringArray};
 use arrow_schema::DataType::{Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8};
 use arrow_schema::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 
@@ -176,8 +176,10 @@ fn _to_char_scalar(
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         } else {
-            let result: Vec<Option<String>> = vec![None; array.len()];
-            return Ok(ColumnarValue::Array(Arc::new(StringArray::from(result))));
+            return Ok(ColumnarValue::Array(new_null_array(
+                &DataType::Utf8,
+                array.len(),
+            )));
         }
     }
 
