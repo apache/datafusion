@@ -611,18 +611,18 @@ mod tests {
                 }),
                 "COUNT(DISTINCT *)",
             ),
-            (Expr::IsNotNull(Box::new(col("a"))), "\"a\" IS NOT NULL"),
+            (Expr::IsNotNull(Box::new(col("a"))), r#""a" IS NOT NULL"#),
             (
                 Expr::IsTrue(Box::new((col("a") + col("b")).gt(lit(4)))),
-                "((\"a\" + \"b\") > 4) IS TRUE",
+                r#"(("a" + "b") > 4) IS TRUE"#,
             ),
             (
                 Expr::IsFalse(Box::new((col("a") + col("b")).gt(lit(4)))),
-                "((\"a\" + \"b\") > 4) IS FALSE",
+                r#"(("a" + "b") > 4) IS FALSE"#,
             ),
             (
                 Expr::IsUnknown(Box::new((col("a") + col("b")).gt(lit(4)))),
-                "((\"a\" + \"b\") > 4) IS UNKNOWN",
+                r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
         ];
 
