@@ -72,6 +72,11 @@ pub mod expr_fn {
         super::to_hex().call(vec![arg1])
     }
 
+    #[doc = "Removes all characters, spaces by default, from both sides of a string"]
+    pub fn trim(args: Vec<Expr>) -> Expr {
+        super::btrim().call(args)
+    }
+
     #[doc = "Converts a string to uppercase."]
     pub fn upper(arg1: Expr) -> Expr {
         super::upper().call(vec![arg1])
