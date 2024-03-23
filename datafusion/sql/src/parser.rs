@@ -754,6 +754,10 @@ impl<'a> DFParser<'a> {
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
                         ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                        // Expects either list of column names (col_name [, col_name]*)
+                        // or list of column definitions (col_name datatype [, col_name datatype]* )
+                        // use the token after the name to decide which parsing rule to use
+                        // Note that mixing both names and definitions is not allowed
                         let peeked = self.parser.peek_nth_token(2);
                         if peeked == Token::Comma || peeked == Token::RParen {
                             // list of column names
@@ -769,7 +773,8 @@ impl<'a> DFParser<'a> {
 
                             if !cons.is_empty() {
                                 return Err(ParserError::ParserError(
-                                    "Should this be allowed?".to_string(),
+                                    "Constraints on Partition Columns are not supported"
+                                        .to_string(),
                                 ));
                             }
                         }
