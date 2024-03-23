@@ -33,7 +33,6 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow_schema::{FieldRef, SchemaBuilder};
-use sqlparser::ast::Table;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
