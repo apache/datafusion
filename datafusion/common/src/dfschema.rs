@@ -811,20 +811,6 @@ impl DFSchema {
             .iter()
             .map(|qualifier| qualifier.as_ref())
     }
-
-    /// Iterator over the qualifers and return DFFieldRef with new field
-    pub fn iter_with_new_field<'a, 'b>(
-        &'a self,
-        field: &'b [Field],
-    ) -> impl Iterator<Item = DFFieldRef<'a>>
-    where
-        'b: 'a,
-    {
-        self.field_qualifiers
-            .iter()
-            .zip(field.iter())
-            .map(|(qualifier, field)| DFFieldRef::new(qualifier.as_ref(), field))
-    }
 }
 
 impl From<DFSchema> for Schema {

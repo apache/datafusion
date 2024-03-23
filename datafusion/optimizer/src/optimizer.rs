@@ -467,7 +467,10 @@ mod tests {
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
+    use arrow::datatypes::FieldRef;
+    use datafusion_common::{
+        plan_err, DFSchema, DFSchemaRef, OwnedTableReference, Result,
+    };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
@@ -613,22 +616,23 @@ mod tests {
     }
 
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
-        let fields = schema
-            .iter()
-            .enumerate()
-            .map(|(i, dfffield)| {
-                let metadata =
-                    [("key".into(), format!("value {i}"))].into_iter().collect();
-                dfffield.owned_field().with_metadata(metadata)
-            })
-            .collect::<Vec<_>>();
-
-        let new_fields = schema
-            .iter_with_new_field(fields.as_slice())
-            .collect::<Vec<_>>();
+        let (qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<FieldRef>) =
+            schema
+                .iter()
+                .enumerate()
+                .map(|(i, dfffield)| {
+                    let metadata =
+                        [("key".into(), format!("value {i}"))].into_iter().collect();
+                    let field = dfffield.owned_field().with_metadata(metadata);
+                    (dfffield.owned_qualifier(), Arc::new(field))
+                })
+                .unzip();
 
         let new_metadata = schema.metadata().clone();
-        Arc::new(DFSchema::from_qualified_fields(new_fields, new_metadata).unwrap())
+        Arc::new(
+            DFSchema::from_owned_qualified_fields(qualifiers, fields, new_metadata)
+                .unwrap(),
+        )
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

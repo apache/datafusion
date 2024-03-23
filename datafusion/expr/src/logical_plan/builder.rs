@@ -1158,10 +1158,7 @@ pub fn build_join_schema(
         match join_type {
             JoinType::Inner => {
                 // left then right
-                left.iter_with_fieldref()
-                    .chain(right.iter_with_fieldref())
-                    .map(|f| (f.owned_qualifier(), f.owned_field()))
-                    .unzip()
+                left.iter_owned().chain(right.iter_owned()).unzip()
             }
             JoinType::Left => {
                 // left then right, right set to nullable in case of not matched scenario
@@ -1299,32 +1296,42 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
     }
 
-    let union_fields = zip(left_plan.schema().iter(), right_plan.schema().iter())
+    fn union_fields<'a>(
+        left_fields: impl Iterator<Item = DFFieldRef<'a>>,
+        right_fields: impl Iterator<Item = DFFieldRef<'a>>,
+    ) -> Result<Vec<(Option<OwnedTableReference>, FieldRef)>> {
+        zip(left_fields, right_fields)
         .map(|(left_field, right_field)| {
             let nullable = left_field.is_nullable() || right_field.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.data_type(), right_field.data_type())
-                    .ok_or_else(|| {
-                        plan_datafusion_err!(
-                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                right_field.name(),
-                right_field.data_type(),
-                left_field.name(),
-                left_field.data_type()
-            )
-                    })?;
+            let data_type = comparison_coercion(left_field.data_type(), right_field.data_type())
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                        right_field.name(),
+                        right_field.data_type(),
+                        left_field.name(),
+                        left_field.data_type()
+                    )
+                })?;
 
-            Ok(Field::new(left_field.name(), data_type, nullable))
+            let field = Field::new(left_field.name(), data_type, nullable);
+            Ok((left_field.owned_qualifier(), Arc::new(field)))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()
+    }
 
     // create union schema
-    let union_qualified_fields = left_plan
-        .schema()
-        .iter_with_new_field(union_fields.as_slice())
-        .collect::<Vec<_>>();
-    let union_schema =
-        DFSchema::from_qualified_fields(union_qualified_fields, HashMap::new())?;
+    let (union_qualifers, union_fields): (
+        Vec<Option<OwnedTableReference>>,
+        Vec<FieldRef>,
+    ) = union_fields(left_plan.schema().iter(), right_plan.schema().iter())?
+        .into_iter()
+        .unzip();
+    let union_schema = DFSchema::from_owned_qualified_fields(
+        union_qualifers,
+        union_fields,
+        HashMap::new(),
+    )?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
