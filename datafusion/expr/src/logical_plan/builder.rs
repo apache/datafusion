@@ -1559,26 +1559,27 @@ pub fn unnest_with_options(
         }
     };
 
-    // TODO: Avoid clone if possible
-    let qualifier = unnest_field.owned_qualifier();
-
     // Update the schema with the unnest column type changed to contain the nested type.
-    let fields = input_schema
-        .iter()
-        .map(|f| {
-            if f.qualifier() == qualifier.as_ref() && f.field() == unnest_field.field() {
-                DFFieldRef::new(qualifier.as_ref(), &unnested_field)
-            } else {
-                f
-            }
-        })
-        .collect::<Vec<_>>();
+    let (field_qualifiers, fields): (Vec<Option<OwnedTableReference>>, Vec<Field>) =
+        input_schema
+            .iter()
+            .map(|f| {
+                if f.qualifier() == unnest_field.qualifier()
+                    && f.field() == unnest_field.field()
+                {
+                    (f.owned_qualifier(), unnested_field.clone())
+                } else {
+                    (f.owned_qualifier(), f.owned_field())
+                }
+            })
+            .unzip();
 
     let metadata = input_schema.metadata().clone();
-    let df_schema = DFSchema::from_qualified_fields(fields, metadata)?;
+    let dfschema =
+        DFSchema::from_owned_qualified_fields(field_qualifiers, fields, metadata)?;
     // We can use the existing functional dependencies:
     let deps = input_schema.functional_dependencies().clone();
-    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
+    let schema = Arc::new(dfschema.with_functional_dependencies(deps)?);
     let column = Column::new(unnest_field.owned_qualifier(), unnest_field.name());
 
     Ok(LogicalPlan::Unnest(Unnest {

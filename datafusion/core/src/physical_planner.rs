@@ -1029,9 +1029,7 @@ impl DefaultPhysicalPlanner {
                         let join_plan = if added_project {
                             let final_join_result = join_schema
                                 .iter()
-                                .map(|dffield| {
-                                    col(dffield)
-                                })
+                                .map(col)
                                 .collect::<Vec<_>>();
                             let projection =
                                 Projection::try_new(

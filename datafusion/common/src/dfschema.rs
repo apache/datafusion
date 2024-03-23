@@ -199,6 +199,22 @@ impl DFSchema {
         Ok(dfschema)
     }
 
+    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
+    pub fn from_owned_qualified_fields(
+        field_qualifiers: Vec<Option<OwnedTableReference>>,
+        fields: impl Into<Fields>,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
+        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+        let dfschema = Self {
+            inner: schema,
+            field_qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+        };
+        dfschema.check_names()?;
+        Ok(dfschema)
+    }
+
     /// Check if the schema have some fields with the same name
     fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
