@@ -187,6 +187,30 @@ select * from partitioned_insert_test_verify;
 
 statement ok
 CREATE EXTERNAL TABLE
+partitioned_insert_test_hive(c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned'
+PARTITIONED BY (a string, b string);
+
+query ITT
+INSERT INTO partitioned_insert_test_hive VALUES (3,30,300);
+----
+1
+
+query ITT
+SELECT * FROM partitioned_insert_test_hive order by a,b,c;
+----
+1 10 100
+1 10 200
+1 20 100
+2 20 100
+1 20 200
+2 20 200
+3 30 300
+
+
+statement ok
+CREATE EXTERNAL TABLE
 partitioned_insert_test_json(a string, b string)
 STORED AS json
 LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/'
