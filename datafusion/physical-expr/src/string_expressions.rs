@@ -41,80 +41,6 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 
-/// applies a unary expression to `args[0]` that is expected to be downcastable to
-/// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
-/// # Errors
-/// This function errors when:
-/// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
-pub(crate) fn unary_string_function<'a, T, O, F, R>(
-    args: &[&'a dyn Array],
-    op: F,
-    name: &str,
-) -> Result<GenericStringArray<O>>
-where
-    R: AsRef<str>,
-    O: OffsetSizeTrait,
-    T: OffsetSizeTrait,
-    F: Fn(&'a str) -> R,
-{
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            name
-        );
-    }
-
-    let string_array = as_generic_string_array::<T>(args[0])?;
-
-    // first map is the iterator, second is for the `Option<_>`
-    Ok(string_array.iter().map(|string| string.map(&op)).collect())
-}
-
-fn handle<'a, F, R>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
-where
-    R: AsRef<str>,
-    F: Fn(&'a str) -> R,
-{
-    match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i32,
-                    i32,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Array(Arc::new(unary_string_function::<
-                    i64,
-                    i64,
-                    _,
-                    _,
-                >(
-                    &[a.as_ref()], op, name
-                )?)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-    }
-}
-
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -319,12 +245,6 @@ pub fn instr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Converts the string to all lower case.
-/// lower('TOM') = 'tom'
-pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_lowercase(), "lower")
-}
-
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
 pub fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -412,12 +332,6 @@ pub fn ends_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = arrow::compute::kernels::comparison::ends_with(left, right)?;
 
     Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Converts the string to all upper case.
-/// upper('tom') = 'TOM'
-pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle(args, |string| string.to_uppercase(), "upper")
 }
 
 /// Prints random (v4) uuid values per row
