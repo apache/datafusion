@@ -871,24 +871,30 @@ impl LogicalPlan {
                 let nested_dffield =
                     input.schema().qualified_field_from_column(column)?;
 
-                let qualifiers_and_fields = input
-                    .schema()
-                    .iter()
-                    .map(|f| {
-                        if f.qualifier().eq(&nested_dffield.qualifier())
-                            && f.field() == nested_dffield.field()
-                        {
-                            // TODO: avoid recompute
-                            schema.qualified_field_from_column(column)
-                        } else {
-                            Ok(f)
-                        }
-                    })
-                    .collect::<Result<Vec<DFFieldRef>>>()?;
+                let unnested_dffield = schema.qualified_field_from_column(column)?;
+
+                let (qualifers, fields): (Vec<Option<OwnedTableReference>>, Vec<Field>) =
+                    input
+                        .schema()
+                        .iter()
+                        .map(|f| {
+                            if f.qualifier().eq(&nested_dffield.qualifier())
+                                && f.field() == nested_dffield.field()
+                            {
+                                (
+                                    unnested_dffield.owned_qualifier(),
+                                    unnested_dffield.owned_field(),
+                                )
+                            } else {
+                                (f.owned_qualifier(), f.owned_field())
+                            }
+                        })
+                        .unzip();
 
                 let schema = Arc::new(
-                    DFSchema::from_qualified_fields(
-                        qualifiers_and_fields,
+                    DFSchema::from_owned_qualified_fields(
+                        qualifers,
+                        fields,
                         input.schema().metadata().clone(),
                     )?
                     // We can use the existing functional dependencies as is:
