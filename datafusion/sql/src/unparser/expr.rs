@@ -181,6 +181,18 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
+            Expr::IsNotNull(expr) => {
+                Ok(ast::Expr::IsNotNull(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsTrue(expr) => {
+                Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsFalse(expr) => {
+                Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::IsUnknown(expr) => {
+                Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }
     }
@@ -598,6 +610,19 @@ mod tests {
                     null_treatment: None,
                 }),
                 "COUNT(DISTINCT *)",
+            ),
+            (Expr::IsNotNull(Box::new(col("a"))), r#""a" IS NOT NULL"#),
+            (
+                Expr::IsTrue(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS TRUE"#,
+            ),
+            (
+                Expr::IsFalse(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS FALSE"#,
+            ),
+            (
+                Expr::IsUnknown(Box::new((col("a") + col("b")).gt(lit(4)))),
+                r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
         ];
 
