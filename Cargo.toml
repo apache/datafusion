@@ -19,7 +19,7 @@
 exclude = ["datafusion-cli"]
 members = [
     "datafusion/common",
-    "datafusion/common_runtime",
+    "datafusion/common-runtime",
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
@@ -73,7 +73,7 @@ ctor = "0.2.0"
 dashmap = "5.4.0"
 datafusion = { path = "datafusion/core", version = "36.0.0", default-features = false }
 datafusion-common = { path = "datafusion/common", version = "36.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common_runtime", version = "36.0.0" }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "36.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "36.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "36.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "36.0.0" }
@@ -93,7 +93,7 @@ indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.9.0", default-features = false }
+object_store = { version = "0.9.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"

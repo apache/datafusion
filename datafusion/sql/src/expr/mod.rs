@@ -15,20 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod binary_op;
-mod function;
-mod grouping_set;
-mod identifier;
-mod json_access;
-mod order_by;
-mod subquery;
-mod substring;
-mod unary_op;
-mod value;
-
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
+use sqlparser::parser::ParserError::ParserError;
+
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
     Result, ScalarValue,
@@ -40,8 +31,19 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
-use sqlparser::parser::ParserError::ParserError;
+
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
+mod binary_op;
+mod function;
+mod grouping_set;
+mod identifier;
+mod json_access;
+mod order_by;
+mod subquery;
+mod substring;
+mod unary_op;
+mod value;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn sql_expr_to_logical_expr(
@@ -743,13 +745,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = match trim_where {
-            Some(TrimWhereField::Leading) => BuiltinScalarFunction::Ltrim,
-            Some(TrimWhereField::Trailing) => BuiltinScalarFunction::Rtrim,
-            Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
-            None => BuiltinScalarFunction::Trim,
-        };
-
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
         let args = match (trim_what, trim_characters) {
             (Some(to_trim), None) => {
@@ -774,7 +769,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             (None, None) => Ok(vec![arg]),
         }?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+
+        let fun_name = match trim_where {
+            Some(TrimWhereField::Leading) => "ltrim",
+            Some(TrimWhereField::Trailing) => "rtrim",
+            Some(TrimWhereField::Both) => "btrim",
+            None => "trim",
+        };
+        let fun = self
+            .context_provider
+            .get_function_meta(fun_name)
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected '{fun_name}' function")
+            })?;
+
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
     fn sql_overlay_to_expr(

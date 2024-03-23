@@ -850,7 +850,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("Unsupported Value in COPY statement {}", value);
                 }
             };
-            options.insert(key.to_lowercase(), value_string.to_lowercase());
+            if !(&key.contains('.')) {
+                // If config does not belong to any namespace, assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+
+                let renamed_key = format!("format.{}", key);
+                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+            } else {
+                options.insert(key.to_lowercase(), value_string.to_lowercase());
+            }
         }
 
         let file_type = if let Some(file_type) = statement.stored_as {

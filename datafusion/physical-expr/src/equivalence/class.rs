@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_remove_redundant_entries_eq_group() -> Result<()> {
-        let entries = vec![
+        let entries = [
             EquivalenceClass::new(vec![lit(1), lit(1), lit(2)]),
             // This group is meaningless should be removed
             EquivalenceClass::new(vec![lit(3), lit(3)]),
@@ -543,11 +543,11 @@ mod tests {
         ];
         // Given equivalences classes are not in succinct form.
         // Expected form is the most plain representation that is functionally same.
-        let expected = vec![
+        let expected = [
             EquivalenceClass::new(vec![lit(1), lit(2)]),
             EquivalenceClass::new(vec![lit(4), lit(5), lit(6)]),
         ];
-        let mut eq_groups = EquivalenceGroup::new(entries);
+        let mut eq_groups = EquivalenceGroup::new(entries.to_vec());
         eq_groups.remove_redundant_entries();
 
         let eq_groups = eq_groups.classes;

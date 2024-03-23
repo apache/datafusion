@@ -20,6 +20,7 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+use crate::config::FormatOptions;
 use crate::error::{DataFusionError, Result};
 
 /// The default file extension of arrow files
@@ -53,6 +54,19 @@ pub enum FileType {
     CSV,
     /// JSON file
     JSON,
+}
+
+impl From<&FormatOptions> for FileType {
+    fn from(value: &FormatOptions) -> Self {
+        match value {
+            FormatOptions::CSV(_) => FileType::CSV,
+            FormatOptions::JSON(_) => FileType::JSON,
+            #[cfg(feature = "parquet")]
+            FormatOptions::PARQUET(_) => FileType::PARQUET,
+            FormatOptions::AVRO => FileType::AVRO,
+            FormatOptions::ARROW => FileType::ARROW,
+        }
+    }
 }
 
 impl GetExt for FileType {

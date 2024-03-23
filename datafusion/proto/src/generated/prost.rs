@@ -2844,7 +2844,7 @@ pub enum ScalarFunction {
     ///   1 was Acos
     ///   2 was Asin
     Atan = 3,
-    Ascii = 4,
+    /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
     /// 7 was Digest
@@ -2863,7 +2863,7 @@ pub enum ScalarFunction {
     /// 20 was Array
     /// RegexpMatch = 21;
     BitLength = 22,
-    Btrim = 23,
+    /// 23 was Btrim
     CharacterLength = 24,
     Chr = 25,
     Concat = 26,
@@ -2874,7 +2874,7 @@ pub enum ScalarFunction {
     Left = 31,
     Lpad = 32,
     Lower = 33,
-    Ltrim = 34,
+    /// 34 was Ltrim
     /// 35 was MD5
     ///   36 was NullIf
     OctetLength = 37,
@@ -2885,24 +2885,24 @@ pub enum ScalarFunction {
     Reverse = 42,
     Right = 43,
     Rpad = 44,
-    Rtrim = 45,
+    /// 45 was Rtrim
     /// 46 was SHA224
     /// 47 was SHA256
     /// 48 was SHA384
     /// 49 was SHA512
     SplitPart = 50,
-    StartsWith = 51,
+    /// StartsWith = 51;
     Strpos = 52,
     Substr = 53,
-    ToHex = 54,
+    /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
     Translate = 60,
-    Trim = 61,
-    Upper = 62,
+    /// Trim = 61;
+    /// Upper = 62;
     Coalesce = 63,
     Power = 64,
     /// 65 was StructFun
@@ -2988,7 +2988,6 @@ impl ScalarFunction {
         match self {
             ScalarFunction::Unknown => "unknown",
             ScalarFunction::Atan => "Atan",
-            ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
@@ -3003,7 +3002,6 @@ impl ScalarFunction {
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::BitLength => "BitLength",
-            ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",
             ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
@@ -3012,7 +3010,6 @@ impl ScalarFunction {
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
             ScalarFunction::Lower => "Lower",
-            ScalarFunction::Ltrim => "Ltrim",
             ScalarFunction::OctetLength => "OctetLength",
             ScalarFunction::Random => "Random",
             ScalarFunction::Repeat => "Repeat",
@@ -3020,15 +3017,10 @@ impl ScalarFunction {
             ScalarFunction::Reverse => "Reverse",
             ScalarFunction::Right => "Right",
             ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::Rtrim => "Rtrim",
             ScalarFunction::SplitPart => "SplitPart",
-            ScalarFunction::StartsWith => "StartsWith",
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
-            ScalarFunction::ToHex => "ToHex",
             ScalarFunction::Translate => "Translate",
-            ScalarFunction::Trim => "Trim",
-            ScalarFunction::Upper => "Upper",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
@@ -3060,7 +3052,6 @@ impl ScalarFunction {
         match value {
             "unknown" => Some(Self::Unknown),
             "Atan" => Some(Self::Atan),
-            "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
@@ -3075,7 +3066,6 @@ impl ScalarFunction {
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
             "BitLength" => Some(Self::BitLength),
-            "Btrim" => Some(Self::Btrim),
             "CharacterLength" => Some(Self::CharacterLength),
             "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
@@ -3084,7 +3074,6 @@ impl ScalarFunction {
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
             "Lower" => Some(Self::Lower),
-            "Ltrim" => Some(Self::Ltrim),
             "OctetLength" => Some(Self::OctetLength),
             "Random" => Some(Self::Random),
             "Repeat" => Some(Self::Repeat),
@@ -3092,15 +3081,10 @@ impl ScalarFunction {
             "Reverse" => Some(Self::Reverse),
             "Right" => Some(Self::Right),
             "Rpad" => Some(Self::Rpad),
-            "Rtrim" => Some(Self::Rtrim),
             "SplitPart" => Some(Self::SplitPart),
-            "StartsWith" => Some(Self::StartsWith),
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
-            "ToHex" => Some(Self::ToHex),
             "Translate" => Some(Self::Translate),
-            "Trim" => Some(Self::Trim),
-            "Upper" => Some(Self::Upper),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),

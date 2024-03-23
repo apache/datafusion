@@ -740,6 +740,9 @@ pub trait ExprSchema: std::fmt::Debug {
 
     /// Returns the column's optional metadata.
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
+
+    /// Return the coulmn's datatype and nullability
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -755,6 +758,10 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
         ExprSchema::metadata(self.as_ref(), col)
     }
+
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
+        self.as_ref().data_type_and_nullable(col)
+    }
 }
 
 impl ExprSchema for DFSchema {
@@ -768,6 +775,11 @@ impl ExprSchema for DFSchema {
 
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
         Ok(self.field_from_column(col)?.metadata())
+    }
+
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
+        let field = self.field_from_column(col)?;
+        Ok((field.data_type(), field.is_nullable()))
     }
 }
 

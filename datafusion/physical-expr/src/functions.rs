@@ -252,15 +252,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
-        BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::ascii::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::ascii::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function ascii"),
-        }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
@@ -272,15 +263,6 @@ pub fn create_physical_fun(
                 )),
                 _ => unreachable!(),
             },
-        }),
-        BuiltinScalarFunction::Btrim => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::btrim::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::btrim::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function btrim"),
         }),
         BuiltinScalarFunction::CharacterLength => {
             Arc::new(|args| match args[0].data_type() {
@@ -346,15 +328,6 @@ pub fn create_physical_fun(
                 make_scalar_function_inner(func)(args)
             }
             other => exec_err!("Unsupported data type {other:?} for function lpad"),
-        }),
-        BuiltinScalarFunction::Ltrim => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::ltrim::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::ltrim::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function ltrim"),
         }),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
@@ -427,15 +400,6 @@ pub fn create_physical_fun(
             }
             other => exec_err!("Unsupported data type {other:?} for function rpad"),
         }),
-        BuiltinScalarFunction::Rtrim => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::rtrim::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::rtrim::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function rtrim"),
-        }),
         BuiltinScalarFunction::SplitPart => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function_inner(string_expressions::split_part::<i32>)(args)
@@ -445,17 +409,6 @@ pub fn create_physical_fun(
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function split_part")
-            }
-        }),
-        BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::starts_with::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::starts_with::<i64>)(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function starts_with")
             }
         }),
         BuiltinScalarFunction::EndsWith => Arc::new(|args| match args[0].data_type() {
@@ -497,15 +450,6 @@ pub fn create_physical_fun(
             }
             other => exec_err!("Unsupported data type {other:?} for function substr"),
         }),
-        BuiltinScalarFunction::ToHex => Arc::new(|args| match args[0].data_type() {
-            DataType::Int32 => {
-                make_scalar_function_inner(string_expressions::to_hex::<Int32Type>)(args)
-            }
-            DataType::Int64 => {
-                make_scalar_function_inner(string_expressions::to_hex::<Int64Type>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function to_hex"),
-        }),
         BuiltinScalarFunction::Translate => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 let func = invoke_if_unicode_expressions_feature_flag!(
@@ -527,16 +471,6 @@ pub fn create_physical_fun(
                 exec_err!("Unsupported data type {other:?} for function translate")
             }
         }),
-        BuiltinScalarFunction::Trim => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::btrim::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::btrim::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function trim"),
-        }),
-        BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
         BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -738,33 +672,6 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        test_function!(Ascii, &[lit("x")], Ok(Some(120)), i32, Int32, Int32Array);
-        test_function!(Ascii, &[lit("ésoj")], Ok(Some(233)), i32, Int32, Int32Array);
-        test_function!(
-            Ascii,
-            &[lit("💯")],
-            Ok(Some(128175)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            Ascii,
-            &[lit("💯a")],
-            Ok(Some(128175)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(Ascii, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
-        test_function!(
-            Ascii,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
         test_function!(
             BitLength,
             &[lit("chars")],
@@ -782,70 +689,6 @@ mod tests {
             Int32Array
         );
         test_function!(BitLength, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
-        test_function!(
-            Btrim,
-            &[lit(" trim ")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit(" trim")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit("trim ")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit("\n trim \n")],
-            Ok(Some("\n trim \n")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit("xyxtrimyyx"), lit("xyz"),],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit("\nxyxtrimyyx\n"), lit("xyz\n"),],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit(ScalarValue::Utf8(None)), lit("xyz"),],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Btrim,
-            &[lit("xyxtrimyyx"), lit(ScalarValue::Utf8(None)),],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,
@@ -1318,54 +1161,6 @@ mod tests {
             StringArray
         );
         test_function!(
-            Ltrim,
-            &[lit(" trim")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Ltrim,
-            &[lit(" trim ")],
-            Ok(Some("trim ")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Ltrim,
-            &[lit("trim ")],
-            Ok(Some("trim ")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Ltrim,
-            &[lit("trim")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Ltrim,
-            &[lit("\n trim ")],
-            Ok(Some("\n trim ")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Ltrim,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
             OctetLength,
             &[lit("chars")],
             Ok(Some(5)),
@@ -1714,54 +1509,6 @@ mod tests {
             StringArray
         );
         test_function!(
-            Rtrim,
-            &[lit("trim ")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Rtrim,
-            &[lit(" trim ")],
-            Ok(Some(" trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Rtrim,
-            &[lit(" trim \n")],
-            Ok(Some(" trim \n")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Rtrim,
-            &[lit(" trim")],
-            Ok(Some(" trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Rtrim,
-            &[lit("trim")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Rtrim,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
             SplitPart,
             &[
                 lit("abc~@~def~@~ghi"),
@@ -1796,38 +1543,6 @@ mod tests {
             &str,
             Utf8,
             StringArray
-        );
-        test_function!(
-            StartsWith,
-            &[lit("alphabet"), lit("alph"),],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            StartsWith,
-            &[lit("alphabet"), lit("blph"),],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            StartsWith,
-            &[lit(ScalarValue::Utf8(None)), lit("alph"),],
-            Ok(None),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            StartsWith,
-            &[lit("alphabet"), lit(ScalarValue::Utf8(None)),],
-            Ok(None),
-            bool,
-            Boolean,
-            BooleanArray
         );
         test_function!(
             EndsWith,
@@ -2145,62 +1860,6 @@ mod tests {
             internal_err!(
                 "function translate requires compilation with feature flag: unicode_expressions."
             ),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Trim,
-            &[lit(" trim ")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Trim,
-            &[lit("trim ")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Trim,
-            &[lit(" trim")],
-            Ok(Some("trim")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Trim,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Upper,
-            &[lit("upper")],
-            Ok(Some("UPPER")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Upper,
-            &[lit("UPPER")],
-            Ok(Some("UPPER")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Upper,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
             &str,
             Utf8,
             StringArray
