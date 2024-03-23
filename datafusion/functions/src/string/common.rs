@@ -141,6 +141,9 @@ macro_rules! get_optimal_return_type {
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
+// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
+get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
+
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
 /// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
 /// # Errors
@@ -262,4 +265,68 @@ where
             result.map(ColumnarValue::Array)
         }
     })
+}
+
+#[cfg(test)]
+pub mod test {
+    /// $FUNC ScalarUDFImpl to test
+    /// $ARGS arguments (vec) to pass to function
+    /// $EXPECTED a Result<ColumnarValue>
+    /// $EXPECTED_TYPE is the expected value type
+    /// $EXPECTED_DATA_TYPE is the expected result type
+    /// $ARRAY_TYPE is the column type after function applied
+    macro_rules! test_function {
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+            let func = $FUNC;
+
+            let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+            let return_type = func.return_type(&type_array);
+
+            match expected {
+                Ok(expected) => {
+                    assert_eq!(return_type.is_ok(), true);
+                    assert_eq!(return_type.unwrap(), $EXPECTED_DATA_TYPE);
+
+                    let result = func.invoke($ARGS);
+                    assert_eq!(result.is_ok(), true);
+
+                    let len = $ARGS
+                        .iter()
+                        .fold(Option::<usize>::None, |acc, arg| match arg {
+                            ColumnarValue::Scalar(_) => acc,
+                            ColumnarValue::Array(a) => Some(a.len()),
+                        });
+                    let inferred_length = len.unwrap_or(1);
+                    let result = result.unwrap().clone().into_array(inferred_length).expect("Failed to convert to array");
+                    let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
+
+                    // value is correct
+                    match expected {
+                        Some(v) => assert_eq!(result.value(0), v),
+                        None => assert!(result.is_null(0)),
+                    };
+                }
+                Err(expected_error) => {
+                    if return_type.is_err() {
+                        match return_type {
+                            Ok(_) => assert!(false, "expected error"),
+                            Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
+                        }
+                    }
+                    else {
+                        // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
+                        match func.invoke($ARGS) {
+                            Ok(_) => assert!(false, "expected error"),
+                            Err(error) => {
+                                assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
+                            }
+                        }
+                    }
+                }
+            };
+        };
+    }
+
+    pub(crate) use test_function;
 }
