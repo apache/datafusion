@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use std::any::Any;
 
+use crate::utils::make_scalar_function;
 use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
 use arrow_array::Date32Array;
 use arrow_schema::IntervalUnit::MonthDayNano;
@@ -85,10 +86,13 @@ impl ScalarUDFImpl for Range {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
         match args[0].data_type() {
-            DataType::Int64 => gen_range_inner(&args, false).map(ColumnarValue::Array),
-            DataType::Date32 => gen_range_date(&args, false).map(ColumnarValue::Array),
+            DataType::Int64 => {
+                make_scalar_function(|args| gen_range_inner(args, false))(args)
+            }
+            DataType::Date32 => {
+                make_scalar_function(|args| gen_range_date(args, false))(args)
+            }
             _ => {
                 exec_err!("unsupported type for range")
             }
@@ -151,10 +155,13 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
         match args[0].data_type() {
-            DataType::Int64 => gen_range_inner(&args, true).map(ColumnarValue::Array),
-            DataType::Date32 => gen_range_date(&args, true).map(ColumnarValue::Array),
+            DataType::Int64 => {
+                make_scalar_function(|args| gen_range_inner(args, true))(args)
+            }
+            DataType::Date32 => {
+                make_scalar_function(|args| gen_range_date(args, true))(args)
+            }
             _ => {
                 exec_err!("unsupported type for range")
             }

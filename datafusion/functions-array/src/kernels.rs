@@ -18,19 +18,18 @@
 //! implementation kernels for array functions
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Capacities, GenericListArray, Int64Array,
-    LargeListArray, ListArray, MutableArrayData, OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, BooleanArray, Capacities, GenericListArray, Int64Array, ListArray,
+    MutableArrayData, OffsetSizeTrait, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_array::new_null_array;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, OffsetBuffer};
 use arrow_schema::FieldRef;
-use arrow_schema::SortOptions;
 
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
-    as_null_array, as_string_array,
+    as_null_array,
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, DataFusionError, Result, ScalarValue,
@@ -190,64 +189,6 @@ fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef>
     Ok(Arc::new(builder))
 }
 
-/// Returns the length of a concrete array dimension
-fn compute_array_length(
-    arr: Option<ArrayRef>,
-    dimension: Option<i64>,
-) -> Result<Option<u64>> {
-    let mut current_dimension: i64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    let dimension = match dimension {
-        Some(value) => {
-            if value < 1 {
-                return Ok(None);
-            }
-
-            value
-        }
-        None => return Ok(None),
-    };
-
-    loop {
-        if current_dimension == dimension {
-            return Ok(Some(value.len() as u64));
-        }
-
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                current_dimension += 1;
-            }
-            DataType::LargeList(..) => {
-                value = downcast_arg!(value, LargeListArray).value(0);
-                current_dimension += 1;
-            }
-            _ => return Ok(None),
-        }
-    }
-}
-
-/// Dispatch array length computation based on the offset type.
-fn general_array_length<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_generic_list_array::<O>(&array[0])?;
-    let dimension = if array.len() == 2 {
-        as_int64_array(&array[1])?.clone()
-    } else {
-        Int64Array::from_value(1, list_array.len())
-    };
-
-    let result = list_array
-        .iter()
-        .zip(dimension.iter())
-        .map(|(arr, dim)| compute_array_length(arr, dim))
-        .collect::<Result<UInt64Array>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
@@ -394,19 +335,6 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     )?))
 }
 
-/// Array_length SQL function
-pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return exec_err!("array_length expects one or two arguments");
-    }
-
-    match &args[0].data_type() {
-        DataType::List(_) => general_array_length::<i32>(args),
-        DataType::LargeList(_) => general_array_length::<i64>(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
-    }
-}
-
 /// array_resize SQL function
 pub fn array_resize(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
@@ -501,89 +429,6 @@ where
     )?))
 }
 
-/// Array_sort SQL function
-pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.is_empty() || args.len() > 3 {
-        return exec_err!("array_sort expects one to three arguments");
-    }
-
-    let sort_option = match args.len() {
-        1 => None,
-        2 => {
-            let sort = as_string_array(&args[1])?.value(0);
-            Some(SortOptions {
-                descending: order_desc(sort)?,
-                nulls_first: true,
-            })
-        }
-        3 => {
-            let sort = as_string_array(&args[1])?.value(0);
-            let nulls_first = as_string_array(&args[2])?.value(0);
-            Some(SortOptions {
-                descending: order_desc(sort)?,
-                nulls_first: order_nulls_first(nulls_first)?,
-            })
-        }
-        _ => return exec_err!("array_sort expects 1 to 3 arguments"),
-    };
-
-    let list_array = as_list_array(&args[0])?;
-    let row_count = list_array.len();
-
-    let mut array_lengths = vec![];
-    let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
-    for i in 0..row_count {
-        if list_array.is_null(i) {
-            array_lengths.push(0);
-            valid.append(false);
-        } else {
-            let arr_ref = list_array.value(i);
-            let arr_ref = arr_ref.as_ref();
-
-            let sorted_array = compute::sort(arr_ref, sort_option)?;
-            array_lengths.push(sorted_array.len());
-            arrays.push(sorted_array);
-            valid.append(true);
-        }
-    }
-
-    // Assume all arrays have the same data type
-    let data_type = list_array.value_type();
-    let buffer = valid.finish();
-
-    let elements = arrays
-        .iter()
-        .map(|a| a.as_ref())
-        .collect::<Vec<&dyn Array>>();
-
-    let list_arr = ListArray::new(
-        Arc::new(Field::new("item", data_type, true)),
-        OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
-    );
-    Ok(Arc::new(list_arr))
-}
-
-fn order_desc(modifier: &str) -> Result<bool> {
-    match modifier.to_uppercase().as_str() {
-        "DESC" => Ok(true),
-        "ASC" => Ok(false),
-        _ => exec_err!("the second parameter of array_sort expects DESC or ASC"),
-    }
-}
-
-fn order_nulls_first(modifier: &str) -> Result<bool> {
-    match modifier.to_uppercase().as_str() {
-        "NULLS FIRST" => Ok(true),
-        "NULLS LAST" => Ok(false),
-        _ => exec_err!(
-            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
-        ),
-    }
-}
-
 // Create new offsets that are euqiavlent to `flatten` the array.
 fn get_offsets_for_flatten<O: OffsetSizeTrait>(
     offsets: OffsetBuffer<O>,
@@ -651,73 +496,4 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
             exec_err!("flatten does not support type '{array_type:?}'")
         }
     }
-}
-
-/// array_reverse SQL function
-pub fn array_reverse(arg: &[ArrayRef]) -> Result<ArrayRef> {
-    if arg.len() != 1 {
-        return exec_err!("array_reverse needs one argument");
-    }
-
-    match &arg[0].data_type() {
-        DataType::List(field) => {
-            let array = as_list_array(&arg[0])?;
-            general_array_reverse::<i32>(array, field)
-        }
-        DataType::LargeList(field) => {
-            let array = as_large_list_array(&arg[0])?;
-            general_array_reverse::<i64>(array, field)
-        }
-        DataType::Null => Ok(arg[0].clone()),
-        array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
-    }
-}
-
-fn general_array_reverse<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
-    field: &FieldRef,
-) -> Result<ArrayRef>
-where
-    O: TryFrom<i64>,
-{
-    let values = array.values();
-    let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut offsets = vec![O::usize_as(0)];
-    let mut nulls = vec![];
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
-
-    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        // skip the null value
-        if array.is_null(row_index) {
-            nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.extend(0, 0, 1);
-            continue;
-        } else {
-            nulls.push(true);
-        }
-
-        let start = offset_window[0];
-        let end = offset_window[1];
-
-        let mut index = end - O::one();
-        let mut cnt = 0;
-
-        while index >= start {
-            mutable.extend(0, index.to_usize().unwrap(), index.to_usize().unwrap() + 1);
-            index = index - O::one();
-            cnt += 1;
-        }
-        offsets.push(offsets[row_index] + O::usize_as(cnt));
-    }
-
-    let data = mutable.freeze();
-    Ok(Arc::new(GenericListArray::<O>::try_new(
-        field.clone(),
-        OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
-        Some(nulls.into()),
-    )?))
 }
