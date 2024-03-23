@@ -461,7 +461,7 @@ pub trait ReadOptions<'a> {
             return Ok(Arc::new(s.to_owned()));
         }
 
-        self.to_listing_options(config, state.default_table_options().clone())
+        self.to_listing_options(config, state.default_table_options())
             .infer_schema(&state, &table_path)
             .await
     }

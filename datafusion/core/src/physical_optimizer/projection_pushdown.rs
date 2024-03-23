@@ -322,7 +322,7 @@ fn try_swapping_with_output_req(
     projection: &ProjectionExec,
     output_req: &OutputRequirementExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -372,7 +372,7 @@ fn try_swapping_with_output_req(
 fn try_swapping_with_coalesce_partitions(
     projection: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -387,7 +387,7 @@ fn try_swapping_with_filter(
     projection: &ProjectionExec,
     filter: &FilterExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down:
+    // If the projection does not narrow the schema, we should not try to push it down:
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -412,7 +412,7 @@ fn try_swapping_with_repartition(
     projection: &ProjectionExec,
     repartition: &RepartitionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -454,7 +454,7 @@ fn try_swapping_with_sort(
     projection: &ProjectionExec,
     sort: &SortExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the the schema, we should not try to push it down.
+    // If the projection does not narrow the schema, we should not try to push it down.
     if projection.expr().len() >= projection.input().schema().fields().len() {
         return Ok(None);
     }
@@ -1082,7 +1082,7 @@ fn join_table_borders(
     (far_right_left_col_ind, far_left_right_col_ind)
 }
 
-/// Tries to update the equi-join `Column`'s of a join as if the the input of
+/// Tries to update the equi-join `Column`'s of a join as if the input of
 /// the join was replaced by a projection.
 fn update_join_on(
     proj_left_exprs: &[(Column, String)],
@@ -1152,7 +1152,7 @@ fn new_columns_for_join_on(
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
 }
 
-/// Tries to update the column indices of a [`JoinFilter`] as if the the input of
+/// Tries to update the column indices of a [`JoinFilter`] as if the input of
 /// the join was replaced by a projection.
 fn update_join_filter(
     projection_left_exprs: &[(Column, String)],
@@ -1287,6 +1287,7 @@ fn new_join_children(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::Any;
     use std::sync::Arc;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -1313,7 +1314,10 @@ mod tests {
     use datafusion_common::{JoinSide, JoinType, Result, ScalarValue, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion_expr::{ColumnarValue, Operator};
+    use datafusion_expr::{
+        ColumnarValue, Operator, ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl,
+        Signature, Volatility,
+    };
     use datafusion_physical_expr::expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
     };
@@ -1328,6 +1332,42 @@ mod tests {
     use datafusion_physical_plan::union::UnionExec;
 
     use itertools::Itertools;
+
+    /// Mocked UDF
+    #[derive(Debug)]
+    struct DummyUDF {
+        signature: Signature,
+    }
+
+    impl DummyUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::variadic_any(Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for DummyUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "dummy_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!("DummyUDF::invoke")
+        }
+    }
 
     #[test]
     fn test_update_matching_exprs() -> Result<()> {
@@ -1345,7 +1385,9 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
+                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
+                    DummyUDF::new(),
+                ))),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1412,7 +1454,9 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
+                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
+                    DummyUDF::new(),
+                ))),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1482,7 +1526,9 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
+                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
+                    DummyUDF::new(),
+                ))),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b", 1)),
@@ -1549,7 +1595,9 @@ mod tests {
             Arc::new(NegativeExpr::new(Arc::new(Column::new("f_new", 5)))),
             Arc::new(ScalarFunctionExpr::new(
                 "scalar_expr",
-                Arc::new(|_: &[ColumnarValue]| unimplemented!("not implemented")),
+                ScalarFunctionDefinition::UDF(Arc::new(ScalarUDF::new_from_impl(
+                    DummyUDF::new(),
+                ))),
                 vec![
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("b_new", 1)),

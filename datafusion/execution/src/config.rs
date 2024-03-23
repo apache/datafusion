@@ -434,9 +434,9 @@ impl SessionConfig {
     /// converted to strings.
     ///
     /// Note that this method will eventually be deprecated and
-    /// replaced by [`config_options`].
+    /// replaced by [`options`].
     ///
-    /// [`config_options`]: Self::config_options
+    /// [`options`]: Self::options
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
@@ -445,18 +445,6 @@ impl SessionConfig {
         }
 
         map
-    }
-
-    /// Return a handle to the configuration options.
-    #[deprecated(since = "21.0.0", note = "use options() instead")]
-    pub fn config_options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    /// Return a mutable handle to the configuration options.
-    #[deprecated(since = "21.0.0", note = "use options_mut() instead")]
-    pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
     }
 
     /// Add extensions.

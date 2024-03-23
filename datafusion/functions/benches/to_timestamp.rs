@@ -19,8 +19,8 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::ArrayRef;
+use arrow::array::builder::StringBuilder;
+use arrow::array::ArrayRef;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use datafusion_expr::ColumnarValue;

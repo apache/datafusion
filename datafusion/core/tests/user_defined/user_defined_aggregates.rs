@@ -184,11 +184,11 @@ async fn test_udaf_shadows_builtin_fn() {
 
     // compute with builtin `sum` aggregator
     let expected = [
-        "+-------------+",
-        "| SUM(t.time) |",
-        "+-------------+",
-        "| 19000       |",
-        "+-------------+",
+        "+---------------------------------------+",
+        "| SUM(arrow_cast(t.time,Utf8(\"Int64\"))) |",
+        "+---------------------------------------+",
+        "| 19000                                 |",
+        "+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 

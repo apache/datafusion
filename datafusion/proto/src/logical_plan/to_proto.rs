@@ -30,6 +30,7 @@ use crate::protobuf::{
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    UnionField, UnionValue,
 };
 
 use arrow::{
@@ -229,6 +230,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 return Err(Error::General(
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
+            }
+            DataType::Utf8View | DataType::BinaryView | DataType::ListView(_) | DataType::LargeListView(_) => {
+                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
             }
         };
 
@@ -1402,6 +1406,34 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 };
                 Ok(protobuf::ScalarValue { value: Some(value) })
             }
+
+            ScalarValue::Union(val, df_fields, mode) => {
+                let mut fields = Vec::<UnionField>::with_capacity(df_fields.len());
+                for (id, field) in df_fields.iter() {
+                    let field_id = id as i32;
+                    let field = Some(field.as_ref().try_into()?);
+                    let field = UnionField { field_id, field };
+                    fields.push(field);
+                }
+                let mode = match mode {
+                    UnionMode::Sparse => 0,
+                    UnionMode::Dense => 1,
+                };
+                let value = match val {
+                    None => None,
+                    Some((_id, v)) => Some(Box::new(v.as_ref().try_into()?)),
+                };
+                let val = UnionValue {
+                    value_id: val.as_ref().map(|(id, _v)| *id as i32).unwrap_or(0),
+                    value,
+                    fields,
+                    mode,
+                };
+                let val = Value::UnionValue(Box::new(val));
+                let val = protobuf::ScalarValue { value: Some(val) };
+                Ok(val)
+            }
+
             ScalarValue::Dictionary(index_type, val) => {
                 let value: protobuf::ScalarValue = val.as_ref().try_into()?;
                 Ok(protobuf::ScalarValue {
@@ -1446,24 +1478,10 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::OctetLength => Self::OctetLength,
             BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Lower => Self::Lower,
-            BuiltinScalarFunction::Upper => Self::Upper,
-            BuiltinScalarFunction::Trim => Self::Trim,
-            BuiltinScalarFunction::Ltrim => Self::Ltrim,
-            BuiltinScalarFunction::Rtrim => Self::Rtrim,
-            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
-            BuiltinScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
-            BuiltinScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
-            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
-            BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
-            BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::Ascii => Self::Ascii,
             BuiltinScalarFunction::BitLength => Self::BitLength,
-            BuiltinScalarFunction::Btrim => Self::Btrim,
             BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
             BuiltinScalarFunction::Chr => Self::Chr,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
@@ -1479,10 +1497,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Right => Self::Right,
             BuiltinScalarFunction::Rpad => Self::Rpad,
             BuiltinScalarFunction::SplitPart => Self::SplitPart,
-            BuiltinScalarFunction::StartsWith => Self::StartsWith,
             BuiltinScalarFunction::Strpos => Self::Strpos,
             BuiltinScalarFunction::Substr => Self::Substr,
-            BuiltinScalarFunction::ToHex => Self::ToHex,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,

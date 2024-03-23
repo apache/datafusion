@@ -102,27 +102,9 @@ pub enum BuiltinScalarFunction {
     /// cot
     Cot,
 
-    // array functions
-    /// array_remove
-    ArrayRemove,
-    /// array_remove_n
-    ArrayRemoveN,
-    /// array_remove_all
-    ArrayRemoveAll,
-    /// array_replace
-    ArrayReplace,
-    /// array_replace_n
-    ArrayReplaceN,
-    /// array_replace_all
-    ArrayReplaceAll,
-
     // string functions
-    /// ascii
-    Ascii,
     /// bit_length
     BitLength,
-    /// btrim
-    Btrim,
     /// character_length
     CharacterLength,
     /// chr
@@ -139,12 +121,6 @@ pub enum BuiltinScalarFunction {
     Left,
     /// lpad
     Lpad,
-    /// lower
-    Lower,
-    /// ltrim
-    Ltrim,
-    /// octet_length
-    OctetLength,
     /// random
     Random,
     /// repeat
@@ -157,24 +133,14 @@ pub enum BuiltinScalarFunction {
     Right,
     /// rpad
     Rpad,
-    /// rtrim
-    Rtrim,
     /// split_part
     SplitPart,
-    /// starts_with
-    StartsWith,
     /// strpos
     Strpos,
     /// substr
     Substr,
-    /// to_hex
-    ToHex,
     /// translate
     Translate,
-    /// trim
-    Trim,
-    /// upper
-    Upper,
     /// uuid
     Uuid,
     /// overlay
@@ -268,15 +234,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
-            BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
-            BuiltinScalarFunction::Btrim => Volatility::Immutable,
             BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
             BuiltinScalarFunction::Chr => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
@@ -285,24 +243,16 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
-            BuiltinScalarFunction::Lower => Volatility::Immutable,
-            BuiltinScalarFunction::Ltrim => Volatility::Immutable,
-            BuiltinScalarFunction::OctetLength => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
             BuiltinScalarFunction::Reverse => Volatility::Immutable,
             BuiltinScalarFunction::Right => Volatility::Immutable,
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
-            BuiltinScalarFunction::Rtrim => Volatility::Immutable,
             BuiltinScalarFunction::SplitPart => Volatility::Immutable,
-            BuiltinScalarFunction::StartsWith => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
-            BuiltinScalarFunction::ToHex => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::Trim => Volatility::Immutable,
-            BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
@@ -331,18 +281,8 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
                 utf8_to_int_type(&input_expr_types[0], "bit_length")
-            }
-            BuiltinScalarFunction::Btrim => {
-                utf8_to_str_type(&input_expr_types[0], "btrim")
             }
             BuiltinScalarFunction::CharacterLength => {
                 utf8_to_int_type(&input_expr_types[0], "character_length")
@@ -359,16 +299,7 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
             BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
-            BuiltinScalarFunction::Lower => {
-                utf8_to_str_type(&input_expr_types[0], "lower")
-            }
             BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
-            BuiltinScalarFunction::Ltrim => {
-                utf8_to_str_type(&input_expr_types[0], "ltrim")
-            }
-            BuiltinScalarFunction::OctetLength => {
-                utf8_to_int_type(&input_expr_types[0], "octet_length")
-            }
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
@@ -385,13 +316,9 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "right")
             }
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
-            BuiltinScalarFunction::Rtrim => {
-                utf8_to_str_type(&input_expr_types[0], "rtrim")
-            }
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
             }
-            BuiltinScalarFunction::StartsWith => Ok(Boolean),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
                 utf8_to_int_type(&input_expr_types[0], "strpos/instr/position")
@@ -399,12 +326,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Substr => {
                 utf8_to_str_type(&input_expr_types[0], "substr")
             }
-            BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
-                Int8 | Int16 | Int32 | Int64 => Utf8,
-                _ => {
-                    return plan_err!("The to_hex function can only accept integers.");
-                }
-            }),
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
@@ -413,10 +334,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Translate => {
                 utf8_to_str_type(&input_expr_types[0], "translate")
-            }
-            BuiltinScalarFunction::Trim => utf8_to_str_type(&input_expr_types[0], "trim"),
-            BuiltinScalarFunction::Upper => {
-                utf8_to_str_type(&input_expr_types[0], "upper")
             }
 
             BuiltinScalarFunction::Factorial
@@ -489,18 +406,6 @@ impl BuiltinScalarFunction {
 
         // for now, the list is small, as we do not have many built-in functions.
         match self {
-            BuiltinScalarFunction::ArrayRemove => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayRemoveAll => {
-                Signature::array_and_element(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                Signature::any(3, self.volatility())
-            }
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -508,24 +413,13 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::Ascii
-            | BuiltinScalarFunction::BitLength
+            BuiltinScalarFunction::BitLength
             | BuiltinScalarFunction::CharacterLength
             | BuiltinScalarFunction::InitCap
-            | BuiltinScalarFunction::Lower
-            | BuiltinScalarFunction::OctetLength
-            | BuiltinScalarFunction::Reverse
-            | BuiltinScalarFunction::Upper => {
+            | BuiltinScalarFunction::Reverse => {
                 Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
             }
-            BuiltinScalarFunction::Btrim
-            | BuiltinScalarFunction::Ltrim
-            | BuiltinScalarFunction::Rtrim
-            | BuiltinScalarFunction::Trim => Signature::one_of(
-                vec![Exact(vec![Utf8]), Exact(vec![Utf8, Utf8])],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
+            BuiltinScalarFunction::Chr => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
             BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => {
@@ -557,17 +451,17 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
-            BuiltinScalarFunction::EndsWith
-            | BuiltinScalarFunction::Strpos
-            | BuiltinScalarFunction::StartsWith => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::EndsWith | BuiltinScalarFunction::Strpos => {
+                Signature::one_of(
+                    vec![
+                        Exact(vec![Utf8, Utf8]),
+                        Exact(vec![Utf8, LargeUtf8]),
+                        Exact(vec![LargeUtf8, Utf8]),
+                        Exact(vec![LargeUtf8, LargeUtf8]),
+                    ],
+                    self.volatility(),
+                )
+            }
 
             BuiltinScalarFunction::Substr => Signature::one_of(
                 vec![
@@ -764,9 +658,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => &["coalesce"],
 
             // string functions
-            BuiltinScalarFunction::Ascii => &["ascii"],
             BuiltinScalarFunction::BitLength => &["bit_length"],
-            BuiltinScalarFunction::Btrim => &["btrim"],
             BuiltinScalarFunction::CharacterLength => {
                 &["character_length", "char_length", "length"]
             }
@@ -776,42 +668,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
             BuiltinScalarFunction::Left => &["left"],
-            BuiltinScalarFunction::Lower => &["lower"],
             BuiltinScalarFunction::Lpad => &["lpad"],
-            BuiltinScalarFunction::Ltrim => &["ltrim"],
-            BuiltinScalarFunction::OctetLength => &["octet_length"],
             BuiltinScalarFunction::Repeat => &["repeat"],
             BuiltinScalarFunction::Replace => &["replace"],
             BuiltinScalarFunction::Reverse => &["reverse"],
             BuiltinScalarFunction::Right => &["right"],
             BuiltinScalarFunction::Rpad => &["rpad"],
-            BuiltinScalarFunction::Rtrim => &["rtrim"],
             BuiltinScalarFunction::SplitPart => &["split_part"],
-            BuiltinScalarFunction::StartsWith => &["starts_with"],
             BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],
-            BuiltinScalarFunction::ToHex => &["to_hex"],
             BuiltinScalarFunction::Translate => &["translate"],
-            BuiltinScalarFunction::Trim => &["trim"],
-            BuiltinScalarFunction::Upper => &["upper"],
             BuiltinScalarFunction::Uuid => &["uuid"],
             BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-
-            // hashing functions
-            BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
-            BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
-            BuiltinScalarFunction::ArrayRemoveAll => {
-                &["array_remove_all", "list_remove_all"]
-            }
-            BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-            BuiltinScalarFunction::ArrayReplaceN => {
-                &["array_replace_n", "list_replace_n"]
-            }
-            BuiltinScalarFunction::ArrayReplaceAll => {
-                &["array_replace_all", "list_replace_all"]
-            }
             BuiltinScalarFunction::OverLay => &["overlay"],
         }
     }

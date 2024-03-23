@@ -17,8 +17,8 @@
 
 extern crate criterion;
 
-use arrow_array::builder::StringBuilder;
-use arrow_array::{ArrayRef, StringArray};
+use arrow::array::builder::StringBuilder;
+use arrow::array::{ArrayRef, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
@@ -44,7 +44,7 @@ fn data(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn regex(rng: &mut ThreadRng) -> StringArray {
-    let samples = vec![
+    let samples = [
         ".*([A-Z]{1}).*".to_string(),
         "^(A).*".to_string(),
         r#"[\p{Letter}-]+"#.to_string(),
@@ -60,7 +60,7 @@ fn regex(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn flags(rng: &mut ThreadRng) -> StringArray {
-    let samples = vec![Some("i".to_string()), Some("im".to_string()), None];
+    let samples = [Some("i".to_string()), Some("im".to_string()), None];
     let mut sb = StringBuilder::new();
     for _ in 0..1000 {
         let sample = samples.choose(rng).unwrap();

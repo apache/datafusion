@@ -46,7 +46,7 @@ use tokio::task::JoinSet;
 /// same results
 #[tokio::test(flavor = "multi_thread")]
 async fn streaming_aggregate_test() {
-    let test_cases = vec![
+    let test_cases = [
         vec!["a"],
         vec!["b", "a"],
         vec!["c", "a"],
