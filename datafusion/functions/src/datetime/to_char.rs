@@ -174,13 +174,10 @@ fn _to_char_scalar(
 
     if format.is_none() {
         if is_scalar_expression {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                Some(String::new()),
-            )));
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         } else {
-            return Ok(ColumnarValue::Array(Arc::new(StringArray::from(
-                vec![String::new(); array.len()],
-            ))));
+            let result: Vec<Option<String>> = vec![None; array.len()];
+            return Ok(ColumnarValue::Array(Arc::new(StringArray::from(result))));
         }
     }
 
@@ -211,7 +208,7 @@ fn _to_char_scalar(
 
 fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
-    let mut results: Vec<String> = vec![];
+    let mut results: Vec<Option<String>> = vec![];
     let format_array = arrays[1].as_string::<i32>();
     let data_type = arrays[0].data_type();
 
@@ -222,7 +219,7 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Some(format_array.value(idx))
         };
         if format.is_none() {
-            results.push(String::new());
+            results.push(None);
             continue;
         }
         let format_options = match _build_format_options(data_type, format) {
@@ -234,7 +231,7 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
-            Ok(value) => results.push(value),
+            Ok(value) => results.push(Some(value)),
             Err(e) => return exec_err!("{}", e),
         }
     }
@@ -243,9 +240,12 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
             results,
         )) as ArrayRef)),
-        ColumnarValue::Scalar(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            results.first().unwrap().to_string(),
-        )))),
+        ColumnarValue::Scalar(_) => match results.first().unwrap() {
+            Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                value.to_string(),
+            )))),
+            None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+        },
     }
 }
 
