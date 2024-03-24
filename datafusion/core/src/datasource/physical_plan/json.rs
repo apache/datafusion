@@ -393,6 +393,7 @@ mod tests {
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::FileType;
 
+    use datafusion_expr::col;
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
@@ -881,6 +882,25 @@ mod tests {
         // Use all rows to infer the schema, those have 5 fields.
         let schema = read_test_data(10).await?;
         assert_eq!(schema.fields().len(), 5);
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_disable_parallel_for_json_gz() -> Result<()> {
+        // let ctx = SessionContext::new_with_config(
+        //     SessionConfig::new().with_target_partitions(2),
+        // );
+        let ctx = SessionContext::new();
+        let mut df = ctx
+            .read_json(
+                "/Users/xiangyanxin/personal/DATAFUSION/arrow-datafusion/example.json.gz",
+                NdJsonReadOptions::default()
+                    .file_compression_type(FileCompressionType::GZIP)
+                    .file_extension("gz"),
+            )
+            .await
+            .unwrap();
+        let show = df.show();
 
         Ok(())
     }
