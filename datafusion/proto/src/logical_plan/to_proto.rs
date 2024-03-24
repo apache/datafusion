@@ -1481,7 +1481,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::BitLength => Self::BitLength,
             BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
             BuiltinScalarFunction::Chr => Self::Chr,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,

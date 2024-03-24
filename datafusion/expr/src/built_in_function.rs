@@ -103,8 +103,6 @@ pub enum BuiltinScalarFunction {
     Cot,
 
     // string functions
-    /// bit_length
-    BitLength,
     /// character_length
     CharacterLength,
     /// chr
@@ -222,7 +220,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
             BuiltinScalarFunction::Chr => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
@@ -263,9 +260,6 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::BitLength => {
-                utf8_to_int_type(&input_expr_types[0], "bit_length")
-            }
             BuiltinScalarFunction::CharacterLength => {
                 utf8_to_int_type(&input_expr_types[0], "character_length")
             }
@@ -377,8 +371,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => {
                 Signature::variadic_equal(self.volatility())
             }
-            BuiltinScalarFunction::BitLength
-            | BuiltinScalarFunction::CharacterLength
+            BuiltinScalarFunction::CharacterLength
             | BuiltinScalarFunction::InitCap
             | BuiltinScalarFunction::Reverse => {
                 Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
@@ -599,7 +592,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => &["coalesce"],
 
             // string functions
-            BuiltinScalarFunction::BitLength => &["bit_length"],
             BuiltinScalarFunction::CharacterLength => {
                 &["character_length", "char_length", "length"]
             }

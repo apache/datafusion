@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 mod ascii;
+mod bit_length;
 mod btrim;
 mod common;
 mod levenshtein;
@@ -40,6 +41,7 @@ mod uuid;
 
 // create UDFs
 make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
+make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
 make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
@@ -61,6 +63,11 @@ pub mod expr_fn {
     #[doc = "Returns the numeric code of the first character of the argument."]
     pub fn ascii(arg1: Expr) -> Expr {
         super::ascii().call(vec![arg1])
+    }
+
+    #[doc = "Returns the number of bits in the `string`"]
+    pub fn bit_length(args: Vec<Expr>) -> Expr {
+        super::bit_length().call(args)
     }
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
@@ -143,6 +150,7 @@ pub mod expr_fn {
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         ascii(),
+        bit_length(),
         btrim(),
         levenshtein(),
         lower(),

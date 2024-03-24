@@ -35,7 +35,6 @@ use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
-    compute::kernels::length::bit_length,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
@@ -255,18 +254,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
-        BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
-            ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| (x.len() * 8) as i32),
-                ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                )),
-                _ => unreachable!(),
-            },
-        }),
         BuiltinScalarFunction::CharacterLength => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
@@ -611,23 +598,6 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        test_function!(
-            BitLength,
-            &[lit("chars")],
-            Ok(Some(40)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            BitLength,
-            &[lit("josé")],
-            Ok(Some(40)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(BitLength, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
         #[cfg(feature = "unicode_expressions")]
         test_function!(
             CharacterLength,

@@ -579,12 +579,6 @@ scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // string functions
 scalar_expr!(
-    BitLength,
-    bit_length,
-    string,
-    "the number of bits in the `string`"
-);
-scalar_expr!(
     CharacterLength,
     character_length,
     string,
@@ -1044,7 +1038,6 @@ mod test {
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(BitLength, bit_length, string);
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
