@@ -29,7 +29,7 @@ c5 INT NOT NULL
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION '/Users/xiangyanxin/personal/DATAFUSION/arrow-datafusion/a.csv';
+LOCATION '../core/tests/data/demo.csv';
 
 query TT
 explain SELECT c3+c4, SUM(c3+c4) OVER()

@@ -714,26 +714,6 @@ fn indices_referred_by_expr(
         _ => {}
     }
     Ok(res_vec)
-    // match expr {
-    //     Expr::BinaryExpr(_) => {
-    //         if let Some(index) =
-    //             input_schema.index_of_column_by_name(None, &expr.to_string())?
-    //         {
-    //             return Ok(vec![index]);
-    //         } else {
-    //             return Ok(vec![]);
-    //         }
-    //     }
-    //     _ => {
-    //         let mut cols = expr.to_columns()?;
-    //         outer_columns(expr, &mut cols);
-    //         let res_vec: Vec<usize> = cols
-    //             .iter()
-    //             .flat_map(|col| input_schema.index_of_column(col))
-    //             .collect();
-    //         Ok(res_vec)
-    //     }
-    // }
 }
 
 /// Gets all required indices for the input; i.e. those required by the parent
