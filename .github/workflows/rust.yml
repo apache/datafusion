@@ -66,7 +66,9 @@ jobs:
           key: cargo-cache-benchmark-${{ hashFiles('datafusion/**/Cargo.toml', 'benchmarks/Cargo.toml', 'datafusion-cli/Cargo.toml') }}
 
       - name: Check datafusion without default features
-        run: cargo check --all-targets --no-default-features -p datafusion
+        # Some of the test binaries require the parquet feature still
+        #run: cargo check --all-targets --no-default-features -p datafusion
+        run: cargo check --no-default-features -p datafusion
 
       - name: Check datafusion-common without default features
         run: cargo check --all-targets --no-default-features -p datafusion-common
