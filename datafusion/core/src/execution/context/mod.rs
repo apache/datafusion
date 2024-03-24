@@ -1906,7 +1906,9 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {}).map(|t|t.data)
+            self.optimizer
+                .optimize(analyzed_plan, self, |_, _| {})
+                .map(|t| t.data)
         }
     }
 

@@ -424,26 +424,32 @@ impl LogicalPlan {
         F: FnMut(LogicalPlan) -> Result<LogicalPlan>,
     {
         match &mut self {
-            LogicalPlan::Projection(Projection { input, .. }) |
-            LogicalPlan::Filter(Filter { input, .. }) |
-            LogicalPlan::Repartition(Repartition { input, .. }) |
-            LogicalPlan::Window(Window { input, .. }) |
-            LogicalPlan::Aggregate(Aggregate { input, .. }) |
-            LogicalPlan::Sort(Sort { input, .. }) |
-            LogicalPlan::Limit(Limit { input, .. }) |
-            LogicalPlan::Subquery(Subquery { subquery: input, .. }) |
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) |
-            LogicalPlan::Prepare(Prepare { input, .. })
-            // LogicalPlan::Unnest(Unnest { input, .. })
-            => {
+            LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Aggregate(Aggregate { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Subquery(Subquery {
+                subquery: input, ..
+            })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. })
+            | LogicalPlan::Unnest(Unnest { input, .. })
+            | LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            )
+            | LogicalPlan::Explain(Explain { plan: input, .. })
+            | LogicalPlan::Analyze(Analyze { input, .. })
+            | LogicalPlan::Dml(DmlStatement { input, .. })
+             => {
                 let old_input = std::mem::take(input);
                 let plan = f(*old_input)?;
                 *input = Box::new(plan);
             }
-            LogicalPlan::Join(Join { left, right, .. }) |
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. })
-            =>
-            {
+            LogicalPlan::Join(Join { left, right, .. })
+            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let old_left = std::mem::take(left);
                 let old_right = std::mem::take(right);
                 let new_left = f(*old_left)?;
@@ -451,7 +457,17 @@ impl LogicalPlan {
                 *left = Box::new(new_left);
                 *right = Box::new(new_right);
             }
-            _ => todo!(""),
+            LogicalPlan::Extension(_extension) => {
+                todo!("implemet rewrite_inputs for extension node")
+            }
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                let _ = inputs.iter_mut().try_for_each(|input| {
+                    let old_input = std::mem::take(input);
+                    *input = f(old_input)?;
+                    Ok::<_, DataFusionError>(())
+                });
+            }
+            _ => todo!("rewrite_inputs"),
         }
 
         Ok(self)
