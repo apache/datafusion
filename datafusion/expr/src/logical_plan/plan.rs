@@ -443,13 +443,18 @@ impl LogicalPlan {
             | LogicalPlan::Explain(Explain { plan: input, .. })
             | LogicalPlan::Analyze(Analyze { input, .. })
             | LogicalPlan::Dml(DmlStatement { input, .. })
-             => {
+            | LogicalPlan::Copy(CopyTo { input, .. }) => {
                 let old_input = std::mem::take(input);
                 let plan = f(*old_input)?;
                 *input = Box::new(plan);
             }
             LogicalPlan::Join(Join { left, right, .. })
-            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. })
+            | LogicalPlan::RecursiveQuery(RecursiveQuery {
+                static_term: left,
+                recursive_term: right,
+                ..
+            }) => {
                 let old_left = std::mem::take(left);
                 let old_right = std::mem::take(right);
                 let new_left = f(*old_left)?;
@@ -467,7 +472,13 @@ impl LogicalPlan {
                     Ok::<_, DataFusionError>(())
                 });
             }
-            _ => todo!("rewrite_inputs"),
+            LogicalPlan::Ddl(_ddl) => todo!("rewrite_inputs for DDL"),
+            // plans without inputs
+            LogicalPlan::TableScan { .. }
+            | LogicalPlan::Statement { .. }
+            | LogicalPlan::EmptyRelation { .. }
+            | LogicalPlan::Values { .. }
+            | LogicalPlan::DescribeTable(_) => {}
         }
 
         Ok(self)
