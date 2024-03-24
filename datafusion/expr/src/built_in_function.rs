@@ -141,12 +141,6 @@ pub enum BuiltinScalarFunction {
     Substr,
     /// translate
     Translate,
-    /// uuid
-    Uuid,
-    /// overlay
-    OverLay,
-    /// levenshtein
-    Levenshtein,
     /// substr_index
     SubstrIndex,
     /// find_in_set
@@ -253,14 +247,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::OverLay => Volatility::Immutable,
-            BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
             BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
-            BuiltinScalarFunction::Uuid => Volatility::Volatile,
         }
     }
 
@@ -302,7 +293,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
-            BuiltinScalarFunction::Uuid => Ok(Utf8),
             BuiltinScalarFunction::Repeat => {
                 utf8_to_str_type(&input_expr_types[0], "repeat")
             }
@@ -361,14 +351,6 @@ impl BuiltinScalarFunction {
             },
 
             BuiltinScalarFunction::Iszero => Ok(Boolean),
-
-            BuiltinScalarFunction::OverLay => {
-                utf8_to_str_type(&input_expr_types[0], "overlay")
-            }
-
-            BuiltinScalarFunction::Levenshtein => {
-                utf8_to_int_type(&input_expr_types[0], "levenshtein")
-            }
 
             BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
@@ -490,7 +472,6 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
-            BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Power => Signature::one_of(
                 vec![Exact(vec![Int64, Int64]), Exact(vec![Float64, Float64])],
                 self.volatility(),
@@ -536,19 +517,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::OverLay => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::Levenshtein => Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
-                self.volatility(),
-            ),
             BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
             | BuiltinScalarFunction::Asinh
@@ -678,11 +646,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],
             BuiltinScalarFunction::Translate => &["translate"],
-            BuiltinScalarFunction::Uuid => &["uuid"],
-            BuiltinScalarFunction::Levenshtein => &["levenshtein"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],
-            BuiltinScalarFunction::OverLay => &["overlay"],
         }
     }
 }

@@ -24,7 +24,8 @@ use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    plan_err, DFSchema, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
+    assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
+    ScalarValue, TableReference,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
@@ -4362,6 +4363,40 @@ fn test_prepare_statement_to_plan_value_list() {
         \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_unknown_list_param() {
+    let sql = "SELECT id from person where id = $2";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::List(vec![]);
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: No value found for placeholder with id $2"
+    );
+}
+
+#[test]
+fn test_prepare_statement_unknown_hash_param() {
+    let sql = "SELECT id from person where id = $bar";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::Map(HashMap::new());
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: No value found for placeholder with name $bar"
+    );
+}
+
+#[test]
+fn test_prepare_statement_bad_list_idx() {
+    let sql = "SELECT id from person where id = $foo";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::List(vec![]);
+
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
 }
 
 #[test]
