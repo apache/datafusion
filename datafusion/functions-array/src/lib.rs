@@ -34,12 +34,15 @@ mod core;
 mod except;
 mod extract;
 mod kernels;
+mod length;
 mod position;
 mod range;
 mod remove;
 mod replace;
+mod reverse;
 mod rewrite;
 mod set_ops;
+mod sort;
 mod string;
 mod udf;
 mod utils;
@@ -64,6 +67,7 @@ pub mod expr_fn {
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
     pub use super::extract::array_slice;
+    pub use super::length::array_length;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -74,19 +78,18 @@ pub mod expr_fn {
     pub use super::replace::array_replace;
     pub use super::replace::array_replace_all;
     pub use super::replace::array_replace_n;
+    pub use super::reverse::array_reverse;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
     pub use super::set_ops::array_union;
+    pub use super::sort::array_sort;
     pub use super::string::array_to_string;
     pub use super::string::string_to_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_empty;
-    pub use super::udf::array_length;
     pub use super::udf::array_ndims;
     pub use super::udf::array_repeat;
     pub use super::udf::array_resize;
-    pub use super::udf::array_reverse;
-    pub use super::udf::array_sort;
     pub use super::udf::cardinality;
     pub use super::udf::flatten;
 }
@@ -114,12 +117,12 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
         udf::array_empty_udf(),
-        udf::array_length_udf(),
+        length::array_length_udf(),
         udf::flatten_udf(),
-        udf::array_sort_udf(),
+        sort::array_sort_udf(),
         udf::array_repeat_udf(),
         udf::array_resize_udf(),
-        udf::array_reverse_udf(),
+        reverse::array_reverse_udf(),
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
         set_ops::array_union_udf(),
