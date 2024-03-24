@@ -29,6 +29,7 @@
 pub mod macros;
 
 mod array_has;
+mod cardinality;
 mod concat;
 mod core;
 mod empty;
@@ -41,6 +42,7 @@ mod range;
 mod remove;
 mod repeat;
 mod replace;
+mod resize;
 mod reverse;
 mod rewrite;
 mod set_ops;
@@ -60,6 +62,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::cardinality::cardinality;
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
@@ -82,6 +85,7 @@ pub mod expr_fn {
     pub use super::replace::array_replace;
     pub use super::replace::array_replace_all;
     pub use super::replace::array_replace_n;
+    pub use super::resize::array_resize;
     pub use super::reverse::array_reverse;
     pub use super::set_ops::array_distinct;
     pub use super::set_ops::array_intersect;
@@ -91,8 +95,6 @@ pub mod expr_fn {
     pub use super::string::string_to_array;
     pub use super::udf::array_dims;
     pub use super::udf::array_ndims;
-    pub use super::udf::array_resize;
-    pub use super::udf::cardinality;
     pub use super::udf::flatten;
 }
 
@@ -104,7 +106,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         range::range_udf(),
         range::gen_series_udf(),
         udf::array_dims_udf(),
-        udf::cardinality_udf(),
+        cardinality::cardinality_udf(),
         udf::array_ndims_udf(),
         concat::array_append_udf(),
         concat::array_prepend_udf(),
@@ -123,7 +125,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         udf::flatten_udf(),
         sort::array_sort_udf(),
         repeat::array_repeat_udf(),
-        udf::array_resize_udf(),
+        resize::array_resize_udf(),
         reverse::array_reverse_udf(),
         set_ops::array_distinct_udf(),
         set_ops::array_intersect_udf(),
