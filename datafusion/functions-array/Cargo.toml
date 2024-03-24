@@ -53,8 +53,6 @@ paste = "1.0.14"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
 
-
 [[bench]]
 harness = false
 name = "array_expression"
-

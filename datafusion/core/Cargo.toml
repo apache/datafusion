@@ -206,5 +206,3 @@ name = "sort"
 [[bench]]
 harness = false
 name = "topk_aggregate"
-
-
