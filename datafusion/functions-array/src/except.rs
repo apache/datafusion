@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! implementation kernel for array_except function
+//! [`ScalarUDFImpl`] definitions for array_except function.
 
 use crate::utils::check_datatypes;
 use arrow::row::{RowConverter, SortField};
