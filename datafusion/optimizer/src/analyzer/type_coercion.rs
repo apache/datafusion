@@ -47,8 +47,8 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
     type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
-    Projection, ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 #[derive(Default)]
@@ -76,7 +76,7 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    let mut new_inputs = plan
+    let new_inputs = plan
         .inputs()
         .iter()
         .map(|p| analyze_internal(external_schema, p))
@@ -110,14 +110,7 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // TODO: with_new_exprs can't change the schema, so we need to do this here
-    match &plan {
-        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
-            new_expr,
-            Arc::new(new_inputs.swap_remove(0)),
-        )?)),
-        _ => plan.with_new_exprs(new_expr, new_inputs),
-    }
+    plan.with_new_exprs(new_expr, new_inputs)
 }
 
 pub(crate) struct TypeCoercionRewriter {

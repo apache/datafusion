@@ -15,49 +15,59 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::{handle, utf8_to_str_type};
-use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
+use std::iter;
+use std::sync::Arc;
+
+use arrow::array::GenericStringArray;
+use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::Utf8;
+use uuid::Uuid;
+
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
-pub(super) struct UpperFunc {
+pub(super) struct UuidFunc {
     signature: Signature,
 }
 
-impl UpperFunc {
+impl UuidFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![], Volatility::Volatile),
         }
     }
 }
 
-impl ScalarUDFImpl for UpperFunc {
+impl ScalarUDFImpl for UuidFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "upper"
+        "uuid"
     }
 
     fn signature(&self) -> &Signature {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "upper")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Utf8)
     }
 
+    /// Prints random (v4) uuid values per row
+    /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_uppercase(), "upper")
+        let len: usize = match &args[0] {
+            ColumnarValue::Array(array) => array.len(),
+            _ => return exec_err!("Expect uuid function to take no param"),
+        };
+
+        let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
+        let array = GenericStringArray::<i32>::from_iter_values(values);
+        Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }

@@ -545,7 +545,7 @@ enum ScalarFunction {
   //  1 was Acos
   //  2 was Asin
   Atan = 3;
-  Ascii = 4;
+  // 4 was Ascii
   Ceil = 5;
   Cos = 6;
   // 7 was Digest
@@ -564,7 +564,7 @@ enum ScalarFunction {
   // 20 was Array
   // RegexpMatch = 21;
   BitLength = 22;
-  Btrim = 23;
+  // 23 was Btrim
   CharacterLength = 24;
   Chr = 25;
   Concat = 26;
@@ -574,11 +574,11 @@ enum ScalarFunction {
   InitCap = 30;
   Left = 31;
   Lpad = 32;
-  Lower = 33;
-  Ltrim = 34;
+  // 33 was Lower
+  // 34 was Ltrim
   // 35 was MD5
   //  36 was NullIf
-  OctetLength = 37;
+  // 37 was OctetLength 
   Random = 38;
   // 39 was RegexpReplace
   Repeat = 40;
@@ -586,7 +586,7 @@ enum ScalarFunction {
   Reverse = 42;
   Right = 43;
   Rpad = 44;
-  Rtrim = 45;
+  // 45 was Rtrim
   // 46 was SHA224
   // 47 was SHA256
   // 48 was SHA384
@@ -613,7 +613,7 @@ enum ScalarFunction {
   // 69 was ArrowTypeof
   // 70 was CurrentDate
   // 71 was CurrentTime
-  Uuid = 72;
+  // 72 was Uuid
   Cbrt = 73;
   Acosh = 74;
   Asinh = 75;
@@ -660,11 +660,11 @@ enum ScalarFunction {
   // 118 was ToTimestampNanos
   // 119 was ArrayIntersect
   // 120 was ArrayUnion
-  OverLay = 121;
+  // 121 was OverLay
   // 122 is Range
   // 123 is ArrayExcept
   // 124 was ArrayPopFront
-  Levenshtein = 125;
+  // 125 was Levenshtein
   SubstrIndex = 126;
   FindInSet = 127;
   // 128 was ArraySort

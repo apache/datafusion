@@ -336,6 +336,21 @@ SELECT ascii(NULL)
 NULL
 
 query I
+SELECT ascii('ésoj')
+----
+233
+
+query I
+SELECT ascii('💯')
+----
+128175
+
+query I
+SELECT ascii('💯a')
+----
+128175
+
+query I
 SELECT bit_length('')
 ----
 0

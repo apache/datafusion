@@ -16,54 +16,57 @@
 // under the License.
 
 use crate::string::common::make_scalar_function;
+use arrow::array::Int32Array;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::{cast::as_generic_string_array, internal_err, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-/// Returns true if string starts with prefix.
-/// starts_with('alphabet', 'alph') = 't'
-pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let left = as_generic_string_array::<T>(&args[0])?;
-    let right = as_generic_string_array::<T>(&args[1])?;
+/// Returns the numeric code of the first character of the argument.
+/// ascii('x') = 120
+pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
 
-    let result = arrow::compute::kernels::comparison::starts_with(left, right)?;
+    let result = string_array
+        .iter()
+        .map(|string| {
+            string.map(|string: &str| {
+                let mut chars = string.chars();
+                chars.next().map_or(0, |v| v as i32)
+            })
+        })
+        .collect::<Int32Array>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
 
 #[derive(Debug)]
-pub(super) struct StartsWithFunc {
+pub(super) struct AsciiFunc {
     signature: Signature,
 }
-impl StartsWithFunc {
+impl AsciiFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
+            signature: Signature::uniform(
+                1,
+                vec![Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
     }
 }
 
-impl ScalarUDFImpl for StartsWithFunc {
+impl ScalarUDFImpl for AsciiFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "starts_with"
+        "ascii"
     }
 
     fn signature(&self) -> &Signature {
@@ -73,14 +76,14 @@ impl ScalarUDFImpl for StartsWithFunc {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
 
-        Ok(Boolean)
+        Ok(Int32)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(starts_with::<i32>, vec![])(args),
+            DataType::Utf8 => make_scalar_function(ascii::<i32>, vec![])(args),
             DataType::LargeUtf8 => {
-                return make_scalar_function(starts_with::<i64>, vec![])(args);
+                return make_scalar_function(ascii::<i64>, vec![])(args);
             }
             _ => internal_err!("Unsupported data type"),
         }
