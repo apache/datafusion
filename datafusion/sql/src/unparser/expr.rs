@@ -561,12 +561,12 @@ impl Unparser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{any::Any, sync::Arc};
+    use std::any::Any;
 
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        col, expr::AggregateFunction, lit, ColumnarValue, ScalarFunctionDefinition,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        col, expr::AggregateFunction, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl,
+        Signature, Volatility,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -637,28 +637,15 @@ mod tests {
                 r#"CAST("a" AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::InList(InList {
-                    expr: Box::new(col("a")),
-                    list: vec![lit(1), lit(2), lit(3)],
-                    negated: false,
-                }),
+                col("a").in_list(vec![lit(1), lit(2), lit(3)], false),
                 r#""a" IN (1, 2, 3)"#,
             ),
             (
-                Expr::InList(InList {
-                    expr: Box::new(col("a")),
-                    list: vec![lit(1), lit(2), lit(3)],
-                    negated: true,
-                }),
+                col("a").in_list(vec![lit(1), lit(2), lit(3)], true),
                 r#""a" NOT IN (1, 2, 3)"#,
             ),
             (
-                Expr::ScalarFunction(ScalarFunction {
-                    func_def: ScalarFunctionDefinition::UDF(Arc::new(
-                        ScalarUDF::new_from_impl(DummyUDF::new()),
-                    )),
-                    args: vec![col("a"), col("b")],
-                }),
+                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
                 r#"dummy_udf("a", "b")"#,
             ),
             (
