@@ -29,7 +29,10 @@ mod lower;
 mod ltrim;
 mod octet_length;
 mod overlay;
+mod repeat;
+mod replace;
 mod rtrim;
+mod split_part;
 mod starts_with;
 mod to_hex;
 mod upper;
@@ -43,8 +46,11 @@ make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(lower::LowerFunc, LOWER, lower);
 make_udf_function!(octet_length::OctetLengthFunc, OCTET_LENGTH, octet_length);
 make_udf_function!(overlay::OverlayFunc, OVERLAY, overlay);
+make_udf_function!(repeat::RepeatFunc, REPEAT, repeat);
+make_udf_function!(replace::ReplaceFunc, REPLACE, replace);
 make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
 make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
+make_udf_function!(split_part::SplitPartFunc, SPLIT_PART, split_part);
 make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
 make_udf_function!(upper::UpperFunc, UPPER, upper);
 make_udf_function!(uuid::UuidFunc, UUID, uuid);
@@ -87,9 +93,24 @@ pub mod expr_fn {
         super::overlay().call(args)
     }
 
+    #[doc = "Repeats the `string` to `n` times"]
+    pub fn repeat(string: Expr, n: Expr) -> Expr {
+        super::repeat().call(vec![string, n])
+    }
+
+    #[doc = "Replaces all occurrences of `from` with `to` in the `string`"]
+    pub fn replace(string: Expr, from: Expr, to: Expr) -> Expr {
+        super::replace().call(vec![string, from, to])
+    }
+
     #[doc = "Removes all characters, spaces by default, from the end of a string"]
     pub fn rtrim(args: Vec<Expr>) -> Expr {
         super::rtrim().call(args)
+    }
+
+    #[doc = "Splits a string based on a delimiter and picks out the desired field based on the index."]
+    pub fn split_part(string: Expr, delimiter: Expr, index: Expr) -> Expr {
+        super::split_part().call(vec![string, delimiter, index])
     }
 
     #[doc = "Returns true if string starts with prefix."]
@@ -128,7 +149,10 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         ltrim(),
         octet_length(),
         overlay(),
+        repeat(),
+        replace(),
         rtrim(),
+        split_part(),
         starts_with(),
         to_hex(),
         upper(),

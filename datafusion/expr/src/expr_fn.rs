@@ -598,11 +598,8 @@ scalar_expr!(
 );
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
-scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
-scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");
 scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
-scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
@@ -1056,13 +1053,10 @@ mod test {
         test_scalar_expr!(Left, left, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count);
         test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
-        test_scalar_expr!(Replace, replace, string, from, to);
-        test_scalar_expr!(Repeat, repeat, string, count);
         test_scalar_expr!(Reverse, reverse, string);
         test_scalar_expr!(Right, right, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count);
         test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
-        test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);

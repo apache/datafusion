@@ -123,18 +123,12 @@ pub enum BuiltinScalarFunction {
     Lpad,
     /// random
     Random,
-    /// repeat
-    Repeat,
-    /// replace
-    Replace,
     /// reverse
     Reverse,
     /// right
     Right,
     /// rpad
     Rpad,
-    /// split_part
-    SplitPart,
     /// strpos
     Strpos,
     /// substr
@@ -238,12 +232,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Left => Volatility::Immutable,
             BuiltinScalarFunction::Lpad => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
-            BuiltinScalarFunction::Repeat => Volatility::Immutable,
-            BuiltinScalarFunction::Replace => Volatility::Immutable,
             BuiltinScalarFunction::Reverse => Volatility::Immutable,
             BuiltinScalarFunction::Right => Volatility::Immutable,
             BuiltinScalarFunction::Rpad => Volatility::Immutable,
-            BuiltinScalarFunction::SplitPart => Volatility::Immutable,
             BuiltinScalarFunction::Strpos => Volatility::Immutable,
             BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
@@ -293,12 +284,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
-            BuiltinScalarFunction::Repeat => {
-                utf8_to_str_type(&input_expr_types[0], "repeat")
-            }
-            BuiltinScalarFunction::Replace => {
-                utf8_to_str_type(&input_expr_types[0], "replace")
-            }
             BuiltinScalarFunction::Reverse => {
                 utf8_to_str_type(&input_expr_types[0], "reverse")
             }
@@ -306,9 +291,6 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "right")
             }
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
-            BuiltinScalarFunction::SplitPart => {
-                utf8_to_str_type(&input_expr_types[0], "split_part")
-            }
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
             BuiltinScalarFunction::Strpos => {
                 utf8_to_int_type(&input_expr_types[0], "strpos/instr/position")
@@ -417,21 +399,12 @@ impl BuiltinScalarFunction {
                     self.volatility(),
                 )
             }
-            BuiltinScalarFunction::Left
-            | BuiltinScalarFunction::Repeat
-            | BuiltinScalarFunction::Right => Signature::one_of(
-                vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::SplitPart => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Utf8, Int64]),
-                    Exact(vec![Utf8, LargeUtf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::Left | BuiltinScalarFunction::Right => {
+                Signature::one_of(
+                    vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
+                    self.volatility(),
+                )
+            }
 
             BuiltinScalarFunction::EndsWith | BuiltinScalarFunction::Strpos => {
                 Signature::one_of(
@@ -467,7 +440,7 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
 
-            BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
+            BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
             }
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
@@ -637,12 +610,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::InitCap => &["initcap"],
             BuiltinScalarFunction::Left => &["left"],
             BuiltinScalarFunction::Lpad => &["lpad"],
-            BuiltinScalarFunction::Repeat => &["repeat"],
-            BuiltinScalarFunction::Replace => &["replace"],
             BuiltinScalarFunction::Reverse => &["reverse"],
             BuiltinScalarFunction::Right => &["right"],
             BuiltinScalarFunction::Rpad => &["rpad"],
-            BuiltinScalarFunction::SplitPart => &["split_part"],
             BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
             BuiltinScalarFunction::Substr => &["substr"],
             BuiltinScalarFunction::Translate => &["translate"],
