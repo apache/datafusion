@@ -57,6 +57,7 @@ impl ScalarUDFImpl for ArrayResize {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_resize"
     }
@@ -85,7 +86,9 @@ impl ScalarUDFImpl for ArrayResize {
 }
 
 /// array_resize SQL function
-pub fn array_resize_inner(arg: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub(crate) fn array_resize_inner(
+    arg: &[ArrayRef],
+) -> datafusion_common::Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
     }
@@ -98,11 +101,11 @@ pub fn array_resize_inner(arg: &[ArrayRef]) -> datafusion_common::Result<ArrayRe
     };
 
     match &arg[0].data_type() {
-        DataType::List(field) => {
+        List(field) => {
             let array = as_list_array(&arg[0])?;
             general_list_resize::<i32>(array, new_len, field, new_element)
         }
-        DataType::LargeList(field) => {
+        LargeList(field) => {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }

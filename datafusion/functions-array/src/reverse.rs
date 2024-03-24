@@ -21,6 +21,7 @@ use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
+use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::exec_err;
@@ -56,6 +57,7 @@ impl ScalarUDFImpl for ArrayReverse {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_reverse"
     }
@@ -84,15 +86,15 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> datafusion_common::Result<ArrayR
     }
 
     match &arg[0].data_type() {
-        DataType::List(field) => {
+        List(field) => {
             let array = as_list_array(&arg[0])?;
             general_array_reverse::<i32>(array, field)
         }
-        DataType::LargeList(field) => {
+        LargeList(field) => {
             let array = as_large_list_array(&arg[0])?;
             general_array_reverse::<i64>(array, field)
         }
-        DataType::Null => Ok(arg[0].clone()),
+        Null => Ok(arg[0].clone()),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }

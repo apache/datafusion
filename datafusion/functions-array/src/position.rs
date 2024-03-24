@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_position function.
+//! [`ScalarUDFImpl`] definitions for array_position and array_positions functions.
 
 use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
@@ -35,7 +35,7 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, internal_err};
 use itertools::Itertools;
 
-use crate::utils::compare_element_to_list;
+use crate::utils::{compare_element_to_list, make_scalar_function};
 
 make_udf_function!(
     ArrayPosition,
@@ -86,8 +86,7 @@ impl ScalarUDFImpl for ArrayPosition {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_position_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_position_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -219,8 +218,7 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_positions_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_positions_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -237,12 +235,12 @@ pub fn array_positions_inner(args: &[ArrayRef]) -> datafusion_common::Result<Arr
     let element = &args[1];
 
     match &args[0].data_type() {
-        DataType::List(_) => {
+        List(_) => {
             let arr = as_list_array(&args[0])?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i32>(arr, element)
         }
-        DataType::LargeList(_) => {
+        LargeList(_) => {
             let arr = as_large_list_array(&args[0])?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)

@@ -60,6 +60,7 @@ impl ScalarUDFImpl for ArrayRepeat {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_repeat"
     }

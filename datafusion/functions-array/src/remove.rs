@@ -18,6 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_remove, array_remove_n, array_remove_all functions.
 
 use crate::utils;
+use crate::utils::make_scalar_function;
 use arrow_array::cast::AsArray;
 use arrow_array::{
     new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait,
@@ -58,6 +59,7 @@ impl ScalarUDFImpl for ArrayRemove {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_remove"
     }
@@ -71,8 +73,7 @@ impl ScalarUDFImpl for ArrayRemove {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_remove_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_remove_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -107,6 +108,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_remove_n"
     }
@@ -120,8 +122,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_remove_n_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_remove_n_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -159,6 +160,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "array_remove_all"
     }
@@ -172,8 +174,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_remove_all_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_remove_all_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {

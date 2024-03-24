@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_except function.
 
-use crate::utils::check_datatypes;
+use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::row::{RowConverter, SortField};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
@@ -74,8 +74,7 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        array_except_inner(&args).map(ColumnarValue::Array)
+        make_scalar_function(array_except_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {

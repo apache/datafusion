@@ -31,13 +31,13 @@ pub mod macros;
 mod array_has;
 mod cardinality;
 mod concat;
-mod core;
 mod dimension;
 mod empty;
 mod except;
 mod extract;
 mod flatten;
 mod length;
+mod make_array;
 mod position;
 mod range;
 mod remove;
@@ -66,7 +66,6 @@ pub mod expr_fn {
     pub use super::concat::array_append;
     pub use super::concat::array_concat;
     pub use super::concat::array_prepend;
-    pub use super::core::make_array;
     pub use super::dimension::array_dims;
     pub use super::dimension::array_ndims;
     pub use super::empty::array_empty;
@@ -77,6 +76,7 @@ pub mod expr_fn {
     pub use super::extract::array_slice;
     pub use super::flatten::flatten;
     pub use super::length::array_length;
+    pub use super::make_array::make_array;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -116,7 +116,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         extract::array_pop_back_udf(),
         extract::array_pop_front_udf(),
         extract::array_slice_udf(),
-        core::make_array_udf(),
+        make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
         array_has::array_has_any_udf(),
