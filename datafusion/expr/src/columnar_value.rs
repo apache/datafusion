@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// for convenience, it is often much more performant to provide an
 /// optimized path for scalar values.
 ///
-/// See [ColumnarValue::values_to_arrays] for a function that converts
+/// See [`ColumnarValue::values_to_arrays`] for a function that converts
 /// multiple columnar values into arrays of the same length.
 #[derive(Clone, Debug)]
 pub enum ColumnarValue {
@@ -63,7 +63,7 @@ impl ColumnarValue {
     }
 
     /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
-    /// number. of rows. [`Self::Scalar`] is converted by repeating the same
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
     ///
