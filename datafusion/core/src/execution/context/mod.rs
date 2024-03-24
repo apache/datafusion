@@ -1885,7 +1885,7 @@ impl SessionState {
                 },
             );
             let (plan, logical_optimization_succeeded) = match optimized_plan {
-                Ok(plan) => (Box::new(plan), true),
+                Ok(plan) => (Box::new(plan.data), true),
                 Err(DataFusionError::Context(optimizer_name, err)) => {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans
@@ -1906,7 +1906,7 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+            self.optimizer.optimize(analyzed_plan, self, |_, _| {}).map(|t|t.data)
         }
     }
 

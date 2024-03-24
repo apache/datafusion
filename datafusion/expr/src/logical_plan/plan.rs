@@ -157,6 +157,15 @@ pub enum LogicalPlan {
     RecursiveQuery(RecursiveQuery),
 }
 
+impl Default for LogicalPlan {
+    fn default() -> Self {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            schema: DFSchemaRef::new(DFSchema::empty()),
+            produce_one_row: false,
+        })
+    }
+}
+
 impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
@@ -408,6 +417,22 @@ impl LogicalPlan {
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => vec![],
         }
+    }
+
+    pub fn rewrite_inputs<F>(mut self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(LogicalPlan) -> Result<LogicalPlan>,
+    {
+        match &mut self {
+            LogicalPlan::Projection(Projection { input, .. }) => {
+                let old_input = std::mem::take(input);
+                let plan = f(*old_input)?;
+                *input = Box::new(plan);
+            }
+            _ => todo!(""),
+        }
+
+        Ok(self)
     }
 
     /// returns all `Using` join columns in a logical plan
