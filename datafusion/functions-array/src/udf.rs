@@ -19,7 +19,6 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use arrow_schema::DataType::List;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
@@ -243,112 +242,6 @@ impl ScalarUDFImpl for ArrayNdims {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         crate::kernels::array_ndims(&args).map(ColumnarValue::Array)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-}
-
-make_udf_function!(
-    ArrayEmpty,
-    array_empty,
-    array,
-    "returns true for an empty array or false for a non-empty array.",
-    array_empty_udf
-);
-
-#[derive(Debug)]
-pub(super) struct ArrayEmpty {
-    signature: Signature,
-    aliases: Vec<String>,
-}
-impl ArrayEmpty {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::array(Volatility::Immutable),
-            aliases: vec![String::from("empty")],
-        }
-    }
-}
-
-impl ScalarUDFImpl for ArrayEmpty {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "empty"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Boolean,
-            _ => {
-                return plan_err!("The array_empty function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::array_empty(&args).map(ColumnarValue::Array)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-}
-
-make_udf_function!(
-    ArrayRepeat,
-    array_repeat,
-    element count, // arg name
-    "returns an array containing element `count` times.", // doc
-    array_repeat_udf // internal function name
-);
-#[derive(Debug)]
-pub(super) struct ArrayRepeat {
-    signature: Signature,
-    aliases: Vec<String>,
-}
-
-impl ArrayRepeat {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("array_repeat"), String::from("list_repeat")],
-        }
-    }
-}
-
-impl ScalarUDFImpl for ArrayRepeat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        "array_repeat"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new(
-            "item",
-            arg_types[0].clone(),
-            true,
-        ))))
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        crate::kernels::array_repeat(&args).map(ColumnarValue::Array)
     }
 
     fn aliases(&self) -> &[String] {
