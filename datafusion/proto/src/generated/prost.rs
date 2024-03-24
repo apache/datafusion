@@ -2880,8 +2880,8 @@ pub enum ScalarFunction {
     /// 37 was OctetLength
     Random = 38,
     /// 39 was RegexpReplace
-    Repeat = 40,
-    Replace = 41,
+    /// 40 was Repeat
+    /// 41 was Replace
     Reverse = 42,
     Right = 43,
     Rpad = 44,
@@ -2890,7 +2890,7 @@ pub enum ScalarFunction {
     /// 47 was SHA256
     /// 48 was SHA384
     /// 49 was SHA512
-    SplitPart = 50,
+    /// 50 was SplitPart
     /// StartsWith = 51;
     Strpos = 52,
     Substr = 53,
@@ -3010,12 +3010,9 @@ impl ScalarFunction {
             ScalarFunction::Left => "Left",
             ScalarFunction::Lpad => "Lpad",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Repeat => "Repeat",
-            ScalarFunction::Replace => "Replace",
             ScalarFunction::Reverse => "Reverse",
             ScalarFunction::Right => "Right",
             ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::SplitPart => "SplitPart",
             ScalarFunction::Strpos => "Strpos",
             ScalarFunction::Substr => "Substr",
             ScalarFunction::Translate => "Translate",
@@ -3069,12 +3066,9 @@ impl ScalarFunction {
             "Left" => Some(Self::Left),
             "Lpad" => Some(Self::Lpad),
             "Random" => Some(Self::Random),
-            "Repeat" => Some(Self::Repeat),
-            "Replace" => Some(Self::Replace),
             "Reverse" => Some(Self::Reverse),
             "Right" => Some(Self::Right),
             "Rpad" => Some(Self::Rpad),
-            "SplitPart" => Some(Self::SplitPart),
             "Strpos" => Some(Self::Strpos),
             "Substr" => Some(Self::Substr),
             "Translate" => Some(Self::Translate),
