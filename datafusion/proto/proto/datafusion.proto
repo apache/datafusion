@@ -566,7 +566,7 @@ enum ScalarFunction {
   // 22 was BitLength
   // 23 was Btrim
   CharacterLength = 24;
-  Chr = 25;
+  // 25 was Chr
   Concat = 26;
   ConcatWithSeparator = 27;
   // 28 was DatePart

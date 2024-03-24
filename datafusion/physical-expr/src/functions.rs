@@ -277,9 +277,6 @@ pub fn create_physical_fun(
                 ),
             })
         }
-        BuiltinScalarFunction::Chr => {
-            Arc::new(|args| make_scalar_function_inner(string_expressions::chr)(args))
-        }
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
@@ -644,62 +641,6 @@ mod tests {
             i32,
             Int32,
             Int32Array
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
-            Ok(Some("💯")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(120)))],
-            Ok(Some("x")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
-            Ok(Some("💯")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(0)))],
-            exec_err!("null character not permitted."),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            exec_err!("requested character too large for encoding."),
-            &str,
-            Utf8,
-            StringArray
         );
         test_function!(
             Concat,

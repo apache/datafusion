@@ -2865,7 +2865,7 @@ pub enum ScalarFunction {
     /// 22 was BitLength
     /// 23 was Btrim
     CharacterLength = 24,
-    Chr = 25,
+    /// 25 was Chr
     Concat = 26,
     ConcatWithSeparator = 27,
     /// 28 was DatePart
@@ -3002,7 +3002,6 @@ impl ScalarFunction {
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::CharacterLength => "CharacterLength",
-            ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
@@ -3057,7 +3056,6 @@ impl ScalarFunction {
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
             "CharacterLength" => Some(Self::CharacterLength),
-            "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),

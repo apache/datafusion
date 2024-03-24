@@ -24,6 +24,7 @@ use datafusion_expr::ScalarUDF;
 mod ascii;
 mod bit_length;
 mod btrim;
+mod chr;
 mod common;
 mod levenshtein;
 mod lower;
@@ -43,6 +44,7 @@ mod uuid;
 make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
+make_udf_function!(chr::ChrFunc, CHR, chr);
 make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(lower::LowerFunc, LOWER, lower);
@@ -73,6 +75,11 @@ pub mod expr_fn {
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
     pub fn btrim(args: Vec<Expr>) -> Expr {
         super::btrim().call(args)
+    }
+
+    #[doc = "Converts the Unicode code point to a UTF8 character"]
+    pub fn chr(args: Vec<Expr>) -> Expr {
+        super::chr().call(args)
     }
 
     #[doc = "Returns the Levenshtein distance between the two given strings"]
@@ -152,6 +159,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         ascii(),
         bit_length(),
         btrim(),
+        chr(),
         levenshtein(),
         lower(),
         ltrim(),
