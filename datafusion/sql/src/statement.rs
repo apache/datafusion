@@ -903,7 +903,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect();
 
         Ok(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
+            input: Box::new(input),
             output_url: statement.target,
             format_options: file_type.into(),
             partition_by,
@@ -1195,7 +1195,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_name: table_ref,
             table_schema: schema.into(),
             op: WriteOp::Delete,
-            input: Arc::new(source),
+            input: Box::new(source),
         });
         Ok(plan)
     }
@@ -1306,7 +1306,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_name,
             table_schema,
             op: WriteOp::Update,
-            input: Arc::new(source),
+            input: Box::new(source),
         });
         Ok(plan)
     }
@@ -1430,7 +1430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_name,
             table_schema: Arc::new(table_schema),
             op,
-            input: Arc::new(source),
+            input: Box::new(source),
         });
         Ok(plan)
     }

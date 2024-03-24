@@ -853,7 +853,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(datafusion_expr::LogicalPlan::Copy(
                     datafusion_expr::dml::CopyTo {
-                        input: Arc::new(input),
+                        input: Box::new(input),
                         output_url: copy.output_url.clone(),
                         partition_by: copy.partition_by.clone(),
                         format_options: convert_required!(copy.format_options)?,
