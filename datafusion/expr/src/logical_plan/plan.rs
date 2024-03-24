@@ -38,7 +38,7 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
+    build_join_schema, col, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
@@ -288,6 +288,141 @@ impl LogicalPlan {
                 }
             });
         exprs
+    }
+
+    pub fn rewrite_exprs<F>(mut self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(Expr) -> Result<Expr>,
+    {
+        match &mut self {
+            LogicalPlan::Projection(Projection { expr, .. })
+            | LogicalPlan::Window(Window {
+                window_expr: expr, ..
+            })
+            | LogicalPlan::Sort(Sort { expr, .. })
+            | LogicalPlan::TableScan(TableScan { filters: expr, .. }) => {
+                let _ = expr.iter_mut().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+            }
+            LogicalPlan::Values(Values { values, .. }) => {
+                let _ = values.iter_mut().flatten().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+            }
+            LogicalPlan::Filter(Filter { predicate, .. }) => {
+                let old_predicate = std::mem::take(predicate);
+                *predicate = f(old_predicate)?;
+            }
+            LogicalPlan::Repartition(Repartition {
+                partitioning_scheme,
+                ..
+            }) => match partitioning_scheme {
+                Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
+                    let _ = expr.iter_mut().try_for_each(|e| {
+                        let old_expr = std::mem::take(e);
+                        *e = f(old_expr)?;
+                        Ok::<_, DataFusionError>(())
+                    })?;
+                }
+                Partitioning::RoundRobinBatch(_) => {}
+            },
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                ..
+            }) => {
+                let _ = group_expr.iter_mut().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+                let _ = aggr_expr.iter_mut().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+            }
+            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // 2. the second part is non-equijoin(filter).
+            LogicalPlan::Join(Join { on, filter, .. }) => {
+                let _ = on.iter_mut().try_for_each(|(l, r)| {
+                    let old_l = std::mem::take(l);
+                    let old_r = std::mem::take(r);
+                    *l = f(old_l)?;
+                    *r = f(old_r)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+
+                if let Some(filter) = filter.as_mut() {
+                    let old_filter = std::mem::take(filter);
+                    *filter = f(old_filter)?;
+                }
+            }
+            LogicalPlan::Extension(_extension) => {
+                todo!("implemet rewrite_exprs for extension node")
+            }
+            LogicalPlan::Unnest(Unnest { column, .. }) => {
+                let old_column = std::mem::take(column);
+                let new_col_expr = f(col(old_column))?;
+                match new_col_expr {
+                    Expr::Column(col) => *column = col,
+                    _ => {
+                        return internal_err!(
+                            "Simplified Unnest's column should be column"
+                        )
+                    }
+                }
+            }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                on_expr,
+                select_expr,
+                sort_expr,
+                ..
+            })) => {
+                let _ = on_expr.iter_mut().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+                let _ = select_expr.iter_mut().try_for_each(|e| {
+                    let old_expr = std::mem::take(e);
+                    *e = f(old_expr)?;
+                    Ok::<_, DataFusionError>(())
+                })?;
+                if let Some(sort_expr) = sort_expr.as_mut() {
+                    let _ = sort_expr.iter_mut().try_for_each(|e| {
+                        let old_expr = std::mem::take(e);
+                        *e = f(old_expr)?;
+                        Ok::<_, DataFusionError>(())
+                    })?;
+                }
+            }
+            // plans without expressions
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::CrossJoin(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Prepare(_) => {}
+        }
+
+        Ok(self)
     }
 
     /// Calls `f` on all expressions (non-recursively) in the current
