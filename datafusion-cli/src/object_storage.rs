@@ -107,14 +107,14 @@ pub fn get_oss_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
-    return get_object_store_builder(url, aws_options, true);
+    get_object_store_builder(url, aws_options, true)
 }
 
 pub fn get_cos_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
-    return get_object_store_builder(url, aws_options, false);
+    get_object_store_builder(url, aws_options, false)
 }
 
 fn get_object_store_builder(
