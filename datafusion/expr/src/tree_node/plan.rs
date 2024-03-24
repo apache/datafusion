@@ -110,4 +110,11 @@ impl TreeNode for LogicalPlan {
             Ok(new_children.update_data(|_| self))
         }
     }
+
+    fn mutate_children<F>(&mut self, f: F) -> Result<Transformed<()>>
+    where
+        F: FnMut(&mut Self) -> Result<Transformed<()>>,
+    {
+        self.rewrite_inputs(f)
+    }
 }

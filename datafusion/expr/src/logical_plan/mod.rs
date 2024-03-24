@@ -20,6 +20,7 @@ mod ddl;
 pub mod display;
 pub mod dml;
 mod extension;
+mod mutate;
 mod plan;
 mod statement;
 
