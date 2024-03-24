@@ -22,14 +22,29 @@ use std::sync::Arc;
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use arrow_array::{
-    Array, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
+    Array, BooleanArray, GenericListArray, ListArray, OffsetSizeTrait, Scalar,
+    UInt32Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 
+use core::any::type_name;
+use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+
+macro_rules! downcast_arg {
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast to {}",
+                type_name::<$ARRAY_TYPE>()
+            ))
+        })?
+    }};
+}
+pub(crate) use downcast_arg;
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -214,17 +229,29 @@ pub(crate) fn compare_element_to_list(
     Ok(res)
 }
 
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
+/// Returns the length of each array dimension
+pub(crate) fn compute_array_dims(
+    arr: Option<ArrayRef>,
+) -> Result<Option<Vec<Option<u64>>>> {
+    let mut value = match arr {
+        Some(arr) => arr,
+        None => return Ok(None),
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let mut res = vec![Some(value.len() as u64)];
+
+    loop {
+        match value.data_type() {
+            DataType::List(..) => {
+                value = downcast_arg!(value, ListArray).value(0);
+                res.push(Some(value.len() as u64));
+            }
+            _ => return Ok(Some(res)),
+        }
+    }
 }
-pub(crate) use downcast_arg;
 
 #[cfg(test)]
 mod tests {

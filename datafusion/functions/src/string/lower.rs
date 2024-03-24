@@ -23,11 +23,11 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
 #[derive(Debug)]
-pub(super) struct UpperFunc {
+pub(super) struct LowerFunc {
     signature: Signature,
 }
 
-impl UpperFunc {
+impl LowerFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
@@ -40,13 +40,13 @@ impl UpperFunc {
     }
 }
 
-impl ScalarUDFImpl for UpperFunc {
+impl ScalarUDFImpl for LowerFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "upper"
+        "lower"
     }
 
     fn signature(&self) -> &Signature {
@@ -54,10 +54,10 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "upper")
+        utf8_to_str_type(&arg_types[0], "lower")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        handle(args, |string| string.to_uppercase(), "upper")
+        handle(args, |string| string.to_lowercase(), "lower")
     }
 }

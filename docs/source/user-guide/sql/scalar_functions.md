@@ -731,12 +731,15 @@ btrim(str[, trim_str])
   Can be a constant, column, or function, and any combination of string operators.
 - **trim_str**: String expression to trim from the beginning and end of the input string.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  _Default is whitespace characters_.
+  _Default is whitespace characters._
 
 **Related functions**:
 [ltrim](#ltrim),
-[rtrim](#rtrim),
-[trim](#trim)
+[rtrim](#rtrim)
+
+#### Aliases
+
+- trim
 
 ### `char_length`
 
@@ -919,26 +922,25 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Removes leading spaces from a string.
+Trims the specified trim string from the beginning of a string.
+If no trim string is provided, all whitespace is removed from the start
+of the input string.
 
 ```
-ltrim(str)
+ltrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[rtrim](#rtrim),
-[trim](#trim)
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+[rtrim](#rtrim)
 
 ### `octet_length`
 
@@ -1040,21 +1042,25 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Removes trailing spaces from a string.
+Trims the specified trim string from the end of a string.
+If no trim string is provided, all whitespace is removed from the end
+of the input string.
 
 ```
-rtrim(str)
+rtrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[ltrim](#ltrim),
-[trim](#trim)
+[ltrim](#ltrim)
 
 ### `split_part`
 
@@ -1154,21 +1160,7 @@ to_hex(int)
 
 ### `trim`
 
-Removes leading and trailing spaces from a string.
-
-```
-trim(str)
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-**Related functions**:
-[btrim](#btrim),
-[ltrim](#ltrim),
-[rtrim](#rtrim)
+_Alias of [btrim](#btrim)._
 
 ### `upper`
 

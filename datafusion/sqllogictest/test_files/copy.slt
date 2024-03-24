@@ -474,6 +474,83 @@ select * from validate_arrow;
 1 Foo
 2 Bar
 
+# Format Options Support without the 'format.' prefix
+
+# Copy with format options for Parquet without the 'format.' prefix
+query IT
+COPY source_table TO 'test_files/scratch/copy/format_table.parquet'
+OPTIONS (
+    compression snappy,
+    'compression::col1' 'zstd(5)'
+);
+----
+2
+
+# Copy with format options for JSON without the 'format.' prefix
+query IT
+COPY source_table  to 'test_files/scratch/copy/format_table'
+STORED AS JSON OPTIONS (compression gzip);
+----
+2
+
+# Copy with format options for CSV without the 'format.' prefix
+query IT
+COPY source_table to 'test_files/scratch/copy/format_table.csv'
+OPTIONS (
+    has_header false,
+    compression xz,
+    datetime_format '%FT%H:%M:%S.%9f',
+    delimiter ';',
+    null_value 'NULLVAL'
+);
+----
+2
+
+# Copy with unknown format options without the 'format.' prefix to ensure error is sensible
+query error DataFusion error: Invalid or Unsupported Configuration: Config value "unknown_option" not found on CsvOptions
+COPY source_table to 'test_files/scratch/copy/format_table2.csv'
+OPTIONS (
+    unknown_option  false,
+);
+
+
+# Format Options Support with format in OPTIONS i.e. COPY { table_name | query } TO 'file_name' OPTIONS (format <format-name>, ...)
+
+query I
+COPY (select * from (values (1))) to 'test_files/scratch/copy/'
+OPTIONS (format parquet);
+----
+1
+
+query I
+COPY (select * from (values (1))) to 'test_files/scratch/copy/'
+OPTIONS (format parquet, compression 'zstd(10)');
+----
+1
+
+query I
+COPY (select * from (values (1))) to 'test_files/scratch/copy/'
+OPTIONS (format json, compression gzip);
+----
+1
+
+query I
+COPY (select * from (values (1))) to 'test_files/scratch/copy/'
+OPTIONS (
+    format csv,
+    has_header false,
+    compression xz,
+    datetime_format '%FT%H:%M:%S.%9f',
+    delimiter ';',
+    null_value 'NULLVAL'
+);
+----
+1
+
+query error DataFusion error: Invalid or Unsupported Configuration: This feature is not implemented: Unknown FileType: NOTVALIDFORMAT
+COPY (select * from (values (1))) to 'test_files/scratch/copy/'
+OPTIONS (format notvalidformat, compression 'zstd(5)');
+
 
 # Error cases:
 

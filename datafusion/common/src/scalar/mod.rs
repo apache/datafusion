@@ -4528,18 +4528,18 @@ mod tests {
         assert_eq!(expected, data_type.try_into().unwrap())
     }
 
-    // this test fails on aarch, so don't run it there
-    #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn size_of_scalar() {
         // Since ScalarValues are used in a non trivial number of places,
         // making it larger means significant more memory consumption
         // per distinct value.
         //
+        // Thus this test ensures that no code change makes ScalarValue larger
+        //
         // The alignment requirements differ across architectures and
         // thus the size of the enum appears to as well
 
-        // The value can be changed depending on rust version
+        // The value may also change depending on rust version
         assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
     }
 

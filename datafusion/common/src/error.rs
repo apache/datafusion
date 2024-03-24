@@ -601,6 +601,7 @@ pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_datafusion_err as _plan_datafusion_err;
 pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
