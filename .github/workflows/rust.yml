@@ -127,7 +127,7 @@ jobs:
         run: cargo check --all-targets --no-default-features --features=regex_expressions -p datafusion-functions
 
       - name: Check datafusion-functions (string_expressions)
-        run: cargo check --no-default-features --features=string_expressions -p datafusion-functions
+        run: cargo check --all-targets --no-default-features --features=string_expressions -p datafusion-functions
 
   # Run tests
   linux-test:
