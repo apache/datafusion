@@ -50,6 +50,7 @@ default = [
     "datetime_expressions",
     "encoding_expressions",
     "regex_expressions",
+    "string_expressions",
     "unicode_expressions",
     "compression",
     "parquet",
@@ -66,6 +67,7 @@ regex_expressions = [
     "datafusion-functions/regex_expressions",
 ]
 serde = ["arrow-schema/serde"]
+string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-physical-expr/unicode_expressions",
     "datafusion-optimizer/unicode_expressions",
