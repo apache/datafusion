@@ -24,24 +24,30 @@ use datafusion_expr::ScalarUDF;
 mod ascii;
 mod btrim;
 mod common;
+mod levenshtein;
 mod lower;
 mod ltrim;
 mod octet_length;
+mod overlay;
 mod rtrim;
 mod starts_with;
 mod to_hex;
 mod upper;
+mod uuid;
 
 // create UDFs
 make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
 make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
+make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
 make_udf_function!(lower::LowerFunc, LOWER, lower);
 make_udf_function!(octet_length::OctetLengthFunc, OCTET_LENGTH, octet_length);
+make_udf_function!(overlay::OverlayFunc, OVERLAY, overlay);
 make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
 make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
 make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
 make_udf_function!(upper::UpperFunc, UPPER, upper);
+make_udf_function!(uuid::UuidFunc, UUID, uuid);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
@@ -54,6 +60,11 @@ pub mod expr_fn {
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
     pub fn btrim(args: Vec<Expr>) -> Expr {
         super::btrim().call(args)
+    }
+
+    #[doc = "Returns the Levenshtein distance between the two given strings"]
+    pub fn levenshtein(arg1: Expr, arg2: Expr) -> Expr {
+        super::levenshtein().call(vec![arg1, arg2])
     }
 
     #[doc = "Converts a string to lowercase."]
@@ -69,6 +80,11 @@ pub mod expr_fn {
     #[doc = "returns the number of bytes of a string"]
     pub fn octet_length(args: Vec<Expr>) -> Expr {
         super::octet_length().call(args)
+    }
+
+    #[doc = "replace the substring of string that starts at the start'th character and extends for count characters with new substring"]
+    pub fn overlay(args: Vec<Expr>) -> Expr {
+        super::overlay().call(args)
     }
 
     #[doc = "Removes all characters, spaces by default, from the end of a string"]
@@ -95,6 +111,11 @@ pub mod expr_fn {
     pub fn upper(arg1: Expr) -> Expr {
         super::upper().call(vec![arg1])
     }
+
+    #[doc = "returns uuid v4 as a string value"]
+    pub fn uuid() -> Expr {
+        super::uuid().call(vec![])
+    }
 }
 
 ///   Return a list of all functions in this package
@@ -102,12 +123,15 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         ascii(),
         btrim(),
+        levenshtein(),
         lower(),
         ltrim(),
         octet_length(),
+        overlay(),
         rtrim(),
         starts_with(),
         to_hex(),
         upper(),
+        uuid(),
     ]
 }

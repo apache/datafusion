@@ -2912,7 +2912,7 @@ pub enum ScalarFunction {
     /// 69 was ArrowTypeof
     /// 70 was CurrentDate
     /// 71 was CurrentTime
-    Uuid = 72,
+    /// 72 was Uuid
     Cbrt = 73,
     Acosh = 74,
     Asinh = 75,
@@ -2959,11 +2959,11 @@ pub enum ScalarFunction {
     /// 118 was ToTimestampNanos
     /// 119 was ArrayIntersect
     /// 120 was ArrayUnion
-    OverLay = 121,
+    /// 121 was OverLay
     /// 122 is Range
     /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
-    Levenshtein = 125,
+    /// 125 was Levenshtein
     SubstrIndex = 126,
     FindInSet = 127,
     /// 128 was ArraySort
@@ -3022,7 +3022,6 @@ impl ScalarFunction {
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
-            ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Acosh => "Acosh",
             ScalarFunction::Asinh => "Asinh",
@@ -3038,8 +3037,6 @@ impl ScalarFunction {
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::OverLay => "OverLay",
-            ScalarFunction::Levenshtein => "Levenshtein",
             ScalarFunction::SubstrIndex => "SubstrIndex",
             ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
@@ -3084,7 +3081,6 @@ impl ScalarFunction {
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),
-            "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
             "Acosh" => Some(Self::Acosh),
             "Asinh" => Some(Self::Asinh),
@@ -3100,8 +3096,6 @@ impl ScalarFunction {
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "OverLay" => Some(Self::OverLay),
-            "Levenshtein" => Some(Self::Levenshtein),
             "SubstrIndex" => Some(Self::SubstrIndex),
             "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),

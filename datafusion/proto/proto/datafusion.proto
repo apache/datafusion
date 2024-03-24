@@ -613,7 +613,7 @@ enum ScalarFunction {
   // 69 was ArrowTypeof
   // 70 was CurrentDate
   // 71 was CurrentTime
-  Uuid = 72;
+  // 72 was Uuid
   Cbrt = 73;
   Acosh = 74;
   Asinh = 75;
@@ -660,11 +660,11 @@ enum ScalarFunction {
   // 118 was ToTimestampNanos
   // 119 was ArrayIntersect
   // 120 was ArrayUnion
-  OverLay = 121;
+  // 121 was OverLay
   // 122 is Range
   // 123 is ArrayExcept
   // 124 was ArrayPopFront
-  Levenshtein = 125;
+  // 125 was Levenshtein
   SubstrIndex = 126;
   FindInSet = 127;
   // 128 was ArraySort
