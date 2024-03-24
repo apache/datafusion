@@ -41,7 +41,7 @@ impl OptimizerRule for EliminateOneUnion {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Union(Union { inputs, .. }) if inputs.len() == 1 => {
-                Ok(inputs.first().map(|input| input.clone()))
+                Ok(inputs.first().cloned())
             }
             _ => Ok(None),
         }
