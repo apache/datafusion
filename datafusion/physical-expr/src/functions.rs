@@ -458,29 +458,6 @@ pub fn create_physical_fun(
                 exec_err!("Unsupported data type {other:?} for function translate")
             }
         }),
-        BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
-        BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
-            DataType::Utf8 => {
-                make_scalar_function_inner(string_expressions::overlay::<i32>)(args)
-            }
-            DataType::LargeUtf8 => {
-                make_scalar_function_inner(string_expressions::overlay::<i64>)(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function overlay"),
-        }),
-        BuiltinScalarFunction::Levenshtein => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => make_scalar_function_inner(
-                    string_expressions::levenshtein::<i32>,
-                )(args),
-                DataType::LargeUtf8 => make_scalar_function_inner(
-                    string_expressions::levenshtein::<i64>,
-                )(args),
-                other => {
-                    exec_err!("Unsupported data type {other:?} for function levenshtein")
-                }
-            })
-        }
         BuiltinScalarFunction::SubstrIndex => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
@@ -1868,11 +1845,7 @@ mod tests {
         let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let funs = [
-            BuiltinScalarFunction::Pi,
-            BuiltinScalarFunction::Random,
-            BuiltinScalarFunction::Uuid,
-        ];
+        let funs = [BuiltinScalarFunction::Pi, BuiltinScalarFunction::Random];
 
         for fun in funs.iter() {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;

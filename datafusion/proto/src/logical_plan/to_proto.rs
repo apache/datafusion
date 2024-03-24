@@ -1490,7 +1490,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
             BuiltinScalarFunction::Reverse => Self::Reverse,
@@ -1506,8 +1505,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
             BuiltinScalarFunction::Iszero => Self::Iszero,
-            BuiltinScalarFunction::OverLay => Self::OverLay,
-            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
             BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
             BuiltinScalarFunction::FindInSet => Self::FindInSet,
         };
