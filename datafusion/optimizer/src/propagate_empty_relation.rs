@@ -203,7 +203,7 @@ mod tests {
     }
 
     fn assert_together_optimized_plan_eq(
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         expected: &str,
     ) -> Result<()> {
         assert_optimized_plan_eq_with_rules(
@@ -249,7 +249,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -262,7 +262,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -287,7 +287,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test1\
             \n  TableScan: test4";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -339,7 +339,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test2\
             \n  TableScan: test3";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -367,7 +367,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 
     #[test]
@@ -400,6 +400,6 @@ mod tests {
         let expected = "Projection: a, b, c\
         \n  TableScan: test";
 
-        assert_together_optimized_plan_eq(&plan, expected)
+        assert_together_optimized_plan_eq(plan, expected)
     }
 }

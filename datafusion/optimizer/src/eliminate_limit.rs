@@ -110,9 +110,10 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq_with_pushdown(
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         expected: &str,
     ) -> Result<()> {
+        let plan_schema = plan.schema().clone();
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
         let config = OptimizerContext::new().with_max_passes(1);
         let optimizer = Optimizer::with_rules(vec![
@@ -124,7 +125,7 @@ mod tests {
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
+        assert_eq!(&plan_schema, optimized_plan.schema());
         Ok(())
     }
 
@@ -171,7 +172,7 @@ mod tests {
 
         // No aggregate / scan / limit
         let expected = "EmptyRelation";
-        assert_optimized_plan_eq_with_pushdown(&plan, expected)
+        assert_optimized_plan_eq_with_pushdown(plan, expected)
     }
 
     #[test]
@@ -191,7 +192,7 @@ mod tests {
         \n    Limit: skip=0, fetch=2\
         \n      Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b)]]\
         \n        TableScan: test";
-        assert_optimized_plan_eq_with_pushdown(&plan, expected)
+        assert_optimized_plan_eq_with_pushdown(plan, expected)
     }
 
     #[test]

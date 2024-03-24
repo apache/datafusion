@@ -174,9 +174,11 @@ pub fn assert_optimized_plan_eq(
 
 pub fn assert_optimized_plan_eq_with_rules(
     rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     expected: &str,
 ) -> Result<()> {
+    let plan_schema = plan.schema().clone();
+
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
     let config = &mut OptimizerContext::new()
         .with_max_passes(1)
@@ -187,7 +189,7 @@ pub fn assert_optimized_plan_eq_with_rules(
         .expect("failed to optimize plan");
     let formatted_plan = format!("{optimized_plan:?}");
     assert_eq!(formatted_plan, expected);
-    assert_eq!(plan.schema(), optimized_plan.schema());
+    assert_eq!(&plan_schema, optimized_plan.schema());
     Ok(())
 }
 
