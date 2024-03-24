@@ -155,6 +155,7 @@ pub fn assert_optimized_plan_eq(
     plan: LogicalPlan,
     expected: &str,
 ) -> Result<()> {
+    let prev_schema = plan.schema().clone();
     let optimizer = Optimizer::with_rules(vec![rule.clone()]);
     let optimized_plan = optimizer
         .optimize_recursively(
@@ -165,7 +166,6 @@ pub fn assert_optimized_plan_eq(
         .data;
 
     // Ensure schemas always match after an optimization
-    let prev_schema = plan.schema().clone();
     assert_schema_is_the_same(rule.name(), prev_schema, &optimized_plan)?;
     let formatted_plan = format!("{optimized_plan:?}");
     assert_eq!(formatted_plan, expected);
@@ -260,6 +260,9 @@ pub fn assert_optimization_skipped(
     plan: LogicalPlan,
 ) -> Result<()> {
     let optimizer = Optimizer::with_rules(vec![rule]);
+
+    let displayed_plan = format!("{}", plan.display_indent());
+
     let new_plan = optimizer
         .optimize_recursively(
             optimizer.rules.first().unwrap(),
@@ -268,9 +271,6 @@ pub fn assert_optimization_skipped(
         )?
         .data;
 
-    assert_eq!(
-        format!("{}", plan.display_indent()),
-        format!("{}", new_plan.display_indent())
-    );
+    assert_eq!(displayed_plan, format!("{}", new_plan.display_indent()));
     Ok(())
 }

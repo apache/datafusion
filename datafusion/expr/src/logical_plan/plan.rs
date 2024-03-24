@@ -301,14 +301,14 @@ impl LogicalPlan {
             })
             | LogicalPlan::Sort(Sort { expr, .. })
             | LogicalPlan::TableScan(TableScan { filters: expr, .. }) => {
-                let _ = expr.iter_mut().try_for_each(|e| {
+                expr.iter_mut().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
                 })?;
             }
             LogicalPlan::Values(Values { values, .. }) => {
-                let _ = values.iter_mut().flatten().try_for_each(|e| {
+                values.iter_mut().flatten().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
@@ -323,7 +323,7 @@ impl LogicalPlan {
                 ..
             }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
-                    let _ = expr.iter_mut().try_for_each(|e| {
+                    expr.iter_mut().try_for_each(|e| {
                         let old_expr = std::mem::take(e);
                         *e = f(old_expr)?;
                         Ok::<_, DataFusionError>(())
@@ -336,12 +336,12 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => {
-                let _ = group_expr.iter_mut().try_for_each(|e| {
+                group_expr.iter_mut().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
                 })?;
-                let _ = aggr_expr.iter_mut().try_for_each(|e| {
+                aggr_expr.iter_mut().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
@@ -351,7 +351,7 @@ impl LogicalPlan {
             // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
             // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join { on, filter, .. }) => {
-                let _ = on.iter_mut().try_for_each(|(l, r)| {
+                on.iter_mut().try_for_each(|(l, r)| {
                     let old_l = std::mem::take(l);
                     let old_r = std::mem::take(r);
                     *l = f(old_l)?;
@@ -385,18 +385,18 @@ impl LogicalPlan {
                 sort_expr,
                 ..
             })) => {
-                let _ = on_expr.iter_mut().try_for_each(|e| {
+                on_expr.iter_mut().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
                 })?;
-                let _ = select_expr.iter_mut().try_for_each(|e| {
+                select_expr.iter_mut().try_for_each(|e| {
                     let old_expr = std::mem::take(e);
                     *e = f(old_expr)?;
                     Ok::<_, DataFusionError>(())
                 })?;
                 if let Some(sort_expr) = sort_expr.as_mut() {
-                    let _ = sort_expr.iter_mut().try_for_each(|e| {
+                    sort_expr.iter_mut().try_for_each(|e| {
                         let old_expr = std::mem::take(e);
                         *e = f(old_expr)?;
                         Ok::<_, DataFusionError>(())

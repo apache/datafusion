@@ -198,7 +198,7 @@ mod tests {
 
     use super::*;
 
-    fn assert_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PropagateEmptyRelation::new()), plan, expected)
     }
 
@@ -226,7 +226,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_eq(&plan, expected)
+        assert_eq(plan, expected)
     }
 
     #[test]

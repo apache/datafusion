@@ -282,7 +282,7 @@ mod test {
         max,
     };
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)
     }
 
@@ -301,7 +301,7 @@ mod test {
         \n  Limit: skip=0, fetch=1000\
         \n    TableScan: test, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod test {
         let expected = "Limit: skip=0, fetch=10\
         \n  TableScan: test, fetch=10";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -336,7 +336,7 @@ mod test {
         \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod test {
         \n  Sort: test.a, fetch=10\
         \n    TableScan: test";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -390,7 +390,7 @@ mod test {
         \n  Sort: test.a, fetch=15\
         \n    TableScan: test";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod test {
         let expected = "Limit: skip=10, fetch=None\
         \n  TableScan: test";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod test {
         \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod test {
         \n  Limit: skip=10, fetch=990\
         \n    TableScan: test, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod test {
         \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -492,7 +492,7 @@ mod test {
         let expected = "Limit: skip=10, fetch=10\
         \n  TableScan: test, fetch=20";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -509,7 +509,7 @@ mod test {
         \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod test {
         \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test, fetch=1010";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod test {
         \n    TableScan: test\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod test {
         \n    TableScan: test\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod test {
         \n    Projection: test2.a\
         \n      TableScan: test2";
 
-        assert_optimized_plan_equal(&outer_query, expected)
+        assert_optimized_plan_equal(outer_query, expected)
     }
 
     #[test]
@@ -635,7 +635,7 @@ mod test {
         \n    Projection: test2.a\
         \n      TableScan: test2";
 
-        assert_optimized_plan_equal(&outer_query, expected)
+        assert_optimized_plan_equal(outer_query, expected)
     }
 
     #[test]
@@ -661,7 +661,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -680,7 +680,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -699,7 +699,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -717,7 +717,7 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -735,7 +735,7 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -753,7 +753,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)?;
+        assert_optimized_plan_equal(plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
@@ -771,7 +771,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -796,7 +796,7 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -821,7 +821,7 @@ mod test {
         \n      TableScan: test, fetch=1010\
         \n    TableScan: test2";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -846,7 +846,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -871,7 +871,7 @@ mod test {
         \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test2, fetch=1010";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -891,7 +891,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -911,7 +911,7 @@ mod test {
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test2, fetch=2000";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -926,7 +926,7 @@ mod test {
         let expected = "Limit: skip=1000, fetch=0\
         \n  TableScan: test, fetch=0";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -941,7 +941,7 @@ mod test {
         let expected = "Limit: skip=1000, fetch=0\
         \n  TableScan: test, fetch=0";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]
@@ -958,6 +958,6 @@ mod test {
         \n  Limit: skip=1000, fetch=0\
         \n    TableScan: test, fetch=0";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal(plan, expected)
     }
 }
