@@ -265,7 +265,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                Arc::new(new_proj),
+                                Box::new(new_proj),
                                 alias.clone(),
                             )?))
                         }
@@ -590,7 +590,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         create_view.name.as_ref(),
                         "CreateView",
                     )?,
-                    input: Arc::new(plan),
+                    input: Box::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
                 })))

@@ -114,7 +114,7 @@ fn analyze_internal(
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
-            Arc::new(new_inputs.swap_remove(0)),
+            Box::new(new_inputs.swap_remove(0)),
         )?)),
         _ => plan.with_new_exprs(new_expr, new_inputs),
     }
@@ -138,7 +138,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery)?;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
-                    subquery: Arc::new(new_plan),
+                    subquery: Box::new(new_plan),
                     outer_ref_columns,
                 })))
             }
@@ -146,7 +146,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
-                        subquery: Arc::new(new_plan),
+                        subquery: Box::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
@@ -165,7 +165,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ),
                 )?;
                 let new_subquery = Subquery {
-                    subquery: Arc::new(new_plan),
+                    subquery: Box::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
@@ -777,15 +777,15 @@ mod test {
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
-    fn empty() -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+    fn empty() -> Box<LogicalPlan> {
+        Box::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         }))
     }
 
-    fn empty_with_type(data_type: DataType) -> Arc<LogicalPlan> {
-        Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+    fn empty_with_type(data_type: DataType) -> Box<LogicalPlan> {
+        Box::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
@@ -1047,7 +1047,7 @@ mod test {
 
         // a in (1,4,8), a is decimal
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
-        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let empty = Box::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::new_with_metadata(
                 vec![DFField::new_unqualified(
