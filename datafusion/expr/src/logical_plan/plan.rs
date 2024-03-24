@@ -424,10 +424,32 @@ impl LogicalPlan {
         F: FnMut(LogicalPlan) -> Result<LogicalPlan>,
     {
         match &mut self {
-            LogicalPlan::Projection(Projection { input, .. }) => {
+            LogicalPlan::Projection(Projection { input, .. }) |
+            LogicalPlan::Filter(Filter { input, .. }) |
+            LogicalPlan::Repartition(Repartition { input, .. }) |
+            LogicalPlan::Window(Window { input, .. }) |
+            LogicalPlan::Aggregate(Aggregate { input, .. }) |
+            LogicalPlan::Sort(Sort { input, .. }) |
+            LogicalPlan::Limit(Limit { input, .. }) |
+            LogicalPlan::Subquery(Subquery { subquery: input, .. }) |
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) |
+            LogicalPlan::Prepare(Prepare { input, .. })
+            // LogicalPlan::Unnest(Unnest { input, .. })
+            => {
                 let old_input = std::mem::take(input);
                 let plan = f(*old_input)?;
                 *input = Box::new(plan);
+            }
+            LogicalPlan::Join(Join { left, right, .. }) |
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. })
+            =>
+            {
+                let old_left = std::mem::take(left);
+                let old_right = std::mem::take(right);
+                let new_left = f(*old_left)?;
+                let new_right = f(*old_right)?;
+                *left = Box::new(new_left);
+                *right = Box::new(new_right);
             }
             _ => todo!(""),
         }
