@@ -79,7 +79,7 @@ jobs:
       - name: Check workspace in debug mode
         run: cargo check
 
-      - name: Check workspace with all features
+      - name: Check workspace with avro,json features
         run: cargo check --workspace --benches --features avro,json
 
       - name: Check Cargo.lock for datafusion-cli
