@@ -266,7 +266,7 @@ impl LogicalPlanBuilder {
         partition_by: Vec<String>,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
+            input: Box::new(input),
             output_url,
             format_options,
             options,
@@ -293,7 +293,7 @@ impl LogicalPlanBuilder {
             table_name: table_name.into(),
             table_schema,
             op,
-            input: Arc::new(input),
+            input: Box::new(input),
         })))
     }
 

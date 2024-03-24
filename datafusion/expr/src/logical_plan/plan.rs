@@ -626,7 +626,7 @@ impl LogicalPlan {
                 table_name: table_name.clone(),
                 table_schema: table_schema.clone(),
                 op: op.clone(),
-                input: Arc::new(inputs.swap_remove(0)),
+                input: Box::new(inputs.swap_remove(0)),
             })),
             LogicalPlan::Copy(CopyTo {
                 input: _,
@@ -635,7 +635,7 @@ impl LogicalPlan {
                 options,
                 partition_by,
             }) => Ok(LogicalPlan::Copy(CopyTo {
-                input: Arc::new(inputs.swap_remove(0)),
+                input: Box::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
                 format_options: format_options.clone(),
                 options: options.clone(),
