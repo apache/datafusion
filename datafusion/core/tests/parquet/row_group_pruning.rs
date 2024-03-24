@@ -285,6 +285,10 @@ async fn prune_disabled() {
     );
 }
 
+// $bits: number of bits of the integer to test (8, 16, 32, 64)
+// $correct_bloom_filters: if false, replicates the
+// https://github.com/apache/arrow-datafusion/issues/9779 bug so that tests pass
+// if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
     ($bits:expr, correct_bloom_filters: $correct_bloom_filters:expr) => {
         paste::item! {
