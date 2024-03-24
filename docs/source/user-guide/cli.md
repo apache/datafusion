@@ -401,7 +401,7 @@ The supported OPTIONS are:
 - secret_access_key
 - endpoint
 
-Note that the `endpoint` format of oss needs to be: `https://cos.{cos-region-endpoint}`
+Note that the `endpoint` format of urls must be: `https://cos.{cos-region-endpoint}`
 
 ## Registering GCS Data Sources
 
