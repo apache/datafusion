@@ -1578,7 +1578,7 @@ pub fn unnest_with_options(
     let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
     Ok(LogicalPlan::Unnest(Unnest {
-        input: Arc::new(input),
+        input: Box::new(input),
         column: unnested_field.qualified_column(),
         schema,
         options,

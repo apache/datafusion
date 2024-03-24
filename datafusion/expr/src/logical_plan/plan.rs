@@ -910,7 +910,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                let input = Arc::new(inputs.swap_remove(0));
+                let input = Box::new(inputs.swap_remove(0));
                 let nested_field = input.schema().field_from_column(column)?;
                 let unnested_field = schema.field_from_column(column)?;
                 let fields = input
@@ -2686,7 +2686,7 @@ pub enum Partitioning {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {
     /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
+    pub input: Box<LogicalPlan>,
     /// The column to unnest
     pub column: Column,
     /// The output schema, containing the unnested field column.
