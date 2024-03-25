@@ -579,22 +579,10 @@ scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // string functions
 scalar_expr!(
-    BitLength,
-    bit_length,
-    string,
-    "the number of bits in the `string`"
-);
-scalar_expr!(
     CharacterLength,
     character_length,
     string,
     "the number of characters in the `string`"
-);
-scalar_expr!(
-    Chr,
-    chr,
-    code_point,
-    "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
@@ -1044,9 +1032,7 @@ mod test {
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(BitLength, bit_length, string);
         test_scalar_expr!(CharacterLength, character_length, string);
-        test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
