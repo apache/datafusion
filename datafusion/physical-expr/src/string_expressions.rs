@@ -33,39 +33,10 @@ use arrow::{
 
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::{as_generic_string_array, as_int64_array, as_string_array},
+    cast::{as_generic_string_array, as_string_array},
     exec_err, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-
-/// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
-/// chr(65) = 'A'
-pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let integer_array = as_int64_array(&args[0])?;
-
-    // first map is the iterator, second is for the `Option<_>`
-    let result = integer_array
-        .iter()
-        .map(|integer: Option<i64>| {
-            integer
-                .map(|integer| {
-                    if integer == 0 {
-                        exec_err!("null character not permitted.")
-                    } else {
-                        match core::char::from_u32(integer as u32) {
-                            Some(integer) => Ok(integer.to_string()),
-                            None => {
-                                exec_err!("requested character too large for encoding.")
-                            }
-                        }
-                    }
-                })
-                .transpose()
-        })
-        .collect::<Result<StringArray>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
-}
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
 /// concat('abcde', 2, NULL, 22) = 'abcde222'
