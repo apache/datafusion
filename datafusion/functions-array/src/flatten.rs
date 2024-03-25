@@ -25,7 +25,7 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -66,8 +66,8 @@ impl ScalarUDFImpl for Flatten {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        fn get_base_type(data_type: &DataType) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        fn get_base_type(data_type: &DataType) -> Result<DataType> {
             match data_type {
                 List(field) | FixedSizeList(field, _)
                     if matches!(field.data_type(), List(_) | FixedSizeList(_, _)) =>
@@ -89,7 +89,7 @@ impl ScalarUDFImpl for Flatten {
         Ok(data_type)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(flatten_inner)(args)
     }
 
@@ -99,7 +99,7 @@ impl ScalarUDFImpl for Flatten {
 }
 
 /// Flatten SQL function
-pub fn flatten_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("flatten expects one argument");
     }
@@ -126,7 +126,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
 fn flatten_internal<O: OffsetSizeTrait>(
     list_arr: GenericListArray<O>,
     indexes: Option<OffsetBuffer<O>>,
-) -> datafusion_common::Result<GenericListArray<O>> {
+) -> Result<GenericListArray<O>> {
     let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
