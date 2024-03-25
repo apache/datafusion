@@ -22,7 +22,10 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
+use datafusion_common::{
+    config::{ConfigExtension, ConfigOptions},
+    Result, ScalarValue,
+};
 
 /// Configuration options for [`SessionContext`].
 ///
@@ -195,6 +198,12 @@ impl SessionConfig {
         // partition count must be greater than zero
         assert!(n > 0);
         self.options.execution.target_partitions = n;
+        self
+    }
+
+    /// Insert new [ConfigExtension]
+    pub fn with_option_extension<T: ConfigExtension>(mut self, extension: T) -> Self {
+        self.options_mut().extensions.insert(extension);
         self
     }
 
