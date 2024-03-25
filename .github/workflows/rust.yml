@@ -355,8 +355,6 @@ jobs:
           python -m pip install pyarrow
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run datafusion-common tests
         run: cargo test -p datafusion-common --features=pyarrow
 
