@@ -124,9 +124,12 @@ impl Unparser<'_> {
         match plan {
             LogicalPlan::TableScan(scan) => {
                 let mut builder = TableRelationBuilder::default();
-                builder.name(ast::ObjectName(vec![
-                    self.new_ident(scan.table_name.table().to_string())
-                ]));
+                let mut table_parts = vec![];
+                if let Some(schema_name) = scan.table_name.schema() {
+                    table_parts.push(self.new_ident(schema_name.to_string()));
+                }
+                table_parts.push(self.new_ident(scan.table_name.table().to_string()));
+                builder.name(ast::ObjectName(table_parts));
                 relation.table(builder);
 
                 Ok(())

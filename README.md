@@ -95,6 +95,11 @@ Optional features:
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
 
-## Rust Version Compatibility
+## Rust Version Compatibility Policy
 
-Datafusion crate is tested with the [minimum required stable Rust version](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support
+each stable Rust version for 6 months after it is
+[released](https://github.com/rust-lang/rust/blob/master/RELEASES.md). This
+generally translates to support for the most recent 3 to 4 stable Rust versions.
+
+We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Farrow-datafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

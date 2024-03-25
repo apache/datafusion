@@ -31,8 +31,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFField, DFSchema, DFSchemaRef,
-    JoinType, Result,
+    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
@@ -165,7 +164,7 @@ fn optimize_projections(
         }
         LogicalPlan::Extension(extension) => {
             let necessary_children_indices = if let Some(necessary_children_indices) =
-                extension.node.necessary_children_exprs(&indices)
+                extension.node.necessary_children_exprs(indices)
             {
                 necessary_children_indices
             } else {
@@ -918,44 +917,6 @@ fn rewrite_projection_given_requirements(
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
     Ok(&projection_schema(input, proj_exprs)? == input.schema()
         && proj_exprs.iter().all(is_expr_trivial))
-}
-
-/// Calculates the corresponding target indices of the expressions at the `source_indices` of the `source_fields`.
-///
-/// # Arguments
-///
-/// * `source_indices` - A slice of `usize` representing the indices that needs to be mapped among the source fields.
-/// * `source_fields` - A slice of `DFField` structs representing the source fields.
-/// * `target_fields` - A slice of `DFField` structs representing the target fields.
-///
-/// # Returns
-///
-/// Returns `Some(mapped_indices)` where `mapped_indices` is a vector of `usize` representing
-/// the indices in the target fields corresponding to the matched target fields for each source
-/// index. Returns `None` if there are no matches or if there is an ambiguity in the matches for any of the source field.
-fn get_mapped_indices(
-    source_indices: &[usize],
-    source_fields: &[DFField],
-    target_fields: &[DFField],
-) -> Option<Vec<usize>> {
-    let mut mapped_indices = vec![];
-    for &source_idx in source_indices {
-        let source_field = &source_fields[source_idx];
-        let matches = target_fields
-            .iter()
-            .enumerate()
-            .filter(|(_idx, target_field)| source_field.eq(target_field))
-            .collect::<Vec<_>>();
-        if matches.len() == 1 {
-            // There is single match, no ambiguity
-            let (target_idx, _) = matches[0];
-            mapped_indices.push(target_idx);
-        } else {
-            // Either no match, or ambiguity
-            return None;
-        }
-    }
-    Some(mapped_indices)
 }
 
 #[cfg(test)]

@@ -53,10 +53,11 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
-    /// Returns all expressions in the current logical plan node. This
-    /// should not include expressions of any inputs (aka
-    /// non-recursively). These expressions are used for optimizer
-    /// passes and rewrites.
+    /// Returns all expressions in the current logical plan node. This should
+    /// not include expressions of any inputs (aka non-recursively).
+    ///
+    /// These expressions are used for optimizer
+    /// passes and rewrites. See [`LogicalPlan::expressions`] for more details.
     fn expressions(&self) -> Vec<Expr>;
 
     /// A list of output columns (e.g. the names of columns in
