@@ -186,6 +186,7 @@ impl ExecutionPlan for UnionExec {
     fn name(&self) -> &'static str {
         "UnionExec"
     }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
