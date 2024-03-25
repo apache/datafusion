@@ -32,7 +32,7 @@ use arrow_array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err};
+use datafusion_common::{exec_err, internal_err, Result};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -78,14 +78,11 @@ impl ScalarUDFImpl for ArrayPosition {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[DataType],
-    ) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(UInt64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_position_inner)(args)
     }
 
@@ -95,7 +92,7 @@ impl ScalarUDFImpl for ArrayPosition {
 }
 
 /// Array_position SQL function
-pub fn array_position_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_position expects two or three arguments");
     }
@@ -105,9 +102,7 @@ pub fn array_position_inner(args: &[ArrayRef]) -> datafusion_common::Result<Arra
         array_type => exec_err!("array_position does not support type '{array_type:?}'."),
     }
 }
-fn general_position_dispatch<O: OffsetSizeTrait>(
-    args: &[ArrayRef],
-) -> datafusion_common::Result<ArrayRef> {
+fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
 
@@ -145,7 +140,7 @@ fn generic_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
     arr_from: Vec<i64>, // 0-indexed
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(list_array.len());
 
     for (row_index, (list_array_row, &from)) in
@@ -210,14 +205,11 @@ impl ScalarUDFImpl for ArrayPositions {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[DataType],
-    ) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(List(Arc::new(Field::new("item", UInt64, true))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_positions_inner)(args)
     }
 
@@ -227,7 +219,7 @@ impl ScalarUDFImpl for ArrayPositions {
 }
 
 /// Array_positions SQL function
-pub fn array_positions_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_positions expects two arguments");
     }
@@ -254,7 +246,7 @@ pub fn array_positions_inner(args: &[ArrayRef]) -> datafusion_common::Result<Arr
 fn general_positions<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(list_array.len());
 
     for (row_index, list_array_row) in list_array.iter().enumerate() {

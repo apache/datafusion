@@ -26,7 +26,7 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -68,11 +68,11 @@ impl ScalarUDFImpl for ArrayRemove {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(args)
     }
 
@@ -117,11 +117,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(args)
     }
 
@@ -169,11 +169,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(args)
     }
 
@@ -183,7 +183,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 }
 
 /// Array_remove SQL function
-pub fn array_remove_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_remove expects two arguments");
     }
@@ -193,7 +193,7 @@ pub fn array_remove_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayR
 }
 
 /// Array_remove_n SQL function
-pub fn array_remove_n_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!("array_remove_n expects three arguments");
     }
@@ -203,7 +203,7 @@ pub fn array_remove_n_inner(args: &[ArrayRef]) -> datafusion_common::Result<Arra
 }
 
 /// Array_remove_all SQL function
-pub fn array_remove_all_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_remove_all expects two arguments");
     }
@@ -216,7 +216,7 @@ fn array_remove_internal(
     array: &ArrayRef,
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
@@ -253,7 +253,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
-) -> datafusion_common::Result<ArrayRef> {
+) -> Result<ArrayRef> {
     let data_type = list_array.value_type();
     let mut new_values = vec![];
     // Build up the offsets for the final output array

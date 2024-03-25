@@ -23,7 +23,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, FieldRef};
-use datafusion_common::{exec_err, internal_err};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -66,14 +66,14 @@ impl ScalarUDFImpl for ArrayExcept {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match (&arg_types[0].clone(), &arg_types[1].clone()) {
             (DataType::Null, _) | (_, DataType::Null) => Ok(arg_types[0].clone()),
             (dt, _) => Ok(dt.clone()),
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_except_inner)(args)
     }
 
@@ -83,7 +83,7 @@ impl ScalarUDFImpl for ArrayExcept {
 }
 
 /// Array_except SQL function
-pub fn array_except_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("array_except needs two arguments");
     }
@@ -117,7 +117,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
     field: &FieldRef,
-) -> datafusion_common::Result<GenericListArray<OffsetSize>> {
+) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
     let l_values = l.values().to_owned();

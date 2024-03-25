@@ -26,8 +26,7 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::Result;
-use datafusion_common::{plan_err, utils::array_into_list_array};
+use datafusion_common::{plan_err, utils::array_into_list_array, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::Expr;
 use datafusion_expr::{
