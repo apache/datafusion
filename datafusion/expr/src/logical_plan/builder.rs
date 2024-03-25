@@ -146,12 +146,12 @@ impl LogicalPlanBuilder {
             );
         }
         // Ensure that the recursive term has the same field types as the static term
-        let coerced_recusive_term =
+        let coerced_recursive_term =
             coerce_plan_expr_for_schema(&recursive_term, self.plan.schema())?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
             static_term: Arc::new(self.plan.clone()),
-            recursive_term: Arc::new(coerced_recusive_term),
+            recursive_term: Arc::new(coerced_recursive_term),
             is_distinct,
         })))
     }
