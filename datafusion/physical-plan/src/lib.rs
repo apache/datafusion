@@ -115,7 +115,12 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
     fn name(&self) -> &'static str {
-        "UNKNOWN"
+        let full_name = std::any::type_name::<Self>();
+        let maybe_start_idx = full_name.rfind(":");
+        match maybe_start_idx {
+            Some(start_idx) => &full_name[start_idx + 1..],
+            None => "UNKNOWN",
+        }
     }
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
