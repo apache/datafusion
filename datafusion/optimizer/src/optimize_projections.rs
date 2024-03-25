@@ -164,29 +164,28 @@ fn optimize_projections(
                 .collect::<Vec<_>>()
         }
         LogicalPlan::Extension(extension) => {
-            let children = extension.node.inputs();
-            if children.len() != 1 {
-                // TODO: Add support for `LogicalPlan::Extension` with multi children.
-                return Ok(None);
-            }
-            // has single child
-            let exprs = plan.expressions();
-            let child = children[0];
-            let node_schema = extension.node.schema();
-            let child_schema = child.schema();
-            if let Some(parent_required_indices_mapped) =
-                get_mapped_indices(indices, node_schema.fields(), child_schema.fields())
+            let necessary_children_indices = if let Some(necessary_children_indices) =
+                extension.node.necessary_children_exprs(&indices)
             {
-                let child_req_indices =
-                    indices_referred_by_exprs(child_schema, exprs.iter())?;
-                vec![(
-                    merge_slices(&parent_required_indices_mapped, &child_req_indices),
-                    false,
-                )]
+                necessary_children_indices
             } else {
                 // Requirements from parent cannot be routed down to user defined logical plan safely
                 return Ok(None);
-            }
+            };
+            let children = extension.node.inputs();
+            assert_eq!(children.len(), necessary_children_indices.len());
+            // Expressions used by node.
+            let exprs = plan.expressions();
+            children
+                .into_iter()
+                .zip(necessary_children_indices)
+                .map(|(child, necessary_indices)| {
+                    let child_schema = child.schema();
+                    let child_req_indices =
+                        indices_referred_by_exprs(child_schema, exprs.iter())?;
+                    Ok((merge_slices(&necessary_indices, &child_req_indices), false))
+                })
+                .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
@@ -1027,6 +1026,14 @@ mod tests {
                 input: Arc::new(inputs[0].clone()),
                 schema: self.schema.clone(),
             }
+        }
+
+        fn necessary_children_exprs(
+            &self,
+            output_columns: &[usize],
+        ) -> Option<Vec<Vec<usize>>> {
+            // Since schema is same. Output columns requires their corresponding version in the input columns.
+            Some(vec![output_columns.to_vec()])
         }
     }
 
