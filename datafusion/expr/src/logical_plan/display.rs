@@ -26,7 +26,7 @@ use crate::{
     Unnest, Values, Window,
 };
 
-use crate::dml::{CopyOptions, CopyTo};
+use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
@@ -425,25 +425,19 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                file_format,
+                format_options,
                 partition_by: _,
-                copy_options,
+                options,
             }) => {
-                let op_str = match copy_options {
-                    CopyOptions::SQLOptions(statement) => statement
-                        .clone()
-                        .into_inner()
-                        .iter()
-                        .map(|(k, v)| format!("{k} {v}"))
-                        .collect::<Vec<String>>()
-                        .join(", "),
-                    CopyOptions::WriterOptions(_) => "".into(),
-                };
-
+                let op_str = options
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 json!({
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
-                    "File Format": format!("{}", file_format),
+                    "Format Options": format!("{}", format_options),
                     "Options": op_str
                 })
             }
