@@ -33,7 +33,7 @@ use arrow::{
 
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::{as_generic_string_array, as_int64_array, as_string_array},
+    cast::{as_generic_string_array, as_string_array},
     exec_err, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
