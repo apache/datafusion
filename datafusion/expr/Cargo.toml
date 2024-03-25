@@ -46,6 +46,7 @@ paste = "^1.0"
 sqlparser = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }
 strum_macros = "0.26.0"
+serde_json = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
