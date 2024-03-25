@@ -63,7 +63,7 @@ pub enum DataFusionError {
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     SQL(ParserError, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
@@ -101,7 +101,7 @@ pub enum DataFusionError {
     /// This error can be returned in cases such as when schema inference is not
     /// possible and when column names are not unique.
     ///
-    /// 2nd argument is for optional backtrace    
+    /// 2nd argument is for optional backtrace
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
     SchemaError(SchemaError, Box<Option<String>>),
     /// Error during execution of the query.
@@ -535,6 +535,9 @@ make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
 make_error!(exec_err, exec_datafusion_err, Execution);
 
+// Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
+make_error!(config_err, config_datafusion_err, Configuration);
+
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
 make_error!(substrait_err, substrait_datafusion_err, Substrait);
 
@@ -594,9 +597,11 @@ macro_rules! schema_err {
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
+pub use config_err as _config_err;
 pub use internal_datafusion_err as _internal_datafusion_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_datafusion_err as _plan_datafusion_err;
 pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 

@@ -45,7 +45,7 @@ CREATE TABLE src_table (
 query ITID
 COPY (SELECT * FROM src_table LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/0.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -53,7 +53,7 @@ TO 'test_files/scratch/parquet/test_table/0.parquet'
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 3 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/1.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -128,7 +128,7 @@ SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/2.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 
@@ -281,7 +281,7 @@ LIMIT 10;
 query ITID
 COPY (SELECT * FROM src_table WHERE int_col > 6 LIMIT 3)
 TO 'test_files/scratch/parquet/test_table/subdir/3.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 ----
 3
 

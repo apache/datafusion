@@ -17,28 +17,25 @@
 
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{
-    Array, ArrayRef, ArrowNativeTypeOp, Float32Array, Float64Array, Int32Array,
-    RecordBatch, UInt8Array,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
 };
 use arrow_schema::DataType::Float64;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
-use datafusion_common::cast::as_float64_array;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, cast::as_int32_array, not_impl_err,
-    plan_err, ExprSchema, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, cast::as_float64_array,
+    cast::as_int32_array, not_impl_err, plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_expr::simplify::ExprSimplifyResult;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_common::{exec_err, internal_err, DataFusionError};
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     create_udaf, create_udf, Accumulator, ColumnarValue, CreateFunction, ExprSchemable,
     LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use parking_lot::Mutex;
-
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use rand::{thread_rng, Rng};
 use std::any::Any;
 use std::iter;
@@ -655,6 +652,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self,
         arg_exprs: &[Expr],
         schema: &dyn ExprSchema,
+        _arg_data_types: &[DataType],
     ) -> Result<DataType> {
         if arg_exprs.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
@@ -739,65 +737,156 @@ async fn verify_udf_return_type() -> Result<()> {
     Ok(())
 }
 
+// create_scalar_function_from_sql_statement helper
+// structures and methods.
+
 #[derive(Debug, Default)]
-struct MockFunctionFactory {
-    pub captured_expr: Mutex<Option<Expr>>,
-}
+struct CustomFunctionFactory {}
 
 #[async_trait::async_trait]
-impl FunctionFactory for MockFunctionFactory {
-    #[doc = r" Crates and registers a function from [CreateFunction] statement"]
-    #[must_use]
-    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+impl FunctionFactory for CustomFunctionFactory {
     async fn create(
         &self,
-        _config: &SessionConfig,
+        _state: &SessionConfig,
         statement: CreateFunction,
-    ) -> datafusion::error::Result<RegisterFunction> {
-        // In this example, we always create a function that adds its arguments
-        // with the name specified in `CREATE FUNCTION`. In a real implementation
-        // the body of the created UDF would also likely be a function of the contents
-        // of the `CreateFunction`
-        let mock_add = Arc::new(|args: &[datafusion_expr::ColumnarValue]| {
-            let args = datafusion_expr::ColumnarValue::values_to_arrays(args)?;
-            let base =
-                datafusion_common::cast::as_float64_array(&args[0]).expect("cast failed");
-            let exponent =
-                datafusion_common::cast::as_float64_array(&args[1]).expect("cast failed");
+    ) -> Result<RegisterFunction> {
+        let f: ScalarFunctionWrapper = statement.try_into()?;
 
-            let array = base
-                .iter()
-                .zip(exponent.iter())
-                .map(|(base, exponent)| match (base, exponent) {
-                    (Some(base), Some(exponent)) => Some(base.add_wrapping(exponent)),
-                    _ => None,
-                })
-                .collect::<arrow_array::Float64Array>();
-            Ok(datafusion_expr::ColumnarValue::from(
-                Arc::new(array) as arrow_array::ArrayRef
-            ))
-        });
+        Ok(RegisterFunction::Scalar(Arc::new(ScalarUDF::from(f))))
+    }
+}
+// a wrapper type to be used to register
+// custom function to datafusion context
+//
+// it also defines custom [ScalarUDFImpl::simplify()]
+// to replace ScalarUDF expression with one instance contains.
+#[derive(Debug)]
+struct ScalarFunctionWrapper {
+    name: String,
+    expr: Expr,
+    signature: Signature,
+    return_type: arrow_schema::DataType,
+}
 
-        let args = statement.args.unwrap();
-        let mock_udf = create_udf(
-            &statement.name,
-            vec![args[0].data_type.clone(), args[1].data_type.clone()],
-            Arc::new(statement.return_type.unwrap()),
-            datafusion_expr::Volatility::Immutable,
-            mock_add,
-        );
+impl ScalarUDFImpl for ScalarFunctionWrapper {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-        // capture expression so we can verify
-        // it has been parsed
-        *self.captured_expr.lock() = statement.params.return_;
+    fn name(&self) -> &str {
+        &self.name
+    }
 
-        Ok(RegisterFunction::Scalar(Arc::new(mock_udf)))
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[arrow_schema::DataType],
+    ) -> Result<arrow_schema::DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke(
+        &self,
+        _args: &[datafusion_expr::ColumnarValue],
+    ) -> Result<datafusion_expr::ColumnarValue> {
+        internal_err!("This function should not get invoked!")
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let replacement = Self::replacement(&self.expr, &args)?;
+
+        Ok(ExprSimplifyResult::Simplified(replacement))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn monotonicity(&self) -> Result<Option<datafusion_expr::FuncMonotonicity>> {
+        Ok(None)
+    }
+}
+
+impl ScalarFunctionWrapper {
+    // replaces placeholders with actual arguments
+    fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
+        let result = expr.clone().transform(&|e| {
+            let r = match e {
+                Expr::Placeholder(placeholder) => {
+                    let placeholder_position =
+                        Self::parse_placeholder_identifier(&placeholder.id)?;
+                    if placeholder_position < args.len() {
+                        Transformed::yes(args[placeholder_position].clone())
+                    } else {
+                        exec_err!(
+                            "Function argument {} not provided, argument missing!",
+                            placeholder.id
+                        )?
+                    }
+                }
+                _ => Transformed::no(e),
+            };
+
+            Ok(r)
+        })?;
+
+        Ok(result.data)
+    }
+    // Finds placeholder identifier.
+    // placeholders are in `$X` format where X >= 1
+    fn parse_placeholder_identifier(placeholder: &str) -> Result<usize> {
+        if let Some(value) = placeholder.strip_prefix('$') {
+            Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Placeholder `{}` parsing error: {}!",
+                    placeholder, e
+                ))
+            })?)
+        } else {
+            exec_err!("Placeholder should start with `$`!")
+        }
+    }
+}
+
+impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
+    type Error = DataFusionError;
+
+    fn try_from(definition: CreateFunction) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            name: definition.name,
+            expr: definition
+                .params
+                .return_
+                .expect("Expression has to be defined!"),
+            return_type: definition
+                .return_type
+                .expect("Return type has to be defined!"),
+            signature: Signature::exact(
+                definition
+                    .args
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|a| a.data_type)
+                    .collect(),
+                definition
+                    .params
+                    .behavior
+                    .unwrap_or(datafusion_expr::Volatility::Volatile),
+            ),
+        })
     }
 }
 
 #[tokio::test]
 async fn create_scalar_function_from_sql_statement() -> Result<()> {
-    let function_factory = Arc::new(MockFunctionFactory::default());
+    let function_factory = Arc::new(CustomFunctionFactory::default());
     let runtime_config = RuntimeConfig::new();
     let runtime_environment = RuntimeEnv::new(runtime_config)?;
 
@@ -826,11 +915,22 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
         .await
         .is_err());
 
-    ctx.sql("select better_add(2.0, 2.0)").await?.show().await?;
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
 
-    // check if we sql expr has been converted to datafusion expr
-    let captured_expression = function_factory.captured_expr.lock().clone().unwrap();
-    assert_eq!("$1 + $2", captured_expression.to_string());
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
 
     // statement drops  function
     assert!(ctx.sql("drop function better_add").await.is_ok());

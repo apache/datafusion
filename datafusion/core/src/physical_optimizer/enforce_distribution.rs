@@ -28,7 +28,8 @@ use super::output_requirements::OutputRequirementExec;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    is_coalesce_partitions, is_repartition, is_sort_preserving_merge,
+    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -50,10 +51,8 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    physical_exprs_equal, EquivalenceProperties, LexRequirementRef, PhysicalExpr,
-    PhysicalExprRef, PhysicalSortRequirement,
+    physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -281,6 +280,7 @@ fn adjust_input_keys_ordering(
         on,
         filter,
         join_type,
+        projection,
         mode,
         null_equals_null,
         ..
@@ -298,6 +298,8 @@ fn adjust_input_keys_ordering(
                         new_conditions.0,
                         filter.clone(),
                         join_type,
+                        // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
+                        projection.clone(),
                         PartitionMode::Partitioned,
                         *null_equals_null,
                     )
@@ -390,7 +392,7 @@ fn adjust_input_keys_ordering(
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
-        // Construct a mapping from new name to the the orginal Column
+        // Construct a mapping from new name to the orginal Column
         let new_required = map_columns_before_projection(&requirements.data, expr);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
@@ -598,6 +600,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
         on,
         filter,
         join_type,
+        projection,
         mode,
         null_equals_null,
         ..
@@ -623,6 +626,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
                     new_join_on,
                     filter.clone(),
                     join_type,
+                    projection.clone(),
                     PartitionMode::Partitioned,
                     *null_equals_null,
                 )?));
@@ -1025,30 +1029,6 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
-/// This utility function adds a [`SortExec`] above an operator according to the
-/// given ordering requirements while preserving the original partitioning.
-fn add_sort_preserving_partitions(
-    node: DistributionContext,
-    sort_requirement: LexRequirementRef,
-    fetch: Option<usize>,
-) -> DistributionContext {
-    // If the ordering requirement is already satisfied, do not add a sort.
-    if !node
-        .plan
-        .equivalence_properties()
-        .ordering_satisfy_requirement(sort_requirement)
-    {
-        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
-        let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
-        if node.plan.output_partitioning().partition_count() > 1 {
-            new_sort = new_sort.with_preserve_partitioning(true);
-        }
-        DistributionContext::new(Arc::new(new_sort), false, vec![node])
-    } else {
-        node
-    }
-}
-
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1180,9 +1160,9 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        child = add_sort_preserving_partitions(
+                        child = add_sort_above_with_check(
                             child,
-                            required_input_ordering,
+                            required_input_ordering.to_vec(),
                             None,
                         );
                     }
@@ -1469,6 +1449,7 @@ pub(crate) mod tests {
             },
             None,
             None,
+            Default::default(),
         ))
     }
 
@@ -1496,6 +1477,7 @@ pub(crate) mod tests {
             },
             None,
             None,
+            Default::default(),
         ))
     }
 
@@ -1625,6 +1607,7 @@ pub(crate) mod tests {
                 join_on.clone(),
                 None,
                 join_type,
+                None,
                 PartitionMode::Partitioned,
                 false,
             )

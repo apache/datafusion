@@ -25,7 +25,7 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/repartition/parquet_table/2.parquet'
-(FORMAT PARQUET);
+STORED AS PARQUET;
 
 statement ok
 CREATE EXTERNAL TABLE parquet_table(column1 int, column2 int)

@@ -307,6 +307,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
             location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
         };
         let endpoints = vec![endpoint];
 
@@ -329,6 +331,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             total_records: -1_i64,
             total_bytes: -1_i64,
             ordered: false,
+            app_metadata: Default::default(),
         };
         let resp = Response::new(info);
         Ok(resp)

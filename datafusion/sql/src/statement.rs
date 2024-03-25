@@ -16,6 +16,8 @@
 // under the License.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
@@ -28,15 +30,14 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, OwnedTableReference, Result, ScalarValue, SchemaError,
+    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, SchemaError,
     SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyOptions, CopyTo};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -812,42 +813,101 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
         // determine if source is table or query and handle accordingly
         let copy_source = statement.source;
-        let input = match copy_source {
+        let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
-                let table_ref =
-                    self.object_name_to_table_reference(object_name.clone())?;
-                let table_source = self.context_provider.get_table_source(table_ref)?;
-                LogicalPlanBuilder::scan(
-                    object_name_to_string(&object_name),
-                    table_source,
-                    None,
-                )?
-                .build()?
+                let table_name = object_name_to_string(&object_name);
+                let table_ref = self.object_name_to_table_reference(object_name)?;
+                let table_source =
+                    self.context_provider.get_table_source(table_ref.clone())?;
+                let plan =
+                    LogicalPlanBuilder::scan(table_name, table_source, None)?.build()?;
+                let input_schema = plan.schema().clone();
+                (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                self.query_to_plan(query, &mut PlannerContext::new())?
+                let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+                let input_schema = plan.schema().clone();
+                (plan, input_schema, None)
             }
         };
 
-        // TODO, parse options as Vec<(String, String)> to avoid this conversion
-        let options = statement
-            .options
+        let mut options = HashMap::new();
+        for (key, value) in statement.options {
+            let value_string = match value {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
+                Value::UnQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => value.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return plan_err!("Unsupported Value in COPY statement {}", value);
+                }
+            };
+            if !(key.contains('.') || key == "format") {
+                // If config does not belong to any namespace, assume it is
+                // a format option and apply the format prefix for backwards
+                // compatibility.
+
+                let renamed_key = format!("format.{}", key);
+                options.insert(renamed_key.to_lowercase(), value_string.to_lowercase());
+            } else {
+                options.insert(key.to_lowercase(), value_string.to_lowercase());
+            }
+        }
+
+        let file_type = if let Some(file_type) = statement.stored_as {
+            FileType::from_str(&file_type).map_err(|_| {
+                DataFusionError::Configuration(format!("Unknown FileType {}", file_type))
+            })?
+        } else if let Some(format) = options.remove("format") {
+            // try to infer file format from the "format" key in options
+            FileType::from_str(&format)
+                .map_err(|e| DataFusionError::Configuration(format!("{}", e)))?
+        } else {
+            let e = || {
+                DataFusionError::Configuration(
+                    "Format not explicitly set and unable to get file extension! Use STORED AS to define file format."
+                        .to_string(),
+                )
+            };
+            // try to infer file format from file extension
+            let extension: &str = &Path::new(&statement.target)
+                .extension()
+                .ok_or_else(e)?
+                .to_str()
+                .ok_or_else(e)?
+                .to_lowercase();
+
+            FileType::from_str(extension).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "{}. Use STORED AS to define file format.",
+                    e
+                ))
+            })?
+        };
+
+        let partition_by = statement
+            .partitioned_by
             .iter()
-            .map(|(s, v)| (s.to_owned(), v.to_string()))
-            .collect::<Vec<(String, String)>>();
-
-        let mut statement_options = StatementOptions::new(options);
-        let file_format = statement_options.try_infer_file_type(&statement.target)?;
-        let partition_by = statement_options.take_partition_by();
-
-        let copy_options = CopyOptions::SQLOptions(statement_options);
+            .map(|col| input_schema.field_with_name(table_ref.as_ref(), col))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|f| f.name().to_owned())
+            .collect();
 
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format,
+            format_options: file_type.into(),
             partition_by,
-            copy_options,
+            options,
         }))
     }
 

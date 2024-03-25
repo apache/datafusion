@@ -30,6 +30,7 @@ use crate::protobuf::{
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    UnionField, UnionValue,
 };
 
 use arrow::{
@@ -229,6 +230,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 return Err(Error::General(
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
+            }
+            DataType::Utf8View | DataType::BinaryView | DataType::ListView(_) | DataType::LargeListView(_) => {
+                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
             }
         };
 
@@ -1402,6 +1406,34 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 };
                 Ok(protobuf::ScalarValue { value: Some(value) })
             }
+
+            ScalarValue::Union(val, df_fields, mode) => {
+                let mut fields = Vec::<UnionField>::with_capacity(df_fields.len());
+                for (id, field) in df_fields.iter() {
+                    let field_id = id as i32;
+                    let field = Some(field.as_ref().try_into()?);
+                    let field = UnionField { field_id, field };
+                    fields.push(field);
+                }
+                let mode = match mode {
+                    UnionMode::Sparse => 0,
+                    UnionMode::Dense => 1,
+                };
+                let value = match val {
+                    None => None,
+                    Some((_id, v)) => Some(Box::new(v.as_ref().try_into()?)),
+                };
+                let val = UnionValue {
+                    value_id: val.as_ref().map(|(id, _v)| *id as i32).unwrap_or(0),
+                    value,
+                    fields,
+                    mode,
+                };
+                let val = Value::UnionValue(Box::new(val));
+                let val = protobuf::ScalarValue { value: Some(val) };
+                Ok(val)
+            }
+
             ScalarValue::Dictionary(index_type, val) => {
                 let value: protobuf::ScalarValue = val.as_ref().try_into()?;
                 Ok(protobuf::ScalarValue {
@@ -1426,11 +1458,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Cbrt => Self::Cbrt,
             BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
-            BuiltinScalarFunction::Tan => Self::Tan,
             BuiltinScalarFunction::Cot => Self::Cot,
             BuiltinScalarFunction::Sinh => Self::Sinh,
             BuiltinScalarFunction::Cosh => Self::Cosh,
-            BuiltinScalarFunction::Tanh => Self::Tanh,
             BuiltinScalarFunction::Atan => Self::Atan,
             BuiltinScalarFunction::Asinh => Self::Asinh,
             BuiltinScalarFunction::Acosh => Self::Acosh,
@@ -1448,94 +1478,28 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
-            BuiltinScalarFunction::OctetLength => Self::OctetLength,
             BuiltinScalarFunction::Concat => Self::Concat,
-            BuiltinScalarFunction::Lower => Self::Lower,
-            BuiltinScalarFunction::Upper => Self::Upper,
-            BuiltinScalarFunction::Trim => Self::Trim,
-            BuiltinScalarFunction::Ltrim => Self::Ltrim,
-            BuiltinScalarFunction::Rtrim => Self::Rtrim,
-            BuiltinScalarFunction::ToChar => Self::ToChar,
-            BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
-            BuiltinScalarFunction::ArraySort => Self::ArraySort,
-            BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
-            BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
-            BuiltinScalarFunction::ArrayExcept => Self::ArrayExcept,
-            BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
-            BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
-            BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
-            BuiltinScalarFunction::ArrayDistinct => Self::ArrayDistinct,
-            BuiltinScalarFunction::ArrayElement => Self::ArrayElement,
-            BuiltinScalarFunction::Flatten => Self::Flatten,
-            BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
-            BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
-            BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
-            BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
-            BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
-            BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
-            BuiltinScalarFunction::ArrayRepeat => Self::ArrayRepeat,
-            BuiltinScalarFunction::ArrayResize => Self::ArrayResize,
-            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
-            BuiltinScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
-            BuiltinScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
-            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
-            BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
-            BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
-            BuiltinScalarFunction::ArrayReverse => Self::ArrayReverse,
-            BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
-            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
-            BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
-            BuiltinScalarFunction::MakeArray => Self::Array,
-            BuiltinScalarFunction::DatePart => Self::DatePart,
-            BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
-            BuiltinScalarFunction::DateBin => Self::DateBin,
-            BuiltinScalarFunction::MD5 => Self::Md5,
-            BuiltinScalarFunction::SHA224 => Self::Sha224,
-            BuiltinScalarFunction::SHA256 => Self::Sha256,
-            BuiltinScalarFunction::SHA384 => Self::Sha384,
-            BuiltinScalarFunction::SHA512 => Self::Sha512,
-            BuiltinScalarFunction::Digest => Self::Digest,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
-            BuiltinScalarFunction::Ascii => Self::Ascii,
-            BuiltinScalarFunction::BitLength => Self::BitLength,
-            BuiltinScalarFunction::Btrim => Self::Btrim,
             BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
-            BuiltinScalarFunction::Chr => Self::Chr,
             BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Uuid => Self::Uuid,
-            BuiltinScalarFunction::Repeat => Self::Repeat,
-            BuiltinScalarFunction::Replace => Self::Replace,
             BuiltinScalarFunction::Reverse => Self::Reverse,
             BuiltinScalarFunction::Right => Self::Right,
             BuiltinScalarFunction::Rpad => Self::Rpad,
-            BuiltinScalarFunction::SplitPart => Self::SplitPart,
-            BuiltinScalarFunction::StringToArray => Self::StringToArray,
-            BuiltinScalarFunction::StartsWith => Self::StartsWith,
             BuiltinScalarFunction::Strpos => Self::Strpos,
             BuiltinScalarFunction::Substr => Self::Substr,
-            BuiltinScalarFunction::ToHex => Self::ToHex,
-            BuiltinScalarFunction::Now => Self::Now,
-            BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
-            BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
-            BuiltinScalarFunction::MakeDate => Self::MakeDate,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
-            BuiltinScalarFunction::Struct => Self::StructFun,
-            BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
             BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::Nanvl => Self::Nanvl,
             BuiltinScalarFunction::Iszero => Self::Iszero,
-            BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
-            BuiltinScalarFunction::OverLay => Self::OverLay,
-            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
             BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
             BuiltinScalarFunction::FindInSet => Self::FindInSet,
         };

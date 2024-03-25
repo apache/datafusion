@@ -25,7 +25,6 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::change_redundant_column;
-use crate::dml::CopyOptions;
 use crate::expr::{
     Alias, Exists, InSubquery, Placeholder, Sort as SortExpr, WindowFunction,
 };
@@ -218,56 +217,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Get all meaningful schemas of a plan and its children plan.
-    #[deprecated(since = "20.0.0")]
-    pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
-        match self {
-            // return self and children schemas
-            LogicalPlan::Window(_)
-            | LogicalPlan::Projection(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_) => {
-                let mut schemas = vec![self.schema()];
-                self.inputs().iter().for_each(|input| {
-                    schemas.push(input.schema());
-                });
-                schemas
-            }
-            // just return self.schema()
-            LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::TableScan(_) => {
-                vec![self.schema()]
-            }
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // return only the schema of the static term
-                static_term.all_schemas()
-            }
-            // return children schemas
-            LogicalPlan::Limit(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Prepare(_) => {
-                self.inputs().iter().map(|p| p.schema()).collect()
-            }
-            // return empty
-            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
-        }
-    }
-
     /// Returns the (fixed) output schema for explain plans
     pub fn explain_schema() -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
@@ -285,9 +234,17 @@ impl LogicalPlan {
         ])
     }
 
-    /// returns all expressions (non-recursively) in the current
-    /// logical plan node. This does not include expressions in any
-    /// children
+    /// Returns all expressions (non-recursively) evaluated by the current
+    /// logical plan node. This does not include expressions in any children
+    ///
+    /// The returned expressions do not necessarily represent or even
+    /// contributed to the output schema of this node. For example,
+    /// `LogicalPlan::Filter` returns the filter expression even though the
+    /// output of a Filter has the same columns as the input.
+    ///
+    /// The expressions do contain all the columns that are used by this plan,
+    /// so if there are columns not referenced by these expressions then
+    /// DataFusion's optimizer attempts to optimize them away.
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
@@ -613,15 +570,15 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
-                file_format,
+                format_options,
+                options,
                 partition_by,
-                copy_options,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                file_format: file_format.clone(),
+                format_options: format_options.clone(),
+                options: options.clone(),
                 partition_by: partition_by.clone(),
-                copy_options: copy_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
@@ -1544,22 +1501,17 @@ impl LogicalPlan {
                     LogicalPlan::Copy(CopyTo {
                         input: _,
                         output_url,
-                        file_format,
-                        partition_by: _,
-                        copy_options,
+                        format_options,
+                        options,
+                        ..
                     }) => {
-                        let op_str = match copy_options {
-                            CopyOptions::SQLOptions(statement) => statement
-                                .clone()
-                                .into_inner()
-                                .iter()
-                                .map(|(k, v)| format!("{k} {v}"))
-                                .collect::<Vec<String>>()
-                                .join(", "),
-                            CopyOptions::WriterOptions(_) => "".into(),
-                        };
+                        let op_str = options
+                            .iter()
+                            .map(|(k, v)| format!("{k} {v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
 
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} options: ({op_str})")
+                        write!(f, "CopyTo: format={format_options} output_url={output_url} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
@@ -2037,7 +1989,8 @@ impl Window {
         let fields = input.schema().fields();
         let input_len = fields.len();
         let mut window_fields = fields.clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
+        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
+        window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -2363,7 +2316,7 @@ impl DistinctOn {
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
         let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&select_expr, &input)?,
+            exprlist_to_fields(select_expr.as_slice(), &input)?,
             input.schema().metadata().clone(),
         )?;
 
@@ -2442,7 +2395,7 @@ impl Aggregate {
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
-        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
+        let mut fields = exprlist_to_fields(grouping_expr.as_slice(), &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
@@ -2452,7 +2405,7 @@ impl Aggregate {
                 .collect::<Vec<_>>();
         }
 
-        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
+        fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
         let schema =
             DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
@@ -3084,14 +3037,6 @@ digraph {
         empty_schema: DFSchemaRef,
     }
 
-    impl NoChildExtension {
-        fn empty() -> Self {
-            Self {
-                empty_schema: Arc::new(DFSchema::empty()),
-            }
-        }
-    }
-
     impl UserDefinedLogicalNode for NoChildExtension {
         fn as_any(&self) -> &dyn std::any::Any {
             unimplemented!()
@@ -3132,18 +3077,6 @@ digraph {
         fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
             unimplemented!()
         }
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_extension_all_schemas() {
-        let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(NoChildExtension::empty()),
-        });
-
-        let schemas = plan.all_schemas();
-        assert_eq!(1, schemas.len());
-        assert_eq!(0, schemas[0].fields().len());
     }
 
     #[test]

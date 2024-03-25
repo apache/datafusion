@@ -859,6 +859,13 @@ impl OptimizerRule for PushDownFilter {
                 let results = scan
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
+                if filter_predicates.len() != results.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        results.len(),
+                        filter_predicates.len());
+                }
+
                 let zip = filter_predicates.iter().zip(results);
 
                 let new_scan_filters = zip

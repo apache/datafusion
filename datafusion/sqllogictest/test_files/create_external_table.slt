@@ -99,3 +99,10 @@ CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
 # Unrecognized random clause
 statement error DataFusion error: SQL error: ParserError\("Unexpected token FOOBAR"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo.csv';
+
+# Conflicting options
+statement error DataFusion error: Invalid or Unsupported Configuration: Config value "column_index_truncate_length" not found on CsvOptions
+CREATE EXTERNAL TABLE csv_table (column1 int)
+STORED AS CSV
+LOCATION 'foo.csv'
+OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')

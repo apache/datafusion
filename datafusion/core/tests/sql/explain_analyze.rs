@@ -656,18 +656,17 @@ async fn test_physical_plan_display_indent_multi_children() {
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
-        "ProjectionExec: expr=[c1@0 as c1]",
-        "  CoalesceBatchesExec: target_batch_size=4096",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
-        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "            ProjectionExec: expr=[c1@0 as c2]",
-        "              CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+		"CoalesceBatchesExec: target_batch_size=4096",
+    	"  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
+    	"      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
+    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+    	"          CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+    	"    CoalesceBatchesExec: target_batch_size=4096",
+    	"      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
+    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+    	"          ProjectionExec: expr=[c1@0 as c2]",
+    	"            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -738,7 +737,9 @@ async fn parquet_explain_analyze() {
 
     // should contain aggregated stats
     assert_contains!(&formatted, "output_rows=8");
+    assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
+    assert_contains!(&formatted, "row_groups_matched_statistics=1");
     assert_contains!(&formatted, "row_groups_pruned_statistics=0");
 }
 
@@ -755,7 +756,9 @@ async fn parquet_explain_analyze_verbose() {
         .to_string();
 
     // should contain the raw per file stats (with the label)
+    assert_contains!(&formatted, "row_groups_matched_bloom_filter{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter{partition=0");
+    assert_contains!(&formatted, "row_groups_matched_statistics{partition=0");
     assert_contains!(&formatted, "row_groups_pruned_statistics{partition=0");
 }
 

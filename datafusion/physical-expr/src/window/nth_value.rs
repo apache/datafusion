@@ -42,6 +42,7 @@ pub struct NthValue {
     /// Output data type
     data_type: DataType,
     kind: NthValueKind,
+    ignore_nulls: bool,
 }
 
 impl NthValue {
@@ -50,12 +51,14 @@ impl NthValue {
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
+        ignore_nulls: bool,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::First,
+            ignore_nulls,
         }
     }
 
@@ -64,12 +67,14 @@ impl NthValue {
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
+        ignore_nulls: bool,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             data_type,
             kind: NthValueKind::Last,
+            ignore_nulls,
         }
     }
 
@@ -78,7 +83,8 @@ impl NthValue {
         name: impl Into<String>,
         expr: Arc<dyn PhysicalExpr>,
         data_type: DataType,
-        n: u32,
+        n: i64,
+        ignore_nulls: bool,
     ) -> Result<Self> {
         match n {
             0 => exec_err!("NTH_VALUE expects n to be non-zero"),
@@ -86,7 +92,8 @@ impl NthValue {
                 name: name.into(),
                 expr,
                 data_type,
-                kind: NthValueKind::Nth(n as i64),
+                kind: NthValueKind::Nth(n),
+                ignore_nulls,
             }),
         }
     }
@@ -122,7 +129,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
             finalized_result: None,
             kind: self.kind,
         };
-        Ok(Box::new(NthValueEvaluator { state }))
+        Ok(Box::new(NthValueEvaluator {
+            state,
+            ignore_nulls: self.ignore_nulls,
+        }))
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
@@ -136,6 +146,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
             expr: self.expr.clone(),
             data_type: self.data_type.clone(),
             kind: reversed_kind,
+            ignore_nulls: self.ignore_nulls,
         }))
     }
 }
@@ -144,6 +155,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
 #[derive(Debug)]
 pub(crate) struct NthValueEvaluator {
     state: NthValueState,
+    ignore_nulls: bool,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
@@ -184,7 +196,8 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         };
-        if is_prunable {
+        // Do not memoize results when nulls are ignored.
+        if is_prunable && !self.ignore_nulls {
             if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
@@ -210,9 +223,46 @@ impl PartitionEvaluator for NthValueEvaluator {
                 // We produce None if the window is empty.
                 return ScalarValue::try_from(arr.data_type());
             }
+
+            // Extract valid indices if ignoring nulls.
+            let valid_indices = if self.ignore_nulls {
+                // Calculate valid indices, inside the window frame boundaries
+                let slice = arr.slice(range.start, n_range);
+                let valid_indices = slice
+                    .nulls()
+                    .map(|nulls| {
+                        nulls
+                            .valid_indices()
+                            // Add offset `range.start` to valid indices, to point correct index in the original arr.
+                            .map(|idx| idx + range.start)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if valid_indices.is_empty() {
+                    return ScalarValue::try_from(arr.data_type());
+                }
+                Some(valid_indices)
+            } else {
+                None
+            };
             match self.state.kind {
-                NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
-                NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
+                NthValueKind::First => {
+                    if let Some(valid_indices) = &valid_indices {
+                        ScalarValue::try_from_array(arr, valid_indices[0])
+                    } else {
+                        ScalarValue::try_from_array(arr, range.start)
+                    }
+                }
+                NthValueKind::Last => {
+                    if let Some(valid_indices) = &valid_indices {
+                        ScalarValue::try_from_array(
+                            arr,
+                            valid_indices[valid_indices.len() - 1],
+                        )
+                    } else {
+                        ScalarValue::try_from_array(arr, range.end - 1)
+                    }
+                }
                 NthValueKind::Nth(n) => {
                     match n.cmp(&0) {
                         Ordering::Greater => {
@@ -221,20 +271,32 @@ impl PartitionEvaluator for NthValueEvaluator {
                             if index >= n_range {
                                 // Outside the range, return NULL:
                                 ScalarValue::try_from(arr.data_type())
+                            } else if let Some(valid_indices) = valid_indices {
+                                if index >= valid_indices.len() {
+                                    return ScalarValue::try_from(arr.data_type());
+                                }
+                                ScalarValue::try_from_array(&arr, valid_indices[index])
                             } else {
                                 ScalarValue::try_from_array(arr, range.start + index)
                             }
                         }
                         Ordering::Less => {
                             let reverse_index = (-n) as usize;
-                            if n_range >= reverse_index {
+                            if n_range < reverse_index {
+                                // Outside the range, return NULL:
+                                ScalarValue::try_from(arr.data_type())
+                            } else if let Some(valid_indices) = valid_indices {
+                                if reverse_index > valid_indices.len() {
+                                    return ScalarValue::try_from(arr.data_type());
+                                }
+                                let new_index =
+                                    valid_indices[valid_indices.len() - reverse_index];
+                                ScalarValue::try_from_array(&arr, new_index)
+                            } else {
                                 ScalarValue::try_from_array(
                                     arr,
                                     range.start + n_range - reverse_index,
                                 )
-                            } else {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
                             }
                         }
                         Ordering::Equal => {
@@ -295,6 +357,7 @@ mod tests {
             "first_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
+            false,
         );
         test_i32_result(first_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
@@ -306,6 +369,7 @@ mod tests {
             "last_value".to_owned(),
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
+            false,
         );
         test_i32_result(
             last_value,
@@ -330,6 +394,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
             1,
+            false,
         )?;
         test_i32_result(nth_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
@@ -342,6 +407,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
             2,
+            false,
         )?;
         test_i32_result(
             nth_value,

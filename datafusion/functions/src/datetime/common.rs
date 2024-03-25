@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::datatypes::DataType;
-use arrow_array::{
+use arrow::array::{
     Array, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
+use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+use arrow::datatypes::DataType;
 use chrono::LocalResult::Single;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use itertools::Either;
@@ -38,26 +38,27 @@ pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
-pub(crate) fn validate_data_types(
-    args: &[ColumnarValue],
-    name: &str,
-) -> Option<Result<ColumnarValue>> {
+/// Checks that all the arguments from the second are of type [Utf8] or [LargeUtf8]
+///
+/// [Utf8]: DataType::Utf8
+/// [LargeUtf8]: DataType::LargeUtf8
+pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<()> {
     for (idx, a) in args.iter().skip(1).enumerate() {
         match a.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 // all good
             }
             _ => {
-                return Some(exec_err!(
+                return exec_err!(
                     "{name} function unsupported data type at index {}: {}",
                     idx + 1,
                     a.data_type()
-                ));
+                );
             }
         }
     }
 
-    None
+    Ok(())
 }
 
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers

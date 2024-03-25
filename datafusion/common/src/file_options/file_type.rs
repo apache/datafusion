@@ -17,11 +17,11 @@
 
 //! File type abstraction
 
-use crate::error::{DataFusionError, Result};
-
-use core::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::str::FromStr;
+
+use crate::config::FormatOptions;
+use crate::error::{DataFusionError, Result};
 
 /// The default file extension of arrow files
 pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
@@ -54,6 +54,19 @@ pub enum FileType {
     CSV,
     /// JSON file
     JSON,
+}
+
+impl From<&FormatOptions> for FileType {
+    fn from(value: &FormatOptions) -> Self {
+        match value {
+            FormatOptions::CSV(_) => FileType::CSV,
+            FormatOptions::JSON(_) => FileType::JSON,
+            #[cfg(feature = "parquet")]
+            FormatOptions::PARQUET(_) => FileType::PARQUET,
+            FormatOptions::AVRO => FileType::AVRO,
+            FormatOptions::ARROW => FileType::ARROW,
+        }
+    }
 }
 
 impl GetExt for FileType {
@@ -105,9 +118,10 @@ impl FromStr for FileType {
 #[cfg(test)]
 #[cfg(feature = "parquet")]
 mod tests {
-    use crate::error::DataFusionError;
-    use crate::file_options::FileType;
     use std::str::FromStr;
+
+    use crate::error::DataFusionError;
+    use crate::FileType;
 
     #[test]
     fn from_str() {

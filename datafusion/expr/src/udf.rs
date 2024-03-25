@@ -18,7 +18,6 @@
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
-use crate::ExprSchemable;
 use crate::{
     ColumnarValue, Expr, FuncMonotonicity, ReturnTypeFunction,
     ScalarFunctionImplementation, Signature,
@@ -157,9 +156,10 @@ impl ScalarUDF {
         &self,
         args: &[Expr],
         schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
-        self.inner.return_type_from_exprs(args, schema)
+        self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
     /// Do the function rewrite
@@ -305,14 +305,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_type_from_exprs(
         &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
     ) -> Result<DataType> {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        self.return_type(&arg_types)
+        self.return_type(arg_types)
     }
 
     /// Invoke the function on `args`, returning the appropriate result
@@ -329,8 +326,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// For the best performance, the implementations of `invoke` should handle
     /// the common case when one or more of their arguments are constant values
-    /// (aka  [`ColumnarValue::Scalar`]). Calling [`ColumnarValue::into_array`]
-    /// and treating all arguments as arrays will work, but will be slower.
+    /// (aka  [`ColumnarValue::Scalar`]).
+    ///
+    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
+    /// to arrays, which will likely be simpler code, but be slower.
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
 
     /// Returns any aliases (alternate names) for this function.

@@ -17,109 +17,86 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::fmt::Debug;
+use std::ops::ControlFlow;
+use std::string::String;
+use std::sync::{Arc, Weak};
+
+use super::options::ReadOptions;
+use crate::{
+    catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA},
+    catalog::listing_schema::ListingSchemaProvider,
+    catalog::schema::{MemorySchemaProvider, SchemaProvider},
+    catalog::{
+        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
+        MemoryCatalogProviderList,
+    },
+    config::ConfigOptions,
+    dataframe::DataFrame,
+    datasource::{
+        cte_worktable::CteWorkTable,
+        function::{TableFunction, TableFunctionImpl},
+        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+        object_store::ObjectStoreUrl,
+        provider::{DefaultTableFactory, TableProviderFactory},
+    },
+    datasource::{provider_as_source, MemTable, TableProvider, ViewTable},
+    error::{DataFusionError, Result},
+    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    logical_expr::{
+        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
+        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
+        DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
+        TableSource, TableType, ToStringifiedPlan, UNNAMED_TABLE,
+    },
+    optimizer::analyzer::{Analyzer, AnalyzerRule},
+    optimizer::optimizer::{Optimizer, OptimizerConfig, OptimizerRule},
+    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
+    physical_plan::{udaf::AggregateUDF, udf::ScalarUDF, ExecutionPlan},
+    physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
+    variable::{VarProvider, VarType},
+};
+
+use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
+use datafusion_common::{
+    alias::AliasGenerator,
+    config::{ConfigExtension, TableOptions},
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+    OwnedTableReference, SchemaReference,
+};
+use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::{
+    logical_plan::{DdlStatement, Statement},
+    var_provider::is_system_variables,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement, DFParser},
+    planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
+    ResolvedTableReference, TableReference,
+};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use parking_lot::RwLock;
+use sqlparser::dialect::dialect_from_str;
+use url::Url;
+use uuid::Uuid;
+
+pub use datafusion_execution::config::SessionConfig;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
+
 mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
-
-use crate::{
-    catalog::{CatalogProviderList, MemoryCatalogProviderList},
-    datasource::{
-        cte_worktable::CteWorkTable,
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable},
-        provider::TableProviderFactory,
-    },
-    datasource::{MemTable, ViewTable},
-    logical_expr::{PlanType, ToStringifiedPlan},
-    optimizer::optimizer::Optimizer,
-    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
-};
-use arrow_schema::Schema;
-use datafusion_common::{
-    alias::AliasGenerator,
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
-    tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor},
-};
-use datafusion_execution::registry::SerializerRegistry;
-pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::var_provider::is_system_variables;
-use datafusion_expr::{
-    logical_plan::{DdlStatement, Statement},
-    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
-};
-use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
-use std::string::String;
-use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-};
-use std::{ops::ControlFlow, sync::Weak};
-
-use arrow::datatypes::{DataType, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
-use crate::catalog::{
-    schema::{MemorySchemaProvider, SchemaProvider},
-    {CatalogProvider, MemoryCatalogProvider},
-};
-use crate::dataframe::DataFrame;
-use crate::datasource::{
-    listing::{ListingTableConfig, ListingTableUrl},
-    provider_as_source, TableProvider,
-};
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-    CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable, DropView,
-    Explain, LogicalPlan, LogicalPlanBuilder, SetVariable, TableSource, TableType,
-    UNNAMED_TABLE,
-};
-use crate::optimizer::OptimizerRule;
-use datafusion_sql::{
-    parser::{CopyToSource, CopyToStatement},
-    planner::ParserOptions,
-    ResolvedTableReference, TableReference,
-};
-use sqlparser::dialect::dialect_from_str;
-
-use crate::config::ConfigOptions;
-use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_planner::DefaultPhysicalPlanner;
-use crate::physical_planner::PhysicalPlanner;
-use crate::variable::{VarProvider, VarType};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, SchemaReference};
-use datafusion_sql::{
-    parser::DFParser,
-    planner::{ContextProvider, SqlToRel},
-};
-use url::Url;
-
-use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::listing_schema::ListingSchemaProvider;
-use crate::datasource::object_store::ObjectStoreUrl;
-use datafusion_optimizer::{
-    analyzer::{Analyzer, AnalyzerRule},
-    OptimizerConfig,
-};
-use datafusion_sql::planner::object_name_to_table_reference;
-use uuid::Uuid;
-
-// backwards compatibility
-use crate::datasource::provider::DefaultTableFactory;
-use crate::execution::options::ArrowReadOptions;
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-
-use super::options::ReadOptions;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -349,6 +326,15 @@ impl SessionContext {
         self.session_start_time
     }
 
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn with_function_factory(
+        self,
+        function_factory: Arc<dyn FunctionFactory>,
+    ) -> Self {
+        self.state.write().set_function_factory(function_factory);
+        self
+    }
+
     /// Registers the [`RecordBatch`] as the specified table name
     pub fn register_batch(
         &self,
@@ -396,6 +382,11 @@ impl SessionContext {
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
         self.state.read().config.clone()
+    }
+
+    /// Return a copied version of table options for this Session
+    pub fn copied_table_options(&self) -> TableOptions {
+        self.state.read().default_table_options()
     }
 
     /// Creates a [`DataFrame`] from SQL query text.
@@ -927,7 +918,8 @@ impl SessionContext {
     ) -> Result<DataFrame> {
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
-        let listing_options = options.to_listing_options(&session_config);
+        let listing_options =
+            options.to_listing_options(&session_config, self.copied_table_options());
 
         let option_extension = listing_options.file_extension.clone();
 
@@ -1064,7 +1056,8 @@ impl SessionContext {
         table_path: &str,
         options: ArrowReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
+        let listing_options = options
+            .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
             name,
@@ -1188,49 +1181,6 @@ impl SessionContext {
         }
     }
 
-    /// Returns the set of available tables in the default catalog and
-    /// schema.
-    ///
-    /// Use [`table`] to get a specific table.
-    ///
-    /// [`table`]: SessionContext::table
-    #[deprecated(
-        since = "23.0.0",
-        note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
-    )]
-    pub fn tables(&self) -> Result<HashSet<String>> {
-        Ok(self
-            .state
-            .read()
-            // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "".into() })?
-            .table_names()
-            .iter()
-            .cloned()
-            .collect())
-    }
-
-    /// Optimizes the logical plan by applying optimizer rules.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
-    )]
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.read().optimize(plan)
-    }
-
-    /// Creates a physical plan from a logical plan.
-    #[deprecated(
-        since = "23.0.0",
-        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
-    )]
-    pub async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.state().create_physical_plan(logical_plan).await
-    }
-
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
@@ -1252,6 +1202,16 @@ impl SessionContext {
     /// Register [`CatalogProviderList`] in [`SessionState`]
     pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().catalog_list = catalog_list;
+    }
+
+    /// Registers a [`ConfigExtension`] as a table option extention that can be
+    /// referenced from SQL statements executed against this context.
+    pub fn register_table_options_extension<T: ConfigExtension>(&self, extension: T) {
+        self.state
+            .write()
+            .table_option_namespace
+            .extensions
+            .insert(extension)
     }
 }
 
@@ -1282,6 +1242,13 @@ impl FunctionRegistry for SessionContext {
     }
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         self.state.write().register_udwf(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.state.write().register_function_rewrite(rewrite)
     }
 }
 
@@ -1369,6 +1336,8 @@ pub struct SessionState {
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
+    /// Table options
+    table_option_namespace: TableOptions,
     /// Execution properties
     execution_props: ExecutionProps,
     /// TableProviderFactories for different file formats.
@@ -1469,6 +1438,9 @@ impl SessionState {
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
+            table_option_namespace: TableOptions::default_from_session_config(
+                config.options(),
+            ),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
@@ -1587,7 +1559,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the default query planner
+    /// override default query planner with `query_planner`
     pub fn with_query_planner(
         mut self,
         query_planner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -1596,7 +1568,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the analyzer rules
+    /// Override the [`AnalyzerRule`]s optimizer plan rules.
     pub fn with_analyzer_rules(
         mut self,
         rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
@@ -1605,7 +1577,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the optimizer rules
+    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
     pub fn with_optimizer_rules(
         mut self,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
@@ -1614,7 +1586,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the physical optimizer rules
+    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
     pub fn with_physical_optimizer_rules(
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -1623,7 +1595,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`AnalyzerRule`]
+    /// Add `analyzer_rule` to the end of the list of
+    /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
         mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
@@ -1632,7 +1605,8 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`OptimizerRule`]
+    /// Add `optimizer_rule` to the end of the list of
+    /// [`OptimizerRule`]s used to rewrite queries.
     pub fn add_optimizer_rule(
         mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
@@ -1641,12 +1615,22 @@ impl SessionState {
         self
     }
 
-    /// Adds a new [`PhysicalOptimizerRule`]
+    /// Add `physical_optimizer_rule` to the end of the list of
+    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
     pub fn add_physical_optimizer_rule(
         mut self,
-        optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
-        self.physical_optimizers.rules.push(optimizer_rule);
+        self.physical_optimizers.rules.push(physical_optimizer_rule);
+        self
+    }
+
+    /// Adds a new [`ConfigExtension`] to TableOptions
+    pub fn add_table_options_extension<T: ConfigExtension>(
+        mut self,
+        extension: T,
+    ) -> Self {
+        self.table_option_namespace.extensions.insert(extension);
         self
     }
 
@@ -1657,6 +1641,11 @@ impl SessionState {
     ) -> Self {
         self.function_factory = Some(function_factory);
         self
+    }
+
+    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
+    pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
+        self.function_factory = Some(function_factory);
     }
 
     /// Replace the extension [`SerializerRegistry`]
@@ -1761,11 +1750,7 @@ impl SessionState {
                         .0
                         .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-                DFStatement::CopyTo(CopyToStatement {
-                    source,
-                    target: _,
-                    options: _,
-                }) => match source {
+                DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                     CopyToSource::Relation(table_name) => {
                         visitor.insert(table_name);
                     }
@@ -1973,6 +1958,12 @@ impl SessionState {
         self.config.options()
     }
 
+    /// return the TableOptions options with its extensions
+    pub fn default_table_options(&self) -> TableOptions {
+        self.table_option_namespace
+            .combine_with_session_config(self.config_options())
+    }
+
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
@@ -2084,6 +2075,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn options(&self) -> &ConfigOptions {
         self.state.config_options()
     }
+
+    fn udfs_names(&self) -> Vec<String> {
+        self.state.scalar_functions().keys().cloned().collect()
+    }
+
+    fn udafs_names(&self) -> Vec<String> {
+        self.state.aggregate_functions().keys().cloned().collect()
+    }
+
+    fn udwfs_names(&self) -> Vec<String> {
+        self.state.window_functions().keys().cloned().collect()
+    }
 }
 
 impl FunctionRegistry for SessionState {
@@ -2126,10 +2129,16 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
+        udaf.aliases().iter().for_each(|alias| {
+            self.aggregate_functions.insert(alias.clone(), udaf.clone());
+        });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
 
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
+        udwf.aliases().iter().for_each(|alias| {
+            self.window_functions.insert(alias.clone(), udwf.clone());
+        });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
 
@@ -2144,11 +2153,31 @@ impl FunctionRegistry for SessionState {
     }
 
     fn deregister_udaf(&mut self, name: &str) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.aggregate_functions.remove(name))
+        let udaf = self.aggregate_functions.remove(name);
+        if let Some(udaf) = &udaf {
+            for alias in udaf.aliases() {
+                self.aggregate_functions.remove(alias);
+            }
+        }
+        Ok(udaf)
     }
 
     fn deregister_udwf(&mut self, name: &str) -> Result<Option<Arc<WindowUDF>>> {
-        Ok(self.window_functions.remove(name))
+        let udwf = self.window_functions.remove(name);
+        if let Some(udwf) = &udwf {
+            for alias in udwf.aliases() {
+                self.window_functions.remove(alias);
+            }
+        }
+        Ok(udwf)
+    }
+
+    fn register_function_rewrite(
+        &mut self,
+        rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
+    ) -> Result<()> {
+        self.analyzer.add_function_rewrite(rewrite);
+        Ok(())
     }
 }
 
@@ -2303,8 +2332,11 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::options::CsvReadOptions;
-    use super::*;
+    use std::env;
+    use std::path::PathBuf;
+    use std::sync::Weak;
+
+    use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
@@ -2312,12 +2344,11 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use async_trait::async_trait;
+
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::Expr;
-    use std::env;
-    use std::path::PathBuf;
-    use std::sync::Weak;
+
+    use async_trait::async_trait;
     use tempfile::TempDir;
 
     #[tokio::test]

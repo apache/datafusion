@@ -23,7 +23,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use super::FileFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
@@ -39,6 +39,8 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
+use datafusion_common::config::CsvOptions;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
@@ -51,27 +53,9 @@ use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CsvFormat {
-    has_header: bool,
-    delimiter: u8,
-    quote: u8,
-    escape: Option<u8>,
-    schema_infer_max_rec: Option<usize>,
-    file_compression_type: FileCompressionType,
-}
-
-impl Default for CsvFormat {
-    fn default() -> Self {
-        Self {
-            schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
-            has_header: true,
-            delimiter: b',',
-            quote: b'"',
-            escape: None,
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-        }
-    }
+    options: CsvOptions,
 }
 
 impl CsvFormat {
@@ -110,7 +94,7 @@ impl CsvFormat {
         &self,
         stream: BoxStream<'static, Result<Bytes>>,
     ) -> BoxStream<'static, Result<Bytes>> {
-        let file_compression_type = self.file_compression_type.to_owned();
+        let file_compression_type: FileCompressionType = self.options.compression.into();
         let decoder = file_compression_type.convert_stream(stream);
         let steam = match decoder {
             Ok(decoded_stream) => {
@@ -131,43 +115,54 @@ impl CsvFormat {
         steam.boxed()
     }
 
+    /// Set the csv options
+    pub fn with_options(mut self, options: CsvOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Retrieve the csv options
+    pub fn options(&self) -> &CsvOptions {
+        &self.options
+    }
+
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
-    pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
-        self.schema_infer_max_rec = max_rec;
+    pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
+        self.options.schema_infer_max_rec = max_rec;
         self
     }
 
     /// Set true to indicate that the first line is a header.
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.options.has_header = has_header;
         self
     }
 
     /// True if the first line is a header.
     pub fn has_header(&self) -> bool {
-        self.has_header
+        self.options.has_header
     }
 
     /// The character separating values within a row.
     /// - default to ','
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
-        self.delimiter = delimiter;
+        self.options.delimiter = delimiter;
         self
     }
 
     /// The quote character in a row.
     /// - default to '"'
     pub fn with_quote(mut self, quote: u8) -> Self {
-        self.quote = quote;
+        self.options.quote = quote;
         self
     }
 
     /// The escape character in a row.
     /// - default is None
     pub fn with_escape(mut self, escape: Option<u8>) -> Self {
-        self.escape = escape;
+        self.options.escape = escape;
         self
     }
 
@@ -177,23 +172,23 @@ impl CsvFormat {
         mut self,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        self.file_compression_type = file_compression_type;
+        self.options.compression = file_compression_type.into();
         self
     }
 
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
-        self.delimiter
+        self.options.delimiter
     }
 
     /// The quote character.
     pub fn quote(&self) -> u8 {
-        self.quote
+        self.options.quote
     }
 
     /// The escape character.
     pub fn escape(&self) -> Option<u8> {
-        self.escape
+        self.options.escape
     }
 }
 
@@ -211,7 +206,7 @@ impl FileFormat for CsvFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        let mut records_to_read = self.options.schema_infer_max_rec;
 
         for object in objects {
             let stream = self.read_to_delimited_chunks(store, object).await;
@@ -247,11 +242,11 @@ impl FileFormat for CsvFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
-            self.has_header,
-            self.delimiter,
-            self.quote,
-            self.escape,
-            self.file_compression_type.to_owned(),
+            self.options.has_header,
+            self.options.delimiter,
+            self.options.quote,
+            self.options.escape,
+            self.options.compression.into(),
         );
         Ok(Arc::new(exec))
     }
@@ -267,12 +262,10 @@ impl FileFormat for CsvFormat {
             return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
-        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return not_impl_err!("Inserting compressed CSV is not implemented yet.");
-        }
+        let writer_options = CsvWriterOptions::try_from(&self.options)?;
 
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(CsvSink::new(conf));
+        let sink = Arc::new(CsvSink::new(conf, writer_options));
 
         Ok(Arc::new(FileSinkExec::new(
             input,
@@ -305,8 +298,8 @@ impl CsvFormat {
 
         while let Some(chunk) = stream.next().await.transpose()? {
             let format = arrow::csv::reader::Format::default()
-                .with_header(self.has_header && first_chunk)
-                .with_delimiter(self.delimiter);
+                .with_header(self.options.has_header && first_chunk)
+                .with_delimiter(self.options.delimiter);
 
             let (Schema { fields, .. }, records_read) =
                 format.infer_schema(chunk.reader(), Some(records_to_read))?;
@@ -439,6 +432,7 @@ impl BatchSerializer for CsvSerializer {
 pub struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
+    writer_options: CsvWriterOptions,
 }
 
 impl Debug for CsvSink {
@@ -461,8 +455,11 @@ impl DisplayAs for CsvSink {
 
 impl CsvSink {
     /// Create from config.
-    pub fn new(config: FileSinkConfig) -> Self {
-        Self { config }
+    pub fn new(config: FileSinkConfig, writer_options: CsvWriterOptions) -> Self {
+        Self {
+            config,
+            writer_options,
+        }
     }
 
     /// Retrieve the inner [`FileSinkConfig`].
@@ -475,11 +472,10 @@ impl CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let writer_options = self.config.file_type_writer_options.try_into_csv()?;
-        let builder = &writer_options.writer_options;
+        let builder = &self.writer_options.writer_options;
 
         let builder_clone = builder.clone();
-        let options_clone = writer_options.clone();
+        let options_clone = self.writer_options.clone();
         let get_serializer = move || {
             Arc::new(
                 CsvSerializer::new()
@@ -494,9 +490,14 @@ impl CsvSink {
             "csv".into(),
             Box::new(get_serializer),
             &self.config,
-            writer_options.compression.into(),
+            self.writer_options.compression.into(),
         )
         .await
+    }
+
+    /// Retrieve the writer options
+    pub fn writer_options(&self) -> &CsvWriterOptions {
+        &self.writer_options
     }
 }
 
@@ -668,11 +669,9 @@ mod tests {
         };
 
         let num_rows_to_read = 100;
-        let csv_format = CsvFormat {
-            has_header: false,
-            schema_infer_max_rec: Some(num_rows_to_read),
-            ..Default::default()
-        };
+        let csv_format = CsvFormat::default()
+            .with_has_header(false)
+            .with_schema_infer_max_rec(num_rows_to_read);
         let inferred_schema = csv_format
             .infer_schema(
                 &state,
@@ -723,7 +722,7 @@ mod tests {
 
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);
-        let records_to_read = csv.schema_infer_max_rec.unwrap_or(usize::MAX);
+        let records_to_read = csv.options().schema_infer_max_rec;
         let store = Arc::new(integration) as Arc<dyn ObjectStore>;
         let original_stream = store.get(&path).await?;
 

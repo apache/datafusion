@@ -22,12 +22,14 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{Field, Schema};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, ExecutionPlan, InputOrderMode};
+use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
+use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
@@ -38,13 +40,12 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use itertools::Itertools;
 use test_utils::add_empty_batches;
 
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-
-use datafusion_physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {
@@ -274,6 +275,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     window_frame.is_causal()
                 };
 
+                let extended_schema =
+                    schema_add_window_fields(&args, &schema, &window_fn, fn_name)?;
+
                 let window_expr = create_window_expr(
                     &window_fn,
                     fn_name.to_string(),
@@ -281,7 +285,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     &partitionby_exprs,
                     &orderby_exprs,
                     Arc::new(window_frame),
-                    schema.as_ref(),
+                    &extended_schema,
                     false,
                 )?;
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
@@ -515,7 +519,8 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     } else {
         WindowFrameUnits::Groups
     };
-    match units {
+
+    let mut window_frame = match units {
         // In range queries window frame boundaries should match column type
         WindowFrameUnits::Range => {
             let start_bound = if start_bound.is_preceding {
@@ -566,6 +571,47 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             // should work only with WindowAggExec
             window_frame
         }
+    };
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.start_bound);
+    convert_bound_to_current_row_if_applicable(rng, &mut window_frame.end_bound);
+    window_frame
+}
+
+/// This utility converts `PRECEDING(0)` or `FOLLOWING(0)` specifiers in window
+/// frame bounds to `CURRENT ROW` with 50% probability. This enables us to test
+/// behaviour of the system in the `CURRENT ROW` mode.
+fn convert_bound_to_current_row_if_applicable(
+    rng: &mut StdRng,
+    bound: &mut WindowFrameBound,
+) {
+    match bound {
+        WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
+            if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
+                if value == &zero && rng.gen_range(0..2) == 0 {
+                    *bound = WindowFrameBound::CurrentRow;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// This utility determines whether a given window frame can be executed with
+/// multiple ORDER BY expressions. As an example, range frames with offset (such
+/// as `RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`) cannot have ORDER BY clauses
+/// of the form `\[ORDER BY a ASC, b ASC, ...]`
+fn can_accept_multi_orderby(window_frame: &WindowFrame) -> bool {
+    match window_frame.units {
+        WindowFrameUnits::Rows => true,
+        WindowFrameUnits::Range => {
+            // Range can only accept multi ORDER BY clauses when bounds are
+            // CURRENT ROW or UNBOUNDED PRECEDING/FOLLOWING:
+            (window_frame.start_bound.is_unbounded()
+                || window_frame.start_bound == WindowFrameBound::CurrentRow)
+                && (window_frame.end_bound.is_unbounded()
+                    || window_frame.end_bound == WindowFrameBound::CurrentRow)
+        }
+        WindowFrameUnits::Groups => true,
     }
 }
 
@@ -588,13 +634,16 @@ async fn run_window_test(
     let mut orderby_exprs = vec![];
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
-            expr: col(column, &schema).unwrap(),
+            expr: col(column, &schema)?,
             options: SortOptions::default(),
         })
     }
+    if orderby_exprs.len() > 1 && !can_accept_multi_orderby(&window_frame) {
+        orderby_exprs = orderby_exprs[0..1].to_vec();
+    }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
-        partitionby_exprs.push(col(column, &schema).unwrap());
+        partitionby_exprs.push(col(column, &schema)?);
     }
     let mut sort_keys = vec![];
     for partition_by_expr in &partitionby_exprs {
@@ -609,7 +658,7 @@ async fn run_window_test(
         }
     }
 
-    let concat_input_record = concat_batches(&schema, &input1).unwrap();
+    let concat_input_record = concat_batches(&schema, &input1)?;
     let source_sort_keys = vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
@@ -624,73 +673,61 @@ async fn run_window_test(
             options: Default::default(),
         },
     ];
-    let memory_exec =
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
-    let memory_exec = memory_exec.with_sort_information(vec![source_sort_keys.clone()]);
-    let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
+    let mut exec1 = Arc::new(
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
+            .with_sort_information(vec![source_sort_keys.clone()]),
+    ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
+        exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
     }
 
-    let usual_window_exec = Arc::new(
-        WindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name.clone(),
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec1,
-            vec![],
-        )
-        .unwrap(),
-    ) as _;
+    let extended_schema = schema_add_window_fields(&args, &schema, &window_fn, &fn_name)?;
+
+    let usual_window_exec = Arc::new(WindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name.clone(),
+            &args,
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            &extended_schema,
+            false,
+        )?],
+        exec1,
+        vec![],
+    )?) as _;
     let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
-            .unwrap()
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
             .with_sort_information(vec![source_sort_keys.clone()]),
     );
-    let running_window_exec = Arc::new(
-        BoundedWindowAggExec::try_new(
-            vec![create_window_expr(
-                &window_fn,
-                fn_name,
-                &args,
-                &partitionby_exprs,
-                &orderby_exprs,
-                Arc::new(window_frame.clone()),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            exec2,
-            vec![],
-            search_mode,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
+        vec![create_window_expr(
+            &window_fn,
+            fn_name,
+            &args,
+            &partitionby_exprs,
+            &orderby_exprs,
+            Arc::new(window_frame.clone()),
+            &extended_schema,
+            false,
+        )?],
+        exec2,
+        vec![],
+        search_mode.clone(),
+    )?) as _;
     let task_ctx = ctx.task_ctx();
-    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await.unwrap();
-
-    let collected_running = collect(running_window_exec, task_ctx.clone())
-        .await
-        .unwrap();
+    let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;
+    let collected_running = collect(running_window_exec, task_ctx).await?;
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
     assert!(collected_running.len() > collected_usual.len());
     // compare
-    let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
-    let running_formatted = pretty_format_batches(&collected_running)
-        .unwrap()
-        .to_string();
+    let usual_formatted = pretty_format_batches(&collected_usual)?.to_string();
+    let running_formatted = pretty_format_batches(&collected_running)?.to_string();
 
     let mut usual_formatted_sorted: Vec<&str> = usual_formatted.trim().lines().collect();
     usual_formatted_sorted.sort_unstable();
@@ -703,13 +740,44 @@ async fn run_window_test(
         .zip(&running_formatted_sorted)
         .enumerate()
     {
-        assert_eq!(
-            (i, usual_line),
-            (i, running_line),
-            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}"
-        );
+        if !usual_line.eq(running_line) {
+            println!("Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
+            println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
+            for (line1, line2) in
+                usual_formatted_sorted.iter().zip(running_formatted_sorted)
+            {
+                println!("{:?}   ---   {:?}", line1, line2);
+            }
+            unreachable!();
+        }
     }
     Ok(())
+}
+
+// The planner has fully updated schema before calling the `create_window_expr`
+// Replicate the same for this test
+fn schema_add_window_fields(
+    args: &[Arc<dyn PhysicalExpr>],
+    schema: &Arc<Schema>,
+    window_fn: &WindowFunctionDefinition,
+    fn_name: &str,
+) -> Result<Arc<Schema>> {
+    let data_types = args
+        .iter()
+        .map(|e| e.clone().as_ref().data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let window_expr_return_type = window_fn.return_type(&data_types)?;
+    let mut window_fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect_vec();
+    window_fields.extend_from_slice(&[Field::new(
+        fn_name,
+        window_expr_return_type,
+        true,
+    )]);
+    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Return randomly sized record batches with:

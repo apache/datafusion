@@ -2661,7 +2661,7 @@ PT123456S
 query T
 select to_char(arrow_cast(123456, 'Duration(Second)'), null);
 ----
-PT123456S
+NULL
 
 query error DataFusion error: Execution error: Cast error: Format error
 SELECT to_char(timestamps, '%X%K') from formats;
@@ -2672,13 +2672,126 @@ SELECT to_char('2000-02-03'::date, '%X%K');
 query T
 SELECT to_char(timestamps, null) from formats;
 ----
-2024-01-01T06:00:00Z
-2025-01-01T23:59:58Z
+NULL
+NULL
 
 query T
 SELECT to_char(null, '%d-%m-%Y');
 ----
 (empty)
 
+query T
+SELECT to_char(column1, column2)
+FROM
+(VALUES ('2024-01-01 06:00:00'::timestamp, null), ('2025-01-01 23:59:58'::timestamp, '%d:%m:%Y %H-%M-%S'));
+----
+NULL
+01:01:2025 23-59-58
+
 statement ok
 drop table formats;
+
+##########
+## to_unixtime tests
+##########
+
+query I
+select to_unixtime('2020-09-08T12:00:00+00:00');
+----
+1599566400
+
+query I
+select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
+----
+1673638290
+
+query I
+select to_unixtime('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
+----
+1684295940
+
+query I
+select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'Date64'));
+----
+1599566400
+
+query I
+select to_unixtime(arrow_cast('2020-09-08', 'Date32'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_seconds('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_millis('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_micros('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(to_timestamp_nanos('2020-09-08'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'Int32'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'Int64'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200.414, 'Float64'));
+----
+1599523200
+
+##########
+## Tests for the "AT TIME ZONE" clause
+##########
+
+query P
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'UTC';
+----
+2000-12-01T04:04:12Z
+
+query P
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New_York';
+----
+2000-12-01T04:04:12-05:00
+
+## date-time strings that already have a explicit timezone can be used with AT TIME ZONE
+
+# same time zone as provided date-time
+query P
+SELECT '2000-12-01T04:04:12-05:00' AT TIME ZONE 'America/New_York';
+----
+2000-12-01T04:04:12-05:00
+
+# different time zone than provided date-time
+query P
+SELECT '2000-12-01T04:04:12-05:00' AT TIME ZONE 'Europe/Berlin';
+----
+2000-12-01T10:04:12+01:00
+
+# longform timezones need whitespace converted to underscore
+statement error
+SELECT '2000-12-01 04:04:12' AT TIME ZONE 'America/New York';
+
+# abbreviated timezone is not supported
+statement error
+SELECT '2023-03-12 02:00:00' AT TIME ZONE 'EDT';

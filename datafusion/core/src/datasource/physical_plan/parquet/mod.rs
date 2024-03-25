@@ -31,7 +31,7 @@ use crate::datasource::physical_plan::{
     FileMeta, FileScanConfig, SchemaAdapter,
 };
 use crate::{
-    config::ConfigOptions,
+    config::{ConfigOptions, TableParquetOptions},
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
@@ -52,6 +52,7 @@ use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
+use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -73,18 +74,6 @@ pub use metrics::ParquetFileMetrics;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    /// Override for `Self::with_pushdown_filters`. If None, uses
-    /// values from base_config
-    pushdown_filters: Option<bool>,
-    /// Override for `Self::with_reorder_filters`. If None, uses
-    /// values from base_config
-    reorder_filters: Option<bool>,
-    /// Override for `Self::with_enable_page_index`. If None, uses
-    /// values from base_config
-    enable_page_index: Option<bool>,
-    /// Override for `Self::with_enable_bloom_filter`. If None, uses
-    /// values from base_config
-    enable_bloom_filter: Option<bool>,
     /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
@@ -101,6 +90,8 @@ pub struct ParquetExec {
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     cache: PlanProperties,
+    /// Parquet Options
+    parquet_options: TableParquetOptions,
 }
 
 impl ParquetExec {
@@ -109,6 +100,7 @@ impl ParquetExec {
         base_config: FileScanConfig,
         predicate: Option<Arc<dyn PhysicalExpr>>,
         metadata_size_hint: Option<usize>,
+        parquet_options: TableParquetOptions,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
@@ -154,10 +146,6 @@ impl ParquetExec {
             &base_config,
         );
         Self {
-            pushdown_filters: None,
-            reorder_filters: None,
-            enable_page_index: None,
-            enable_bloom_filter: None,
             base_config,
             projected_statistics,
             metrics,
@@ -167,6 +155,7 @@ impl ParquetExec {
             metadata_size_hint,
             parquet_file_reader_factory: None,
             cache,
+            parquet_options,
         }
     }
 
@@ -208,14 +197,13 @@ impl ParquetExec {
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
-        self.pushdown_filters = Some(pushdown_filters);
+        self.parquet_options.global.pushdown_filters = pushdown_filters;
         self
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
-    fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
-        self.pushdown_filters
-            .unwrap_or(config_options.execution.parquet.pushdown_filters)
+    fn pushdown_filters(&self) -> bool {
+        self.parquet_options.global.pushdown_filters
     }
 
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
@@ -225,14 +213,13 @@ impl ParquetExec {
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
-        self.reorder_filters = Some(reorder_filters);
+        self.parquet_options.global.reorder_filters = reorder_filters;
         self
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
-    fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
-        self.reorder_filters
-            .unwrap_or(config_options.execution.parquet.reorder_filters)
+    fn reorder_filters(&self) -> bool {
+        self.parquet_options.global.reorder_filters
     }
 
     /// If enabled, the reader will read the page index
@@ -240,26 +227,24 @@ impl ParquetExec {
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
     pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
-        self.enable_page_index = Some(enable_page_index);
+        self.parquet_options.global.enable_page_index = enable_page_index;
         self
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
-    fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_page_index
-            .unwrap_or(config_options.execution.parquet.enable_page_index)
+    fn enable_page_index(&self) -> bool {
+        self.parquet_options.global.enable_page_index
     }
 
     /// If enabled, the reader will read by the bloom filter
     pub fn with_enable_bloom_filter(mut self, enable_bloom_filter: bool) -> Self {
-        self.enable_bloom_filter = Some(enable_bloom_filter);
+        self.parquet_options.global.bloom_filter_enabled = enable_bloom_filter;
         self
     }
 
     /// Return the value described in [`Self::with_enable_bloom_filter`]
-    fn enable_bloom_filter(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_bloom_filter
-            .unwrap_or(config_options.execution.parquet.bloom_filter_enabled)
+    fn enable_bloom_filter(&self) -> bool {
+        self.parquet_options.global.bloom_filter_enabled
     }
 
     fn output_partitioning_helper(file_config: &FileScanConfig) -> Partitioning {
@@ -397,8 +382,6 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let config_options = ctx.session_config().options();
-
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
@@ -411,10 +394,10 @@ impl ExecutionPlan for ParquetExec {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(config_options),
-            reorder_filters: self.reorder_filters(config_options),
-            enable_page_index: self.enable_page_index(config_options),
-            enable_bloom_filter: self.enable_bloom_filter(config_options),
+            pushdown_filters: self.pushdown_filters(),
+            reorder_filters: self.reorder_filters(),
+            enable_page_index: self.enable_page_index(),
+            enable_bloom_filter: self.enable_bloom_filter(),
         };
 
         let stream =
@@ -716,15 +699,11 @@ pub async fn plan_to_parquet(
         let propclone = writer_properties.clone();
 
         let storeref = store.clone();
-        let (_, multipart_writer) = storeref.put_multipart(&file).await?;
+        let buf_writer = BufWriter::new(storeref, file.clone());
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let mut writer = AsyncArrowWriter::try_new(
-                multipart_writer,
-                plan.schema(),
-                10485760,
-                propclone,
-            )?;
+            let mut writer =
+                AsyncArrowWriter::try_new(buf_writer, plan.schema(), propclone)?;
             while let Some(next_batch) = stream.next().await {
                 let batch = next_batch?;
                 writer.write(&batch).await?;
@@ -917,6 +896,7 @@ mod tests {
                 },
                 predicate,
                 None,
+                Default::default(),
             );
 
             if pushdown_predicate {
@@ -1573,6 +1553,7 @@ mod tests {
                 },
                 None,
                 None,
+                Default::default(),
             );
             assert_eq!(
                 parquet_exec
@@ -1693,6 +1674,7 @@ mod tests {
             },
             None,
             None,
+            Default::default(),
         );
         assert_eq!(
             parquet_exec.cache.output_partitioning().partition_count(),
@@ -1759,6 +1741,7 @@ mod tests {
             },
             None,
             None,
+            Default::default(),
         );
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
@@ -1884,7 +1867,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
+            "pruning_predicate=CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != bar OR bar != c1_max@1 END"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);
@@ -2021,7 +2004,7 @@ mod tests {
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // Configure listing options
-        let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
+        let file_format = ParquetFormat::default().with_enable_pruning(true);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::PARQUET.get_ext());
 

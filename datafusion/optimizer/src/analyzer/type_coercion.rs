@@ -46,9 +46,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, ExprSchemable,
-    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, Signature, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    type_coercion, AggregateFunction, Expr, ExprSchemable, LogicalPlan, Operator,
+    ScalarFunctionDefinition, ScalarUDF, Signature, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 #[derive(Default)]
@@ -76,7 +76,7 @@ fn analyze_internal(
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
-    let mut new_inputs = plan
+    let new_inputs = plan
         .inputs()
         .iter()
         .map(|p| analyze_internal(external_schema, p))
@@ -110,14 +110,7 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // TODO: with_new_exprs can't change the schema, so we need to do this here
-    match &plan {
-        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
-            new_expr,
-            Arc::new(new_inputs.swap_remove(0)),
-        )?)),
-        _ => plan.with_new_exprs(new_expr, new_inputs),
-    }
+    plan.with_new_exprs(new_expr, new_inputs)
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -316,11 +309,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         &self.schema,
                         &fun.signature(),
                     )?;
-                    let new_args = coerce_arguments_for_fun(
-                        new_args.as_slice(),
-                        &self.schema,
-                        &fun,
-                    )?;
                     Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new(
                         fun, new_args,
                     ))))
@@ -330,6 +318,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         args.as_slice(),
                         &self.schema,
                         fun.signature(),
+                    )?;
+                    let new_expr = coerce_arguments_for_fun(
+                        new_expr.as_slice(),
+                        &self.schema,
+                        &fun,
                     )?;
                     Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(fun, new_expr),
@@ -583,7 +576,7 @@ fn coerce_arguments_for_signature(
 fn coerce_arguments_for_fun(
     expressions: &[Expr],
     schema: &DFSchema,
-    fun: &BuiltinScalarFunction,
+    fun: &Arc<ScalarUDF>,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(vec![]);
@@ -591,7 +584,7 @@ fn coerce_arguments_for_fun(
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
     // Cast Fixedsizelist to List for array functions
-    if *fun == BuiltinScalarFunction::MakeArray {
+    if fun.name() == "make_array" {
         expressions = expressions
             .into_iter()
             .map(|expr| {
@@ -759,12 +752,11 @@ mod test {
     use std::sync::{Arc, OnceLock};
 
     use crate::analyzer::type_coercion::{
-        cast_expr, coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
     use crate::test::assert_analyzed_plan_eq;
 
-    use arrow::array::{FixedSizeListArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
@@ -1253,57 +1245,6 @@ mod test {
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_casting_for_fixed_size_list() -> Result<()> {
-        let val = lit(ScalarValue::FixedSizeList(Arc::new(
-            FixedSizeListArray::new(
-                Arc::new(Field::new("item", DataType::Int32, true)),
-                3,
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                None,
-            ),
-        )));
-        let expr = Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            vec![val.clone()],
-        ));
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified(
-                "item",
-                DataType::FixedSizeList(
-                    Arc::new(Field::new("a", DataType::Int32, true)),
-                    3,
-                ),
-                true,
-            )],
-            std::collections::HashMap::new(),
-        )?);
-        let mut rewriter = TypeCoercionRewriter { schema };
-        let result = expr.rewrite(&mut rewriter).data()?;
-
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified(
-                "item",
-                DataType::List(Arc::new(Field::new("a", DataType::Int32, true))),
-                true,
-            )],
-            std::collections::HashMap::new(),
-        )?);
-        let expected_casted_expr = cast_expr(
-            &val,
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-            &schema,
-        )?;
-
-        let expected = Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::MakeArray,
-            vec![expected_casted_expr],
-        ));
-
-        assert_eq!(result, expected);
         Ok(())
     }
 

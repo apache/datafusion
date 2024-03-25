@@ -17,12 +17,8 @@
 
 pub mod aggregate;
 pub mod analysis;
-pub mod array_expressions;
 pub mod binary_map;
 pub mod conditional_expressions;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
 pub mod equivalence;
 pub mod expressions;
 pub mod functions;
@@ -35,7 +31,6 @@ mod scalar_function;
 mod sort_expr;
 pub mod sort_properties;
 pub mod string_expressions;
-pub mod struct_expressions;
 pub mod tree_node;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]

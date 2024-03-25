@@ -280,3 +280,70 @@ ORDER BY
 2023-12-20T01:20:00 1000 f2 foo
 2023-12-20T01:30:00 1000 f1 32.0
 2023-12-20T01:30:00 1000 f2 foo
+
+# Cleanup
+statement ok
+drop view m1;
+
+statement ok
+drop view m2;
+
+######
+# Create a table using UNION ALL to get 2 partitions (very important)
+######
+statement ok
+create table m3_source as
+    select * from (values('foo', 'bar', 1))
+    UNION ALL
+    select * from (values('foo', 'baz', 1));
+
+######
+# Now, create a table with the same data, but column2 has type `Dictionary(Int32)` to trigger the fallback code
+######
+statement ok
+create table m3 as
+  select
+    column1,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as "column2",
+    column3
+from m3_source;
+
+# there are two values in column2
+query T?I rowsort
+SELECT *
+FROM m3;
+----
+foo bar 1
+foo baz 1
+
+# There is 1 distinct value in column1
+query I
+SELECT count(distinct column1)
+FROM m3
+GROUP BY column3;
+----
+1
+
+# There are 2 distinct values in column2
+query I
+SELECT count(distinct column2)
+FROM m3
+GROUP BY column3;
+----
+2
+
+# Should still get the same results when querying in the same query
+query II
+SELECT count(distinct column1), count(distinct column2)
+FROM m3
+GROUP BY column3;
+----
+1 2
+
+
+# Cleanup
+statement ok
+drop table m3;
+
+statement ok
+drop table m3_source;

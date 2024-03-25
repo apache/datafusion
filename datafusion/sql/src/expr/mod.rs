@@ -15,7 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod arrow_cast;
+use arrow_schema::DataType;
+use arrow_schema::TimeUnit;
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
+use sqlparser::parser::ParserError::ParserError;
+
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
+    Result, ScalarValue,
+};
+use datafusion_expr::expr::AggregateFunctionDefinition;
+use datafusion_expr::expr::InList;
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{
+    col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
+    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
+};
+
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
 mod binary_op;
 mod function;
 mod grouping_set;
@@ -26,22 +44,6 @@ mod subquery;
 mod substring;
 mod unary_op;
 mod value;
-
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow_schema::DataType;
-use arrow_schema::TimeUnit;
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
-};
-use datafusion_expr::expr::AggregateFunctionDefinition;
-use datafusion_expr::expr::InList;
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{
-    col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
-};
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
-use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn sql_expr_to_logical_expr(
@@ -169,12 +171,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::DatePart,
-                    vec![
-                        Expr::Literal(ScalarValue::from(format!("{field}"))),
-                        self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                    ],
+                let date_part = self
+                    .context_provider
+                    .get_function_meta("date_part")
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Unable to find expected 'date_part' function"
+                        )
+                    })?;
+                let args = vec![
+                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+                ];
+                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    date_part, args,
                 )))
             }
 
@@ -262,8 +272,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Cast {
-                expr, data_type, ..
+                expr,
+                data_type,
+                format,
             } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
                 let dt = self.convert_data_type(&data_type)?;
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
@@ -286,15 +302,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::TryCast {
-                expr, data_type, ..
-            } => Ok(Expr::TryCast(TryCast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+                expr,
+                data_type,
+                format,
+            } => {
+                if let Some(format) = format {
+                    return not_impl_err!("CAST with format is not supported: {format}");
+                }
+
+                Ok(Expr::TryCast(TryCast::new(
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *expr,
+                        schema,
+                        planner_context,
+                    )?),
+                    self.convert_data_type(&data_type)?,
+                )))
+            }
 
             SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
                 Box::new(lit(value)),
@@ -468,11 +492,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 trim_where,
                 trim_what,
-                ..
+                trim_characters,
             } => self.sql_trim_to_expr(
                 *expr,
                 trim_where,
                 trim_what,
+                trim_characters,
                 schema,
                 planner_context,
             ),
@@ -552,6 +577,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
             }
+            SQLExpr::AtTimeZone {
+                timestamp,
+                time_zone,
+            } => Ok(Expr::Cast(Cast::new(
+                Box::new(self.sql_expr_to_logical_expr_internal(
+                    *timestamp,
+                    schema,
+                    planner_context,
+                )?),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(time_zone.into())),
+            ))),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -572,8 +608,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(value, input_schema, planner_context)
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Expr::ScalarFunction(ScalarFunction::new(
-            BuiltinScalarFunction::Struct,
+        let struct_func = self
+            .context_provider
+            .get_function_meta("struct")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'struct' function")
+            })?;
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+            struct_func,
             args,
         )))
     }
@@ -699,25 +741,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         expr: SQLExpr,
         trim_where: Option<TrimWhereField>,
         trim_what: Option<Box<SQLExpr>>,
+        trim_characters: Option<Vec<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = match trim_where {
-            Some(TrimWhereField::Leading) => BuiltinScalarFunction::Ltrim,
-            Some(TrimWhereField::Trailing) => BuiltinScalarFunction::Rtrim,
-            Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
-            None => BuiltinScalarFunction::Trim,
-        };
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
-        let args = match trim_what {
-            Some(to_trim) => {
+        let args = match (trim_what, trim_characters) {
+            (Some(to_trim), None) => {
                 let to_trim =
                     self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
-                vec![arg, to_trim]
+                Ok(vec![arg, to_trim])
             }
-            None => vec![arg],
+            (None, Some(trim_characters)) => {
+                if let Some(first) = trim_characters.first() {
+                    let to_trim = self.sql_expr_to_logical_expr(
+                        first.clone(),
+                        schema,
+                        planner_context,
+                    )?;
+                    Ok(vec![arg, to_trim])
+                } else {
+                    plan_err!("TRIM CHARACTERS cannot be empty")
+                }
+            }
+            (Some(_), Some(_)) => {
+                plan_err!("Both TRIM and TRIM CHARACTERS cannot be specified")
+            }
+            (None, None) => Ok(vec![arg]),
+        }?;
+
+        let fun_name = match trim_where {
+            Some(TrimWhereField::Leading) => "ltrim",
+            Some(TrimWhereField::Trailing) => "rtrim",
+            Some(TrimWhereField::Both) => "btrim",
+            None => "trim",
         };
-        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+        let fun = self
+            .context_provider
+            .get_function_meta(fun_name)
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected '{fun_name}' function")
+            })?;
+
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
     fn sql_overlay_to_expr(
@@ -729,7 +795,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::OverLay;
+        let fun = self
+            .context_provider
+            .get_function_meta("overlay")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'overlay' function")
+            })?;
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
         let what_arg =
             self.sql_expr_to_logical_expr(overlay_what, schema, planner_context)?;
@@ -743,7 +814,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg, what_arg, from_arg],
         };
-        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
     fn sql_position_to_expr(
         &self,
@@ -773,7 +844,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 distinct,
                 order_by,
                 null_treatment,
-                ..
+                filter: None, // filter is passed in
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
                 args,
@@ -786,7 +857,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 order_by,
                 null_treatment,
             ))),
-            _ => plan_err!(
+            Expr::AggregateFunction(..) => {
+                internal_err!("Expected null filter clause in aggregate function")
+            }
+            _ => internal_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
             ),
         }
@@ -889,8 +963,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -903,6 +975,8 @@ mod tests {
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
     use crate::TableReference;
+
+    use super::*;
 
     struct TestContextProvider {
         options: ConfigOptions,
@@ -954,6 +1028,18 @@ mod tests {
 
         fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
             None
+        }
+
+        fn udfs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udafs_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn udwfs_names(&self) -> Vec<String> {
+            Vec::new()
         }
     }
 

@@ -34,22 +34,22 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::functions::out_ordering;
+use crate::functions::{create_physical_fun, out_ordering};
 use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionImplementation,
+    ScalarFunctionDefinition,
 };
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionImplementation,
+    fun: ScalarFunctionDefinition,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
@@ -79,7 +79,7 @@ impl ScalarFunctionExpr {
     /// Create a new Scalar function
     pub fn new(
         name: &str,
-        fun: ScalarFunctionImplementation,
+        fun: ScalarFunctionDefinition,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
@@ -96,7 +96,7 @@ impl ScalarFunctionExpr {
     }
 
     /// Get the scalar function implementation
-    pub fn fun(&self) -> &ScalarFunctionImplementation {
+    pub fn fun(&self) -> &ScalarFunctionDefinition {
         &self.fun
     }
 
@@ -153,14 +153,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 if scalar_fun
                     .signature()
                     .type_signature
-                    .supports_zero_argument()
-                    && scalar_fun != BuiltinScalarFunction::MakeArray =>
+                    .supports_zero_argument() =>
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             // If the function supports zero argument, we pass in a null array indicating the batch size.
             // This is for user-defined functions.
-            (true, Err(_)) if self.supports_zero_argument => {
+            (true, Err(_))
+                if self.supports_zero_argument && self.name != "make_array" =>
+            {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
@@ -171,8 +172,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
         };
 
         // evaluate the function
-        let fun = self.fun.as_ref();
-        (fun)(&inputs)
+        match self.fun {
+            ScalarFunctionDefinition::BuiltIn(ref fun) => {
+                let fun = create_physical_fun(fun)?;
+                (fun)(&inputs)
+            }
+            ScalarFunctionDefinition::UDF(ref fun) => fun.invoke(&inputs),
+            ScalarFunctionDefinition::Name(_) => {
+                internal_err!(
+                    "Name function must be resolved to one of the other variants prior to physical planning"
+                )
+            }
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {

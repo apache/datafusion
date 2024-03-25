@@ -222,6 +222,7 @@ pub fn hash_join_exec(
         on,
         filter,
         join_type,
+        None,
         PartitionMode::Partitioned,
         true,
     )?))
@@ -286,6 +287,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
         },
         None,
         None,
+        Default::default(),
     ))
 }
 
@@ -309,6 +311,7 @@ pub fn parquet_exec_sorted(
         },
         None,
         None,
+        Default::default(),
     ))
 }
 
