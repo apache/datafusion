@@ -431,7 +431,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
         vec![DataType::Float64],
         Arc::new(DataType::Float64),
         Volatility::Immutable,
-        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(|_, _, _| Ok(Box::<AvgAccumulator>::default())),
         Arc::new(vec![DataType::UInt64, DataType::Float64]),
     )
     .with_aliases(vec!["dummy_alias"]);

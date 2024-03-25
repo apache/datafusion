@@ -355,8 +355,13 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn accumulator(&self, arg: &DataType) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(arg)
+    fn accumulator(
+        &self,
+        arg: &DataType,
+        sort_exprs: &[Expr],
+        schema: &Schema,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(arg, sort_exprs, schema)
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {

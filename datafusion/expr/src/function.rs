@@ -17,10 +17,9 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
-use crate::{Accumulator, BuiltinScalarFunction, Expr, PartitionEvaluator, Signature};
-use crate::{AggregateFunction, BuiltInWindowFunction, ColumnarValue};
+use crate::ColumnarValue;
+use crate::{Accumulator, Expr, PartitionEvaluator};
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::Result;
 use std::sync::Arc;
 
