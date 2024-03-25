@@ -401,3 +401,83 @@ async fn test_first_value_with_sort() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn last_value() -> Result<()> {
+    let session_ctx = SessionContext::new();
+    session_ctx
+        .sql("CREATE TABLE abc AS VALUES (1, 2, 3), (null, 5, 6)")
+        .await?
+        .collect()
+        .await?;
+
+    let results1 = session_ctx
+        .sql("SELECT LAST_VALUE(column1) ignore nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected1 = [
+        "+-------------------------+",
+        "| LAST_VALUE(abc.column1) |",
+        "+-------------------------+",
+        "| 1                       |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected1, &results1);
+
+    let results2 = session_ctx
+        .sql("SELECT LAST_VALUE(column1) respect nulls FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected2 = [
+        "+-------------------------+",
+        "| LAST_VALUE(abc.column1) |",
+        "+-------------------------+",
+        "|                         |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected2, &results2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_last_value_with_sort() -> Result<()> {
+    let session_ctx = SessionContext::new();
+    session_ctx
+        .sql("CREATE TABLE abc AS VALUES (null,2,3), (null,1,6), (4, 4, 5), (5, 5, 7), (3, 3, 8)")
+        .await?
+        .collect()
+        .await?;
+
+    let results1 = session_ctx
+        .sql("SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected1 = [
+        "+-------------------------+",
+        "| LAST_VALUE(abc.column1) |",
+        "+-------------------------+",
+        "| 3                       |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected1, &results1);
+
+    let results2 = session_ctx
+        .sql("SELECT LAST_VALUE(column1 ORDER BY column2 DESC) RESPECT NULLS FROM abc")
+        .await?
+        .collect()
+        .await?;
+    let expected2 = [
+        "+-------------------------+",
+        "| LAST_VALUE(abc.column1) |",
+        "+-------------------------+",
+        "|                         |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected2, &results2);
+
+    Ok(())
+}
