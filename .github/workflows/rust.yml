@@ -353,6 +353,9 @@ jobs:
         run: |
           echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
           python -m pip install pyarrow
+      - name: Remove preinstall clippy
+        run: |
+          rustup component remove clippy
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Run datafusion-common tests
