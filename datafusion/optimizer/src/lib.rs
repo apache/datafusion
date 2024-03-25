@@ -47,6 +47,7 @@ pub mod utils;
 pub mod test;
 
 pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
+pub use simplify_expressions::ConstEvaluator;
 pub use utils::optimize_children;
 
 mod plan_signature;

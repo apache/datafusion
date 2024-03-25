@@ -43,6 +43,7 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+datafusion-optimizer = { workspace = true }
 log = { workspace = true }
 sqlparser = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }

@@ -1381,6 +1381,7 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-optimizer",
  "log",
  "sqlparser",
  "strum 0.26.2",
