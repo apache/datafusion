@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::iter;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;

@@ -68,8 +68,8 @@ pub mod expr_fn {
     }
 
     #[doc = "Returns the number of bits in the `string`"]
-    pub fn bit_length(args: Vec<Expr>) -> Expr {
-        super::bit_length().call(args)
+    pub fn bit_length(arg: Expr) -> Expr {
+        super::bit_length().call(vec![arg])
     }
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
@@ -78,8 +78,8 @@ pub mod expr_fn {
     }
 
     #[doc = "Converts the Unicode code point to a UTF8 character"]
-    pub fn chr(args: Vec<Expr>) -> Expr {
-        super::chr().call(args)
+    pub fn chr(arg: Expr) -> Expr {
+        super::chr().call(vec![arg])
     }
 
     #[doc = "Returns the Levenshtein distance between the two given strings"]
