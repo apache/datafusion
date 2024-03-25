@@ -415,6 +415,7 @@ mod tests {
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",
+            "cos://bucket/path/file.parquet",
             "gcs://bucket/path/file.parquet",
         ];
         let mut ctx = SessionContext::new();
@@ -492,6 +493,21 @@ mod tests {
         // Should be OK
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
             OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_cos() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let endpoint = "fake_endpoint";
+        let location = "cos://bucket/path/file.parquet";
+
+        // Should be OK
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.cos.endpoint' '{endpoint}') LOCATION '{location}'");
         create_external_table_test(location, &sql).await?;
 
         Ok(())
