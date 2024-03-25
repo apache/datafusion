@@ -315,6 +315,10 @@ impl DisplayAs for ParquetExec {
 }
 
 impl ExecutionPlan for ParquetExec {
+    fn name(&self) -> &'static str {
+        "ParquetExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

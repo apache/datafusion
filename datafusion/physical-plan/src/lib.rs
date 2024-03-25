@@ -113,6 +113,10 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    fn name(&self) -> &'static str {
+        "UNKNOWN"
+    }
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;

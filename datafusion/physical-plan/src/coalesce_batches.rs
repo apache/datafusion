@@ -104,6 +104,10 @@ impl DisplayAs for CoalesceBatchesExec {
 }
 
 impl ExecutionPlan for CoalesceBatchesExec {
+    fn name(&self) -> &'static str {
+        "CoalesceBatchesExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

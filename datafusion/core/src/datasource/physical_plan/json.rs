@@ -127,6 +127,10 @@ impl DisplayAs for NdJsonExec {
 }
 
 impl ExecutionPlan for NdJsonExec {
+    fn name(&self) -> &'static str {
+        "NdJsonExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
