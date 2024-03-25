@@ -925,13 +925,16 @@ mod tests {
     use std::sync::Arc;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::test::{assert_optimized_plan_eq, test_table_scan};
+    use crate::test::{
+        assert_optimized_plan_eq, test_table_scan, test_table_scan_with_name,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Column, DFSchemaRef, Result, TableReference};
+    use datafusion_common::{Column, DFSchemaRef, JoinType, Result, TableReference};
     use datafusion_expr::{
-        binary_expr, col, count, lit, logical_plan::builder::LogicalPlanBuilder, not,
-        table_scan, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan,
-        Operator, UserDefinedLogicalNodeCore,
+        binary_expr, build_join_schema, col, count, lit,
+        logical_plan::builder::LogicalPlanBuilder, not, table_scan, try_cast, when,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
+        UserDefinedLogicalNodeCore,
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -995,6 +998,81 @@ mod tests {
         ) -> Option<Vec<Vec<usize>>> {
             // Since schema is same. Output columns requires their corresponding version in the input columns.
             Some(vec![output_columns.to_vec()])
+        }
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct UserDefinedCrossJoin {
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+        left_child: Arc<LogicalPlan>,
+        right_child: Arc<LogicalPlan>,
+    }
+
+    impl UserDefinedCrossJoin {
+        fn new(left_child: Arc<LogicalPlan>, right_child: Arc<LogicalPlan>) -> Self {
+            let left_schema = left_child.schema();
+            let right_schema = right_child.schema();
+            let schema = Arc::new(
+                build_join_schema(left_schema, right_schema, &JoinType::Inner).unwrap(),
+            );
+            Self {
+                exprs: vec![],
+                schema,
+                left_child,
+                right_child,
+            }
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for UserDefinedCrossJoin {
+        fn name(&self) -> &str {
+            "UserDefinedCrossJoin"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.left_child, &self.right_child]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.exprs.clone()
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "UserDefinedCrossJoin")
+        }
+
+        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            assert_eq!(inputs.len(), 2);
+            Self {
+                exprs: exprs.to_vec(),
+                left_child: Arc::new(inputs[0].clone()),
+                right_child: Arc::new(inputs[1].clone()),
+                schema: self.schema.clone(),
+            }
+        }
+
+        fn necessary_children_exprs(
+            &self,
+            output_columns: &[usize],
+        ) -> Option<Vec<Vec<usize>>> {
+            let left_child_len = self.left_child.schema().fields().len();
+            let mut left_reqs = vec![];
+            let mut right_reqs = vec![];
+            for &out_idx in output_columns {
+                if out_idx < left_child_len {
+                    left_reqs.push(out_idx);
+                } else {
+                    // Output indices further than the left_child_len
+                    // comes from right children
+                    right_reqs.push(out_idx - left_child_len)
+                }
+            }
+            Some(vec![left_reqs, right_reqs])
         }
     }
 
@@ -1373,6 +1451,29 @@ mod tests {
         let expected = "Projection: test.a, Int32(0) AS d\
         \n  NoOpUserDefined\
         \n    TableScan: test projection=[a, b, c]";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // Optimize Projections Rule, pushes down projection through
+    // users defined logical plan nodes with more than single child
+    #[test]
+    fn test_user_defined_logical_plan_node5() -> Result<()> {
+        let left_table = test_table_scan_with_name("l")?;
+        let right_table = test_table_scan_with_name("r")?;
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(UserDefinedCrossJoin::new(
+                Arc::new(left_table.clone()),
+                Arc::new(right_table.clone()),
+            )),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("l.a"), col("l.c"), col("r.a"), lit(0).alias("d")])?
+            .build()?;
+
+        let expected = "Projection: l.a, l.c, r.a, Int32(0) AS d\
+        \n  UserDefinedCrossJoin\
+        \n    TableScan: l projection=[a, c]\
+        \n    TableScan: r projection=[a]";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
