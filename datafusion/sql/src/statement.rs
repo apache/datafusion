@@ -21,7 +21,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement, ExtensionStatement, LexOrdering, Statement as DFStatement
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -150,13 +151,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 statement,
             }) => self.explain_to_plan(verbose, analyze, *statement),
-            DFStatement::Extension(ext) => self.extension_to_plan(ext),
         }
-    }
-
-    /// Generate a logical plan from an Extension SQL statement
-    pub fn extension_to_plan(&self, ext: ExtensionStatement) -> Result<LogicalPlan> {
-        ext.to_logical_plan()
     }
 
     /// Generate a logical plan from an SQL statement

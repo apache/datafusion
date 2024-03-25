@@ -1761,9 +1761,6 @@ impl SessionState {
                 DFStatement::Explain(explain) => {
                     visit_statement(&explain.statement, visitor)
                 }
-                DFStatement::Extension(ext) => {
-                    ext.visit(visitor);
-                }
             }
         }
 
