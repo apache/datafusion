@@ -430,6 +430,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#registering-cos-data-sources">
+   Registering COS Data Sources
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#registering-gcs-data-sources">
    Registering GCS Data Sources
   </a>
@@ -760,9 +765,9 @@ For example to read from a remote parquet file via HTTP(S) you can use the follo
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">OPTIONS</span><span class="p">(</span>
-<span class="w">    </span><span class="s1">&#39;access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
-<span class="w">    </span><span class="s1">&#39;secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
-<span class="w">    </span><span class="s1">&#39;region&#39;</span><span class="w"> </span><span class="s1">&#39;us-east-2&#39;</span>
+<span class="w">    </span><span class="s1">&#39;aws.access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.region&#39;</span><span class="w"> </span><span class="s1">&#39;us-east-2&#39;</span>
 <span class="p">)</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 </pre></div>
@@ -810,9 +815,9 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">OPTIONS</span><span class="p">(</span>
-<span class="w">    </span><span class="s1">&#39;access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
-<span class="w">    </span><span class="s1">&#39;secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
-<span class="w">    </span><span class="s1">&#39;endpoint&#39;</span><span class="w"> </span><span class="s1">&#39;https://bucket.oss-cn-hangzhou.aliyuncs.com&#39;</span>
+<span class="w">    </span><span class="s1">&#39;aws.access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.oss.endpoint&#39;</span><span class="w"> </span><span class="s1">&#39;https://bucket.oss-cn-hangzhou.aliyuncs.com&#39;</span>
 <span class="p">)</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;oss://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 </pre></div>
@@ -825,13 +830,34 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 </ul>
 <p>Note that the <code class="docutils literal notranslate"><span class="pre">endpoint</span></code> format of oss needs to be: <code class="docutils literal notranslate"><span class="pre">https://{bucket}.{oss-region-endpoint}</span></code></p>
 </section>
+<section id="registering-cos-data-sources">
+<h2>Registering COS Data Sources<a class="headerlink" href="#registering-cos-data-sources" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://cloud.tencent.com/product/cos">Tencent cloud COS</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;aws.access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;aws.cos.endpoint&#39;</span><span class="w"> </span><span class="s1">&#39;https://cos.ap-singapore.myqcloud.com&#39;</span>
+<span class="p">)</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;cos://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The supported OPTIONS are:</p>
+<ul class="simple">
+<li><p>access_key_id</p></li>
+<li><p>secret_access_key</p></li>
+<li><p>endpoint</p></li>
+</ul>
+<p>Note that the <code class="docutils literal notranslate"><span class="pre">endpoint</span></code> format of urls must be: <code class="docutils literal notranslate"><span class="pre">https://cos.{cos-region-endpoint}</span></code></p>
+</section>
 <section id="registering-gcs-data-sources">
 <h2>Registering GCS Data Sources<a class="headerlink" href="#registering-gcs-data-sources" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://cloud.google.com/storage">Google Cloud Storage</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">OPTIONS</span><span class="p">(</span>
-<span class="w">    </span><span class="s1">&#39;service_account_path&#39;</span><span class="w"> </span><span class="s1">&#39;/tmp/gcs.json&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;gcp.service_account_path&#39;</span><span class="w"> </span><span class="s1">&#39;/tmp/gcs.json&#39;</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 </pre></div>
