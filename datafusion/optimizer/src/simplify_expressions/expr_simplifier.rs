@@ -385,7 +385,7 @@ impl TreeNodeRewriter for Canonicalizer {
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
-pub struct ConstEvaluator<'a> {
+struct ConstEvaluator<'a> {
     /// `can_evaluate` is used during the depth-first-search of the
     /// `Expr` tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -407,7 +407,7 @@ pub struct ConstEvaluator<'a> {
 
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
-pub enum ConstSimplifyResult {
+enum ConstSimplifyResult {
     // Expr was simplifed and contains the new expression
     Simplified(ScalarValue),
     // Evaluation encountered an error, contains the original expression
@@ -556,7 +556,7 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
+    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
             return ConstSimplifyResult::Simplified(s);
         }

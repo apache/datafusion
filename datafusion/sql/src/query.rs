@@ -23,12 +23,10 @@ use arrow::datatypes::Schema;
 use datafusion_common::{
     not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    Operator,
 };
-use datafusion_optimizer::simplify_expressions::ConstSimplifyResult;
-use datafusion_optimizer::ConstEvaluator;
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, SetOperator,
     SetQuantifier, Value,
@@ -230,12 +228,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input.schema(),
                     &mut PlannerContext::new(),
                 )?;
-                match get_constant_result(expr)? {
-                    ScalarValue::Int64(Some(s)) => convert_usize_with_check(s, "OFFSET"),
-                    result => plan_err!(
-                        "Unexpected data type for OFFSET clause, '{result}' was provided."
-                    ),
-                }
+                let n = get_constant_result(&expr, "OFFSET")?;
+                convert_usize_with_check(n, "OFFSET")
             }
             _ => Ok(0),
         }?;
@@ -249,13 +243,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input.schema(),
                     &mut PlannerContext::new(),
                 )?;
-                let n = match get_constant_result(expr)? {
-                    ScalarValue::Int64(Some(s)) => convert_usize_with_check(s, "LIMIT"),
-                    result => plan_err!(
-                        "Unexpected data type for LIMIT clause, '{result}' was provided."
-                    ),
-                }?;
-                Some(n)
+                let n = get_constant_result(&expr, "LIMIT")?;
+                Some(convert_usize_with_check(n, "LIMIT")?)
             }
             _ => None,
         };
@@ -290,24 +279,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 /// Retrieves the constant result of an expression, evaluating it if possible.
 ///
-/// This function takes an expression as input and returns a `Result<ScalarValue>`
-/// indicating either the constant result of the expression or an
+/// This function takes an expression and an argument name as input and returns
+/// a `Result<i64>` indicating either the constant result of the expression or an
 /// error if the expression cannot be evaluated.
 ///
 /// # Arguments
 ///
 /// * `expr` - An `Expr` representing the expression to evaluate.
+/// * `arg_name` - The name of the argument for error messages.
 ///
 /// # Returns
 ///
-/// * `Result<ScalarValue>` - An `Ok` variant containing the constant result if evaluation is successful,
+/// * `Result<i64>` - An `Ok` variant containing the constant result if evaluation is successful,
 ///   or an `Err` variant containing an error message if evaluation fails.
-fn get_constant_result(expr: Expr) -> Result<ScalarValue> {
-    let props = ExecutionProps::new();
-    let mut const_evaluator = ConstEvaluator::try_new(&props)?;
-    match const_evaluator.evaluate_to_scalar(expr) {
-        ConstSimplifyResult::Simplified(value) => Ok(value),
-        ConstSimplifyResult::SimplifyRuntimeError(e, _) => Err(e),
+fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
+    match expr {
+        Expr::Literal(ScalarValue::Int64(Some(s))) => Ok(*s),
+        Expr::BinaryExpr(binary_expr) => {
+            let lhs = get_constant_result(&binary_expr.left, arg_name)?;
+            let rhs = get_constant_result(&binary_expr.right, arg_name)?;
+            let res = match binary_expr.op {
+                Operator::Plus => lhs + rhs,
+                Operator::Minus => lhs - rhs,
+                _ => return plan_err!("Unsupported operator for {arg_name} clause"),
+            };
+            Ok(res)
+        }
+        _ => plan_err!("Unexpected expression in {arg_name} clause"),
     }
 }
 
