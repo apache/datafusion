@@ -36,12 +36,12 @@ runs:
         echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
         export PATH=$PATH:$HOME/d/protoc/bin
         protoc --version
-    - name: Setup Rust toolchain
-      shell: bash
-      run: |
-        rustup update stable
-        rustup toolchain install stable
-        rustup default stable
-        rustup component add rustfmt
+#    - name: Setup Rust toolchain
+#      shell: bash
+#      run: |
+#        rustup update stable
+#        rustup toolchain install stable
+#        rustup default stable
+#        rustup component add rustfmt
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime        
