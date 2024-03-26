@@ -602,8 +602,8 @@ mod tests {
 
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility,
+        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     };
 
     use crate::unparser::dialect::CustomDialect;
