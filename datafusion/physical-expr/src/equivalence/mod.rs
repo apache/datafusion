@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
+use crate::sort_properties::SortProperties;
 use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -43,6 +44,41 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
         }
     }
     output
+}
+
+/// This function constructs a normalized [`LexRequirement`] by filtering out entries
+/// that are ordered if the next entry is.
+pub(crate) fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequirement {
+    input
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            if i == input.len() - 1 {
+                return Some(item);
+            }
+            let next_expr = &input[i + 1];
+
+            if !(item.expr.children().len() == 1
+                && item.expr.children()[0].eq(&next_expr.expr))
+            {
+                return Some(item);
+            }
+
+            let opts = match next_expr.options {
+                None => return Some(item),
+                Some(opts) => opts,
+            };
+
+            if item.options.map(SortProperties::Ordered)
+                == Some(item.expr.get_ordering(&[SortProperties::Ordered(opts)]))
+            {
+                return None;
+            }
+
+            Some(item)
+        })
+        .cloned()
+        .collect::<Vec<_>>()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
