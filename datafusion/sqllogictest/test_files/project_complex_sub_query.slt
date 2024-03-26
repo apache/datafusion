@@ -29,7 +29,7 @@ c5 INT NOT NULL
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION '../core/tests/data/demo.csv';
+LOCATION '../core/tests/data/project_complex_expressions.csv';
 
 query TT
 explain SELECT c3+c4, SUM(c3+c4) OVER()

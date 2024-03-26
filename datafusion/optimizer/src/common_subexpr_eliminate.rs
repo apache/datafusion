@@ -438,7 +438,6 @@ impl OptimizerRule for CommonSubexprEliminate {
     ) -> Result<Option<LogicalPlan>> {
         let optimized_plan_option = self.common_optimize(plan, config)?;
 
-        // println!("optimized plan option is {:?}", optimized_plan_option);
         let plan = match optimized_plan_option {
             Some(plan) => plan,
             _ => plan.clone(),
@@ -882,11 +881,6 @@ impl ProjectionAdder {
                             .field_from_column(l)
                             .expect("Field not found for left column");
 
-                        // res.insert(DFField::new_unqualified(
-                        //     &expr.to_string(),
-                        //     l_field.data_type().clone(),
-                        //     true,
-                        // ));
                         expr_data_type
                             .entry(expr.clone())
                             .or_insert(l_field.data_type().clone());
@@ -919,7 +913,7 @@ impl TreeNodeRewriter for ProjectionAdder {
     fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         // use depth to trace where we are in the LogicalPlan tree
         self.depth += 1;
-        // extract all expressions + check whether it contains in depth_sets
+        // extract all expressions and check whether it contains in depth_sets
         let exprs = node.expressions();
         let depth_set = self.depth_map.entry(self.depth).or_default();
         let mut schema = node.schema().deref().clone();
@@ -936,14 +930,58 @@ impl TreeNodeRewriter for ProjectionAdder {
         let current_depth_schema =
             self.depth_map.get(&self.depth).cloned().unwrap_or_default();
 
-        // get the intersected part
+        // get the intersected part looking up
         let added_expr = self
             .depth_map
             .iter()
             .filter(|(&depth, _)| depth < self.depth)
-            .fold(current_depth_schema, |acc, (_, expr)| {
+            .fold(current_depth_schema.clone(), |acc, (_, expr)| {
                 acc.intersection(expr).cloned().collect()
             });
+        // in projection, we are trying to get intersect with lower one and if some column is not used in upper one, we just abandon them
+        match node.clone() {
+            LogicalPlan::Projection(_) => {
+                // we get the expressions that has intersect with deeper layer since those expressions could be rewrite
+                let mut cross_expr_deeper = HashSet::new();
+
+                self.depth_map
+                    .iter()
+                    .filter(|(&depth, _)| depth > self.depth)
+                    .for_each(|(_, exprs)| {
+                        // get intersection
+                        let intersection = current_depth_schema
+                            .intersection(exprs)
+                            .cloned()
+                            .collect::<HashSet<_>>();
+                        cross_expr_deeper =
+                            cross_expr_deeper.union(&intersection).cloned().collect();
+                    });
+                let mut project_exprs = vec![];
+                if cross_expr_deeper.len() > 0 {
+                    let current_expressions = node.expressions();
+                    for expr in current_expressions {
+                        if cross_expr_deeper.contains(&expr) {
+                            let f = DFField::new_unqualified(
+                                &expr.to_string(),
+                                self.data_type_map[&expr].clone(),
+                                true,
+                            );
+                            project_exprs.push(Expr::Column(f.qualified_column()));
+                            cross_expr_deeper.remove(&expr);
+                        } else {
+                            project_exprs.push(expr);
+                        }
+                    }
+                    let new_projection = LogicalPlan::Projection(Projection::try_new(
+                        project_exprs,
+                        Arc::new(node.inputs()[0].clone()),
+                    )?);
+                    self.depth -= 1;
+                    return Ok(Transformed::yes(new_projection));
+                }
+            }
+            _ => {}
+        }
         self.depth -= 1;
         // do not do extra things
         if added_expr.is_empty() {
@@ -954,6 +992,7 @@ impl TreeNodeRewriter for ProjectionAdder {
             LogicalPlan::Projection(_)
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Join(_) => Ok(Transformed::no(node)),
+
             _ => {
                 // avoid recursive add projections
                 if added_expr.iter().any(|expr| {
@@ -966,6 +1005,7 @@ impl TreeNodeRewriter for ProjectionAdder {
 
                 let mut field_set = HashSet::new();
                 let mut project_exprs = vec![];
+                // here we can deduce that
                 for expr in added_expr {
                     let f = DFField::new_unqualified(
                         &expr.to_string(),
@@ -1005,7 +1045,7 @@ mod test {
     };
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
-        SimpleAggregateUDF, Volatility,
+        SimpleAggregateUDF, TableScan, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -1528,4 +1568,6 @@ mod test {
         assert!(result.len() == 1);
         Ok(())
     }
+    #[test]
+    fn test_extra_projection_for_upper() -> Result<()> {}
 }
