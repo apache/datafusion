@@ -356,7 +356,7 @@ jobs:
       - name: Remove preinstall clippy
         run: |
           mv rust-toolchain.toml rust-toolchain.toml.bak
-          rustup component remove clippy
+          rustup component remove clippy-preview
           mv rust-toolchain.toml.bak rust-toolchain.toml
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
