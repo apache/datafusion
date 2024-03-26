@@ -22,7 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
+    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, not
 };
 use sqlparser::ast::{self, Function, FunctionArg, Ident, UnaryOperator, Expr as AstExpr};
 
@@ -719,7 +719,7 @@ mod tests {
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
             (
-                Expr::Not(Box::new(col("a"))),
+                not(col("a")),
                 r#"NOT "a""#,
             )
         ];
