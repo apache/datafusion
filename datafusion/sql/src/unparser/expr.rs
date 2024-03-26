@@ -725,12 +725,7 @@ mod tests {
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
             (
-                Expr::Between(Between {
-                    expr: Box::new(col("a")),
-                    negated: false,
-                    low: Box::new(lit(1)),
-                    high: Box::new(lit(7))
-                }),
+                Expr::between(col("a"), lit(1), lit(7)),
                 r#"("a" BETWEEN 1 AND 7)"#,
             )
         ];
