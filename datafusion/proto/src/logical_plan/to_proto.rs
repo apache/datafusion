@@ -544,11 +544,7 @@ pub fn serialize_expr(
                 // We need to reverse exprs since operands are expected to be
                 // linearized from left innermost to right outermost (but while
                 // traversing the chain we do the exact opposite).
-                operands: exprs
-                    .into_iter()
-                    .rev()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                operands: serialize_exprs(exprs, codec)?,
                 op: format!("{op:?}"),
             };
             protobuf::LogicalExprNode {
@@ -640,14 +636,8 @@ pub fn serialize_expr(
             } else {
                 None
             };
-            let partition_by = partition_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
-            let order_by = order_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let partition_by = serialize_exprs(partition_by, codec)?;
+            let order_by = serialize_exprs(order_by, codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
@@ -745,20 +735,14 @@ pub fn serialize_expr(
 
                 let aggregate_expr = protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
-                    expr: args
-                        .iter()
-                        .map(|v| serialize_expr(v, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    expr: serialize_exprs(args, codec)?,
                     distinct: *distinct,
                     filter: match filter {
                         Some(e) => Some(Box::new(serialize_expr(e, codec)?)),
                         None => None,
                     },
                     order_by: match order_by {
-                        Some(e) => e
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, _>>()?,
+                        Some(e) => serialize_exprs(e, codec)?,
                         None => vec![],
                     },
                 };
@@ -770,19 +754,13 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name().to_string(),
-                        args: args
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, Error>>()?,
+                        args: serialize_exprs(args, codec)?,
                         filter: match filter {
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,
                         },
                         order_by: match order_by {
-                            Some(e) => e
-                                .iter()
-                                .map(|expr| serialize_expr(expr, codec))
-                                .collect::<Result<Vec<_>, _>>()?,
+                            Some(e) => serialize_exprs(e, codec)?,
                             None => vec![],
                         },
                     },
@@ -802,10 +780,7 @@ pub fn serialize_expr(
             ))
         }
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let args = args
-                .iter()
-                .map(|expr| serialize_expr(expr, codec))
-                .collect::<Result<Vec<_>, Error>>()?;
+            let args = serialize_exprs(args, codec)?;
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
                     let fun: protobuf::ScalarFunction = fun.try_into()?;
@@ -998,10 +973,7 @@ pub fn serialize_expr(
         }
         Expr::Unnest(Unnest { exprs }) => {
             let expr = protobuf::Unnest {
-                exprs: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                exprs: serialize_exprs(exprs, codec)?,
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -1014,10 +986,7 @@ pub fn serialize_expr(
         }) => {
             let expr = Box::new(protobuf::InListNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                list: list
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                list: serialize_exprs(list, codec)?,
                 negated: *negated,
             });
             protobuf::LogicalExprNode {
@@ -1078,18 +1047,12 @@ pub fn serialize_expr(
 
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::Rollup(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Rollup(RollupNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
@@ -1099,10 +1062,7 @@ pub fn serialize_expr(
                         .iter()
                         .map(|expr_list| {
                             Ok(LogicalExprList {
-                                expr: expr_list
-                                    .iter()
-                                    .map(|expr| serialize_expr(expr, codec))
-                                    .collect::<Result<Vec<_>, Error>>()?,
+                                expr: serialize_exprs(expr_list, codec)?,
                             })
                         })
                         .collect::<Result<Vec<_>, Error>>()?,
