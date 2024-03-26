@@ -19,12 +19,8 @@
 
 use std::sync::Arc;
 
-use arrow::{
-    compute::concat_batches,
-    datatypes::{Int32Type, Int64Type},
-    util::pretty::print_batches,
-};
-use arrow_array::{ArrayRef, Datum, Int32Array, Int64Array, PrimitiveArray, RecordBatch};
+use arrow::datatypes::Int32Type;
+use arrow_array::{ArrayRef, Int32Array, PrimitiveArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::SessionContext;
 use datafusion_execution::config::SessionConfig;
@@ -34,29 +30,35 @@ use rand::{rngs::ThreadRng, Rng};
 
 #[tokio::test]
 async fn test_cross_fuzz() {
+    for _ in 0..50 {
+        run_test().await;
+    }
+}
+
+async fn run_test() {
     let mut rng = rand::thread_rng();
     let cfg = SessionConfig::new();
     let ctx = SessionContext::new_with_config(cfg);
 
-    let left_batch_count = rng.gen_range(0..=20);
+    let left_batch_count = rng.gen_range(0..=10);
     let mut left_row_counts = vec![];
     for _ in 0..left_batch_count {
-        left_row_counts.push(rng.gen_range(0..=50));
+        left_row_counts.push(rng.gen_range(0..=5));
     }
-
-    let right_batch_count = rng.gen_range(0..=20);
+    let right_batch_count = rng.gen_range(0..=10);
     let mut right_row_counts = vec![];
     for _ in 0..right_batch_count {
-        right_row_counts.push(rng.gen_range(0..=50));
+        right_row_counts.push(rng.gen_range(0..=5));
     }
 
-    let (left_data, right_data) = get_data(
+    let (left_data, right_data) = generate_data(
         left_batch_count,
         left_row_counts.clone(),
         right_batch_count,
         right_row_counts.clone(),
         &mut rng,
     );
+
     let left_schema =
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
     let right_schema =
@@ -65,7 +67,6 @@ async fn test_cross_fuzz() {
     let left_memory_exec =
         Arc::new(MemoryExec::try_new(&[left_data.clone()], left_schema, None).unwrap())
             as _;
-
     let right_memory_exec =
         Arc::new(MemoryExec::try_new(&[right_data.clone()], right_schema, None).unwrap())
             as _;
@@ -78,12 +79,12 @@ async fn test_cross_fuzz() {
         collected,
         left_data,
         left_batch_count,
+        left_row_counts,
         right_data,
-        right_row_counts,
     );
 }
 
-fn get_data(
+fn generate_data(
     left_batch_count: i32,
     left_row_counts: Vec<i32>,
     right_batch_count: i32,
@@ -120,8 +121,8 @@ fn assert_results(
     collected: Vec<RecordBatch>,
     left_data: Vec<RecordBatch>,
     left_batch_count: i32,
+    left_row_counts: Vec<i32>,
     right_data: Vec<RecordBatch>,
-    right_row_counts: Vec<i32>,
 ) {
     let mut collected_a = vec![];
     let mut collected_x = vec![];
@@ -154,27 +155,26 @@ fn assert_results(
         }
     }
 
-    let mut curr_right_data_batch = 0;
-    for (batch_idx, batch_x) in collected_x.into_iter().enumerate() {
-        let curr_right_data_value = right_data[batch_idx
-            / (left_batch_count * right_row_counts[curr_right_data_batch]) as usize]
-            .columns()[0]
+    let total_left_row_count = left_row_counts.iter().sum::<i32>();
+    let mut checked_row = 0;
+    let mut checked_batch = 0;
+    for curr_right_batch in right_data.iter() {
+        for value in curr_right_batch.columns()[0]
             .as_any()
             .downcast_ref::<PrimitiveArray<Int32Type>>()
             .unwrap()
-            .clone();
-        let duplicated_right_value =
-            curr_right_data_value.value(batch_idx / left_batch_count as usize);
-        let right_value_arr = Arc::new(Int32Array::from_value(
-            duplicated_right_value,
-            batch_x.len(),
-        ));
-        for (row_idx, value_x) in batch_x.into_iter().enumerate() {
-            assert_eq!(value_x.unwrap(), right_value_arr.value(row_idx));
-        }
-        if batch_idx as i32 == left_batch_count * right_row_counts[curr_right_data_batch]
+            .iter()
         {
-            curr_right_data_batch += 1;
+            for x_batch in collected_x[checked_batch..].iter() {
+                for x_value in x_batch.iter() {
+                    assert_eq!(value, x_value);
+                    checked_row += 1;
+                }
+                checked_batch += 1;
+                if checked_row % total_left_row_count as usize == 0 {
+                    break;
+                }
+            }
         }
     }
 }
