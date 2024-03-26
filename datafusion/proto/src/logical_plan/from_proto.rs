@@ -1025,11 +1025,7 @@ pub fn parse_expr(
                 .window_function
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
-            let partition_by = expr
-                .partition_by
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
             let mut order_by = expr
                 .order_by
                 .iter()
@@ -1596,6 +1592,24 @@ pub fn parse_expr(
             ))),
         },
     }
+}
+
+/// Parse a vector of `protobuf::LogicalExprNode`s.
+pub fn parse_exprs<'a, I>(
+    protos: I,
+    registry: &dyn FunctionRegistry,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<Expr>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::LogicalExprNode>,
+{
+    let res = protos
+        .into_iter()
+        .map(|elem| {
+            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(res)
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
