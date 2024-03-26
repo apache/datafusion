@@ -104,7 +104,12 @@ impl Unparser<'_> {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
                 let sql_low = self.expr_to_sql(low)?;
                 let sql_high = self.expr_to_sql(high)?;
-                Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(sql_parser_expr, *negated, sql_low, sql_high))))
+                Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(
+                    sql_parser_expr,
+                    *negated,
+                    sql_low,
+                    sql_high,
+                ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -271,9 +276,14 @@ impl Unparser<'_> {
         expr: ast::Expr,
         negated: bool,
         low: ast::Expr,
-        high: ast::Expr
+        high: ast::Expr,
     ) -> ast::Expr {
-        ast::Expr::Between { expr: Box::new(expr), negated: negated, low: Box::new(low), high: Box::new(high) }
+        ast::Expr::Between {
+            expr: Box::new(expr),
+            negated: negated,
+            low: Box::new(low),
+            high: Box::new(high),
+        }
     }
 
     fn op_to_sql(&self, op: &Operator) -> Result<ast::BinaryOperator> {
@@ -727,7 +737,7 @@ mod tests {
             (
                 Expr::between(col("a"), lit(1), lit(7)),
                 r#"("a" BETWEEN 1 AND 7)"#,
-            )
+            ),
         ];
 
         for (expr, expected) in tests {
