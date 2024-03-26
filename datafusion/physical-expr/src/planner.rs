@@ -168,20 +168,15 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            let when_expr = case
+            let (when_expr, then_expr): (Vec<&Expr>, Vec<&Expr>) = case
                 .when_then_expr
                 .iter()
-                .map(|(w, _)| {
-                    create_physical_expr(w.as_ref(), input_dfschema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let then_expr = case
-                .when_then_expr
-                .iter()
-                .map(|(_, t)| {
-                    create_physical_expr(t.as_ref(), input_dfschema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|(w, t)| (w.as_ref(), t.as_ref()))
+                .unzip();
+            let when_expr =
+                create_physical_exprs(when_expr, input_dfschema, execution_props)?;
+            let then_expr =
+                create_physical_exprs(then_expr, input_dfschema, execution_props)?;
             let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
                 when_expr
                     .iter()
@@ -320,13 +315,16 @@ pub fn create_physical_expr(
 }
 
 /// Create vector of Physical Expression from a vector of logical expression
-pub fn create_physical_exprs(
-    exprs: &[Expr],
+pub fn create_physical_exprs<'a, I>(
+    exprs: I,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+) -> Result<Vec<Arc<dyn PhysicalExpr>>>
+where
+    I: IntoIterator<Item = &'a Expr>,
+{
     exprs
-        .iter()
+        .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
         .collect::<Result<Vec<_>>>()
 }
