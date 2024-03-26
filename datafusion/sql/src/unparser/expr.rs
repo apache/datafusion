@@ -280,7 +280,7 @@ impl Unparser<'_> {
     ) -> ast::Expr {
         ast::Expr::Between {
             expr: Box::new(expr),
-            negated: negated,
+            negated,
             low: Box::new(low),
             high: Box::new(high),
         }
