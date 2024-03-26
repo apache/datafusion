@@ -1042,7 +1042,7 @@ mod test {
     };
     use datafusion_expr::{
         grouping_set, AccumulatorFactoryFunction, AggregateUDF, Signature,
-        SimpleAggregateUDF, TableScan, Volatility,
+        SimpleAggregateUDF, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
