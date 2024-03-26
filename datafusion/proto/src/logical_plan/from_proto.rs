@@ -1382,12 +1382,8 @@ pub fn parse_expr(
                     Ok(factorial(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Round => Ok(round(
-                    parse_exprs(args, registry, codec)?,
-                )),
-                ScalarFunction::Trunc => Ok(trunc(
-                    parse_exprs(args, registry, codec)?,
-                )),
+                ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
+                ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::Signum => {
                     Ok(signum(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1417,18 +1413,14 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Concat => Ok(concat_expr(
-                    parse_exprs(args, registry, codec)?,
-                )),
-                ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
-                    parse_exprs(args, registry, codec)?,
-                )),
-                ScalarFunction::Lpad => Ok(lpad(
-                    parse_exprs(args, registry, codec)?,
-                )),
-                ScalarFunction::Rpad => Ok(rpad(
-                    parse_exprs(args, registry, codec)?,
-                )),
+                ScalarFunction::Concat => {
+                    Ok(concat_expr(parse_exprs(args, registry, codec)?))
+                }
+                ScalarFunction::ConcatWithSeparator => {
+                    Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
+                }
+                ScalarFunction::Lpad => Ok(lpad(parse_exprs(args, registry, codec)?)),
+                ScalarFunction::Rpad => Ok(rpad(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::EndsWith => Ok(ends_with(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
@@ -1457,9 +1449,9 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                     parse_expr(&args[2], registry, codec)?,
                 )),
-                ScalarFunction::Coalesce => Ok(coalesce(
-                    parse_exprs(args, registry, codec)?,
-                )),
+                ScalarFunction::Coalesce => {
+                    Ok(coalesce(parse_exprs(args, registry, codec)?))
+                }
                 ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
                     parse_expr(&args[0], registry, codec)?,
@@ -1521,24 +1513,16 @@ pub fn parse_expr(
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
-                    .map(|expr_list| {
-                        parse_exprs(&expr_list.expr, registry, codec)
-                    })
+                    .map(|expr_list| parse_exprs(&expr_list.expr, registry, codec))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
         ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
-            expr.iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, Error>>()?,
+            parse_exprs(expr, registry, codec)?,
         ))),
-        ExprType::Rollup(RollupNode { expr }) => {
-            Ok(Expr::GroupingSet(GroupingSet::Rollup(
-                expr.iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
-            )))
-        }
+        ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
+            GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
+        )),
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
             None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
             Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
@@ -1623,12 +1607,7 @@ fn parse_vec_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Option<Vec<Expr>>, Error> {
-    let res = p
-        .iter()
-        .map(|elem| {
-            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let res = parse_exprs(p, registry, codec)?;
     // Convert empty vector to None.
     Ok((!res.is_empty()).then_some(res))
 }
