@@ -156,11 +156,7 @@ pub fn parse_physical_window_expr(
         .map(|p| parse_physical_expr(p, registry, input_schema, &codec))
         .collect::<Result<Vec<_>>>()?;
 
-    let order_by = proto
-        .order_by
-        .iter()
-        .map(|o| parse_physical_sort_expr(o, registry, input_schema))
-        .collect::<Result<Vec<_>>>()?;
+    let order_by = parse_physical_sort_exprs(&proto.order_by, registry, input_schema)?;
 
     let window_frame = proto
         .window_frame

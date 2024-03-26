@@ -323,11 +323,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
-                strct
-                    .sub_field_types
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<_, _>>()?,
+                parse_proto_fields_to_fields(&strct.sub_field_types)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::try_from(union.union_mode)
@@ -336,11 +332,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
                 };
-                let union_fields = union
-                    .union_types
-                    .iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<Field>, _>>()?;
+                let union_fields = parse_proto_fields_to_fields(&union.union_types)?;
 
                 // Default to index based type ids if not provided
                 let type_ids: Vec<_> = match union.type_ids.is_empty() {
@@ -763,10 +755,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .map(|f| f.field.clone())
                     .collect::<Option<Vec<_>>>();
                 let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
-                let fields = fields
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<Vec<_>, _>>()?;
+                let fields = parse_proto_fields_to_fields(&fields)?;
                 let fields = UnionFields::new(ids, fields);
                 let v_id = val.value_id as i8;
                 let val = match &val.value {
@@ -937,11 +926,7 @@ pub fn parse_expr(
     match expr_type {
         ExprType::BinaryExpr(binary_expr) => {
             let op = from_proto_binary_op(&binary_expr.op)?;
-            let operands = binary_expr
-                .operands
-                .iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let operands = parse_exprs(&binary_expr.operands, registry, codec)?;
 
             if operands.len() < 2 {
                 return Err(proto_error(
@@ -1637,4 +1622,17 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+/// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
+fn parse_proto_fields_to_fields<'a, I>(
+    fields: I,
+) -> std::result::Result<Vec<Field>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::Field>,
+{
+    fields
+        .into_iter()
+        .map(Field::try_from)
+        .collect::<Result<_, _>>()
 }
