@@ -1026,11 +1026,7 @@ pub fn parse_expr(
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
             let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
-            let mut order_by = expr
-                .order_by
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut order_by = parse_exprs(&expr.order_by, registry, codec)?;
             let window_frame = expr
                 .window_frame
                 .as_ref()
@@ -1126,10 +1122,7 @@ pub fn parse_expr(
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
-                expr.expr
-                    .iter()
-                    .map(|e| parse_expr(e, registry, codec))
-                    .collect::<Result<Vec<_>, _>>()?,
+                parse_exprs(&expr.expr, registry, codec)?,
                 expr.distinct,
                 parse_optional_expr(expr.filter.as_deref(), registry, codec)?
                     .map(Box::new),
@@ -1327,11 +1320,7 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = unnest
-                .exprs
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
             Ok(Expr::Unnest(Unnest { exprs }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
@@ -1341,11 +1330,7 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?),
-            in_list
-                .list
-                .iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?,
+            parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
@@ -1398,16 +1383,10 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Round => Ok(round(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::Trunc => Ok(trunc(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::Signum => {
                     Ok(signum(parse_expr(&args[0], registry, codec)?))
@@ -1439,28 +1418,16 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                 )),
                 ScalarFunction::Concat => Ok(concat_expr(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::Lpad => Ok(lpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::Rpad => Ok(rpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::EndsWith => Ok(ends_with(
                     parse_expr(&args[0], registry, codec)?,
@@ -1491,10 +1458,7 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry, codec)?,
                 )),
                 ScalarFunction::Coalesce => Ok(coalesce(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_exprs(args, registry, codec)?,
                 )),
                 ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
@@ -1539,9 +1503,7 @@ pub fn parse_expr(
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
-                args.iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                parse_exprs(args, registry, codec)?,
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
@@ -1549,10 +1511,7 @@ pub fn parse_expr(
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
-                pb.args
-                    .iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                parse_exprs(&pb.args, registry, codec)?,
                 false,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry, codec)?,
@@ -1563,11 +1522,7 @@ pub fn parse_expr(
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
                     .map(|expr_list| {
-                        expr_list
-                            .expr
-                            .iter()
-                            .map(|expr| parse_expr(expr, registry, codec))
-                            .collect::<Result<Vec<_>, Error>>()
+                        parse_exprs(&expr_list.expr, registry, codec)
                     })
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
