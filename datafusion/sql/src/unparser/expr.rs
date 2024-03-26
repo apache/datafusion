@@ -22,9 +22,11 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
-    Between, BinaryExpr, Case, Cast, Expr, Like, Operator, not
+    not, Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
-use sqlparser::ast::{self, Function, FunctionArg, Ident, UnaryOperator, Expr as AstExpr};
+use sqlparser::ast::{
+    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
+};
 
 use super::Unparser;
 
@@ -232,7 +234,7 @@ impl Unparser<'_> {
                 let sql_parser_expr = self.expr_to_sql(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Not,
-                    expr: Box::new(sql_parser_expr)
+                    expr: Box::new(sql_parser_expr),
                 })
             }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
@@ -718,10 +720,7 @@ mod tests {
                 Expr::IsUnknown(Box::new((col("a") + col("b")).gt(lit(4)))),
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
-            (
-                not(col("a")),
-                r#"NOT "a""#,
-            )
+            (not(col("a")), r#"NOT "a""#),
         ];
 
         for (expr, expected) in tests {
