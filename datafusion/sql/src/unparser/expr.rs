@@ -99,11 +99,19 @@ impl Unparser<'_> {
             }
             Expr::Between(Between {
                 expr,
-                negated: _,
-                low: _,
-                high: _,
+                negated,
+                low,
+                high,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                let sql_low = self.expr_to_sql(low)?;
+                let sql_high = self.expr_to_sql(high)?;
+                Ok(ast::Expr::Nested(Box::new(self.between_op_to_sql(
+                    sql_parser_expr,
+                    *negated,
+                    sql_low,
+                    sql_high,
+                ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -297,6 +305,21 @@ impl Unparser<'_> {
             left: Box::new(lhs),
             op,
             right: Box::new(rhs),
+        }
+    }
+
+    pub(super) fn between_op_to_sql(
+        &self,
+        expr: ast::Expr,
+        negated: bool,
+        low: ast::Expr,
+        high: ast::Expr,
+    ) -> ast::Expr {
+        ast::Expr::Between {
+            expr: Box::new(expr),
+            negated,
+            low: Box::new(low),
+            high: Box::new(high),
         }
     }
 
@@ -756,6 +779,10 @@ mod tests {
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
             (not(col("a")), r#"NOT "a""#),
+            (
+                Expr::between(col("a"), lit(1), lit(7)),
+                r#"("a" BETWEEN 1 AND 7)"#,
+            ),
         ];
 
         for (expr, expected) in tests {
