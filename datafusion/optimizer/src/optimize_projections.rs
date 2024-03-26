@@ -26,7 +26,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::common_subexpr_eliminate::is_not_complex;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -70,6 +69,8 @@ impl OptimizerRule for OptimizeProjections {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        println!("plan at the start:");
+        println!("{:?}", plan);
         // All output fields are necessary:
         let indices = (0..plan.schema().fields().len()).collect::<Vec<_>>();
         optimize_projections(plan, config, &indices)
@@ -694,26 +695,10 @@ fn indices_referred_by_expr(
     // TODO: Support more Expressions
     let mut cols = expr.to_columns()?;
     outer_columns(expr, &mut cols);
-    let mut res_vec: Vec<usize> = cols
+    Ok(cols
         .iter()
         .flat_map(|col| input_schema.index_of_column(col))
-        .collect();
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { op, .. }) if !is_not_complex(op) => {
-            if let Some(index) =
-                input_schema.index_of_column_by_name(None, &expr.to_string())?
-            {
-                match res_vec.binary_search(&index) {
-                    Ok(_) => {}
-                    Err(pos) => {
-                        res_vec.insert(pos, index);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    Ok(res_vec)
+        .collect())
 }
 
 /// Gets all required indices for the input; i.e. those required by the parent

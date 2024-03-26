@@ -31,15 +31,17 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../core/tests/data/demo.csv';
 
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
 query TT
 explain SELECT c3+c4, SUM(c3+c4) OVER()
 FROM t;
 ----
 logical_plan
-Projection: t.c3 + t.c4, SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
---WindowAggr: windowExpr=[[SUM(CAST(t.c3 + t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-----Projection: t.c3 + t.c4 AS t.c3 + t.c4, t.c3, t.c4
-------TableScan: t projection=[c3, c4]
+WindowAggr: windowExpr=[[SUM(CAST(t.c3 + t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--Projection: t.c3 + t.c4 AS t.c3 + t.c4
+----TableScan: t projection=[c3, c4]
 
 query TT
 explain SELECT c3+c4, SUM(c3+c4) OVER(order by c3+c4)
@@ -66,7 +68,6 @@ explain SELECT c3-c4, SUM(c3-c4) OVER()
 FROM t;
 ----
 logical_plan
-Projection: t.c3 - t.c4, SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
---WindowAggr: windowExpr=[[SUM(CAST(t.c3 - t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-----Projection: t.c3 - t.c4 AS t.c3 - t.c4, t.c3, t.c4
-------TableScan: t projection=[c3, c4]
+WindowAggr: windowExpr=[[SUM(CAST(t.c3 - t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--Projection: t.c3 - t.c4 AS t.c3 - t.c4
+----TableScan: t projection=[c3, c4]
