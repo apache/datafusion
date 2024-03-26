@@ -113,10 +113,38 @@ impl Unparser<'_> {
             }
             Expr::Case(Case {
                 expr,
-                when_then_expr: _,
-                else_expr: _,
+                when_then_expr,
+                else_expr,
             }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
+                let conditions = when_then_expr
+                    .iter()
+                    .map(|(w, _)| self.expr_to_sql(w))
+                    .collect::<Result<Vec<_>>>()?;
+                let results = when_then_expr
+                    .iter()
+                    .map(|(_, t)| self.expr_to_sql(t))
+                    .collect::<Result<Vec<_>>>()?;
+                let operand = match expr.as_ref() {
+                    Some(e) => match self.expr_to_sql(e) {
+                        Ok(sql_expr) => Some(Box::new(sql_expr)),
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+                let else_result = match else_expr.as_ref() {
+                    Some(e) => match self.expr_to_sql(e) {
+                        Ok(sql_expr) => Some(Box::new(sql_expr)),
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+
+                Ok(ast::Expr::Case {
+                    operand,
+                    conditions,
+                    results,
+                    else_result,
+                })
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql(expr)?;
@@ -565,7 +593,7 @@ mod tests {
 
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        col, expr::AggregateFunction, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl,
+        case, col, expr::AggregateFunction, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility,
     };
 
@@ -621,6 +649,13 @@ mod tests {
                 })
                 .gt(lit(4)),
                 r#"("a"."b"."c" > 4)"#,
+            ),
+            (
+                case(col("a"))
+                    .when(lit(1), lit(true))
+                    .when(lit(0), lit(false))
+                    .otherwise(lit(ScalarValue::Null))?,
+                r#"CASE "a" WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END"#,
             ),
             (
                 Expr::Cast(Cast {
@@ -698,17 +733,17 @@ mod tests {
                 }),
                 "COUNT(DISTINCT *)",
             ),
-            (Expr::IsNotNull(Box::new(col("a"))), r#""a" IS NOT NULL"#),
+            (col("a").is_not_null(), r#""a" IS NOT NULL"#),
             (
-                Expr::IsTrue(Box::new((col("a") + col("b")).gt(lit(4)))),
+                (col("a") + col("b")).gt(lit(4)).is_true(),
                 r#"(("a" + "b") > 4) IS TRUE"#,
             ),
             (
-                Expr::IsFalse(Box::new((col("a") + col("b")).gt(lit(4)))),
+                (col("a") + col("b")).gt(lit(4)).is_false(),
                 r#"(("a" + "b") > 4) IS FALSE"#,
             ),
             (
-                Expr::IsUnknown(Box::new((col("a") + col("b")).gt(lit(4)))),
+                (col("a") + col("b")).gt(lit(4)).is_unknown(),
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
         ];
