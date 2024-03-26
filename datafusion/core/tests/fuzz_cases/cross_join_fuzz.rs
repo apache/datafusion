@@ -83,7 +83,6 @@ async fn run_test() {
     assert_results2(
         collected,
         left_data,
-        left_row_counts,
         right_data,
     ).unwrap();
 
@@ -132,16 +131,20 @@ fn generate_data(
 fn assert_results2(
     collected: Vec<RecordBatch>,
     left_data: Vec<RecordBatch>,
-    mut left_row_counts: Vec<i32>,
     right_data: Vec<RecordBatch>,
 ) -> Result<()>{
+    let left_row_counts = left_data.iter().map(|batch| batch.num_rows()).collect::<Vec<_>>();
     let left_data = concat_batches(&left_data[0].schema(), &left_data)?;
     let right_data = concat_batches(&right_data[0].schema(), &right_data)?;
+    let n_left = left_data.num_rows();
+    let n_right = right_data.num_rows();
+    print_batches(&[left_data.clone()])?;
+    print_batches(&[right_data.clone()])?;
+    println!("left_row_counts: {:?}", left_row_counts);
     let (result_schema, _) = build_join_schema(&left_data.schema(), &right_data.schema(), &JoinType::Inner);
     let mut all_results = vec![];
     for idx in 0..right_data.num_rows(){
         let left_cols = left_data.columns();
-        let n_left = left_data.num_rows();
         let indices = PrimitiveArray::from_iter_values(vec![idx as u32; n_left]);
         let right_cols = get_arrayref_at_indices(right_data.columns(), &indices)?;
         let mut join_cols = vec![];
@@ -150,7 +153,10 @@ fn assert_results2(
         let batch = RecordBatch::try_new(Arc::new(result_schema.clone()), join_cols)?;
         all_results.push(batch);
     }
-    let join_result = concat_batches(&all_results[0].schema(), &all_results)?;
+    let join_result = concat_batches(&Arc::new(result_schema.clone()), &all_results)?;
+
+    // sanity check whether result have expected size.
+    assert_eq!(join_result.num_rows(), n_left*n_right);
 
     let result_chunk_sizes = collected.iter().map(|batch| batch.num_rows()).collect::<Vec<_>>();
 
