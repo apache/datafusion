@@ -61,7 +61,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        todo!()
+        Ok(arg_types[0].clone())
     }
 
     fn accumulator(
