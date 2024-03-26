@@ -355,7 +355,9 @@ jobs:
           python -m pip install pyarrow
       - name: Remove preinstall clippy
         run: |
+          mv rust-toolchain.toml rust-toolchain.toml.bak
           rustup component remove clippy
+          mv rust-toolchain.toml.bak rust-toolchain.toml
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Run datafusion-common tests
@@ -488,7 +490,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        run: cargo +stable install taplo-cli --version ^0.9 --locked
+        run: cargo install taplo-cli --version ^0.9 --locked
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
         run: taplo format --check
