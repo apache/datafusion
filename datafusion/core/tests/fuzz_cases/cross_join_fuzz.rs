@@ -19,8 +19,12 @@
 
 use std::sync::Arc;
 
-use arrow::{compute::concat_batches, util::pretty::print_batches};
-use arrow_array::{ArrayRef, Datum, Int32Array, Int64Array, RecordBatch};
+use arrow::{
+    compute::concat_batches,
+    datatypes::{Int32Type, Int64Type},
+    util::pretty::print_batches,
+};
+use arrow_array::{ArrayRef, Datum, Int32Array, Int64Array, PrimitiveArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::SessionContext;
 use datafusion_execution::config::SessionConfig;
@@ -48,7 +52,7 @@ async fn test_cross_fuzz() {
 
     let (left_data, right_data) = get_data(
         left_batch_count,
-        left_row_counts,
+        left_row_counts.clone(),
         right_batch_count,
         right_row_counts.clone(),
         &mut rng,
@@ -70,48 +74,13 @@ async fn test_cross_fuzz() {
 
     let collected = collect(cross_join, ctx.task_ctx()).await.unwrap();
 
-    let mut collected_a = vec![];
-    let mut collected_x = vec![];
-    for collected_batch in collected {
-        collected_a.push(
-            collected_batch.columns()[0]
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .clone(),
-        );
-        collected_x.push(
-            collected_batch.columns()[1]
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .clone(),
-        );
-    }
-
-    for (batch_idx, batch_a) in collected_a.into_iter().enumerate() {
-        let curr_left_data_batch = left_data[batch_idx % left_batch_count as usize]
-            .columns()[0]
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .clone();
-        for (row_idx, value_a) in batch_a.into_iter().enumerate() {
-            assert_eq!(value_a.unwrap(), curr_left_data_batch.value(row_idx));
-        }
-    }
-
-    for (batch_idx, batch_x) in collected_x.into_iter().enumerate() {
-        let curr_right_data_batch = right_data[batch_idx % right_batch_count as usize]
-            .columns()[0]
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .clone();
-        for (row_idx, value_x) in batch_x.into_iter().enumerate() {
-            assert_eq!(value_x.unwrap(), curr_right_data_batch.value(row_idx));
-        }
-    }
+    assert_results(
+        collected,
+        left_data,
+        left_batch_count,
+        right_data,
+        right_row_counts,
+    );
 }
 
 fn get_data(
@@ -145,4 +114,67 @@ fn get_data(
         right_data.push(RecordBatch::try_from_iter(vec![("x", column_x)]).unwrap());
     }
     (left_data, right_data)
+}
+
+fn assert_results(
+    collected: Vec<RecordBatch>,
+    left_data: Vec<RecordBatch>,
+    left_batch_count: i32,
+    right_data: Vec<RecordBatch>,
+    right_row_counts: Vec<i32>,
+) {
+    let mut collected_a = vec![];
+    let mut collected_x = vec![];
+    for collected_batch in collected {
+        collected_a.push(
+            collected_batch.columns()[0]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                .unwrap()
+                .clone(),
+        );
+        collected_x.push(
+            collected_batch.columns()[1]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                .unwrap()
+                .clone(),
+        );
+    }
+
+    for (batch_idx, batch_a) in collected_a.into_iter().enumerate() {
+        let curr_left_data_batch = left_data[batch_idx % left_batch_count as usize]
+            .columns()[0]
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap()
+            .clone();
+        for (row_idx, value_a) in batch_a.into_iter().enumerate() {
+            assert_eq!(value_a.unwrap(), curr_left_data_batch.value(row_idx));
+        }
+    }
+
+    let mut curr_right_data_batch = 0;
+    for (batch_idx, batch_x) in collected_x.into_iter().enumerate() {
+        let curr_right_data_value = right_data[batch_idx
+            / (left_batch_count * right_row_counts[curr_right_data_batch]) as usize]
+            .columns()[0]
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap()
+            .clone();
+        let duplicated_right_value =
+            curr_right_data_value.value(batch_idx / left_batch_count as usize);
+        let right_value_arr = Arc::new(Int32Array::from_value(
+            duplicated_right_value,
+            batch_x.len(),
+        ));
+        for (row_idx, value_x) in batch_x.into_iter().enumerate() {
+            assert_eq!(value_x.unwrap(), right_value_arr.value(row_idx));
+        }
+        if batch_idx as i32 == left_batch_count * right_row_counts[curr_right_data_batch]
+        {
+            curr_right_data_batch += 1;
+        }
+    }
 }
