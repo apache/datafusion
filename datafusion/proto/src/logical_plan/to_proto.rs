@@ -19,6 +19,8 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::sync::Arc;
+
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -186,10 +188,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
-                sub_field_types: struct_fields
-                    .iter()
-                    .map(|field| field.as_ref().try_into())
-                    .collect::<Result<Vec<_>, Error>>()?,
+                sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
             DataType::Union(fields, union_mode) => {
                 let union_mode = match union_mode {
@@ -197,10 +196,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: fields
-                        .iter()
-                        .map(|(_, field)| field.as_ref().try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
+                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -262,11 +258,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
         })
     }
@@ -277,11 +269,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
 
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
         })
     }
@@ -484,6 +472,19 @@ impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
             )),
         })
     }
+}
+
+pub fn serialize_exprs<'a, I>(
+    exprs: I,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<protobuf::LogicalExprNode>, Error>
+where
+    I: IntoIterator<Item = &'a Expr>,
+{
+    exprs
+        .into_iter()
+        .map(|expr| serialize_expr(expr, codec))
+        .collect::<Result<Vec<_>, Error>>()
 }
 
 pub fn serialize_expr(
@@ -1679,4 +1680,17 @@ fn encode_scalar_nested_value(
         }),
         _ => unreachable!(),
     }
+}
+
+/// Converts a vector of `Arc<arrow::Field>`s to `protobuf::Field`s
+fn convert_arc_fields_to_proto_fields<'a, I>(
+    fields: I,
+) -> Result<Vec<protobuf::Field>, Error>
+where
+    I: IntoIterator<Item = &'a Arc<Field>>,
+{
+    fields
+        .into_iter()
+        .map(|field| field.as_ref().try_into())
+        .collect::<Result<Vec<_>, Error>>()
 }
