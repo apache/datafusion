@@ -33,7 +33,7 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, AggregateUDFImpl};
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug, Clone)]
@@ -45,6 +45,45 @@ pub struct FirstValue {
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
     ignore_nulls: bool,
+}
+
+impl AggregateUDFImpl for FirstValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn signature(&self) -> &datafusion_expr::Signature {
+        todo!()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        todo!()
+    }
+
+    fn accumulator(
+        &self,
+        _arg: &DataType,
+        _sort_exprs: &[datafusion_expr::Expr],
+        _schema: &arrow_schema::Schema,
+    ) -> Result<Box<dyn Accumulator>> {
+        FirstValueAccumulator::try_new(
+            &self.input_data_type,
+            &self.order_by_data_types,
+            self.ordering_req.clone(),
+            self.ignore_nulls,
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
+    }
+
+    fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
+        todo!()
+    }
 }
 
 impl FirstValue {
