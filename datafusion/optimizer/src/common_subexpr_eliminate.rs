@@ -939,48 +939,45 @@ impl TreeNodeRewriter for ProjectionAdder {
                 acc.intersection(expr).cloned().collect()
             });
         // in projection, we are trying to get intersect with lower one and if some column is not used in upper one, we just abandon them
-        match node.clone() {
-            LogicalPlan::Projection(_) => {
-                // we get the expressions that has intersect with deeper layer since those expressions could be rewrite
-                let mut cross_expr_deeper = HashSet::new();
+        if let LogicalPlan::Projection(_) = node.clone() {
+            // we get the expressions that has intersect with deeper layer since those expressions could be rewrite
+            let mut cross_expr_deeper = HashSet::new();
 
-                self.depth_map
-                    .iter()
-                    .filter(|(&depth, _)| depth > self.depth)
-                    .for_each(|(_, exprs)| {
-                        // get intersection
-                        let intersection = current_depth_schema
-                            .intersection(exprs)
-                            .cloned()
-                            .collect::<HashSet<_>>();
-                        cross_expr_deeper =
-                            cross_expr_deeper.union(&intersection).cloned().collect();
-                    });
-                let mut project_exprs = vec![];
-                if cross_expr_deeper.len() > 0 {
-                    let current_expressions = node.expressions();
-                    for expr in current_expressions {
-                        if cross_expr_deeper.contains(&expr) {
-                            let f = DFField::new_unqualified(
-                                &expr.to_string(),
-                                self.data_type_map[&expr].clone(),
-                                true,
-                            );
-                            project_exprs.push(Expr::Column(f.qualified_column()));
-                            cross_expr_deeper.remove(&expr);
-                        } else {
-                            project_exprs.push(expr);
-                        }
+            self.depth_map
+                .iter()
+                .filter(|(&depth, _)| depth > self.depth)
+                .for_each(|(_, exprs)| {
+                    // get intersection
+                    let intersection = current_depth_schema
+                        .intersection(exprs)
+                        .cloned()
+                        .collect::<HashSet<_>>();
+                    cross_expr_deeper =
+                        cross_expr_deeper.union(&intersection).cloned().collect();
+                });
+            let mut project_exprs = vec![];
+            if !cross_expr_deeper.is_empty() {
+                let current_expressions = node.expressions();
+                for expr in current_expressions {
+                    if cross_expr_deeper.contains(&expr) {
+                        let f = DFField::new_unqualified(
+                            &expr.to_string(),
+                            self.data_type_map[&expr].clone(),
+                            true,
+                        );
+                        project_exprs.push(Expr::Column(f.qualified_column()));
+                        cross_expr_deeper.remove(&expr);
+                    } else {
+                        project_exprs.push(expr);
                     }
-                    let new_projection = LogicalPlan::Projection(Projection::try_new(
-                        project_exprs,
-                        Arc::new(node.inputs()[0].clone()),
-                    )?);
-                    self.depth -= 1;
-                    return Ok(Transformed::yes(new_projection));
                 }
+                let new_projection = LogicalPlan::Projection(Projection::try_new(
+                    project_exprs,
+                    Arc::new(node.inputs()[0].clone()),
+                )?);
+                self.depth -= 1;
+                return Ok(Transformed::yes(new_projection));
             }
-            _ => {}
         }
         self.depth -= 1;
         // do not do extra things
