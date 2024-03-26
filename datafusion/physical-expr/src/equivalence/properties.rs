@@ -2203,8 +2203,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn test_hierarchical_sort() -> Result<()> {
-        // todo: give this a better name
+    fn test_eliminate_redundant_monotonic_sorts() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Date32, true),
             Field::new("b", DataType::Utf8, true),
@@ -2225,8 +2224,10 @@ mod tests {
                     })
                     .collect::<Result<Vec<_>>>()?,
             )
+            // b is constant, so it should be removed from the sort order
             .add_constants(Some(col("b", schema.as_ref())?));
 
+        // If c is a monotonic expression of a, then order by (c, a) is equivalent to order by (a)
         properties.add_equal_conditions(
             &(Arc::new(CastExpr::new(
                 col("c", schema.as_ref())?,
