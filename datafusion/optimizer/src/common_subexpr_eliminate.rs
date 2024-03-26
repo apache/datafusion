@@ -1568,6 +1568,4 @@ mod test {
         assert!(result.len() == 1);
         Ok(())
     }
-    #[test]
-    fn test_extra_projection_for_upper() -> Result<()> {}
 }
