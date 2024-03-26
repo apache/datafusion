@@ -53,11 +53,15 @@ pub(crate) fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequiremen
         .iter()
         .enumerate()
         .filter_map(|(i, item)| {
+            // If it's the last entry, there is no next entry
             if i == input.len() - 1 {
                 return Some(item);
             }
             let next_expr = &input[i + 1];
 
+            // Only handle expressions with exactly one child
+            // TODO: it should be possible to handle expressions orderings f(a, b, c), a, b, c
+            // if f is monotonic in all arguments
             if !(item.expr.children().len() == 1
                 && item.expr.children()[0].eq(&next_expr.expr))
             {
@@ -72,6 +76,7 @@ pub(crate) fn collapse_monotonic_lex_req(input: LexRequirement) -> LexRequiremen
             if item.options.map(SortProperties::Ordered)
                 == Some(item.expr.get_ordering(&[SortProperties::Ordered(opts)]))
             {
+                // Remove the redundant sort
                 return None;
             }
 
