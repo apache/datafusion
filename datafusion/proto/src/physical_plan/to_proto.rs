@@ -245,16 +245,9 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
             return not_impl_err!("WindowExpr not supported: {window_expr:?}");
         };
         let codec = DefaultPhysicalExtensionCodec {};
-        let args = args
-            .into_iter()
-            .map(|e| serialize_physical_expr(e, &codec))
-            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
-
-        let partition_by = window_expr
-            .partition_by()
-            .iter()
-            .map(|p| serialize_physical_expr(p.clone(), &codec))
-            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+        let args = serialize_physical_exprs(args, &codec)?;
+        let partition_by =
+            serialize_physical_exprs(window_expr.partition_by().to_vec(), &codec)?;
 
         let order_by = window_expr
             .order_by()
@@ -379,6 +372,19 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     };
 
     Ok(AggrFn { inner, distinct })
+}
+
+pub fn serialize_physical_exprs<I>(
+    values: I,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Vec<protobuf::PhysicalExprNode>, DataFusionError>
+where
+    I: IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+{
+    values
+        .into_iter()
+        .map(|value| serialize_physical_expr(value, codec))
+        .collect()
 }
 
 /// Serialize a `PhysicalExpr` to default protobuf representation.

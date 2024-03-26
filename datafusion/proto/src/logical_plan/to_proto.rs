@@ -544,7 +544,7 @@ pub fn serialize_expr(
                 // We need to reverse exprs since operands are expected to be
                 // linearized from left innermost to right outermost (but while
                 // traversing the chain we do the exact opposite).
-                operands: serialize_exprs(exprs, codec)?,
+                operands: serialize_exprs(exprs.into_iter().rev(), codec)?,
                 op: format!("{op:?}"),
             };
             protobuf::LogicalExprNode {
