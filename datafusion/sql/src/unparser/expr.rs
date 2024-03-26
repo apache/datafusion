@@ -22,7 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
-    not, Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
+    Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
 use sqlparser::ast::{
     self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
@@ -574,7 +574,7 @@ mod tests {
 
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        col, expr::AggregateFunction, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl,
+        col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility,
     };
 
