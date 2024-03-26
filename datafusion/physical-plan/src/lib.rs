@@ -116,7 +116,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'ParquetExec'.
     fn name(&self) -> &'static str {
         let full_name = std::any::type_name::<Self>();
-        let maybe_start_idx = full_name.rfind(":");
+        let maybe_start_idx = full_name.rfind(':');
         match maybe_start_idx {
             Some(start_idx) => &full_name[start_idx + 1..],
             None => "UNKNOWN",
@@ -786,5 +786,281 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 #[cfg(test)]
 #[allow(clippy::single_component_path_imports)]
 use rstest_reuse;
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use arrow_array::RecordBatch;
+    use arrow_schema::{Schema, SchemaRef};
+    use datafusion_common::{internal_err, Result, Statistics};
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+    use log::trace;
+
+    use crate::memory::MemoryStream;
+    use crate::{
+        common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
+        PlanProperties,
+    };
+
+    /// Execution plan for empty relation with produce_one_row=false
+    #[derive(Debug)]
+    pub struct EmptyExec {
+        /// The schema for the produced row
+        schema: SchemaRef,
+        /// Number of partitions
+        partitions: usize,
+        cache: PlanProperties,
+    }
+
+    impl EmptyExec {
+        /// Create a new EmptyExec
+        pub fn new(schema: SchemaRef) -> Self {
+            let cache = Self::compute_properties(schema.clone(), 1);
+            EmptyExec {
+                schema,
+                partitions: 1,
+                cache,
+            }
+        }
+
+        /// Create a new EmptyExec with specified partition number
+        pub fn with_partitions(mut self, partitions: usize) -> Self {
+            self.partitions = partitions;
+            // Changing partitions may invalidate output partitioning, so update it:
+            let output_partitioning = Self::output_partitioning_helper(self.partitions);
+            self.cache = self.cache.with_partitioning(output_partitioning);
+            self
+        }
+
+        fn data(&self) -> Result<Vec<RecordBatch>> {
+            Ok(vec![])
+        }
+
+        fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
+            Partitioning::UnknownPartitioning(n_partitions)
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
+            let eq_properties = EquivalenceProperties::new(schema);
+            let output_partitioning = Self::output_partitioning_helper(n_partitions);
+            PlanProperties::new(
+                eq_properties,
+                // Output Partitioning
+                output_partitioning,
+                // Execution Mode
+                ExecutionMode::Bounded,
+            )
+        }
+    }
+
+    impl DisplayAs for EmptyExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "EmptyExec")
+                }
+            }
+        }
+    }
+
+    impl ExecutionPlan for EmptyExec {
+        /// Return a reference to Any that can be used for downcasting
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+
+            if partition >= self.partitions {
+                return internal_err!(
+                    "EmptyExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitions
+                );
+            }
+
+            Ok(Box::pin(MemoryStream::try_new(
+                self.data()?,
+                self.schema.clone(),
+                None,
+            )?))
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            let batch = self
+                .data()
+                .expect("Create empty RecordBatch should not fail");
+            Ok(common::compute_record_batch_statistics(
+                &[batch],
+                &self.schema,
+                None,
+            ))
+        }
+    }
+
+    /// Execution plan for empty relation with produce_one_row=false
+    #[derive(Debug)]
+    pub struct RenamedEmptyExec {
+        /// The schema for the produced row
+        schema: SchemaRef,
+        /// Number of partitions
+        partitions: usize,
+        cache: PlanProperties,
+    }
+
+    impl RenamedEmptyExec {
+        /// Create a new EmptyExec
+        pub fn new(schema: SchemaRef) -> Self {
+            let cache = Self::compute_properties(schema.clone(), 1);
+            RenamedEmptyExec {
+                schema,
+                partitions: 1,
+                cache,
+            }
+        }
+
+        /// Create a new EmptyExec with specified partition number
+        pub fn with_partitions(mut self, partitions: usize) -> Self {
+            self.partitions = partitions;
+            // Changing partitions may invalidate output partitioning, so update it:
+            let output_partitioning = Self::output_partitioning_helper(self.partitions);
+            self.cache = self.cache.with_partitioning(output_partitioning);
+            self
+        }
+
+        fn data(&self) -> Result<Vec<RecordBatch>> {
+            Ok(vec![])
+        }
+
+        fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
+            Partitioning::UnknownPartitioning(n_partitions)
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
+            let eq_properties = EquivalenceProperties::new(schema);
+            let output_partitioning = Self::output_partitioning_helper(n_partitions);
+            PlanProperties::new(
+                eq_properties,
+                // Output Partitioning
+                output_partitioning,
+                // Execution Mode
+                ExecutionMode::Bounded,
+            )
+        }
+    }
+
+    impl DisplayAs for RenamedEmptyExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "EmptyExec")
+                }
+            }
+        }
+    }
+
+    impl ExecutionPlan for RenamedEmptyExec {
+        fn name(&self) -> &'static str {
+            "MyRenamedEmptyExec"
+        }
+
+        /// Return a reference to Any that can be used for downcasting
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+
+            if partition >= self.partitions {
+                return internal_err!(
+                    "EmptyExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitions
+                );
+            }
+
+            Ok(Box::pin(MemoryStream::try_new(
+                self.data()?,
+                self.schema.clone(),
+                None,
+            )?))
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            let batch = self
+                .data()
+                .expect("Create empty RecordBatch should not fail");
+            Ok(common::compute_record_batch_statistics(
+                &[batch],
+                &self.schema,
+                None,
+            ))
+        }
+    }
+
+    #[test]
+    fn test_execution_plan_name() {
+        let schema1 = Arc::new(Schema::empty());
+        let default_name_exec = EmptyExec::new(schema1);
+        assert_eq!(default_name_exec.name(), "EmptyExec");
+
+        let schema2 = Arc::new(Schema::empty());
+        let renamed_exec = RenamedEmptyExec::new(schema2);
+        assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
+    }
+}
 
 pub mod test;
