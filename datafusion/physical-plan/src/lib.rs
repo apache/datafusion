@@ -826,15 +826,6 @@ mod tests {
             }
         }
 
-        /// Create a new EmptyExec with specified partition number
-        pub fn with_partitions(mut self, partitions: usize) -> Self {
-            self.partitions = partitions;
-            // Changing partitions may invalidate output partitioning, so update it:
-            let output_partitioning = Self::output_partitioning_helper(self.partitions);
-            self.cache = self.cache.with_partitioning(output_partitioning);
-            self
-        }
-
         fn data(&self) -> Result<Vec<RecordBatch>> {
             Ok(vec![])
         }
@@ -945,15 +936,6 @@ mod tests {
                 partitions: 1,
                 cache,
             }
-        }
-
-        /// Create a new EmptyExec with specified partition number
-        pub fn with_partitions(mut self, partitions: usize) -> Self {
-            self.partitions = partitions;
-            // Changing partitions may invalidate output partitioning, so update it:
-            let output_partitioning = Self::output_partitioning_helper(self.partitions);
-            self.cache = self.cache.with_partitioning(output_partitioning);
-            self
         }
 
         fn data(&self) -> Result<Vec<RecordBatch>> {
