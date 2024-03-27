@@ -27,6 +27,7 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SortOptions;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -225,6 +226,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// struct is used.
     fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
         SortProperties::Unordered
+    }
+
+    /// The order information of the children expressions based the ordering of the expression.
+    /// If it can be deduced. This is helpful in propagating constraints on the output expression
+    /// to the children.
+    fn get_children_ordering(&self, _ordering: SortOptions) -> Vec<SortProperties> {
+        // In the absense of information, assume children have no ordering.
+        let n_children = self.children().len();
+        vec![SortProperties::Unordered; n_children]
     }
 }
 

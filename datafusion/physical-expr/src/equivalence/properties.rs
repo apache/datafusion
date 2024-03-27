@@ -18,7 +18,6 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::collapse_monotonic_lex_req;
 use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
@@ -188,6 +187,41 @@ impl EquivalenceProperties {
         left: &Arc<dyn PhysicalExpr>,
         right: &Arc<dyn PhysicalExpr>,
     ) {
+        let left_expr_ordering = self.get_expr_ordering(left.clone());
+        let right_expr_ordering = self.get_expr_ordering(right.clone());
+        match (left_expr_ordering.data, right_expr_ordering.data) {
+            (SortProperties::Ordered(options), SortProperties::Unordered) => {
+                // Left is ordered, right is not ordered.
+                // See whether left side ordering information can help deduce some ordering for right side children given their equivalence.
+                let children_orderings = right.get_children_ordering(options);
+                let children = right.children();
+                for (child, ordering) in children.into_iter().zip(children_orderings) {
+                    if let SortProperties::Ordered(options) = ordering {
+                        let sort_expr = PhysicalSortExpr {
+                            expr: child,
+                            options,
+                        };
+                        self.add_new_orderings(vec![vec![sort_expr]]);
+                    }
+                }
+            }
+            (SortProperties::Unordered, SortProperties::Ordered(options)) => {
+                // Right is ordered, left is not ordered.
+                // See whether right side ordering information can help deduce some ordering for left side children given their equivalence.
+                let children_orderings = left.get_children_ordering(options);
+                let children = left.children();
+                for (child, ordering) in children.into_iter().zip(children_orderings) {
+                    if let SortProperties::Ordered(options) = ordering {
+                        let sort_expr = PhysicalSortExpr {
+                            expr: child,
+                            options,
+                        };
+                        self.add_new_orderings(vec![vec![sort_expr]]);
+                    }
+                }
+            }
+            (_, _) => {}
+        }
         self.eq_group.add_equal_conditions(left, right);
     }
 
@@ -252,7 +286,7 @@ impl EquivalenceProperties {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let constants_normalized = self.eq_group.normalize_exprs(self.constants.clone());
         // Prune redundant sections in the requirement:
-        collapse_monotonic_lex_req(collapse_lex_req(
+        collapse_lex_req(
             normalized_sort_reqs
                 .iter()
                 .filter(|&order| {
@@ -260,7 +294,7 @@ impl EquivalenceProperties {
                 })
                 .cloned()
                 .collect(),
-        ))
+        )
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing

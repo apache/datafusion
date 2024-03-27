@@ -27,6 +27,7 @@ use DataType::*;
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SortOptions;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -166,6 +167,11 @@ impl PhysicalExpr for CastExpr {
     /// A [`CastExpr`] preserves the ordering of its child.
     fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         children[0]
+    }
+
+    /// If it is known that [`CastExpr`] have an ordering. Its input should have same ordering.
+    fn get_children_ordering(&self, ordering: SortOptions) -> Vec<SortProperties> {
+        vec![SortProperties::Ordered(ordering)]
     }
 }
 
