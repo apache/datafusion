@@ -906,6 +906,47 @@ impl ProjectionAdder {
         }
         (res, expr_data_type)
     }
+
+    fn update_expr_with_available_columns(&self, expr: &mut Expr, available_columns: &[Column]) -> Result<()> {
+        match expr {
+            Expr::BinaryExpr(_) => {
+                for available_col in available_columns{
+                    // println!("cached_expr.display_name(), expr.display_name() {:?}, {:?}", cached_expr.display_name()?, expr.display_name()?);
+                    if available_col.flat_name() == expr.display_name()?{
+                        // println!("replacing expr: {:?} with available_col: {:?}", expr, available_col);
+                        *expr = Expr::Column(available_col.clone());
+                    }
+                }
+            },
+            Expr::WindowFunction(WindowFunction { fun: _, args, .. }) => {
+                args.iter_mut().try_for_each(|arg| self.update_expr_with_available_columns(arg, available_columns))?
+            },
+            Expr::Cast(Cast{ expr, .. }) => {
+                self.update_expr_with_available_columns(expr, available_columns)?
+            }
+            _ => {
+                // cannot rewrite
+            }
+        }
+        Ok(())
+    }
+
+
+    // Assumes operators doesn't modify name of the fields.
+    // Otherwise this operation is not safe.
+    fn extend_with_exprs(&mut self, node: &LogicalPlan) {
+        // use depth to trace where we are in the LogicalPlan tree
+        // extract all expressions + check whether it contains in depth_sets
+        let exprs = node.expressions();
+        let mut schema = node.schema().deref().clone();
+        for ip in node.inputs() {
+            schema.merge(ip.schema());
+        }
+        let (extended_set, data_map) =
+            Self::get_complex_expressions(exprs, Arc::new(schema));
+        self.cumulative_map.extend(extended_set);
+        self.data_type_map.extend(data_map);
+    }
 }
 impl TreeNodeRewriter for ProjectionAdder {
     type Node = LogicalPlan;
@@ -914,35 +955,35 @@ impl TreeNodeRewriter for ProjectionAdder {
     fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         let depth_set = &mut self.cumulative_map;
         // Insert for other end points
-        if let LogicalPlan::TableScan(_) = node{
-            self.cumulative_expr_map.insert(self.depth, depth_set.clone());
-            self.depth += 1;
-            return Ok(Transformed::no(node));
-        } else {
-            // TODO: Assumes operators doesn't modify name of the fields.
-            // use depth to trace where we are in the LogicalPlan tree
-            self.depth += 1;
-            // extract all expressions + check whether it contains in depth_sets
-            let exprs = node.expressions();
-            // let depth_set = self.cumulative_expr_map.entry(self.depth).or_default();
-            let mut schema = node.schema().deref().clone();
-            for ip in node.inputs() {
-                schema.merge(ip.schema());
+        self.depth += 1;
+        match node {
+            LogicalPlan::TableScan(_) => {
+                self.cumulative_expr_map.insert(self.depth-1, depth_set.clone());
+                return Ok(Transformed::no(node));
+            },
+            LogicalPlan::Sort(_) | LogicalPlan::Filter(_) | LogicalPlan::Window(_) => {
+                self.extend_with_exprs(&node);
+                Ok(Transformed::no(node))
             }
-            let (extended_set, data_map) =
-                Self::get_complex_expressions(exprs, Arc::new(schema));
-            depth_set.extend(extended_set);
-            self.data_type_map.extend(data_map);
-            Ok(Transformed::no(node))
+            LogicalPlan::Projection(_) => {
+                if depth_set.is_empty(){
+                    self.extend_with_exprs(&node);
+                } else {
+                    self.cumulative_expr_map.insert(self.depth-1, depth_set.clone());
+                }
+                Ok(Transformed::no(node))
+            },
+            _ => {
+                // Unsupported operators
+                self.cumulative_map.clear();
+                Ok(Transformed::no(node))
+            }
         }
     }
 
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         let added_expr =
             self.cumulative_expr_map.get(&self.depth).cloned().unwrap_or_default();
-        // println!("self.cumulative_expr_map: {:?}", self.cumulative_expr_map);
-        // println!("self.cumulative_map: {:?}", self.cumulative_map);
-        // println!("node:{:?}", node);
         self.depth -= 1;
         // do not do extra things
         let should_add_projection = !added_expr.is_empty();
@@ -950,10 +991,6 @@ impl TreeNodeRewriter for ProjectionAdder {
             // println!("not updating node");
             return Ok(Transformed::no(node));
         }
-        // if added_expr.is_empty() {
-        //     println!("not updating node");
-        //     return Ok(Transformed::no(node));
-        // }
 
         let child = node.inputs()[0];
         let child = if should_add_projection {
@@ -986,92 +1023,18 @@ impl TreeNodeRewriter for ProjectionAdder {
             child.clone()
         };
         let mut expressions = node.expressions();
-        // for expr in &added_expr{
-        //     println!("expr.display_name() {:?}", expr.display_name()?);
-        // }
-        // println!("    original expressions: {:?}", expressions);
         let available_columns = child.schema().fields().iter().map(|field| field.qualified_column()).collect::<Vec<_>>();
         // Replace expressions with its pre-computed variant if available.
         expressions.iter_mut().try_for_each(|expr|{
-            update_expr_with_available_columns(expr, &available_columns)
+            self.update_expr_with_available_columns(expr, &available_columns)
         })?;
-        // println!("after update expressions: {:?}", expressions);
 
         let new_node = node.with_new_exprs(expressions, [child].to_vec())?;
-        // println!("new node: {:?}", new_node);
         Ok(Transformed::yes(
             new_node,
         ))
-
-        // match node {
-        //     // do not add for Projections
-        //     LogicalPlan::Projection(_)
-        //     | LogicalPlan::TableScan(_)
-        //     | LogicalPlan::Join(_) => Ok(Transformed::no(node)),
-        //     _ => {
-        //         // avoid recursive add projections
-        //         if added_expr.iter().any(|expr| {
-        //             node.inputs()[0]
-        //                 .schema()
-        //                 .has_column_with_unqualified_name(&expr.to_string())
-        //         }) {
-        //             return Ok(Transformed::no(node));
-        //         }
-        //
-        //         let mut field_set = HashSet::new();
-        //         let mut project_exprs = vec![];
-        //         for expr in added_expr {
-        //             let f = DFField::new_unqualified(
-        //                 &expr.to_string(),
-        //                 self.data_type_map[&expr].clone(),
-        //                 true,
-        //             );
-        //             field_set.insert(f.name().to_owned());
-        //             project_exprs.push(expr.clone().alias(expr.to_string()));
-        //         }
-        //         for field in node.inputs()[0].schema().fields() {
-        //             if field_set.insert(field.qualified_name()) {
-        //                 project_exprs.push(Expr::Column(field.qualified_column()));
-        //             }
-        //         }
-        //         // adding new plan here
-        //         let new_plan = LogicalPlan::Projection(Projection::try_new(
-        //             project_exprs,
-        //             Arc::new(node.inputs()[0].clone()),
-        //         )?);
-        //         Ok(Transformed::yes(
-        //             node.with_new_exprs(node.expressions(), [new_plan].to_vec())?,
-        //         ))
-        //     }
-        // }
     }
 }
-
-fn update_expr_with_available_columns(expr: &mut Expr, available_columns: &[Column]) -> Result<()> {
-    match expr {
-        Expr::BinaryExpr(_) => {
-            for available_col in available_columns{
-                // println!("cached_expr.display_name(), expr.display_name() {:?}, {:?}", cached_expr.display_name()?, expr.display_name()?);
-                if available_col.flat_name() == expr.display_name()?{
-                    // println!("replacing expr: {:?} with available_col: {:?}", expr, available_col);
-                    *expr = Expr::Column(available_col.clone());
-                }
-            }
-        },
-        Expr::WindowFunction(WindowFunction { fun: _, args, .. }) => {
-            args.iter_mut().try_for_each(|arg| update_expr_with_available_columns(arg, available_columns))?
-        },
-        Expr::Cast(Cast{ expr, .. }) => {
-            update_expr_with_available_columns(expr, available_columns)?
-        }
-        _ => {
-            // println!("unsupported expression : {:?}", expr);
-            // cannot rewrite
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use std::iter;
