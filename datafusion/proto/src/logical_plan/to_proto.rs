@@ -19,6 +19,8 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::sync::Arc;
+
 use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
@@ -186,10 +188,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
-                sub_field_types: struct_fields
-                    .iter()
-                    .map(|field| field.as_ref().try_into())
-                    .collect::<Result<Vec<_>, Error>>()?,
+                sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
             DataType::Union(fields, union_mode) => {
                 let union_mode = match union_mode {
@@ -197,10 +196,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: fields
-                        .iter()
-                        .map(|(_, field)| field.as_ref().try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
+                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -262,11 +258,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
 
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
         })
     }
@@ -277,11 +269,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
 
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
-            columns: schema
-                .fields()
-                .iter()
-                .map(|f| f.as_ref().try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+            columns: convert_arc_fields_to_proto_fields(schema.fields())?,
             metadata: schema.metadata.clone(),
         })
     }
@@ -486,6 +474,19 @@ impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
     }
 }
 
+pub fn serialize_exprs<'a, I>(
+    exprs: I,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<protobuf::LogicalExprNode>, Error>
+where
+    I: IntoIterator<Item = &'a Expr>,
+{
+    exprs
+        .into_iter()
+        .map(|expr| serialize_expr(expr, codec))
+        .collect::<Result<Vec<_>, Error>>()
+}
+
 pub fn serialize_expr(
     expr: &Expr,
     codec: &dyn LogicalExtensionCodec,
@@ -543,11 +544,7 @@ pub fn serialize_expr(
                 // We need to reverse exprs since operands are expected to be
                 // linearized from left innermost to right outermost (but while
                 // traversing the chain we do the exact opposite).
-                operands: exprs
-                    .into_iter()
-                    .rev()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                operands: serialize_exprs(exprs.into_iter().rev(), codec)?,
                 op: format!("{op:?}"),
             };
             protobuf::LogicalExprNode {
@@ -639,14 +636,8 @@ pub fn serialize_expr(
             } else {
                 None
             };
-            let partition_by = partition_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
-            let order_by = order_by
-                .iter()
-                .map(|e| serialize_expr(e, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let partition_by = serialize_exprs(partition_by, codec)?;
+            let order_by = serialize_exprs(order_by, codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
@@ -744,20 +735,14 @@ pub fn serialize_expr(
 
                 let aggregate_expr = protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
-                    expr: args
-                        .iter()
-                        .map(|v| serialize_expr(v, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    expr: serialize_exprs(args, codec)?,
                     distinct: *distinct,
                     filter: match filter {
                         Some(e) => Some(Box::new(serialize_expr(e, codec)?)),
                         None => None,
                     },
                     order_by: match order_by {
-                        Some(e) => e
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, _>>()?,
+                        Some(e) => serialize_exprs(e, codec)?,
                         None => vec![],
                     },
                 };
@@ -769,19 +754,13 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name().to_string(),
-                        args: args
-                            .iter()
-                            .map(|expr| serialize_expr(expr, codec))
-                            .collect::<Result<Vec<_>, Error>>()?,
+                        args: serialize_exprs(args, codec)?,
                         filter: match filter {
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,
                         },
                         order_by: match order_by {
-                            Some(e) => e
-                                .iter()
-                                .map(|expr| serialize_expr(expr, codec))
-                                .collect::<Result<Vec<_>, _>>()?,
+                            Some(e) => serialize_exprs(e, codec)?,
                             None => vec![],
                         },
                     },
@@ -801,10 +780,7 @@ pub fn serialize_expr(
             ))
         }
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let args = args
-                .iter()
-                .map(|expr| serialize_expr(expr, codec))
-                .collect::<Result<Vec<_>, Error>>()?;
+            let args = serialize_exprs(args, codec)?;
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
                     let fun: protobuf::ScalarFunction = fun.try_into()?;
@@ -997,10 +973,7 @@ pub fn serialize_expr(
         }
         Expr::Unnest(Unnest { exprs }) => {
             let expr = protobuf::Unnest {
-                exprs: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                exprs: serialize_exprs(exprs, codec)?,
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -1013,10 +986,7 @@ pub fn serialize_expr(
         }) => {
             let expr = Box::new(protobuf::InListNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                list: list
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                list: serialize_exprs(list, codec)?,
                 negated: *negated,
             });
             protobuf::LogicalExprNode {
@@ -1077,18 +1047,12 @@ pub fn serialize_expr(
 
         Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::Rollup(exprs)) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Rollup(RollupNode {
-                expr: exprs
-                    .iter()
-                    .map(|expr| serialize_expr(expr, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                expr: serialize_exprs(exprs, codec)?,
             })),
         },
         Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
@@ -1098,10 +1062,7 @@ pub fn serialize_expr(
                         .iter()
                         .map(|expr_list| {
                             Ok(LogicalExprList {
-                                expr: expr_list
-                                    .iter()
-                                    .map(|expr| serialize_expr(expr, codec))
-                                    .collect::<Result<Vec<_>, Error>>()?,
+                                expr: serialize_exprs(expr_list, codec)?,
                             })
                         })
                         .collect::<Result<Vec<_>, Error>>()?,
@@ -1679,4 +1640,17 @@ fn encode_scalar_nested_value(
         }),
         _ => unreachable!(),
     }
+}
+
+/// Converts a vector of `Arc<arrow::Field>`s to `protobuf::Field`s
+fn convert_arc_fields_to_proto_fields<'a, I>(
+    fields: I,
+) -> Result<Vec<protobuf::Field>, Error>
+where
+    I: IntoIterator<Item = &'a Arc<Field>>,
+{
+    fields
+        .into_iter()
+        .map(|field| field.as_ref().try_into())
+        .collect::<Result<Vec<_>, Error>>()
 }
