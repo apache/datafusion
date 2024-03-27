@@ -792,84 +792,38 @@ mod tests {
     use std::any::Any;
     use std::sync::Arc;
 
-    use arrow_array::RecordBatch;
     use arrow_schema::{Schema, SchemaRef};
-    use datafusion_common::{internal_err, Result, Statistics};
+    use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-    use log::trace;
 
-    use crate::memory::MemoryStream;
-    use crate::{
-        common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-        PlanProperties,
-    };
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-    /// Execution plan for empty relation with produce_one_row=false
     #[derive(Debug)]
-    pub struct EmptyExec {
-        /// The schema for the produced row
-        schema: SchemaRef,
-        /// Number of partitions
-        partitions: usize,
-        cache: PlanProperties,
-    }
+    pub struct EmptyExec;
 
     impl EmptyExec {
-        /// Create a new EmptyExec
-        pub fn new(schema: SchemaRef) -> Self {
-            let cache = Self::compute_properties(schema.clone(), 1);
-            EmptyExec {
-                schema,
-                partitions: 1,
-                cache,
-            }
-        }
-
-        fn data(&self) -> Result<Vec<RecordBatch>> {
-            Ok(vec![])
-        }
-
-        fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
-            Partitioning::UnknownPartitioning(n_partitions)
-        }
-
-        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-        fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
-            let output_partitioning = Self::output_partitioning_helper(n_partitions);
-            PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
-                output_partitioning,
-                // Execution Mode
-                ExecutionMode::Bounded,
-            )
+        pub fn new(_schema: SchemaRef) -> Self {
+            unimplemented!()
         }
     }
 
     impl DisplayAs for EmptyExec {
         fn fmt_as(
             &self,
-            t: DisplayFormatType,
-            f: &mut std::fmt::Formatter,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
-            match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "EmptyExec")
-                }
-            }
+            unimplemented!()
         }
     }
 
     impl ExecutionPlan for EmptyExec {
-        /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
             self
         }
 
         fn properties(&self) -> &PlanProperties {
-            &self.cache
+            unimplemented!()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -880,97 +834,38 @@ mod tests {
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+            unimplemented!()
         }
 
         fn execute(
             &self,
-            partition: usize,
-            context: Arc<TaskContext>,
+            _partition: usize,
+            _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-
-            if partition >= self.partitions {
-                return internal_err!(
-                    "EmptyExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitions
-                );
-            }
-
-            Ok(Box::pin(MemoryStream::try_new(
-                self.data()?,
-                self.schema.clone(),
-                None,
-            )?))
+            unimplemented!()
         }
 
         fn statistics(&self) -> Result<Statistics> {
-            let batch = self
-                .data()
-                .expect("Create empty RecordBatch should not fail");
-            Ok(common::compute_record_batch_statistics(
-                &[batch],
-                &self.schema,
-                None,
-            ))
+            unimplemented!()
         }
     }
 
-    /// Execution plan for empty relation with produce_one_row=false
     #[derive(Debug)]
-    pub struct RenamedEmptyExec {
-        /// The schema for the produced row
-        schema: SchemaRef,
-        /// Number of partitions
-        partitions: usize,
-        cache: PlanProperties,
-    }
+    pub struct RenamedEmptyExec;
 
     impl RenamedEmptyExec {
-        /// Create a new EmptyExec
-        pub fn new(schema: SchemaRef) -> Self {
-            let cache = Self::compute_properties(schema.clone(), 1);
-            RenamedEmptyExec {
-                schema,
-                partitions: 1,
-                cache,
-            }
-        }
-
-        fn data(&self) -> Result<Vec<RecordBatch>> {
-            Ok(vec![])
-        }
-
-        fn output_partitioning_helper(n_partitions: usize) -> Partitioning {
-            Partitioning::UnknownPartitioning(n_partitions)
-        }
-
-        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-        fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
-            let output_partitioning = Self::output_partitioning_helper(n_partitions);
-            PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
-                output_partitioning,
-                // Execution Mode
-                ExecutionMode::Bounded,
-            )
+        pub fn new(_schema: SchemaRef) -> Self {
+            unimplemented!()
         }
     }
 
     impl DisplayAs for RenamedEmptyExec {
         fn fmt_as(
             &self,
-            t: DisplayFormatType,
-            f: &mut std::fmt::Formatter,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
-            match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "EmptyExec")
-                }
-            }
+            unimplemented!()
         }
     }
 
@@ -979,13 +874,12 @@ mod tests {
             "MyRenamedEmptyExec"
         }
 
-        /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
             self
         }
 
         fn properties(&self) -> &PlanProperties {
-            &self.cache
+            unimplemented!()
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -996,40 +890,19 @@ mod tests {
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(EmptyExec::new(self.schema.clone())))
+            unimplemented!()
         }
 
         fn execute(
             &self,
-            partition: usize,
-            context: Arc<TaskContext>,
+            _partition: usize,
+            _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-
-            if partition >= self.partitions {
-                return internal_err!(
-                    "EmptyExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitions
-                );
-            }
-
-            Ok(Box::pin(MemoryStream::try_new(
-                self.data()?,
-                self.schema.clone(),
-                None,
-            )?))
+            unimplemented!()
         }
 
         fn statistics(&self) -> Result<Statistics> {
-            let batch = self
-                .data()
-                .expect("Create empty RecordBatch should not fail");
-            Ok(common::compute_record_batch_statistics(
-                &[batch],
-                &self.schema,
-                None,
-            ))
+            unimplemented!()
         }
     }
 
