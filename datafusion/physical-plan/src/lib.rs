@@ -803,7 +803,7 @@ mod tests {
 
     impl EmptyExec {
         pub fn new(_schema: SchemaRef) -> Self {
-            unimplemented!()
+            Self
         }
     }
 
@@ -855,7 +855,7 @@ mod tests {
 
     impl RenamedEmptyExec {
         pub fn new(_schema: SchemaRef) -> Self {
-            unimplemented!()
+            Self
         }
     }
 
