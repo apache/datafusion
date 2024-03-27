@@ -31,7 +31,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
+    get_required_group_by_exprs_indices, internal_err, Column, DFSchema, DFSchemaRef,
+    JoinType, Result,
 };
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
@@ -172,7 +173,11 @@ fn optimize_projections(
                 return Ok(None);
             };
             let children = extension.node.inputs();
-            assert_eq!(children.len(), necessary_children_indices.len());
+            if children.len() != necessary_children_indices.len() {
+                return internal_err!("Inconsistent length between children and necessary children indices. \
+                Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
+                consistent with actual children length for the node.");
+            }
             // Expressions used by node.
             let exprs = plan.expressions();
             children
@@ -1355,7 +1360,8 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    // Since only column `a` is referred at the output. Scan should only contain projection=[a].
+    // User defined node should be able to propagate necessary expressions by its parent to its child.
     #[test]
     fn test_user_defined_logical_plan_node() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1375,33 +1381,12 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    // Only column `a` is referred at the output. However, User defined node itself uses column `b`
+    // during its operation. Hence, scan should contain projection=[a, b].
+    // User defined node should be able to propagate necessary expressions by its parent, as well as its own
+    // required expressions.
     #[test]
     fn test_user_defined_logical_plan_node2() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let exprs = vec![Expr::Column(Column::from_qualified_name("a"))];
-        let custom_plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(
-                NoOpUserDefined::new(
-                    table_scan.schema().clone(),
-                    Arc::new(table_scan.clone()),
-                )
-                .with_exprs(exprs),
-            ),
-        });
-        let plan = LogicalPlanBuilder::from(custom_plan)
-            .project(vec![col("a"), lit(0).alias("d")])?
-            .build()?;
-
-        let expected = "Projection: test.a, Int32(0) AS d\
-        \n  NoOpUserDefined\
-        \n    TableScan: test projection=[a]";
-        assert_optimized_plan_equal(&plan, expected)
-    }
-
-    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
-    #[test]
-    fn test_user_defined_logical_plan_node3() -> Result<()> {
         let table_scan = test_table_scan()?;
         let exprs = vec![Expr::Column(Column::from_qualified_name("b"))];
         let custom_plan = LogicalPlan::Extension(Extension {
@@ -1423,9 +1408,13 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Optimize Projections Rule, pushes down projection through users defined logical plan node.
+    // Only column `a` is referred at the output. However, User defined node itself uses expression `b+c`
+    // during its operation. Hence, scan should contain projection=[a, b, c].
+    // User defined node should be able to propagate necessary expressions by its parent, as well as its own
+    // required expressions. Expressions doesn't have to be just column. Requirements from complex expressions
+    // should be propagated also.
     #[test]
-    fn test_user_defined_logical_plan_node4() -> Result<()> {
+    fn test_user_defined_logical_plan_node3() -> Result<()> {
         let table_scan = test_table_scan()?;
         let left_expr = Expr::Column(Column::from_qualified_name("b"));
         let right_expr = Expr::Column(Column::from_qualified_name("c"));
@@ -1454,10 +1443,12 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    // Optimize Projections Rule, pushes down projection through
-    // users defined logical plan nodes with more than single child
+    // Columns `l.a`, `l.c`, `r.a` is referred at the output.
+    // User defined node should be able to propagate necessary expressions by its parent, to its children.
+    // Even if it has multiple children.
+    // left child should have `projection=[a, c]`, and right side should have `projection=[a]`.
     #[test]
-    fn test_user_defined_logical_plan_node5() -> Result<()> {
+    fn test_user_defined_logical_plan_node4() -> Result<()> {
         let left_table = test_table_scan_with_name("l")?;
         let right_table = test_table_scan_with_name("r")?;
         let custom_plan = LogicalPlan::Extension(Extension {
