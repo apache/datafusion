@@ -175,14 +175,17 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported expression: {expr:?}")
             }
             Expr::Like(Like {
-                negated: _,
+                negated,
                 expr,
-                pattern: _,
-                escape_char: _,
+                pattern,
+                escape_char,
                 case_insensitive: _,
-            }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
-            }
+            }) => Ok(ast::Expr::Like {
+                negated: *negated,
+                expr: Box::new(self.expr_to_sql(expr)?),
+                pattern: Box::new(self.expr_to_sql(pattern)?),
+                escape_char: *escape_char,
+            }),
             Expr::AggregateFunction(agg) => {
                 let func_name = if let AggregateFunctionDefinition::BuiltIn(built_in) =
                     &agg.func_def
@@ -705,6 +708,16 @@ mod tests {
             (
                 ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]),
                 r#"dummy_udf("a", "b")"#,
+            ),
+            (
+                Expr::Like(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
