@@ -24,6 +24,8 @@ use datafusion_sql::{
 };
 
 /// This example demonstrates how to use the DFParser to parse a statement in a custom way
+///
+/// This technique can be used to implement a custom SQL dialect, for example. 
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut my_parser =
