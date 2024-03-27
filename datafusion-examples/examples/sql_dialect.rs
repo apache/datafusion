@@ -52,35 +52,29 @@ impl MyParser<'_> {
         Ok(Self { df_parser })
     }
 
+    /// Returns true if the next token is `COPY` keyword, false otherwise
+    fn is_copy(&self) -> bool {
+        matches!(
+            self.df_parser.parser.peek_token().token,
+            Token::Word(w) if w.keyword == Keyword::COPY
+        )
+    }
+
     /// This is the entry point to our parser -- it handles `COPY` statements specially
     /// but otherwise delegates to the existing DataFusion parser.
     pub fn parse_statement(&mut self) -> Result<MyStatement, ParserError> {
-        match self.df_parser.parser.peek_token().token {
-            Token::Word(w) => {
-                match w.keyword {
-                    Keyword::COPY => {
-                        // Invoke special COPY dialect parsing
-                        // and fall back to the DataFusion parser to parse the body
-                        self.df_parser.parser.next_token(); // COPY
-                        let df_statement = self.df_parser.parse_copy()?;
+        if self.is_copy() {
+            self.df_parser.parser.next_token(); // COPY
+            let df_statement = self.df_parser.parse_copy()?;
 
-                        if let Statement::CopyTo(s) = df_statement {
-                            Ok(MyStatement::from(s))
-                        } else {
-                            Ok(MyStatement::DFStatement(Box::from(df_statement)))
-                        }
-                    }
-                    _ => {
-                        // Otherwise, delegate back to the DFParser directly
-                        let df_statement = self.df_parser.parse_statement()?;
-                        Ok(MyStatement::from(df_statement))
-                    }
-                }
+            if let Statement::CopyTo(s) = df_statement {
+                Ok(MyStatement::from(s))
+            } else {
+                Ok(MyStatement::DFStatement(Box::from(df_statement)))
             }
-            _ => {
-                let df_statement = self.df_parser.parse_statement()?;
-                Ok(MyStatement::from(df_statement))
-            }
+        } else {
+            let df_statement = self.df_parser.parse_statement()?;
+            Ok(MyStatement::from(df_statement))
         }
     }
 }
