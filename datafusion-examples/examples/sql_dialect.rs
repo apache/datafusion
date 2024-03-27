@@ -25,7 +25,7 @@ use datafusion_sql::{
 
 /// This example demonstrates how to use the DFParser to parse a statement in a custom way
 ///
-/// This technique can be used to implement a custom SQL dialect, for example. 
+/// This technique can be used to implement a custom SQL dialect, for example.
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut my_parser =
@@ -53,7 +53,7 @@ impl MyParser<'_> {
     }
 
     /// This is the entry point to our parser -- it handles `COPY` statements specially
-    /// but otherwise delegates to the existing DataFusion parser. 
+    /// but otherwise delegates to the existing DataFusion parser.
     pub fn parse_statement(&mut self) -> Result<MyStatement, ParserError> {
         match self.df_parser.parser.peek_token().token {
             Token::Word(w) => {
