@@ -69,8 +69,6 @@ impl OptimizerRule for OptimizeProjections {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        println!("plan at the start:");
-        println!("{:?}", plan);
         // All output fields are necessary:
         let indices = (0..plan.schema().fields().len()).collect::<Vec<_>>();
         optimize_projections(plan, config, &indices)

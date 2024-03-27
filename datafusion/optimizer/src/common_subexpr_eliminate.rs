@@ -940,14 +940,14 @@ impl TreeNodeRewriter for ProjectionAdder {
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         let added_expr =
             self.cumulative_expr_map.get(&self.depth).cloned().unwrap_or_default();
-        println!("self.cumulative_expr_map: {:?}", self.cumulative_expr_map);
-        println!("self.cumulative_map: {:?}", self.cumulative_map);
-        println!("node:{:?}", node);
+        // println!("self.cumulative_expr_map: {:?}", self.cumulative_expr_map);
+        // println!("self.cumulative_map: {:?}", self.cumulative_map);
+        // println!("node:{:?}", node);
         self.depth -= 1;
         // do not do extra things
         let should_add_projection = !added_expr.is_empty();
         if !should_add_projection && !self.should_update_parents {
-            println!("not updating node");
+            // println!("not updating node");
             return Ok(Transformed::no(node));
         }
         // if added_expr.is_empty() {
@@ -989,16 +989,16 @@ impl TreeNodeRewriter for ProjectionAdder {
         // for expr in &added_expr{
         //     println!("expr.display_name() {:?}", expr.display_name()?);
         // }
-        println!("    original expressions: {:?}", expressions);
+        // println!("    original expressions: {:?}", expressions);
         let available_columns = child.schema().fields().iter().map(|field| field.qualified_column()).collect::<Vec<_>>();
         // Replace expressions with its pre-computed variant if available.
         expressions.iter_mut().try_for_each(|expr|{
             update_expr_with_available_columns(expr, &available_columns)
         })?;
-        println!("after update expressions: {:?}", expressions);
+        // println!("after update expressions: {:?}", expressions);
 
         let new_node = node.with_new_exprs(expressions, [child].to_vec())?;
-        println!("new node: {:?}", new_node);
+        // println!("new node: {:?}", new_node);
         Ok(Transformed::yes(
             new_node,
         ))
@@ -1053,7 +1053,7 @@ fn update_expr_with_available_columns(expr: &mut Expr, available_columns: &[Colu
             for available_col in available_columns{
                 // println!("cached_expr.display_name(), expr.display_name() {:?}, {:?}", cached_expr.display_name()?, expr.display_name()?);
                 if available_col.flat_name() == expr.display_name()?{
-                    println!("replacing expr: {:?} with available_col: {:?}", expr, available_col);
+                    // println!("replacing expr: {:?} with available_col: {:?}", expr, available_col);
                     *expr = Expr::Column(available_col.clone());
                 }
             }
@@ -1065,7 +1065,7 @@ fn update_expr_with_available_columns(expr: &mut Expr, available_columns: &[Colu
             update_expr_with_available_columns(expr, available_columns)?
         }
         _ => {
-            println!("unsupported expression : {:?}", expr);
+            // println!("unsupported expression : {:?}", expr);
             // cannot rewrite
         }
     }
