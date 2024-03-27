@@ -151,12 +151,10 @@ impl ExecutionPlan for NdJsonExec {
         target_partitions: usize,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let repartition_file_min_size =
-            if self.file_compression_type == FileCompressionType::GZIP {
-                OptimizerOptions::default().repartition_file_min_size
-            } else {
-                config.optimizer.repartition_file_min_size
-            };
+        if self.file_compression_type == FileCompressionType::GZIP {
+            return Ok(None);
+        }
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         let preserve_order_within_groups = self.properties().output_ordering().is_some();
         let file_groups = &self.base_config.file_groups;
 
