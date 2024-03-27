@@ -29,17 +29,20 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::joins::utils::build_join_schema;
 use datafusion_physical_plan::{collect, joins::CrossJoinExec, memory::MemoryExec};
 
-use rand::{rngs::ThreadRng, Rng};
+use rand::rngs::StdRng;
+use rand::Rng;
+use rand::SeedableRng;
 
 #[tokio::test]
 async fn test_cross_fuzz() {
-    for _ in 0..50 {
-        run_test().await;
+    let seeds = [2, 15, 29, 54, 87, 123, 543, 1342, 23452, 123432];
+    for seed in seeds {
+        run_test(seed).await;
     }
 }
 
-async fn run_test() {
-    let mut rng = rand::thread_rng();
+async fn run_test(seed: u64) {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let cfg = SessionConfig::new();
     let ctx = SessionContext::new_with_config(cfg);
 
@@ -79,7 +82,7 @@ async fn run_test() {
 fn generate_data(
     left_row_counts: Vec<i32>,
     right_row_counts: Vec<i32>,
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
 ) -> (Vec<RecordBatch>, Vec<RecordBatch>) {
     let mut left_data = vec![];
     for count in left_row_counts {
