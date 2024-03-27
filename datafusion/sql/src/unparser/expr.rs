@@ -24,7 +24,9 @@ use datafusion_expr::{
     expr::{AggregateFunctionDefinition, Alias, InList, ScalarFunction, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, Like, Operator,
 };
-use sqlparser::ast::{self, Function, FunctionArg, Ident};
+use sqlparser::ast::{
+    self, Expr as AstExpr, Function, FunctionArg, Ident, UnaryOperator,
+};
 
 use super::Unparser;
 
@@ -175,14 +177,17 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported expression: {expr:?}")
             }
             Expr::Like(Like {
-                negated: _,
+                negated,
                 expr,
-                pattern: _,
-                escape_char: _,
+                pattern,
+                escape_char,
                 case_insensitive: _,
-            }) => {
-                not_impl_err!("Unsupported expression: {expr:?}")
-            }
+            }) => Ok(ast::Expr::Like {
+                negated: *negated,
+                expr: Box::new(self.expr_to_sql(expr)?),
+                pattern: Box::new(self.expr_to_sql(pattern)?),
+                escape_char: *escape_char,
+            }),
             Expr::AggregateFunction(agg) => {
                 let func_name = if let AggregateFunctionDefinition::BuiltIn(built_in) =
                     &agg.func_def
@@ -263,6 +268,13 @@ impl Unparser<'_> {
             }
             Expr::IsUnknown(expr) => {
                 Ok(ast::Expr::IsUnknown(Box::new(self.expr_to_sql(expr)?)))
+            }
+            Expr::Not(expr) => {
+                let sql_parser_expr = self.expr_to_sql(expr)?;
+                Ok(AstExpr::UnaryOp {
+                    op: UnaryOperator::Not,
+                    expr: Box::new(sql_parser_expr),
+                })
             }
             _ => not_impl_err!("Unsupported expression: {expr:?}"),
         }
@@ -616,8 +628,8 @@ mod tests {
 
     use datafusion_common::TableReference;
     use datafusion_expr::{
-        case, col, expr::AggregateFunction, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility,
+        case, col, expr::AggregateFunction, lit, not, ColumnarValue, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     };
 
     use crate::unparser::dialect::CustomDialect;
@@ -707,6 +719,16 @@ mod tests {
                 r#"dummy_udf("a", "b")"#,
             ),
             (
+                Expr::Like(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#""a" NOT LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
                 r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
             ),
@@ -769,6 +791,7 @@ mod tests {
                 (col("a") + col("b")).gt(lit(4)).is_unknown(),
                 r#"(("a" + "b") > 4) IS UNKNOWN"#,
             ),
+            (not(col("a")), r#"NOT "a""#),
             (
                 Expr::between(col("a"), lit(1), lit(7)),
                 r#"("a" BETWEEN 1 AND 7)"#,
