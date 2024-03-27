@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Here we define a Parser for our new SQL dialect that wraps the existing `DFParser`
 struct MyParser<'a> {
     df_parser: DFParser<'a>,
 }
@@ -51,11 +52,15 @@ impl MyParser<'_> {
         Ok(Self { df_parser })
     }
 
+    /// This is the entry point to our parser -- it handles `COPY` statements specially
+    /// but otherwise delegates to the existing DataFusion parser. 
     pub fn parse_statement(&mut self) -> Result<MyStatement, ParserError> {
         match self.df_parser.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::COPY => {
+                        // Invoke special COPY dialect parsing
+                        // and fall back to the DataFusion parser to parse the body
                         self.df_parser.parser.next_token(); // COPY
                         let df_statement = self.df_parser.parse_copy()?;
 
@@ -66,7 +71,7 @@ impl MyParser<'_> {
                         }
                     }
                     _ => {
-                        // use sqlparser-rs parser
+                        // Otherwise, delegate back to the DFParser directly
                         let df_statement = self.df_parser.parse_statement()?;
                         Ok(MyStatement::from(df_statement))
                     }
