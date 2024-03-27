@@ -22,15 +22,16 @@ use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
+    StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::ExecutionPlanProperties;
 use crate::{
     execution_mode_from_children, ColumnStatistics, DisplayAs, DisplayFormatType,
     Distribution, ExecutionMode, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::{handle_state, ExecutionPlanProperties};
 
 use arrow::datatypes::{Fields, Schema, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
@@ -248,7 +249,9 @@ impl ExecutionPlan for CrossJoinExec {
             join_metrics,
             left_batch_index: 0,
             right_row_index: 0,
-            curr_probe_batch: None,
+            state: CrossJoinStreamState::WaitBuildSide,
+            left_data: vec![],
+            right_batch: RecordBatch::new_empty(self.schema.clone()),
         }))
     }
 
@@ -323,14 +326,41 @@ struct CrossJoinStream {
     left_batch_index: usize,
     /// Indexes the next processed probe side row
     right_row_index: usize,
-    /// Currently processed probe batch
-    curr_probe_batch: Option<RecordBatch>,
+    /// State information
+    state: CrossJoinStreamState,
+    /// Left data
+    left_data: Vec<RecordBatch>,
+    /// Current right batch
+    right_batch: RecordBatch,
 }
 
 impl RecordBatchStream for CrossJoinStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+/// Represents state of CrossJoinStream
+///
+/// Expected state transitions performed by CrossJoinStream are:
+///
+/// ```text
+///
+///       WaitBuildSide ───► Completed
+///             │               ▲  
+///             ▼               |
+///  ┌─► FetchProbeBatch ───────┘
+///  │          │               |
+///  │          ▼               |
+///  └───GenerateResult────┐────┘
+///             ▲          |
+///             └──────────┘
+/// ```     
+enum CrossJoinStreamState {
+    WaitBuildSide,
+    FetchProbeBatch,
+    GenerateResult,
+    Completed,
 }
 
 #[async_trait]
@@ -352,124 +382,135 @@ impl CrossJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<RecordBatch>>> {
-        let schema = self.schema();
+        loop {
+            return match self.state {
+                CrossJoinStreamState::WaitBuildSide => {
+                    handle_state!(ready!(self.collect_build_side(cx)))
+                }
+                CrossJoinStreamState::FetchProbeBatch => {
+                    handle_state!(ready!(self.fetch_probe_batch(cx)))
+                }
+                CrossJoinStreamState::GenerateResult => {
+                    handle_state!(ready!(self.generate_result()))
+                }
+                CrossJoinStreamState::Completed => Poll::Ready(None),
+            };
+        }
+    }
 
+    fn collect_build_side(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         let (left_data, _) = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
-            Err(e) => return Poll::Ready(Some(Err(e))),
+            Err(e) => return Poll::Ready(Err(e)),
         };
         build_timer.done();
 
         // If the left batch is empty, we can return `Poll::Ready(None)` immediately.
-        if left_data
-            .first()
-            .map_or(true, |first_batch| first_batch.num_rows() == 0)
-        {
-            return Poll::Ready(None);
-        }
-
-        match &self.curr_probe_batch {
-            Some(curr_probe_batch)
-                if self.right_row_index < curr_probe_batch.num_rows() =>
-            {
-                // Right batch has some unpaired rows, continue with the next row.
-                let result_batch = build_batch(
-                    &mut self.left_batch_index,
-                    &mut self.right_row_index,
-                    &mut self.join_metrics,
-                    left_data,
-                    curr_probe_batch,
-                    schema,
-                )?;
-                Poll::Ready(Some(Ok(result_batch)))
-            }
-            // If it is the first poll or the right batch is fully processed:
-            _ => match ready!(self.right.poll_next_unpin(cx)) {
-                None => Poll::Ready(None),
-                Some(Ok(right_batch)) => {
-                    // New batch arrives, reset the indices.
-                    self.left_batch_index = 0;
-                    self.right_row_index = 0;
-                    let result_batch = build_batch(
-                        &mut self.left_batch_index,
-                        &mut self.right_row_index,
-                        &mut self.join_metrics,
-                        left_data,
-                        &right_batch,
-                        schema,
-                    )?;
-                    // Update the metrics.
-                    self.join_metrics.input_batches.add(1);
-                    self.join_metrics.input_rows.add(
-                        self.curr_probe_batch.as_ref().map_or(0, |rb| rb.num_rows()),
-                    );
-                    // Store the new batch into the state.
-                    self.curr_probe_batch = Some(right_batch);
-                    Poll::Ready(Some(Ok(result_batch)))
-                }
-                Some(Err(err)) => Poll::Ready(Some(Err(err))),
-            },
+        if left_data.iter().all(|batch| batch.num_rows() == 0) {
+            self.state = CrossJoinStreamState::Completed;
+            Poll::Ready(Ok(StatefulStreamResult::Continue))
+        } else {
+            self.left_data = left_data
+                .clone()
+                .into_iter()
+                .filter(|batch| batch.num_rows() > 0)
+                .collect();
+            self.state = CrossJoinStreamState::FetchProbeBatch;
+            Poll::Ready(Ok(StatefulStreamResult::Continue))
         }
     }
-}
 
-/// This function constructs a new `RecordBatch` by joining the left and right batches
-/// based on the current indices. It also updates the metrics.
-///
-/// # Arguments
-/// * `left_batch_index` - Index of the current left batch being processed.
-/// * `right_row_index` - Index of the current row in the right batch to be joined.
-/// * `join_metrics` - Metrics container to track performance of the join operation.
-/// * `left_data` - Array of `RecordBatch`es from the left side to be joined.
-/// * `probe_batch` - The current `RecordBatch` from the right side to be joined.
-/// * `schema` - `Arc<Schema>` describing the schema of the resulting `RecordBatch`.
-fn build_batch(
-    left_batch_index: &mut usize,
-    right_row_index: &mut usize,
-    join_metrics: &mut BuildProbeJoinMetrics,
-    left_data: &[RecordBatch],
-    probe_batch: &RecordBatch,
-    schema: Arc<Schema>,
-) -> Result<RecordBatch> {
-    if probe_batch.num_rows() != 0 {
-        let join_timer = join_metrics.join_time.timer();
+    fn fetch_probe_batch(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        match ready!(self.right.poll_next_unpin(cx)) {
+            None => {
+                self.state = CrossJoinStreamState::Completed;
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+            Some(Ok(right_batch)) => {
+                // Update the metrics.
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(right_batch.num_rows());
+                if right_batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+                // New batch arrives, reset the indices.
+                self.left_batch_index = 0;
+                self.right_row_index = 0;
+                // Store the new batch into the state.
+                self.right_batch = right_batch;
+                self.state = CrossJoinStreamState::GenerateResult;
+                Poll::Ready(Ok(StatefulStreamResult::Continue))
+            }
+            Some(Err(err)) => Poll::Ready(Err(err)),
+        }
+    }
+
+    fn generate_result(
+        &mut self,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        if self.right_row_index < self.right_batch.num_rows() {
+            // Right batch has some unpaired rows, continue with the next row.
+            let result_batch = self.build_batch()?;
+            Poll::Ready(Ok(StatefulStreamResult::Ready(Some(result_batch))))
+        } else {
+            self.state = CrossJoinStreamState::FetchProbeBatch;
+            Poll::Ready(Ok(StatefulStreamResult::Continue))
+        }
+    }
+
+    /// This function constructs a new `RecordBatch` by joining the left and right batches
+    /// based on the current indices. It also updates the metrics.
+    ///
+    /// # Arguments
+    /// * `left_batch_index` - Index of the current left batch being processed.
+    /// * `right_row_index` - Index of the current row in the right batch to be joined.
+    /// * `join_metrics` - Metrics container to track performance of the join operation.
+    /// * `left_data` - Array of `RecordBatch`es from the left side to be joined.
+    /// * `probe_batch` - The current `RecordBatch` from the right side to be joined.
+    /// * `schema` - `Arc<Schema>` describing the schema of the resulting `RecordBatch`.
+    fn build_batch(&mut self) -> Result<RecordBatch> {
+        let join_timer = self.join_metrics.join_time.timer();
         // Create copies of the indexed right-side row for joining.
         let right_copies: Vec<Arc<dyn Array>> = get_arrayref_at_indices(
-            probe_batch.columns(),
+            self.right_batch.columns(),
             &PrimitiveArray::<UInt32Type>::from_value(
-                *right_row_index as u32,
-                left_data[*left_batch_index].num_rows(),
+                self.right_row_index as u32,
+                self.left_data[self.left_batch_index].num_rows(),
             ),
         )?;
 
         // Combine columns from the current left batch and the right copies.
         let result = RecordBatch::try_new_with_options(
-            schema.clone(),
-            left_data[*left_batch_index]
+            self.schema(),
+            self.left_data[self.left_batch_index]
                 .columns()
                 .iter()
                 .cloned()
                 .chain(right_copies.into_iter())
                 .collect(),
             &RecordBatchOptions::new()
-                .with_row_count(Some(left_data[*left_batch_index].num_rows())),
+                .with_row_count(Some(self.left_data[self.left_batch_index].num_rows())),
         )?;
         join_timer.done();
         // Update the metrics.
-        join_metrics.output_batches.add(1);
-        join_metrics.output_rows.add(result.num_rows());
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(result.num_rows());
 
         // Increment the left batch index. If it reaches the end, reset it to 0 and increment the right row index.
-        *left_batch_index = if *left_batch_index == left_data.len() - 1 {
-            *right_row_index += 1;
+        self.left_batch_index = if self.left_batch_index == self.left_data.len() - 1 {
+            self.right_row_index += 1;
             0
         } else {
-            *left_batch_index + 1
+            self.left_batch_index + 1
         };
         Ok(result)
-    } else {
-        Ok(RecordBatch::new_empty(schema))
     }
 }
 
