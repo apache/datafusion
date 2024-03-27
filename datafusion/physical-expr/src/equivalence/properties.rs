@@ -22,7 +22,7 @@ use super::ordering::collapse_lex_ordering;
 use crate::equivalence::{
     collapse_lex_req, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastExpr, Literal};
+use crate::expressions::{CastExpr, Column, Literal};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexRequirement,
@@ -179,6 +179,31 @@ impl EquivalenceProperties {
         self.eq_group.extend(other_eq_group);
     }
 
+    /// Adds children orderings that can be deduced from the ordering of the expression.
+    fn add_deduced_children_orderings(
+        &mut self,
+        expr: &Arc<dyn PhysicalExpr>,
+        options: SortOptions,
+    ) {
+        // See whether ordering information can help deduce some ordering children expressions.
+        let children_orderings = expr.get_children_ordering(options);
+        let children = expr.children();
+        for (child, ordering) in children.into_iter().zip(children_orderings) {
+            if let SortProperties::Ordered(options) = ordering {
+                // Add ordering only for leaf expressions
+                if child.as_any().is::<Column>() {
+                    let sort_expr = PhysicalSortExpr {
+                        expr: child,
+                        options,
+                    };
+                    self.add_new_orderings(vec![vec![sort_expr]]);
+                } else {
+                    self.add_deduced_children_orderings(&child, options);
+                }
+            }
+        }
+    }
+
     /// Adds a new equality condition into the existing equivalence group.
     /// If the given equality defines a new equivalence class, adds this new
     /// equivalence class to the equivalence group.
@@ -192,33 +217,11 @@ impl EquivalenceProperties {
         match (left_expr_ordering.data, right_expr_ordering.data) {
             (SortProperties::Ordered(options), SortProperties::Unordered) => {
                 // Left is ordered, right is not ordered.
-                // See whether left side ordering information can help deduce some ordering for right side children given their equivalence.
-                let children_orderings = right.get_children_ordering(options);
-                let children = right.children();
-                for (child, ordering) in children.into_iter().zip(children_orderings) {
-                    if let SortProperties::Ordered(options) = ordering {
-                        let sort_expr = PhysicalSortExpr {
-                            expr: child,
-                            options,
-                        };
-                        self.add_new_orderings(vec![vec![sort_expr]]);
-                    }
-                }
+                self.add_deduced_children_orderings(right, options);
             }
             (SortProperties::Unordered, SortProperties::Ordered(options)) => {
                 // Right is ordered, left is not ordered.
-                // See whether right side ordering information can help deduce some ordering for left side children given their equivalence.
-                let children_orderings = left.get_children_ordering(options);
-                let children = left.children();
-                for (child, ordering) in children.into_iter().zip(children_orderings) {
-                    if let SortProperties::Ordered(options) = ordering {
-                        let sort_expr = PhysicalSortExpr {
-                            expr: child,
-                            options,
-                        };
-                        self.add_new_orderings(vec![vec![sort_expr]]);
-                    }
-                }
+                self.add_deduced_children_orderings(left, options);
             }
             (_, _) => {}
         }
