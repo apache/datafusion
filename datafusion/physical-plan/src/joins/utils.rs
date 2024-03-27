@@ -888,43 +888,36 @@ fn estimate_join_cardinality(
             })
         }
 
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            let cardinality = estimate_semi_join_cardinality(
-                Statistics {
-                    num_rows: left_stats.num_rows.clone(),
-                    total_byte_size: Precision::Absent,
-                    column_statistics: left_col_stats,
-                },
-                Statistics {
-                    num_rows: right_stats.num_rows.clone(),
-                    total_byte_size: Precision::Absent,
-                    column_statistics: right_col_stats,
-                },
-            )?;
+        // For SemiJoins estimation result is either zero, in cases when inputs
+        // are non-overlapping according to statistics, or equal to number of rows
+        // for outer input
+        JoinType::LeftSemi | JoinType::RightSemi => {
+            let (outer_stats, inner_stats) = match join_type {
+                JoinType::LeftSemi => (left_stats, right_stats),
+                _ => (right_stats, left_stats),
+            };
+            let cardinality = match estimate_disjoint_inputs(&outer_stats, &inner_stats) {
+                Some(estimation) => *estimation.get_value()?,
+                None => *outer_stats.num_rows.get_value()?,
+            };
 
             Some(PartialJoinStatistics {
-                num_rows: *cardinality.get_value()?,
-                column_statistics: left_stats.column_statistics,
+                num_rows: cardinality,
+                column_statistics: outer_stats.column_statistics,
             })
         }
 
-        JoinType::RightSemi | JoinType::RightAnti => {
-            let cardinality = estimate_semi_join_cardinality(
-                Statistics {
-                    num_rows: right_stats.num_rows.clone(),
-                    total_byte_size: Precision::Absent,
-                    column_statistics: right_col_stats,
-                },
-                Statistics {
-                    num_rows: left_stats.num_rows.clone(),
-                    total_byte_size: Precision::Absent,
-                    column_statistics: left_col_stats,
-                },
-            )?;
+        // For AntiJoins estimation always equals to outer statistics, as
+        // non-overlapping inputs won't affect estimation
+        JoinType::LeftAnti | JoinType::RightAnti => {
+            let outer_stats = match join_type {
+                JoinType::LeftAnti => left_stats,
+                _ => right_stats,
+            };
 
             Some(PartialJoinStatistics {
-                num_rows: *cardinality.get_value()?,
-                column_statistics: right_stats.column_statistics,
+                num_rows: *outer_stats.num_rows.get_value()?,
+                column_statistics: outer_stats.column_statistics,
             })
         }
     }
@@ -989,26 +982,6 @@ fn estimate_inner_join_cardinality(
         // overestimation using just the cartesian product).
         _ => None,
     }
-}
-
-/// Estimates semi join cardinality based on statistics.
-///
-/// The estimation result is either zero, in cases inputs statistics are non-overlapping
-/// or equal to number of rows for outer input.
-fn estimate_semi_join_cardinality(
-    outer_stats: Statistics,
-    inner_stats: Statistics,
-) -> Option<Precision<usize>> {
-    // Immediatedly return if inputs considered as non-overlapping
-    if let Some(estimation) = estimate_disjoint_inputs(&outer_stats, &inner_stats) {
-        return Some(estimation);
-    };
-
-    // Otherwise estimate SemiJoin output as whole outer side
-    outer_stats
-        .num_rows
-        .get_value()
-        .map(|val| Precision::Inexact(*val))
 }
 
 /// Estimates if inputs are non-overlapping, using input statistics.
@@ -2209,46 +2182,97 @@ mod tests {
     }
 
     #[test]
-    fn estimate_semi_join_cardinality_absent_rows() -> Result<()> {
-        let cases: Vec<(PartialStats, PartialStats, Option<Precision<usize>>)> = vec![
+    fn test_anti_semi_join_cardinality() -> Result<()> {
+        let cases: Vec<(JoinType, PartialStats, PartialStats, Option<usize>)> = vec![
             // ------------------------------------------------
-            // | outer(rows, min, max, distinct, null_count), |
-            // | inner(rows, min, max, distinct, null_count), |
+            // | join_type ,                                   |
+            // | left(rows, min, max, distinct, null_count), |
+            // | right(rows, min, max, distinct, null_count), |
             // | expected,                                    |
             // ------------------------------------------------
 
             // Cardinality computation
             // =======================
-            //
-            // distinct(left) == NaN, distinct(right) == NaN
             (
+                JoinType::LeftSemi,
                 (50, Inexact(10), Inexact(20), Absent, Absent),
                 (10, Inexact(15), Inexact(25), Absent, Absent),
-                Some(Inexact(50)),
+                Some(50),
             ),
             (
+                JoinType::RightSemi,
+                (50, Inexact(10), Inexact(20), Absent, Absent),
+                (10, Inexact(15), Inexact(25), Absent, Absent),
+                Some(10),
+            ),
+            (
+                JoinType::LeftSemi,
                 (10, Absent, Absent, Absent, Absent),
                 (50, Absent, Absent, Absent, Absent),
-                Some(Inexact(10)),
+                Some(10),
             ),
             (
+                JoinType::LeftSemi,
                 (50, Inexact(10), Inexact(20), Absent, Absent),
                 (10, Inexact(30), Inexact(40), Absent, Absent),
-                Some(Inexact(0)),
+                Some(0),
             ),
             (
+                JoinType::LeftSemi,
                 (50, Inexact(10), Absent, Absent, Absent),
                 (10, Absent, Inexact(5), Absent, Absent),
-                Some(Inexact(0)),
+                Some(0),
             ),
             (
+                JoinType::LeftSemi,
                 (50, Absent, Inexact(20), Absent, Absent),
                 (10, Inexact(30), Absent, Absent, Absent),
-                Some(Inexact(0)),
+                Some(0),
+            ),
+            (
+                JoinType::LeftAnti,
+                (50, Inexact(10), Inexact(20), Absent, Absent),
+                (10, Inexact(15), Inexact(25), Absent, Absent),
+                Some(50),
+            ),
+            (
+                JoinType::RightAnti,
+                (50, Inexact(10), Inexact(20), Absent, Absent),
+                (10, Inexact(15), Inexact(25), Absent, Absent),
+                Some(10),
+            ),
+            (
+                JoinType::LeftAnti,
+                (10, Absent, Absent, Absent, Absent),
+                (50, Absent, Absent, Absent, Absent),
+                Some(10),
+            ),
+            (
+                JoinType::LeftAnti,
+                (50, Inexact(10), Inexact(20), Absent, Absent),
+                (10, Inexact(30), Inexact(40), Absent, Absent),
+                Some(50),
+            ),
+            (
+                JoinType::LeftAnti,
+                (50, Inexact(10), Absent, Absent, Absent),
+                (10, Absent, Inexact(5), Absent, Absent),
+                Some(50),
+            ),
+            (
+                JoinType::LeftAnti,
+                (50, Absent, Inexact(20), Absent, Absent),
+                (10, Inexact(30), Absent, Absent, Absent),
+                Some(50),
             ),
         ];
 
-        for (outer_info, inner_info, expected_cardinality) in cases {
+        let join_on = vec![(
+            Arc::new(Column::new("l_col", 0)) as _,
+            Arc::new(Column::new("r_col", 0)) as _,
+        )];
+
+        for (join_type, outer_info, inner_info, expected) in cases {
             let outer_num_rows = outer_info.0;
             let outer_col_stats = vec![create_column_stats(
                 outer_info.1,
@@ -2265,20 +2289,26 @@ mod tests {
                 inner_info.4,
             )];
 
+            let output_cardinality = estimate_join_cardinality(
+                &join_type,
+                Statistics {
+                    num_rows: Inexact(outer_num_rows),
+                    total_byte_size: Absent,
+                    column_statistics: outer_col_stats,
+                },
+                Statistics {
+                    num_rows: Inexact(inner_num_rows),
+                    total_byte_size: Absent,
+                    column_statistics: inner_col_stats,
+                },
+                &join_on,
+            )
+            .map(|cardinality| cardinality.num_rows);
+
             assert_eq!(
-                estimate_semi_join_cardinality(
-                    Statistics {
-                        num_rows: Inexact(outer_num_rows),
-                        total_byte_size: Absent,
-                        column_statistics: outer_col_stats,
-                    },
-                    Statistics {
-                        num_rows: Inexact(inner_num_rows),
-                        total_byte_size: Absent,
-                        column_statistics: inner_col_stats,
-                    },
-                ),
-                expected_cardinality
+                output_cardinality, expected,
+                "failure for join_type: {}",
+                join_type
             );
         }
 
@@ -2286,11 +2316,16 @@ mod tests {
     }
 
     #[test]
-    fn test_semi_join_cardinality() -> Result<()> {
+    fn test_semi_join_cardinality_absent_rows() -> Result<()> {
         let dummy_column_stats =
             vec![create_column_stats(Absent, Absent, Absent, Absent)];
+        let join_on = vec![(
+            Arc::new(Column::new("l_col", 0)) as _,
+            Arc::new(Column::new("r_col", 0)) as _,
+        )];
 
-        let absent_outer_estimation = estimate_semi_join_cardinality(
+        let absent_outer_estimation = estimate_join_cardinality(
+            &JoinType::LeftSemi,
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
@@ -2301,13 +2336,15 @@ mod tests {
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
+            &join_on,
         );
-        assert_eq!(
-            absent_outer_estimation, None,
+        assert!(
+            absent_outer_estimation.is_none(),
             "Expected \"None\" esimated SemiJoin cardinality for absent outer num_rows"
         );
 
-        let absent_inner_estimation = estimate_semi_join_cardinality(
+        let absent_inner_estimation = estimate_join_cardinality(
+            &JoinType::LeftSemi,
             Statistics {
                 num_rows: Inexact(500),
                 total_byte_size: Absent,
@@ -2318,10 +2355,13 @@ mod tests {
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
-        );
-        assert_eq!(absent_inner_estimation, Some(Inexact(500)), "Expected outer.num_rows esimated SemiJoin cardinality for absent inner num_rows");
+            &join_on,
+        ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
 
-        let absent_inner_estimation = estimate_semi_join_cardinality(
+        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows esimated SemiJoin cardinality for absent inner num_rows");
+
+        let absent_inner_estimation = estimate_join_cardinality(
+            &JoinType::LeftSemi,
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
@@ -2332,8 +2372,9 @@ mod tests {
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
+            &join_on,
         );
-        assert_eq!(absent_inner_estimation, None, "Expected \"None\" esimated SemiJoin cardinality for absent outer and inner num_rows");
+        assert!(absent_inner_estimation.is_none(), "Expected \"None\" esimated SemiJoin cardinality for absent outer and inner num_rows");
 
         Ok(())
     }
