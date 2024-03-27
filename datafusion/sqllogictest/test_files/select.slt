@@ -560,6 +560,21 @@ select * from (select 1 a union all select 2) b order by a limit 1+1;
 1
 2
 
+# select limit with basic arithmetic
+query I
+select * from (values (1)) LIMIT 10*100;
+----
+1
+
+# More complex expressions in the limit is not supported yet.
+# See issue: https://github.com/apache/arrow-datafusion/issues/9821
+statement error DataFusion error: Error during planning: Unsupported operator for LIMIT clause
+select * from (values (1)) LIMIT 100/10;
+
+# More complex expressions in the limit is not supported yet.
+statement error DataFusion error: Error during planning: Unexpected expression in LIMIT clause
+select * from (values (1)) LIMIT cast(column1 as tinyint);
+
 # select limit clause
 query I
 select * from (select 1 a union all select 2) b order by a limit null;

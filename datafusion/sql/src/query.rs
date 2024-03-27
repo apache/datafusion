@@ -303,6 +303,7 @@ fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
             let res = match binary_expr.op {
                 Operator::Plus => lhs + rhs,
                 Operator::Minus => lhs - rhs,
+                Operator::Multiply => lhs * rhs,
                 _ => return plan_err!("Unsupported operator for {arg_name} clause"),
             };
             Ok(res)
