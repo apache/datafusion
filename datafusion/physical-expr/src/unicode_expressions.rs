@@ -36,29 +36,6 @@ use datafusion_common::{
     exec_err, Result,
 };
 
-/// Returns number of characters in the string.
-/// character_length('josé') = 4
-/// The implementation counts UTF-8 code points to count the number of characters
-pub fn character_length<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    T::Native: OffsetSizeTrait,
-{
-    let string_array: &GenericStringArray<T::Native> =
-        as_generic_string_array::<T::Native>(&args[0])?;
-
-    let result = string_array
-        .iter()
-        .map(|string| {
-            string.map(|string: &str| {
-                T::Native::from_usize(string.chars().count())
-                    .expect("should not fail as string.chars will always return integer")
-            })
-        })
-        .collect::<PrimitiveArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
 /// left('abcde', 2) = 'ab'
 /// The implementation uses UTF-8 code points as characters
