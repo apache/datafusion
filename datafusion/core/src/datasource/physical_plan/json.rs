@@ -38,7 +38,6 @@ use crate::physical_plan::{
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::config::OptimizerOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
