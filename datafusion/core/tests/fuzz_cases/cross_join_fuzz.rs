@@ -121,6 +121,7 @@ fn assert_results(
         return Ok(());
     }
 
+    // Left side batch sizes must be equal to collected batch sizes.
     let right_row_count = right_data
         .iter()
         .map(|batch| batch.num_rows())
@@ -160,9 +161,12 @@ fn assert_results(
         let batch = RecordBatch::try_new(Arc::new(result_schema.clone()), join_cols)?;
         all_results.push(batch);
     }
+
+    // Check resulting row count holds.
     let join_result = concat_batches(&Arc::new(result_schema.clone()), &all_results)?;
     assert_eq!(join_result.num_rows(), n_left * n_right);
 
+    // Check all values are as expected.
     let collected = concat_batches(&Arc::new(result_schema), &collected)?;
     assert!(join_result.eq(&collected));
 

@@ -322,16 +322,16 @@ struct CrossJoinStream {
     right: SendableRecordBatchStream,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
-    /// Indexes the next processed build side batch
-    left_batch_index: usize,
-    /// Indexes the next processed probe side row
-    right_row_index: usize,
     /// State information
     state: CrossJoinStreamState,
     /// Left data
     left_data: Vec<RecordBatch>,
     /// Current right batch
     right_batch: RecordBatch,
+    /// Indexes the next processed build side batch
+    left_batch_index: usize,
+    /// Indexes the next processed probe side row
+    right_row_index: usize,
 }
 
 impl RecordBatchStream for CrossJoinStream {
@@ -391,13 +391,16 @@ impl CrossJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 CrossJoinStreamState::GenerateResult => {
-                    handle_state!(ready!(self.generate_result()))
+                    handle_state!(self.generate_result())
                 }
                 CrossJoinStreamState::Completed => Poll::Ready(None),
             };
         }
     }
 
+    /// Waits until the left data computation completes. After it is ready,
+    /// copies it into the state and continues with fetching probe side. If we
+    /// cannot receive any row from left, the operation ends without polling right.
     fn collect_build_side(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -424,6 +427,9 @@ impl CrossJoinStream {
         }
     }
 
+    /// Polls the right (probe) side until a non-empty batch is ready.
+    /// Then, the next state is set as the result generation step after
+    /// the polled batch is stored in the state and indices are reset.
     fn fetch_probe_batch(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -452,16 +458,16 @@ impl CrossJoinStream {
         }
     }
 
-    fn generate_result(
-        &mut self,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+    /// If there is non-paired rows in the probe batch, the function process them.
+    /// If not, it directs the state to fetching probe side.
+    fn generate_result(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         if self.right_row_index < self.right_batch.num_rows() {
             // Right batch has some unpaired rows, continue with the next row.
             let result_batch = self.build_batch()?;
-            Poll::Ready(Ok(StatefulStreamResult::Ready(Some(result_batch))))
+            Ok(StatefulStreamResult::Ready(Some(result_batch)))
         } else {
             self.state = CrossJoinStreamState::FetchProbeBatch;
-            Poll::Ready(Ok(StatefulStreamResult::Continue))
+            Ok(StatefulStreamResult::Continue)
         }
     }
 
@@ -469,12 +475,12 @@ impl CrossJoinStream {
     /// based on the current indices. It also updates the metrics.
     ///
     /// # Arguments
-    /// * `left_batch_index` - Index of the current left batch being processed.
-    /// * `right_row_index` - Index of the current row in the right batch to be joined.
+    /// * `self.left_data` - Array of `RecordBatch`es from the left side to be joined.
+    /// * `self.right_batch` - The current `RecordBatch` from the right side to be joined.
+    /// * `self.left_batch_index` - Index of the current left batch being processed.
+    /// * `self.right_row_index` - Index of the current row in the right batch to be joined.
     /// * `join_metrics` - Metrics container to track performance of the join operation.
-    /// * `left_data` - Array of `RecordBatch`es from the left side to be joined.
-    /// * `probe_batch` - The current `RecordBatch` from the right side to be joined.
-    /// * `schema` - `Arc<Schema>` describing the schema of the resulting `RecordBatch`.
+
     fn build_batch(&mut self) -> Result<RecordBatch> {
         let join_timer = self.join_metrics.join_time.timer();
         // Create copies of the indexed right-side row for joining.
