@@ -24,8 +24,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-use datafusion_physical_expr::functions::Hint;
+use datafusion_expr::ColumnarValue;
 
 pub(crate) enum TrimType {
     Left,
@@ -97,49 +96,6 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         }
     }
 }
-
-/// Creates a function to identify the optimal return type of a string function given
-/// the type of its first argument.
-///
-/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
-/// `$largeUtf8Type`,
-///
-/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
-macro_rules! get_optimal_return_type {
-    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
-        pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
-            Ok(match arg_type {
-                // LargeBinary inputs are automatically coerced to Utf8
-                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                // Binary inputs are automatically coerced to Utf8
-                DataType::Utf8 | DataType::Binary => $utf8Type,
-                DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
-                    DataType::Utf8 | DataType::Binary => $utf8Type,
-                    DataType::Null => DataType::Null,
-                    _ => {
-                        return datafusion_common::exec_err!(
-                            "The {} function can only accept strings, but got {:?}.",
-                            name.to_uppercase(),
-                            **value_type
-                        );
-                    }
-                },
-                data_type => {
-                    return datafusion_common::exec_err!(
-                        "The {} function can only accept strings, but got {:?}.",
-                        name.to_uppercase(),
-                        data_type
-                    );
-                }
-            })
-        }
-    };
-}
-
-// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
-get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
 /// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
@@ -217,49 +173,4 @@ where
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
-}
-
-pub(super) fn make_scalar_function<F>(
-    inner: F,
-    hints: Vec<Hint>,
-) -> ScalarFunctionImplementation
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
-{
-    Arc::new(move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let inferred_length = len.unwrap_or(1);
-        let args = args
-            .iter()
-            .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
-            .map(|(arg, hint)| {
-                // Decide on the length to expand this scalar to depending
-                // on the given hints.
-                let expansion_len = match hint {
-                    Hint::AcceptsSingular => 1,
-                    Hint::Pad => inferred_length,
-                };
-                arg.clone().into_array(expansion_len)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = (inner)(&args);
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
-        }
-    })
 }

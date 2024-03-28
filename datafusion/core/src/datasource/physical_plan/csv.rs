@@ -160,6 +160,10 @@ impl DisplayAs for CsvExec {
 }
 
 impl ExecutionPlan for CsvExec {
+    fn name(&self) -> &'static str {
+        "CsvExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

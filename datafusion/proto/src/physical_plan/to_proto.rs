@@ -79,18 +79,10 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
 
     fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
         let codec = DefaultPhysicalExtensionCodec {};
-        let expressions: Vec<protobuf::PhysicalExprNode> = a
-            .expressions()
-            .iter()
-            .map(|e| serialize_physical_expr(e.clone(), &codec))
-            .collect::<Result<Vec<_>>>()?;
+        let expressions = serialize_physical_exprs(a.expressions(), &codec)?;
 
-        let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
-            .order_bys()
-            .unwrap_or(&[])
-            .iter()
-            .map(|e| e.clone().try_into())
-            .collect::<Result<Vec<_>>>()?;
+        let ordering_req = a.order_bys().unwrap_or(&[]).to_vec();
+        let ordering_req = serialize_physical_sort_exprs(ordering_req, &codec)?;
 
         if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
             let name = a.fun().name().to_string();
@@ -245,22 +237,12 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
             return not_impl_err!("WindowExpr not supported: {window_expr:?}");
         };
         let codec = DefaultPhysicalExtensionCodec {};
-        let args = args
-            .into_iter()
-            .map(|e| serialize_physical_expr(e, &codec))
-            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+        let args = serialize_physical_exprs(args, &codec)?;
+        let partition_by =
+            serialize_physical_exprs(window_expr.partition_by().to_vec(), &codec)?;
 
-        let partition_by = window_expr
-            .partition_by()
-            .iter()
-            .map(|p| serialize_physical_expr(p.clone(), &codec))
-            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
-
-        let order_by = window_expr
-            .order_by()
-            .iter()
-            .map(|o| o.clone().try_into())
-            .collect::<Result<Vec<protobuf::PhysicalSortExprNode>>>()?;
+        let order_by =
+            serialize_physical_sort_exprs(window_expr.order_by().to_vec(), &codec)?;
 
         let window_frame: protobuf::WindowFrame = window_frame
             .as_ref()
@@ -381,6 +363,45 @@ fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
     Ok(AggrFn { inner, distinct })
 }
 
+pub fn serialize_physical_sort_exprs<I>(
+    sort_exprs: I,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Vec<protobuf::PhysicalSortExprNode>, DataFusionError>
+where
+    I: IntoIterator<Item = PhysicalSortExpr>,
+{
+    sort_exprs
+        .into_iter()
+        .map(|sort_expr| serialize_physical_sort_expr(sort_expr, codec))
+        .collect()
+}
+
+pub fn serialize_physical_sort_expr(
+    sort_expr: PhysicalSortExpr,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalSortExprNode, DataFusionError> {
+    let PhysicalSortExpr { expr, options } = sort_expr;
+    let expr = serialize_physical_expr(expr, codec)?;
+    Ok(PhysicalSortExprNode {
+        expr: Some(Box::new(expr)),
+        asc: !options.descending,
+        nulls_first: options.nulls_first,
+    })
+}
+
+pub fn serialize_physical_exprs<I>(
+    values: I,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Vec<protobuf::PhysicalExprNode>, DataFusionError>
+where
+    I: IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+{
+    values
+        .into_iter()
+        .map(|value| serialize_physical_expr(value, codec))
+        .collect()
+}
+
 /// Serialize a `PhysicalExpr` to default protobuf representation.
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
@@ -488,27 +509,16 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
         Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(
-                protobuf::physical_expr_node::ExprType::InList(
-                    Box::new(
-                        protobuf::PhysicalInListNode {
-                            expr: Some(Box::new(serialize_physical_expr(
-                                expr.expr().to_owned(),
-                                codec,
-                            )?)),
-                            list: expr
-                                .list()
-                                .iter()
-                                .map(|a| serialize_physical_expr(a.clone(), codec))
-                                .collect::<Result<
-                                    Vec<protobuf::PhysicalExprNode>,
-                                    DataFusionError,
-                                >>()?,
-                            negated: expr.negated(),
-                        },
-                    ),
-                ),
-            ),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
+                protobuf::PhysicalInListNode {
+                    expr: Some(Box::new(serialize_physical_expr(
+                        expr.expr().to_owned(),
+                        codec,
+                    )?)),
+                    list: serialize_physical_exprs(expr.list().to_vec(), codec)?,
+                    negated: expr.negated(),
+                },
+            ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
         Ok(protobuf::PhysicalExprNode {
@@ -552,11 +562,7 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        let args: Vec<protobuf::PhysicalExprNode> = expr
-            .args()
-            .iter()
-            .map(|e| serialize_physical_expr(e.to_owned(), codec))
-            .collect::<Result<Vec<_>, _>>()?;
+        let args = serialize_physical_exprs(expr.args().to_vec(), codec)?;
         if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
             let fun: protobuf::ScalarFunction = (&fun).try_into()?;
 
@@ -754,18 +760,8 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
 
         let mut output_orderings = vec![];
         for order in &conf.output_ordering {
-            let expr_node_vec = order
-                .iter()
-                .map(|sort_expr| {
-                    let expr = serialize_physical_expr(sort_expr.expr.clone(), &codec)?;
-                    Ok(PhysicalSortExprNode {
-                        expr: Some(Box::new(expr)),
-                        asc: !sort_expr.options.descending,
-                        nulls_first: sort_expr.options.nulls_first,
-                    })
-                })
-                .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
-            output_orderings.push(expr_node_vec)
+            let ordering = serialize_physical_sort_exprs(order.to_vec(), &codec)?;
+            output_orderings.push(ordering)
         }
 
         // Fields must be added to the schema so that they can persist in the protobuf

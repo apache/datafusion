@@ -6116,7 +6116,7 @@ from fixed_size_flatten_table;
 [1, 2, 3] [1, 2, 3, 4, 5, 6] [1, 2, 3] [1.0, 2.1, 2.2, 3.2, 3.3, 3.4]
 [1, 2, 3, 4, 5, 6] [8, 9, 10, 11, 12, 13] [1, 2, 3] [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
-## empty
+## empty (aliases: `array_empty`, `list_empty`)
 # empty scalar function #1
 query B
 select empty(make_array(1));
@@ -6207,6 +6207,75 @@ NULL
 false
 false
 
+## array_empty (aliases: `empty`, `list_empty`)
+# array_empty scalar function #1
+query B
+select array_empty(make_array(1));
+----
+false
+
+query B
+select array_empty(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+false
+
+# array_empty scalar function #2
+query B
+select array_empty(make_array());
+----
+true
+
+query B
+select array_empty(arrow_cast(make_array(), 'LargeList(Null)'));
+----
+true
+
+# array_empty scalar function #3
+query B
+select array_empty(make_array(NULL));
+----
+false
+
+query B
+select array_empty(arrow_cast(make_array(NULL), 'LargeList(Null)'));
+----
+false
+
+## list_empty (aliases: `empty`, `array_empty`)
+# list_empty scalar function #1
+query B
+select list_empty(make_array(1));
+----
+false
+
+query B
+select list_empty(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+false
+
+# list_empty scalar function #2
+query B
+select list_empty(make_array());
+----
+true
+
+query B
+select list_empty(arrow_cast(make_array(), 'LargeList(Null)'));
+----
+true
+
+# list_empty scalar function #3
+query B
+select list_empty(make_array(NULL));
+----
+false
+
+query B
+select list_empty(arrow_cast(make_array(NULL), 'LargeList(Null)'));
+----
+false
+
+# string_to_array scalar function
 query ?
 SELECT string_to_array('abcxxxdef', 'xxx')
 ----

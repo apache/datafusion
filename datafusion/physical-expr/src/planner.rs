@@ -168,20 +168,15 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            let when_expr = case
+            let (when_expr, then_expr): (Vec<&Expr>, Vec<&Expr>) = case
                 .when_then_expr
                 .iter()
-                .map(|(w, _)| {
-                    create_physical_expr(w.as_ref(), input_dfschema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let then_expr = case
-                .when_then_expr
-                .iter()
-                .map(|(_, t)| {
-                    create_physical_expr(t.as_ref(), input_dfschema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|(w, t)| (w.as_ref(), t.as_ref()))
+                .unzip();
+            let when_expr =
+                create_physical_exprs(when_expr, input_dfschema, execution_props)?;
+            let then_expr =
+                create_physical_exprs(then_expr, input_dfschema, execution_props)?;
             let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
                 when_expr
                     .iter()
@@ -248,10 +243,8 @@ pub fn create_physical_expr(
         }
 
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            let physical_args = args
-                .iter()
-                .map(|e| create_physical_expr(e, input_dfschema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
+            let physical_args =
+                create_physical_exprs(args, input_dfschema, execution_props)?;
 
             match func_def {
                 ScalarFunctionDefinition::BuiltIn(fun) => {
@@ -310,12 +303,8 @@ pub fn create_physical_expr(
                 let value_expr =
                     create_physical_expr(expr, input_dfschema, execution_props)?;
 
-                let list_exprs = list
-                    .iter()
-                    .map(|expr| {
-                        create_physical_expr(expr, input_dfschema, execution_props)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let list_exprs =
+                    create_physical_exprs(list, input_dfschema, execution_props)?;
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
@@ -323,6 +312,21 @@ pub fn create_physical_expr(
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }
     }
+}
+
+/// Create vector of Physical Expression from a vector of logical expression
+pub fn create_physical_exprs<'a, I>(
+    exprs: I,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<Vec<Arc<dyn PhysicalExpr>>>
+where
+    I: IntoIterator<Item = &'a Expr>,
+{
+    exprs
+        .into_iter()
+        .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]
