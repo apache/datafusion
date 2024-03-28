@@ -72,11 +72,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             cte,
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
-                            (Some(cte_plan), _) => {
-                                let cte_plan = cte_plan.clone();
-                                planner_context.increment_cte_reference(table_name);
-                                Ok(cte_plan)
-                            }
+                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
                             (_, Ok(provider)) => {
                                 LogicalPlanBuilder::scan(table_ref, provider, None)?
                                     .build()

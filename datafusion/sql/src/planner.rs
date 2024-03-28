@@ -146,8 +146,6 @@ pub struct PlannerContext {
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
-    /// Map of CTE name to the number of references to the CTE
-    cte_references: HashMap<String, usize>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
     outer_query_schema: Option<DFSchema>,
 }
@@ -164,7 +162,6 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: vec![],
             ctes: HashMap::new(),
-            cte_references: HashMap::new(),
             outer_query_schema: None,
         }
     }
@@ -217,12 +214,9 @@ impl PlannerContext {
         self.ctes.get(cte_name).map(|cte| cte.as_ref())
     }
 
-    pub(crate) fn increment_cte_reference(&mut self, cte_name: String) {
-        *self.cte_references.entry(cte_name).or_default() += 1;
-    }
-
-    pub(crate) fn get_cte_reference(&self, cte_name: &str) -> usize {
-        *self.cte_references.get(cte_name).unwrap_or(&0)
+    /// Remove the plan of CTE / Subquery for the specified name
+    pub(super) fn remove_cte(&mut self, cte_name: &str) {
+        self.ctes.remove(cte_name);
     }
 }
 

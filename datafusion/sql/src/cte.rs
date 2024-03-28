@@ -20,9 +20,13 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::Schema;
-use datafusion_common::{not_impl_err, plan_err, Result};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Query, SetExpr, SetOperator, SetQuantifier, With};
+use datafusion_common::{
+    not_impl_err, plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion},
+    Result,
+};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
+use sqlparser::ast::{Query, SetExpr, SetOperator, With};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn plan_with_clause(
@@ -41,22 +45,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 );
             }
 
-            // CTE expr don't need extend outer_query_schema, so we clone the planner_context here
-            let mut cte_planner_context = planner_context.clone();
             // Create a logical plan for the CTE
-            let logical_plan = if is_recursive {
-                self.recursive_cte(
-                    cte_name.clone(),
-                    *cte.query,
-                    &mut cte_planner_context,
-                )?
+            let cte_plan = if is_recursive {
+                self.recursive_cte(cte_name.clone(), *cte.query, planner_context)?
             } else {
-                self.non_recursive_cte(*cte.query, &mut cte_planner_context)?
+                self.non_recursive_cte(*cte.query, planner_context)?
             };
 
             // Each `WITH` block can change the column names in the last
             // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
-            let final_plan = self.apply_table_alias(logical_plan, cte.alias)?;
+            let final_plan = self.apply_table_alias(cte_plan, cte.alias)?;
+            // Export the CTE to the outer query
             planner_context.insert_cte(cte_name, final_plan);
         }
         Ok(())
@@ -67,7 +66,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         cte_query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan(cte_query, planner_context)
+        // CTE expr don't need extend outer_query_schema,
+        // so we clone a new planner_context here.
+        let mut cte_planner_context = planner_context.clone();
+        self.query_to_plan(cte_query, &mut cte_planner_context)
     }
 
     fn recursive_cte(
@@ -111,7 +113,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // allow us to infer the schema to be used in the recursive term.
 
         // ---------- Step 1: Compile the static term ------------------
-        let static_plan = self.set_expr_to_plan(*left_expr, planner_context)?;
+        let static_plan =
+            self.set_expr_to_plan(*left_expr, &mut planner_context.clone())?;
 
         // Since the recursive CTEs include a component that references a
         // table with its name, like the example below:
@@ -143,9 +146,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
-        let work_table_plan =
-            LogicalPlanBuilder::scan(cte_name.to_string(), work_table_source, None)?
-                .build()?;
+        let work_table_plan = LogicalPlanBuilder::scan(
+            cte_name.to_string(),
+            work_table_source.clone(),
+            None,
+        )?
+        .build()?;
 
         let name = cte_name.clone();
 
@@ -160,30 +166,47 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // this uses the named_relation we inserted above to resolve the
         // relation. This ensures that the recursive term uses the named relation logical plan
         // and thus the 'continuance' physical plan as its input and source
-        let recursive_plan = self.set_expr_to_plan(*right_expr, planner_context)?;
+        let recursive_plan =
+            self.set_expr_to_plan(*right_expr, &mut planner_context.clone())?;
 
-        // Check if the recursive term references the CTE itself, if not, it is a non-recursive CTE
-        if planner_context.get_cte_reference(&cte_name) == 0 {
-            // TODO: remove cte and its reference create a non-recursive CTE
-            return plan_err!(
-                "Recursive CTE {cte_name:?} does not reference itself in the recursive term"
+        // Check if the recursive term references the CTE itself,
+        // if not, it is a non-recursive CTE
+        if !has_work_table_reference(&recursive_plan, &work_table_source) {
+            // Remove the work table plan from the context
+            planner_context.remove_cte(&cte_name);
+            // Compile it as a non-recursive CTE
+            return self.set_operation_to_plan(
+                SetOperator::Union,
+                static_plan,
+                recursive_plan,
+                set_quantifier,
             );
         }
 
-        let distinct = match set_quantifier {
-            SetQuantifier::All => false,
-            SetQuantifier::None | SetQuantifier::Distinct => true,
-            _ => {
-                return not_impl_err!(
-                "Recursive CTEs with {set_quantifier:?} set quantifier are not supported"
-            )
-            }
-        };
-
         // ---------- Step 4: Create the final plan ------------------
         // Step 4.1: Compile the final plan
+        let distinct = !Self::is_union_all(set_quantifier)?;
         LogicalPlanBuilder::from(static_plan)
             .to_recursive_query(name, recursive_plan, distinct)?
             .build()
     }
+}
+
+fn has_work_table_reference(
+    plan: &LogicalPlan,
+    work_table_source: &Arc<dyn TableSource>,
+) -> bool {
+    let mut has_reference = false;
+    plan.apply(&mut |node| {
+        if let LogicalPlan::TableScan(scan) = node {
+            if Arc::ptr_eq(&scan.source, work_table_source) {
+                has_reference = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    // Closure always return Ok
+    .unwrap();
+    has_reference
 }
