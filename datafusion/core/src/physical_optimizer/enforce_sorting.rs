@@ -2348,7 +2348,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod tmp_tests {
     use crate::assert_batches_eq;
@@ -2385,7 +2384,7 @@ LOCATION '../core/tests/data/project_complex_expression.csv'";
 
         ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
 
-        let sql = "SELECT c3+c4, SUM(c3+c4) OVER(order by c3+c4)
+        let sql = "SELECT c3+c4, SUM(c3+c4) OVER()
 FROM t";
 
         let msg = format!("Creating logical plan for '{sql}'");
