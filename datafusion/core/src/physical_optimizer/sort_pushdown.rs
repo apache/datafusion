@@ -61,7 +61,7 @@ pub(crate) fn pushdown_sorts(
     let parent_reqs = requirements.data.as_deref().unwrap_or(&[]);
     let satisfy_parent = plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(parent_reqs);
+        .ordering_satisfy_requirement(parent_reqs, &None);
 
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let required_ordering = plan
@@ -189,7 +189,10 @@ fn pushdown_requirement_to_children(
         spm_eqs = spm_eqs.with_reorder(new_ordering);
         // Do not push-down through SortPreservingMergeExec when
         // ordering requirement invalidates requirement of sort preserving merge exec.
-        if !spm_eqs.ordering_satisfy(plan.output_ordering().unwrap_or(&[])) {
+        if !spm_eqs.ordering_satisfy(
+            plan.output_ordering().unwrap_or(&[]),
+            &Some(plan.children()[0].schema()),
+        ) {
             Ok(None)
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
@@ -265,7 +268,7 @@ fn try_pushdown_requirements_to_join(
     let mut smj_eqs = smj.properties().equivalence_properties().clone();
     // smj will have this ordering when its input changes.
     smj_eqs = smj_eqs.with_reorder(new_output_ordering.unwrap_or_default());
-    let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
+    let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required, &None);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
         let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));

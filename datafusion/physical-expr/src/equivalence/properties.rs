@@ -264,21 +264,29 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+    pub fn ordering_satisfy(
+        &self,
+        given: LexOrderingRef,
+        input_schema: &Option<SchemaRef>,
+    ) -> bool {
         // Convert the given sort expressions to sort requirements:
         let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
-        self.ordering_satisfy_requirement(&sort_requirements)
+        self.ordering_satisfy_requirement(&sort_requirements, input_schema)
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+    pub fn ordering_satisfy_requirement(
+        &self,
+        reqs: LexRequirementRef,
+        input_schema: &Option<SchemaRef>,
+    ) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
-            if !eq_properties.ordering_satisfy_single(&normalized_req) {
+            if !eq_properties.ordering_satisfy_single(&normalized_req, input_schema) {
                 return false;
             }
             // Treat satisfied keys as constants in subsequent iterations. We
@@ -311,8 +319,12 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
-    fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let expr_ordering = self.get_expr_ordering(req.expr.clone());
+    fn ordering_satisfy_single(
+        &self,
+        req: &PhysicalSortRequirement,
+        input_schema: &Option<SchemaRef>,
+    ) -> bool {
+        let expr_ordering = self.get_expr_ordering(req.expr.clone(), input_schema);
         let ExprOrdering { expr, data, .. } = expr_ordering;
         match data {
             SortProperties::Ordered(options) => {
@@ -623,7 +635,11 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// A vector of `LexOrdering` containing all valid orderings after projection.
-    fn projected_orderings(&self, mapping: &ProjectionMapping) -> Vec<LexOrdering> {
+    fn projected_orderings(
+        &self,
+        mapping: &ProjectionMapping,
+        input_schema: &Option<SchemaRef>,
+    ) -> Vec<LexOrdering> {
         let mapping = self.normalized_mapping(mapping);
 
         // Get dependency map for existing orderings:
@@ -633,7 +649,7 @@ impl EquivalenceProperties {
                 .into_iter()
                 .filter_map(|relevant_deps| {
                     if let SortProperties::Ordered(options) =
-                        get_expr_ordering(source, &relevant_deps)
+                        get_expr_ordering(source, &relevant_deps, input_schema)
                     {
                         Some((options, relevant_deps))
                     } else {
@@ -728,10 +744,12 @@ impl EquivalenceProperties {
         &self,
         projection_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
+        input_schema: &Option<SchemaRef>,
     ) -> Self {
         let projected_constants = self.projected_constants(projection_mapping);
         let projected_eq_group = self.eq_group.project(projection_mapping);
-        let projected_orderings = self.projected_orderings(projection_mapping);
+        let projected_orderings =
+            self.projected_orderings(projection_mapping, input_schema);
         Self {
             eq_group: projected_eq_group,
             oeq_class: OrderingEquivalenceClass::new(projected_orderings),
@@ -753,6 +771,7 @@ impl EquivalenceProperties {
     pub fn find_longest_permutation(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
+        input_schema: &Option<SchemaRef>,
     ) -> (LexOrdering, Vec<usize>) {
         let mut eq_properties = self.clone();
         let mut result = vec![];
@@ -772,7 +791,7 @@ impl EquivalenceProperties {
                 .iter()
                 .flat_map(|&idx| {
                     let ExprOrdering { expr, data, .. } =
-                        eq_properties.get_expr_ordering(exprs[idx].clone());
+                        eq_properties.get_expr_ordering(exprs[idx].clone(), input_schema);
                     match data {
                         SortProperties::Ordered(options) => {
                             Some((PhysicalSortExpr { expr, options }, idx))
@@ -844,9 +863,13 @@ impl EquivalenceProperties {
     ///
     /// Returns an `ExprOrdering` object containing the ordering information for
     /// the given expression.
-    pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
+    pub fn get_expr_ordering(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        input_schema: &Option<SchemaRef>,
+    ) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up(&|expr| Ok(update_ordering(expr, self, input_schema)))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
@@ -868,6 +891,7 @@ impl EquivalenceProperties {
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
+    input_schema: &Option<SchemaRef>,
 ) -> Transformed<ExprOrdering> {
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
@@ -881,10 +905,10 @@ fn update_ordering(
     } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         let children_orderings = node.children.iter().map(|c| c.data).collect_vec();
-        node.data = node.expr.get_ordering(&children_orderings);
+        node.data = node.expr.get_ordering(&children_orderings, input_schema);
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
-        node.data = node.expr.get_ordering(&[]);
+        node.data = node.expr.get_ordering(&[], input_schema);
     } else {
         return Transformed::no(node);
     }
@@ -1074,6 +1098,7 @@ fn generate_dependency_orderings(
 fn get_expr_ordering(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
+    input_schema: &Option<SchemaRef>,
 ) -> SortProperties {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
@@ -1083,10 +1108,10 @@ fn get_expr_ordering(
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_ordering(child, dependencies))
+            .map(|child| get_expr_ordering(child, dependencies, input_schema))
             .collect::<Vec<_>>();
         // Calculate expression ordering using ordering of its children.
-        expr.get_ordering(&child_states)
+        expr.get_ordering(&child_states, input_schema)
     }
 }
 
@@ -1340,7 +1365,8 @@ mod tests {
         let col_a2 = &col("a2", &out_schema)?;
         let col_a3 = &col("a3", &out_schema)?;
         let col_a4 = &col("a4", &out_schema)?;
-        let out_properties = input_properties.project(&projection_mapping, out_schema);
+        let out_properties =
+            input_properties.project(&projection_mapping, out_schema, &None);
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
@@ -1607,7 +1633,8 @@ mod tests {
                 options: sort_options,
             },
         ]]);
-        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (result, idxs) =
+            eq_properties.find_longest_permutation(&required_columns, &None);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
@@ -1648,7 +1675,8 @@ mod tests {
                 },
             ],
         ]);
-        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (result, idxs) =
+            eq_properties.find_longest_permutation(&required_columns, &None);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
@@ -1690,7 +1718,7 @@ mod tests {
                 options: sort_options,
             },
         ]]);
-        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns, &None);
         assert_eq!(idxs, vec![0]);
 
         Ok(())
@@ -1758,7 +1786,7 @@ mod tests {
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_ordering = eq_properties.get_expr_ordering(expr.clone());
+            let expr_ordering = eq_properties.get_expr_ordering(expr.clone(), &None);
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_ordering.data
@@ -1808,7 +1836,7 @@ mod tests {
                 for exprs in exprs.iter().combinations(n_req) {
                     let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
                     let (ordering, indices) =
-                        eq_properties.find_longest_permutation(&exprs);
+                        eq_properties.find_longest_permutation(&exprs, &None);
                     // Make sure that find_longest_permutation return values are consistent
                     let ordering2 = indices
                         .iter()
@@ -1952,7 +1980,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs, &None);
             assert_eq!(actual, expected);
         }
 
@@ -1981,7 +2009,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs, &None);
             assert_eq!(actual, expected);
         }
 

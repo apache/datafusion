@@ -1151,7 +1151,7 @@ fn ensure_distribution(
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(required_input_ordering);
+                    .ordering_satisfy_requirement(required_input_ordering, &None);
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {

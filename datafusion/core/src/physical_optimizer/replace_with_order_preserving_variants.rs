@@ -161,7 +161,10 @@ fn plan_with_order_breaking_variants(
                 || !required_ordering.map_or(false, |required_ordering| {
                     node.plan
                         .equivalence_properties()
-                        .ordering_satisfy_requirement(&required_ordering)
+                        .ordering_satisfy_requirement(
+                            &required_ordering,
+                            &Some(sort_input.plan.schema()),
+                        )
                 }))
         {
             plan_with_order_breaking_variants(node)
@@ -255,7 +258,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]))
+        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]), &None)
     {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;

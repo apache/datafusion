@@ -610,7 +610,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let expected = convert_to_orderings_owned(&expected);
 
-            let projected_eq = eq_properties.project(&projection_mapping, output_schema);
+            let projected_eq =
+                eq_properties.project(&projection_mapping, output_schema, &None);
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
@@ -797,7 +798,7 @@ mod tests {
             let expected = convert_to_orderings(expected);
 
             let projected_eq =
-                eq_properties.project(&projection_mapping, output_schema.clone());
+                eq_properties.project(&projection_mapping, output_schema.clone(), &None);
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
@@ -943,7 +944,7 @@ mod tests {
             let expected = convert_to_orderings(&expected);
 
             let projected_eq =
-                eq_properties.project(&projection_mapping, output_schema.clone());
+                eq_properties.project(&projection_mapping, output_schema.clone(), &None);
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
@@ -1112,7 +1113,7 @@ mod tests {
                             // Check whether ordering_satisfy API result and
                             // experimental result matches.
                             assert_eq!(
-                                projected_eq.ordering_satisfy(&requirement),
+                                projected_eq.ordering_satisfy(&requirement, &None),
                                 expected,
                                 "{}",
                                 err_msg

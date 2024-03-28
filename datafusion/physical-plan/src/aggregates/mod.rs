@@ -342,6 +342,7 @@ impl AggregateExec {
             &group_by,
             input_eq_properties,
             &mode,
+            &Some(input_schema.clone()),
         )?;
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
@@ -515,9 +516,11 @@ impl AggregateExec {
         input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
-            .equivalence_properties()
-            .project(projection_mapping, schema);
+        let eq_properties = input.equivalence_properties().project(
+            projection_mapping,
+            schema,
+            &Some(input.schema()),
+        );
 
         // Get output partitioning:
         let mut output_partitioning = input.output_partitioning().clone();
@@ -893,6 +896,7 @@ fn get_aggregate_exprs_requirement(
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
+    input_schema: &Option<SchemaRef>,
 ) -> Result<LexRequirement> {
     let mut requirement = vec![];
     for aggr_expr in aggr_exprs.iter_mut() {
@@ -904,16 +908,16 @@ fn get_aggregate_exprs_requirement(
 
         if let Some(first_value) = aggr_expr.as_any().downcast_ref::<FirstValue>() {
             let mut first_value = first_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
+            if eq_properties.ordering_satisfy_requirement(
+                &concat_slices(prefix_requirement, &aggr_req),
+                input_schema,
+            ) {
                 first_value = first_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(first_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
+            } else if eq_properties.ordering_satisfy_requirement(
+                &concat_slices(prefix_requirement, &reverse_aggr_req),
+                input_schema,
+            ) {
                 // Converting to LAST_VALUE enables more efficient execution
                 // given the existing ordering:
                 let mut last_value = first_value.convert_to_last();
@@ -928,16 +932,16 @@ fn get_aggregate_exprs_requirement(
         }
         if let Some(last_value) = aggr_expr.as_any().downcast_ref::<LastValue>() {
             let mut last_value = last_value.clone();
-            if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &aggr_req,
-            )) {
+            if eq_properties.ordering_satisfy_requirement(
+                &concat_slices(prefix_requirement, &aggr_req),
+                input_schema,
+            ) {
                 last_value = last_value.with_requirement_satisfied(true);
                 *aggr_expr = Arc::new(last_value) as _;
-            } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                prefix_requirement,
-                &reverse_aggr_req,
-            )) {
+            } else if eq_properties.ordering_satisfy_requirement(
+                &concat_slices(prefix_requirement, &reverse_aggr_req),
+                input_schema,
+            ) {
                 // Converting to FIRST_VALUE enables more efficient execution
                 // given the existing ordering:
                 let mut first_value = last_value.convert_to_first();
@@ -953,7 +957,7 @@ fn get_aggregate_exprs_requirement(
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
+            if eq_properties.ordering_satisfy(&finer_ordering, input_schema) {
                 // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
@@ -967,7 +971,7 @@ fn get_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
+                if eq_properties.ordering_satisfy(&finer_ordering, input_schema) {
                     // Reverse requirement is satisfied by exiting ordering.
                     // Hence reverse the aggregator
                     requirement = finer_ordering;
@@ -2168,6 +2172,7 @@ mod tests {
             &group_by,
             &eq_properties,
             &AggregateMode::Partial,
+            &None,
         )?;
         let res = PhysicalSortRequirement::to_sort_exprs(res);
         assert_eq!(res, common_requirement);

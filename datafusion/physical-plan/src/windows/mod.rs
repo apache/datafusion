@@ -368,7 +368,7 @@ pub(crate) fn get_ordered_partition_by_indices(
 ) -> Vec<usize> {
     let (_, indices) = input
         .equivalence_properties()
-        .find_longest_permutation(partition_by_exprs);
+        .find_longest_permutation(partition_by_exprs, &Some(input.schema()));
     indices
 }
 
@@ -385,7 +385,7 @@ pub(crate) fn get_partition_by_sort_exprs(
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
     let (ordering, _) = input
         .equivalence_properties()
-        .find_longest_permutation(&ordered_partition_exprs);
+        .find_longest_permutation(&ordered_partition_exprs, &Some(input.schema()));
     if ordering.len() == ordered_partition_exprs.len() {
         Ok(ordering)
     } else {
@@ -407,7 +407,8 @@ pub(crate) fn window_equivalence_properties(
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut window_eq_properties);
+            builtin_window_expr
+                .add_equal_orderings(&mut window_eq_properties, &Some(input.schema()));
         }
     }
     window_eq_properties
@@ -507,7 +508,8 @@ pub fn get_window_mode(
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
-    let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
+    let (_, indices) =
+        input_eqs.find_longest_permutation(partitionby_exprs, &Some(input.schema()));
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: partitionby_exprs[idx].clone(),
         options: None,
@@ -522,7 +524,7 @@ pub fn get_window_mode(
     {
         let req = [partition_by_reqs.clone(), order_by_reqs].concat();
         let req = collapse_lex_req(req);
-        if partition_by_eqs.ordering_satisfy_requirement(&req) {
+        if partition_by_eqs.ordering_satisfy_requirement(&req, &Some(input.schema())) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted
