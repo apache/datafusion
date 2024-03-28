@@ -728,7 +728,8 @@ async fn tpcds_physical_q40() -> Result<()> {
     create_physical_plan(40).await
 }
 
-#[ignore] // Context("check_analyzed_plan", Plan("Correlated column is not allowed in predicate: (..)
+#[ignore]
+// Context("check_analyzed_plan", Plan("Correlated column is not allowed in predicate: (..)
 #[tokio::test]
 async fn tpcds_physical_q41() -> Result<()> {
     create_physical_plan(41).await
