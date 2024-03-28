@@ -577,13 +577,6 @@ scalar_expr!(Power, power, base exponent, "`base` raised to the power of `expone
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-// string functions
-scalar_expr!(
-    CharacterLength,
-    character_length,
-    string,
-    "the number of characters in the `string`"
-);
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");
@@ -1032,7 +1025,6 @@ mod test {
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);

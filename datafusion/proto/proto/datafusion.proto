@@ -565,7 +565,7 @@ enum ScalarFunction {
   // RegexpMatch = 21;
   // 22 was BitLength
   // 23 was Btrim
-  CharacterLength = 24;
+  // 24 was CharacterLength
   // 25 was Chr
   Concat = 26;
   ConcatWithSeparator = 27;
