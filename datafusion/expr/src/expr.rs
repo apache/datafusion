@@ -1866,19 +1866,8 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("{expr} BETWEEN {low} AND {high}"))
             }
         }
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let dir = if *asc { "ASC" } else { "DESC" };
-            let nulls = if *nulls_first {
-                "NULLS_FIRST"
-            } else {
-                "NULLS_LAST"
-            };
-            Ok(format!("{expr} {dir} {nulls}"))
-            // internal_err!("Create name does not support sort expression")
+        Expr::Sort { .. } => {
+            internal_err!("Create name does not support sort expression")
         }
         Expr::Wildcard { qualifier } => match qualifier {
             Some(qualifier) => internal_err!(
