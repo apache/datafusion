@@ -112,6 +112,10 @@ impl DisplayAs for UnnestExec {
 }
 
 impl ExecutionPlan for UnnestExec {
+    fn name(&self) -> &'static str {
+        "UnnestExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

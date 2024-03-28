@@ -226,6 +226,10 @@ impl DisplayAs for CustomExec {
 }
 
 impl ExecutionPlan for CustomExec {
+    fn name(&self) -> &'static str {
+        "CustomExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
