@@ -19,7 +19,7 @@ use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use datafusion::common::{config_namespace, exec_datafusion_err, exec_err, internal_err};
+use datafusion::common::{exec_datafusion_err, exec_err, internal_err};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
@@ -107,11 +107,26 @@ pub fn get_oss_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
 ) -> Result<AmazonS3Builder> {
+    get_object_store_builder(url, aws_options, true)
+}
+
+pub fn get_cos_object_store_builder(
+    url: &Url,
+    aws_options: &AwsOptions,
+) -> Result<AmazonS3Builder> {
+    get_object_store_builder(url, aws_options, false)
+}
+
+fn get_object_store_builder(
+    url: &Url,
+    aws_options: &AwsOptions,
+    virtual_hosted_style_request: bool,
+) -> Result<AmazonS3Builder> {
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env()
-        .with_virtual_hosted_style_request(true)
+        .with_virtual_hosted_style_request(virtual_hosted_style_request)
         .with_bucket_name(bucket_name)
-        // oss don't care about the "region" field
+        // oss/cos don't care about the "region" field
         .with_region("do_not_care");
 
     if let (Some(access_key_id), Some(secret_access_key)) =
@@ -122,7 +137,7 @@ pub fn get_oss_object_store_builder(
             .with_secret_access_key(secret_access_key);
     }
 
-    if let Some(endpoint) = &aws_options.oss.endpoint {
+    if let Some(endpoint) = &aws_options.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
 
@@ -171,14 +186,8 @@ pub struct AwsOptions {
     pub session_token: Option<String>,
     /// AWS Region
     pub region: Option<String>,
-    /// Object Storage Service options
-    pub oss: OssOptions,
-}
-
-config_namespace! {
-    pub struct OssOptions {
-        pub endpoint: Option<String>, default = None
-    }
+    /// OSS or COS Endpoint
+    pub endpoint: Option<String>,
 }
 
 impl ExtensionOptions for AwsOptions {
@@ -210,8 +219,8 @@ impl ExtensionOptions for AwsOptions {
             "region" => {
                 self.region.set(rem, value)?;
             }
-            "oss" => {
-                self.oss.set(rem, value)?;
+            "oss" | "cos" => {
+                self.endpoint.set(rem, value)?;
             }
             _ => {
                 return internal_err!("Config value \"{}\" not found on AwsOptions", rem);
@@ -252,7 +261,7 @@ impl ExtensionOptions for AwsOptions {
             .visit(&mut v, "secret_access_key", "");
         self.session_token.visit(&mut v, "session_token", "");
         self.region.visit(&mut v, "region", "");
-        self.oss.visit(&mut v, "oss", "");
+        self.endpoint.visit(&mut v, "endpoint", "");
         v.0
     }
 }
@@ -376,7 +385,7 @@ pub(crate) fn register_options(ctx: &SessionContext, scheme: &str) {
     // Match the provided scheme against supported cloud storage schemes:
     match scheme {
         // For Amazon S3 or Alibaba Cloud OSS
-        "s3" | "oss" => {
+        "s3" | "oss" | "cos" => {
             // Register AWS specific table options in the session context:
             ctx.register_table_options_extension(AwsOptions::default())
         }
@@ -413,6 +422,15 @@ pub(crate) async fn get_object_store(
                 );
             };
             let builder = get_oss_object_store_builder(url, options)?;
+            Arc::new(builder.build()?)
+        }
+        "cos" => {
+            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+                return exec_err!(
+                    "Given table options incompatible with the 'cos' scheme"
+                );
+            };
+            let builder = get_cos_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
         "gs" | "gcs" => {

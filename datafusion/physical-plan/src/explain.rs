@@ -98,6 +98,10 @@ impl DisplayAs for ExplainExec {
 }
 
 impl ExecutionPlan for ExplainExec {
+    fn name(&self) -> &'static str {
+        "ExplainExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

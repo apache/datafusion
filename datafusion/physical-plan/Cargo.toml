@@ -58,7 +58,6 @@ parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 tokio = { workspace = true }
-uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 rstest = { workspace = true }
