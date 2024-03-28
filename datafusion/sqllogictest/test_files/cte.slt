@@ -785,10 +785,10 @@ WITH RECURSIVE cte AS (
 
 # Define a non-recursive CTE in the recursive WITH clause.
 # UNION ALL
-query I
+query I rowsort
 WITH RECURSIVE cte AS (
     SELECT 1
-    UNION
+    UNION ALL
     SELECT 2
 ) SELECT * FROM cte;
 ----
@@ -816,7 +816,7 @@ WITH RECURSIVE cte AS (
 1
 
 # Define a recursive CTE and a non-recursive CTE at the same time.
-query II
+query II rowsort
 WITH RECURSIVE
 non_recursive_cte AS (
   SELECT 1
