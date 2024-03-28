@@ -254,29 +254,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
-        BuiltinScalarFunction::CharacterLength => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        character_length,
-                        Int32Type,
-                        "character_length"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                DataType::LargeUtf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        character_length,
-                        Int64Type,
-                        "character_length"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function character_length"
-                ),
-            })
-        }
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
@@ -595,53 +572,6 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("chars")],
-            Ok(Some(5)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("josé")],
-            Ok(Some(4)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("")],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(not(feature = "unicode_expressions"))]
-        test_function!(
-            CharacterLength,
-            &[lit("josé")],
-            internal_err!(
-                "function character_length requires compilation with feature flag: unicode_expressions."
-            ),
-            i32,
-            Int32,
-            Int32Array
-        );
         test_function!(
             Concat,
             &[lit("aa"), lit("bb"), lit("cc"),],
