@@ -893,8 +893,13 @@ impl ProjectionAdder {
                         Self::get_complex_expressions(vec![*expr], schema.clone());
                     res.extend(expr_set);
                     expr_data_type.extend(type_data_map);
+                },
+                Expr::Alias(Alias{expr, relation: _, name: _}) => {
+                    let (expr_set, type_data_map) =
+                        Self::get_complex_expressions(vec![*expr], schema.clone());
+                    res.extend(expr_set);
+                    expr_data_type.extend(type_data_map);
                 }
-
                 Expr::WindowFunction(WindowFunction { fun: _, args, .. }) => {
                     let (expr_set, type_map) =
                         Self::get_complex_expressions(args, schema.clone());
@@ -923,14 +928,31 @@ impl ProjectionAdder {
             },
             Expr::Cast(Cast{ expr, .. }) => {
                 self.update_expr_with_available_columns(expr, available_columns)?
+            },
+            Expr::Alias(alias) => {
+                self.update_expr_with_available_columns(&mut alias.expr, available_columns)?;
             }
             _ => {
                 // cannot rewrite
             }
         }
+        Self::trim_expr(expr)?;
         Ok(())
     }
 
+    fn trim_expr(expr: &mut Expr) -> Result<()> {
+        let orig_name = expr.display_name()?;
+        match expr {
+            Expr::Alias(alias) => {
+                Self::trim_expr(&mut alias.expr)?;
+                if orig_name == alias.expr.display_name()?{
+                    *expr = *alias.expr.clone();
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
 
     // Assumes operators doesn't modify name of the fields.
     // Otherwise this operation is not safe.
@@ -966,6 +988,7 @@ impl TreeNodeRewriter for ProjectionAdder {
                 Ok(Transformed::no(node))
             }
             LogicalPlan::Projection(_) => {
+                // println!("proj node exprs: {:?}", node.expressions());
                 if depth_set.is_empty(){
                     self.extend_with_exprs(&node);
                 } else {
@@ -988,7 +1011,7 @@ impl TreeNodeRewriter for ProjectionAdder {
         // do not do extra things
         let should_add_projection = !added_expr.is_empty();
         if !should_add_projection && !self.should_update_parents {
-            // println!("not updating node");
+            // clearln!("not updating node");
             return Ok(Transformed::no(node));
         }
 

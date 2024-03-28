@@ -174,6 +174,7 @@ fn optimize_projections(
             return Ok(None);
         }
         LogicalPlan::Projection(proj) => {
+            // println!("expr:{:?}", proj.expr);
             return if let Some(proj) = merge_consecutive_projections(proj)? {
                 Ok(Some(
                     rewrite_projection_given_requirements(&proj, config, indices)?

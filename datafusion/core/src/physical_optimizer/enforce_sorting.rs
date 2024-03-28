@@ -2367,18 +2367,16 @@ mod tmp_tests {
         Ok(())
     }
 
-    const MULTIPLE_ORDERED_TABLE: &str = "CREATE EXTERNAL TABLE multiple_ordered_table (
-          a0 INTEGER,
-          a INTEGER,
-          b INTEGER,
-          c INTEGER,
-          d INTEGER
-        )
-        STORED AS CSV
-        WITH HEADER ROW
-        WITH ORDER (a ASC, b ASC)
-        WITH ORDER (c ASC)
-        LOCATION '../core/tests/data/window_2.csv'";
+    const MULTIPLE_ORDERED_TABLE: &str = "CREATE EXTERNAL TABLE t (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL,
+c4 INT NOT NULL,
+c5 INT NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/project_complex_expression.csv'";
 
     #[tokio::test]
     async fn test_query() -> Result<()> {
@@ -2387,7 +2385,8 @@ mod tmp_tests {
 
         ctx.sql(MULTIPLE_ORDERED_TABLE).await?;
 
-        let sql = "SELECT a+b, SUM(a+b) OVER() FROM multiple_ordered_table";
+        let sql = "SELECT c3+c4, SUM(c3+c4) OVER(order by c3+c4)
+FROM t";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
