@@ -312,7 +312,7 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
     fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let expr_ordering = self.get_expr_ordering(req.expr.clone());
+        let expr_ordering = self.get_expr_ordering(req.expr.clone(), Some(self.schema()));
         let ExprOrdering { expr, data, .. } = expr_ordering;
         match data {
             SortProperties::Ordered(options) => {
@@ -633,7 +633,7 @@ impl EquivalenceProperties {
                 .into_iter()
                 .filter_map(|relevant_deps| {
                     if let SortProperties::Ordered(options) =
-                        get_expr_ordering(source, &relevant_deps)
+                        get_expr_ordering(source, &relevant_deps, Some(self.schema()))
                     {
                         Some((options, relevant_deps))
                     } else {
@@ -771,8 +771,8 @@ impl EquivalenceProperties {
             let ordered_exprs = search_indices
                 .iter()
                 .flat_map(|&idx| {
-                    let ExprOrdering { expr, data, .. } =
-                        eq_properties.get_expr_ordering(exprs[idx].clone());
+                    let ExprOrdering { expr, data, .. } = eq_properties
+                        .get_expr_ordering(exprs[idx].clone(), Some(self.schema()));
                     match data {
                         SortProperties::Ordered(options) => {
                             Some((PhysicalSortExpr { expr, options }, idx))
@@ -844,9 +844,13 @@ impl EquivalenceProperties {
     ///
     /// Returns an `ExprOrdering` object containing the ordering information for
     /// the given expression.
-    pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
+    pub fn get_expr_ordering(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        input_schema: Option<&SchemaRef>,
+    ) -> ExprOrdering {
         ExprOrdering::new_default(expr.clone())
-            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            .transform_up(&|expr| Ok(update_ordering(expr, self, input_schema)))
             .data()
             // Guaranteed to always return `Ok`.
             .unwrap()
@@ -868,6 +872,7 @@ impl EquivalenceProperties {
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
+    input_schema: Option<&SchemaRef>,
 ) -> Transformed<ExprOrdering> {
     // We have a Column, which is one of the two possible leaf node types:
     let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
@@ -881,10 +886,10 @@ fn update_ordering(
     } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         let children_orderings = node.children.iter().map(|c| c.data).collect_vec();
-        node.data = node.expr.get_ordering(&children_orderings);
+        node.data = node.expr.get_ordering(&children_orderings, input_schema);
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
-        node.data = node.expr.get_ordering(&[]);
+        node.data = node.expr.get_ordering(&[], input_schema);
     } else {
         return Transformed::no(node);
     }
@@ -1074,6 +1079,7 @@ fn generate_dependency_orderings(
 fn get_expr_ordering(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
+    input_schema: Option<&SchemaRef>,
 ) -> SortProperties {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
@@ -1083,10 +1089,10 @@ fn get_expr_ordering(
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_ordering(child, dependencies))
+            .map(|child| get_expr_ordering(child, dependencies, input_schema))
             .collect::<Vec<_>>();
         // Calculate expression ordering using ordering of its children.
-        expr.get_ordering(&child_states)
+        expr.get_ordering(&child_states, input_schema)
     }
 }
 
@@ -1758,7 +1764,7 @@ mod tests {
                 .iter()
                 .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
-            let expr_ordering = eq_properties.get_expr_ordering(expr.clone());
+            let expr_ordering = eq_properties.get_expr_ordering(expr.clone(), None);
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_ordering.data
