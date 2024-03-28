@@ -456,6 +456,11 @@
       </a>
      </li>
      <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#comparing-baselines">
+       Comparing Baselines
+      </a>
+     </li>
+     <li class="toc-h3 nav-item toc-entry">
       <a class="reference internal nav-link" href="#upstream-benchmark-suites">
        Upstream Benchmark Suites
       </a>
@@ -749,6 +754,21 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <p>These randomly generate a parquet file, and then benchmark queries sourced from <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/benches/parquet_query_sql.sql">parquet_query_sql.sql</a> against it. This can therefore be a quick way to add coverage of particular query and/or data paths.</p>
 <p>If the environment variable <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.</p>
 <p>The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> in subsequent runs.</p>
+</section>
+<section id="comparing-baselines">
+<h3>Comparing Baselines<a class="headerlink" href="#comparing-baselines" title="Link to this heading">¶</a></h3>
+<p>By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it’s useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">git</span> <span class="n">checkout</span> <span class="n">main</span>
+ <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span> <span class="o">--</span><span class="n">save</span><span class="o">-</span><span class="n">baseline</span> <span class="n">main</span>
+ <span class="n">git</span> <span class="n">checkout</span> <span class="n">YOUR_BRANCH</span>
+ <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span>  <span class="o">--</span><span class="n">baseline</span> <span class="n">main</span>
+</pre></div>
+</div>
+<p>Note: For MacOS it may be required to run <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">bench</span></code> with <code class="docutils literal notranslate"><span class="pre">sudo</span></code></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sudo</span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">...</span>
+</pre></div>
+</div>
+<p>More information on <a class="reference external" href="https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines">Baselines</a></p>
 </section>
 <section id="upstream-benchmark-suites">
 <h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Link to this heading">¶</a></h3>

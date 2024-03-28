@@ -237,6 +237,25 @@ If the environment variable `PARQUET_FILE` is set, the benchmark will run querie
 
 The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
 
+### Comparing Baselines
+
+By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it's useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.
+
+```
+ git checkout main
+ cargo bench --bench sql_planner -- --save-baseline main
+ git checkout YOUR_BRANCH
+ cargo bench --bench sql_planner --  --baseline main
+```
+
+Note: For MacOS it may be required to run `cargo bench` with `sudo`
+
+```
+sudo cargo bench ...
+```
+
+More information on [Baselines](https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines)
+
 ### Upstream Benchmark Suites
 
 Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/arrow-datafusion/tree/main/benchmarks).
