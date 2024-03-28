@@ -850,10 +850,13 @@ fn replace_common_expr(
 }
 
 struct ProjectionAdder {
+    // Keeps track of cumulative usage of common expressions with its corresponding data type.
+    // accross plan where key is unsafe nodes that cumulative tracking is invalidated.
     insertion_point_map: HashMap<usize, HashMap<Expr, (DataType, u32)>>,
     depth: usize,
+    // Keeps track of cumulative usage of the common expressions with its corresponding data type.
+    // between safe nodes.
     complex_exprs: HashMap<Expr, (DataType, u32)>,
-    // should_update_parents: bool,
 }
 pub fn is_not_complex(op: &Operator) -> bool {
     matches!(
@@ -967,21 +970,24 @@ impl TreeNodeRewriter for ProjectionAdder {
         self.depth += 1;
         match node {
             LogicalPlan::TableScan(_) => {
+                // Stop tracking cumulative usage at the source.
+                let complex_exprs = std::mem::take(&mut self.complex_exprs);
                 self.insertion_point_map
-                    .insert(self.depth - 1, self.complex_exprs.clone());
+                    .insert(self.depth - 1, complex_exprs);
                 Ok(Transformed::no(node))
             }
             LogicalPlan::Sort(_) | LogicalPlan::Filter(_) | LogicalPlan::Window(_) => {
+                // These are safe operators where, expression identity is preserved during operation.
                 self.extend_with_exprs(&node);
                 Ok(Transformed::no(node))
             }
             LogicalPlan::Projection(_) => {
-                if self.complex_exprs.is_empty() {
-                    self.extend_with_exprs(&node);
-                } else {
-                    self.insertion_point_map
-                        .insert(self.depth - 1, self.complex_exprs.clone());
-                }
+                // Stop tracking cumulative usage at the projection since it may invalidate expression identity.
+                let complex_exprs = std::mem::take(&mut self.complex_exprs);
+                self.insertion_point_map
+                    .insert(self.depth - 1, complex_exprs);
+                // Start tracking common expressions from now on including projection.
+                self.extend_with_exprs(&node);
                 Ok(Transformed::no(node))
             }
             _ => {
