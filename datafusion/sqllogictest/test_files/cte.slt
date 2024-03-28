@@ -39,6 +39,10 @@ physical_plan
 ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 --PlaceholderRowExec
 
+# cte_use_same_name_multiple_times
+statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
+WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
+
 # Test disabling recursive CTE
 statement ok
 set datafusion.execution.enable_recursive_ctes = false;
