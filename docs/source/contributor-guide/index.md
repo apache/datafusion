@@ -245,7 +245,13 @@ By default, Criterion.rs will compare the measurements against the previous run 
  git checkout main
  cargo bench --bench sql_planner -- --save-baseline main
  git checkout YOUR_BRANCH
- cargo bench --bench sql_planner -- --load-baseline new --baseline main
+ cargo bench --bench sql_planner --  --baseline main
+```
+
+Note: For MacOS it may be required to run `cargo bench` with `sudo`
+
+```
+sudo cargo bench ...
 ```
 
 More information on [Baselines](https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines)
