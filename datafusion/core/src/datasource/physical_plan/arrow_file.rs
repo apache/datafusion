@@ -122,6 +122,10 @@ impl DisplayAs for ArrowExec {
 }
 
 impl ExecutionPlan for ArrowExec {
+    fn name(&self) -> &'static str {
+        "ArrowExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

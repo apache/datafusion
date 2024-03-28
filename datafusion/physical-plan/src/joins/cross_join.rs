@@ -194,6 +194,10 @@ impl DisplayAs for CrossJoinExec {
 }
 
 impl ExecutionPlan for CrossJoinExec {
+    fn name(&self) -> &'static str {
+        "CrossJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

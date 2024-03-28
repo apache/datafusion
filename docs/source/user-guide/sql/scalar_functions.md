@@ -731,12 +731,15 @@ btrim(str[, trim_str])
   Can be a constant, column, or function, and any combination of string operators.
 - **trim_str**: String expression to trim from the beginning and end of the input string.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  _Default is whitespace characters_.
+  _Default is whitespace characters._
 
 **Related functions**:
 [ltrim](#ltrim),
-[rtrim](#rtrim),
-[trim](#trim)
+[rtrim](#rtrim)
+
+#### Aliases
+
+- trim
 
 ### `char_length`
 
@@ -919,26 +922,25 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Removes leading spaces from a string.
+Trims the specified trim string from the beginning of a string.
+If no trim string is provided, all whitespace is removed from the start
+of the input string.
 
 ```
-ltrim(str)
+ltrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[rtrim](#rtrim),
-[trim](#trim)
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+[rtrim](#rtrim)
 
 ### `octet_length`
 
@@ -1040,21 +1042,25 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Removes trailing spaces from a string.
+Trims the specified trim string from the end of a string.
+If no trim string is provided, all whitespace is removed from the end
+of the input string.
 
 ```
-rtrim(str)
+rtrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[ltrim](#ltrim),
-[trim](#trim)
+[ltrim](#ltrim)
 
 ### `split_part`
 
@@ -1154,21 +1160,7 @@ to_hex(int)
 
 ### `trim`
 
-Removes leading and trailing spaces from a string.
-
-```
-trim(str)
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-**Related functions**:
-[btrim](#btrim),
-[ltrim](#ltrim),
-[rtrim](#rtrim)
+_Alias of [btrim](#btrim)._
 
 ### `upper`
 
@@ -1624,34 +1616,19 @@ _Alias of [date_part](#date_part)._
 ### `extract`
 
 Returns a sub-field from a time value as an integer.
-Similar to `date_part`, but with different arguments.
 
 ```
 extract(field FROM source)
 ```
 
-#### Arguments
+Equivalent to calling `date_part('field', source)`. For example, these are equivalent:
 
-- **field**: Part or field of the date to return.
-  The following date fields are supported:
+```sql
+extract(day FROM '2024-04-13'::date)
+date_part('day', '2024-04-13'::date)
+```
 
-  - year
-  - quarter _(emits value in inclusive range [1, 4] based on which quartile of the year the date is in)_
-  - month
-  - week _(week of the year)_
-  - day _(day of the month)_
-  - hour
-  - minute
-  - second
-  - millisecond
-  - microsecond
-  - nanosecond
-  - dow _(day of the week)_
-  - doy _(day of the year)_
-  - epoch _(seconds since Unix epoch)_
-
-- **source**: Source time expression to operate on.
-  Can be a constant, column, or function.
+See [date_part](#date_part).
 
 ### `make_date`
 
@@ -1954,6 +1931,7 @@ from_unixtime(expression)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_fill](#array_fill)
@@ -3032,6 +3010,11 @@ empty(array)
 +------------------+
 ```
 
+#### Aliases
+
+- array_empty,
+- list_empty
+
 ### `generate_series`
 
 Similar to the range function, but it includes the upper bound.
@@ -3061,10 +3044,6 @@ generate_series(start, stop, step)
 
 _Alias of [array_append](#array_append)._
 
-### `list_sort`
-
-_Alias of [array_sort](#array_sort)._
-
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -3084,6 +3063,10 @@ _Alias of [array_dims](#array_distinct)._
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
 
 ### `list_except`
 
@@ -3193,13 +3176,17 @@ _Alias of [array_reverse](#array_reverse)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
 
 ### `list_union`
 
-_Alias of [array_to_string](#array_union)._
+_Alias of [array_union](#array_union)._
 
 ### `make_array`
 
@@ -3208,6 +3195,10 @@ Returns an Arrow array using the specified input expressions.
 ```
 make_array(expression1[, ..., expression_n])
 ```
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
 
 #### Arguments
 

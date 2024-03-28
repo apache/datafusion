@@ -205,6 +205,10 @@ impl DisplayAs for NestedLoopJoinExec {
 }
 
 impl ExecutionPlan for NestedLoopJoinExec {
+    fn name(&self) -> &'static str {
+        "NestedLoopJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

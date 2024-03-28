@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -32,7 +33,7 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
     FileSinkConfig, ParquetExec,
 };
-use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
 };
@@ -49,7 +50,6 @@ use datafusion::physical_plan::expressions::{
     NotExpr, NthValue, PhysicalSortExpr, StringAgg, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::functions;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
@@ -73,13 +73,19 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, Signature,
-    SimpleAggregateUDF, WindowFrame, WindowFrameBound,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    ScalarFunctionDefinition, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+    WindowFrame, WindowFrameBound,
 };
-use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf;
+use prost::Message;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -603,14 +609,11 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    let execution_props = ExecutionProps::new();
-
-    let fun_expr =
-        functions::create_physical_fun(&BuiltinScalarFunction::Sin, &execution_props)?;
+    let fun_def = ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::Sin);
 
     let expr = ScalarFunctionExpr::new(
         "sin",
-        fun_expr,
+        fun_def,
         vec![col("a", &schema)?],
         DataType::Float64,
         None,
@@ -646,9 +649,11 @@ fn roundtrip_scalar_udf() -> Result<()> {
         scalar_fn.clone(),
     );
 
+    let fun_def = ScalarFunctionDefinition::UDF(Arc::new(udf.clone()));
+
     let expr = ScalarFunctionExpr::new(
         "dummy",
-        scalar_fn,
+        fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
         None,
@@ -665,6 +670,134 @@ fn roundtrip_scalar_udf() -> Result<()> {
     roundtrip_test_with_context(Arc::new(project), ctx)
 }
 
+#[test]
+fn roundtrip_scalar_udf_extension_codec() {
+    #[derive(Debug)]
+    struct MyRegexUdf {
+        signature: Signature,
+        // regex as original string
+        pattern: String,
+    }
+
+    impl MyRegexUdf {
+        fn new(pattern: String) -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Int32],
+                    Volatility::Immutable,
+                ),
+                pattern,
+            }
+        }
+    }
+
+    /// Implement the ScalarUDFImpl trait for MyRegexUdf
+    impl ScalarUDFImpl for MyRegexUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "regex_udf"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+            if !matches!(args.first(), Some(&DataType::Utf8)) {
+                return plan_err!("regex_udf only accepts Utf8 arguments");
+            }
+            Ok(DataType::Int32)
+        }
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct MyRegexUdfNode {
+        #[prost(string, tag = "1")]
+        pub pattern: String,
+    }
+
+    #[derive(Debug)]
+    pub struct ScalarUDFExtensionCodec {}
+
+    impl PhysicalExtensionCodec for ScalarUDFExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[Arc<dyn ExecutionPlan>],
+            _registry: &dyn FunctionRegistry,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            not_impl_err!("No extension codec provided")
+        }
+
+        fn try_encode(
+            &self,
+            _node: Arc<dyn ExecutionPlan>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            not_impl_err!("No extension codec provided")
+        }
+
+        fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+            if name == "regex_udf" {
+                let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
+                    DataFusionError::Internal(format!(
+                        "failed to decode regex_udf: {}",
+                        err
+                    ))
+                })?;
+
+                Ok(Arc::new(ScalarUDF::new_from_impl(MyRegexUdf::new(
+                    proto.pattern,
+                ))))
+            } else {
+                not_impl_err!("unrecognized scalar UDF implementation, cannot decode")
+            }
+        }
+
+        fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+            let binding = node.inner();
+            if let Some(udf) = binding.as_any().downcast_ref::<MyRegexUdf>() {
+                let proto = MyRegexUdfNode {
+                    pattern: udf.pattern.clone(),
+                };
+                proto.encode(buf).map_err(|e| {
+                    DataFusionError::Internal(format!("failed to encode udf: {e:?}"))
+                })?;
+            }
+            Ok(())
+        }
+    }
+
+    let pattern = ".*";
+    let udf = ScalarUDF::from(MyRegexUdf::new(pattern.to_string()));
+    let test_expr = ScalarFunctionExpr::new(
+        udf.name(),
+        ScalarFunctionDefinition::UDF(Arc::new(udf.clone())),
+        vec![],
+        DataType::Int32,
+        None,
+        false,
+    );
+    let fmt_expr = format!("{test_expr:?}");
+    let ctx = SessionContext::new();
+
+    ctx.register_udf(udf.clone());
+    let extension_codec = ScalarUDFExtensionCodec {};
+    let proto: protobuf::PhysicalExprNode =
+        match serialize_physical_expr(Arc::new(test_expr), &extension_codec) {
+            Ok(proto) => proto,
+            Err(e) => panic!("failed to serialize expr: {e:?}"),
+        };
+    let field_a = Field::new("a", DataType::Int32, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+    let round_trip =
+        parse_physical_expr(&proto, &ctx, &schema, &extension_codec).unwrap();
+    assert_eq!(fmt_expr, format!("{round_trip:?}"));
+}
 #[test]
 fn roundtrip_distinct_count() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
