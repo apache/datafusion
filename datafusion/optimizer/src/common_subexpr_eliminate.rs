@@ -420,8 +420,7 @@ impl CommonSubexprEliminate {
     /// currently the implemention is not optimal, Basically I just do a top-down iteration over all the
     ///
     fn add_extra_projection(&self, plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-        // println!("plan at the start: {:?}", plan);
-        let res = plan
+        let result = plan
             .clone()
             .rewrite(&mut ProjectionAdder {
                 insertion_point_map: HashMap::new(),
@@ -429,9 +428,7 @@ impl CommonSubexprEliminate {
                 complex_exprs: HashMap::new(),
             })?
             .data;
-        // .map(|transformed| Some(transformed.data))
-        // println!("plan at the end: {:?}", res);
-        Ok(Some(res))
+        Ok(Some(result))
     }
 }
 impl OptimizerRule for CommonSubexprEliminate {
@@ -912,30 +909,27 @@ impl ProjectionAdder {
     }
 
     fn update_expr_with_available_columns(
-        &self,
         expr: &mut Expr,
         available_columns: &[Column],
     ) -> Result<()> {
         match expr {
             Expr::BinaryExpr(_) => {
                 for available_col in available_columns {
-                    // println!("cached_expr.display_name(), expr.display_name() {:?}, {:?}", cached_expr.display_name()?, expr.display_name()?);
                     if available_col.flat_name() == expr.display_name()? {
-                        // println!("replacing expr: {:?} with available_col: {:?}", expr, available_col);
                         *expr = Expr::Column(available_col.clone());
                     }
                 }
             }
             Expr::WindowFunction(WindowFunction { fun: _, args, .. }) => {
                 args.iter_mut().try_for_each(|arg| {
-                    self.update_expr_with_available_columns(arg, available_columns)
+                    Self::update_expr_with_available_columns(arg, available_columns)
                 })?
             }
             Expr::Cast(Cast { expr, .. }) => {
-                self.update_expr_with_available_columns(expr, available_columns)?
+                Self::update_expr_with_available_columns(expr, available_columns)?
             }
             Expr::Alias(alias) => {
-                self.update_expr_with_available_columns(
+                Self::update_expr_with_available_columns(
                     &mut alias.expr,
                     available_columns,
                 )?;
@@ -944,22 +938,7 @@ impl ProjectionAdder {
                 // cannot rewrite
             }
         }
-        // Self::trim_expr(expr)?;
         Ok(())
-    }
-
-    fn trim_expr(expr: &mut Expr) -> Result<()> {
-        let orig_name = expr.display_name()?;
-        match expr {
-            Expr::Alias(alias) => {
-                Self::trim_expr(&mut alias.expr)?;
-                if orig_name == alias.expr.display_name()? {
-                    *expr = *alias.expr.clone();
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
     }
 
     // Assumes operators doesn't modify name of the fields.
@@ -968,7 +947,6 @@ impl ProjectionAdder {
         // use depth to trace where we are in the LogicalPlan tree
         // extract all expressions + check whether it contains in depth_sets
         let exprs = node.expressions();
-        // println!("extended exprs: {:?}", exprs);
         let mut schema = node.schema().deref().clone();
         for ip in node.inputs() {
             schema.merge(ip.schema());
@@ -978,8 +956,6 @@ impl ProjectionAdder {
             let (_, count) = self.complex_exprs.entry(expr).or_insert_with(|| (dtype, 0));
             *count += 1;
         }
-        // self.cumulative_map.extend(extended_set);
-        // self.data_type_map.extend(data_map);
     }
 }
 impl TreeNodeRewriter for ProjectionAdder {
@@ -993,14 +969,13 @@ impl TreeNodeRewriter for ProjectionAdder {
             LogicalPlan::TableScan(_) => {
                 self.insertion_point_map
                     .insert(self.depth - 1, self.complex_exprs.clone());
-                return Ok(Transformed::no(node));
+                Ok(Transformed::no(node))
             }
             LogicalPlan::Sort(_) | LogicalPlan::Filter(_) | LogicalPlan::Window(_) => {
                 self.extend_with_exprs(&node);
                 Ok(Transformed::no(node))
             }
             LogicalPlan::Projection(_) => {
-                // println!("proj node exprs: {:?}", node.expressions());
                 if self.complex_exprs.is_empty() {
                     self.extend_with_exprs(&node);
                 } else {
@@ -1025,17 +1000,8 @@ impl TreeNodeRewriter for ProjectionAdder {
             .unwrap_or_default();
         self.depth -= 1;
         // do not do extra things
-        // println!("---------------------");
-        // for (depth, complex_exprs) in &self.insertion_point_map{
-        //     println!("depth: {:?}, complex_exprs: {:?}", depth, complex_exprs);
-        // }
-        // println!("---------------------");
-        // let should_add_projection = !cached_exprs.is_empty();
         let should_add_projection =
             cached_exprs.iter().any(|(_expr, (_, count))| *count > 1);
-        // if let LogicalPlan::Projection(projection) = node {
-        //
-        // }
 
         let children = node.inputs();
         if children.len() != 1 {
@@ -1062,11 +1028,10 @@ impl TreeNodeRewriter for ProjectionAdder {
             }
 
             // adding new plan here
-            let new_child = LogicalPlan::Projection(Projection::try_new(
+            LogicalPlan::Projection(Projection::try_new(
                 project_exprs,
                 Arc::new(node.inputs()[0].clone()),
-            )?);
-            new_child
+            )?)
         } else {
             child
         };
@@ -1078,21 +1043,10 @@ impl TreeNodeRewriter for ProjectionAdder {
             .map(|field| field.qualified_column())
             .collect::<Vec<_>>();
         // Replace expressions with its pre-computed variant if available.
-        // println!("-----------------------");
-        // for expr in &expressions{
-        //     println!("old expr: {:?}", expr);
-        // }
         expressions.iter_mut().try_for_each(|expr| {
-            self.update_expr_with_available_columns(expr, &available_columns)
+            Self::update_expr_with_available_columns(expr, &available_columns)
         })?;
-        // for expr in &expressions{
-        //     println!("new expr: {:?}", expr);
-        // }
-        // println!("-----------------------");
-
-        // println!("old node:{:?}", node);
         let new_node = node.with_new_exprs(expressions, [child].to_vec())?;
-        // println!("new node:{:?}", new_node);
         Ok(Transformed::yes(new_node))
     }
 }
