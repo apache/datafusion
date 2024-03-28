@@ -1369,6 +1369,10 @@ pub(crate) mod tests {
     }
 
     impl ExecutionPlan for SortRequiredExec {
+        fn name(&self) -> &'static str {
+            "SortRequiredExec"
+        }
+
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }

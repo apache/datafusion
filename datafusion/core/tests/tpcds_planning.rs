@@ -73,9 +73,6 @@ async fn tpcds_logical_q9() -> Result<()> {
     create_logical_plan(9).await
 }
 
-#[ignore]
-// Schema error: No field named 'c'.'c_customer_sk'.
-// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q10() -> Result<()> {
     create_logical_plan(10).await
@@ -201,9 +198,6 @@ async fn tpcds_logical_q34() -> Result<()> {
     create_logical_plan(34).await
 }
 
-#[ignore]
-// Schema error: No field named 'c'.'c_customer_sk'.
-// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q35() -> Result<()> {
     create_logical_plan(35).await
@@ -577,7 +571,7 @@ async fn tpcds_physical_q9() -> Result<()> {
     create_physical_plan(9).await
 }
 
-#[ignore] // FieldNotFound
+#[ignore] // Physical plan does not support logical expression Exists(<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q10() -> Result<()> {
     create_physical_plan(10).await
@@ -703,7 +697,7 @@ async fn tpcds_physical_q34() -> Result<()> {
     create_physical_plan(34).await
 }
 
-#[ignore] // FieldNotFound
+#[ignore] // Physical plan does not support logical expression Exists(<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q35() -> Result<()> {
     create_physical_plan(35).await
@@ -734,7 +728,8 @@ async fn tpcds_physical_q40() -> Result<()> {
     create_physical_plan(40).await
 }
 
-#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[ignore]
+// Context("check_analyzed_plan", Plan("Correlated column is not allowed in predicate: (..)
 #[tokio::test]
 async fn tpcds_physical_q41() -> Result<()> {
     create_physical_plan(41).await
