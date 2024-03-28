@@ -41,7 +41,6 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
@@ -213,11 +212,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // Add `self.fun` when hash is available
     }
 
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        _input_schema: &Option<SchemaRef>,
-    ) -> SortProperties {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         self.monotonicity
             .as_ref()
             .map(|monotonicity| out_ordering(monotonicity, children))

@@ -31,7 +31,6 @@ use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
@@ -73,11 +72,7 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(
-        &self,
-        eq_properties: &mut EquivalenceProperties,
-        input_schema: &Option<SchemaRef>,
-    ) {
+    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
         let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
@@ -90,8 +85,8 @@ impl BuiltInWindowExpr {
                 // expressions and existing ordering expressions are equal (w.r.t.
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
-                let (mut ordering, _) = eq_properties
-                    .find_longest_permutation(&self.partition_by, input_schema);
+                let (mut ordering, _) =
+                    eq_properties.find_longest_permutation(&self.partition_by);
                 if ordering.len() == self.partition_by.len() {
                     ordering.push(fn_res_ordering);
                     eq_properties.add_new_orderings([ordering]);

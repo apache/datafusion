@@ -123,11 +123,7 @@ impl ProjectionExec {
         // Calculate equivalence properties:
         let mut input_eq_properties = input.equivalence_properties().clone();
         input_eq_properties.substitute_oeq_class(projection_mapping)?;
-        let eq_properties = input_eq_properties.project(
-            projection_mapping,
-            schema,
-            &Some(input.schema()),
-        );
+        let eq_properties = input_eq_properties.project(projection_mapping, schema);
 
         // Calculate output partitioning, which needs to respect aliases:
         let input_partition = input.output_partitioning();

@@ -312,11 +312,8 @@ mod tests {
             RecordBatch::try_new(output_schema.clone(), projected_values)?
         };
 
-        let projected_eq = input_eq_properties.project(
-            &projection_mapping,
-            output_schema,
-            &Some(input_data.schema()),
-        );
+        let projected_eq =
+            input_eq_properties.project(&projection_mapping, output_schema);
         Ok((projected_batch, projected_eq))
     }
 

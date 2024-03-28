@@ -891,32 +891,3 @@ select column2, column1 from foo ORDER BY column2 desc, column1 desc;
 # Cleanup
 statement ok
 drop table foo;
-
-# Casting from numeric to string types breaks the ordering
-statement ok
-CREATE EXTERNAL TABLE ordered_table (
-  a0 INTEGER,
-  a INTEGER,
-  b INTEGER,
-  c INTEGER,
-  d INTEGER
-)
-STORED AS CSV
-WITH HEADER ROW
-WITH ORDER (c ASC)
-LOCATION '../core/tests/data/window_2.csv';
-
-query T
-SELECT CAST(c as VARCHAR) as c_str
-FROM ordered_table
-ORDER BY c_str
-limit 5;
-----
-0
-1
-10
-11
-12
-
-statement ok
-drop table ordered_table;

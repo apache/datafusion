@@ -30,7 +30,6 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::{
@@ -135,11 +134,7 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(
-        &self,
-        children: &[SortProperties],
-        _input_schema: &Option<SchemaRef>,
-    ) -> SortProperties {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         -children[0]
     }
 }

@@ -263,12 +263,12 @@ mod tests {
         // finer ordering satisfies, crude ordering should return true
         let mut eq_properties_finer = EquivalenceProperties::new(input_schema.clone());
         eq_properties_finer.oeq_class.push(finer.clone());
-        assert!(eq_properties_finer.ordering_satisfy(&crude, &None));
+        assert!(eq_properties_finer.ordering_satisfy(&crude));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude = EquivalenceProperties::new(input_schema.clone());
         eq_properties_crude.oeq_class.push(crude.clone());
-        assert!(!eq_properties_crude.ordering_satisfy(&finer, &None));
+        assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
     }
 
@@ -552,7 +552,7 @@ mod tests {
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs, &None),
+                eq_properties.ordering_satisfy(&reqs),
                 expected,
                 "{}",
                 err_msg
@@ -722,7 +722,7 @@ mod tests {
                 expected
             );
             assert_eq!(
-                eq_properties.ordering_satisfy(&required, &None),
+                eq_properties.ordering_satisfy(&required),
                 expected,
                 "{err_msg}"
             );
@@ -775,7 +775,7 @@ mod tests {
                     // Check whether ordering_satisfy API result and
                     // experimental result matches.
                     assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement, &None),
+                        eq_properties.ordering_satisfy(&requirement),
                         expected,
                         "{}",
                         err_msg
@@ -847,7 +847,7 @@ mod tests {
                     // experimental result matches.
 
                     assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement, &None),
+                        eq_properties.ordering_satisfy(&requirement),
                         (expected | false),
                         "{}",
                         err_msg
@@ -909,7 +909,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs, &None),
+                eq_properties.ordering_satisfy(&reqs),
                 expected,
                 "{}",
                 err_msg

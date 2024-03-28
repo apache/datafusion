@@ -27,7 +27,6 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -224,11 +223,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
     /// the propagation of unordered columns and literals, the `SortProperties`
     /// struct is used.
-    fn get_ordering(
-        &self,
-        _children: &[SortProperties],
-        _input_schema: &Option<SchemaRef>,
-    ) -> SortProperties {
+    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
         SortProperties::Unordered
     }
 }

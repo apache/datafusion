@@ -221,10 +221,9 @@ fn replace_with_partial_sort(
         let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_plan.expr());
 
         let mut common_prefix_length = 0;
-        while child_eq_properties.ordering_satisfy_requirement(
-            &sort_req[0..common_prefix_length + 1],
-            &Some(child.schema()),
-        ) {
+        while child_eq_properties
+            .ordering_satisfy_requirement(&sort_req[0..common_prefix_length + 1])
+        {
             common_prefix_length += 1;
         }
         if common_prefix_length > 0 {
@@ -345,9 +344,7 @@ fn ensure_sorting(
 
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
-            if !eq_properties
-                .ordering_satisfy_requirement(&required, &Some(child.plan.schema()))
-            {
+            if !eq_properties.ordering_satisfy_requirement(&required) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
@@ -391,10 +388,10 @@ fn analyze_immediate_sort_removal(
     if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
-        if sort_input.equivalence_properties().ordering_satisfy(
-            sort_exec.properties().output_ordering().unwrap_or(&[]),
-            &Some(sort_input.schema()),
-        ) {
+        if sort_input
+            .equivalence_properties()
+            .ordering_satisfy(sort_exec.properties().output_ordering().unwrap_or(&[]))
+        {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
             {

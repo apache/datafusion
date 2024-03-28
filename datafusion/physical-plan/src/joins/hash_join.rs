@@ -539,7 +539,7 @@ impl HashJoinExec {
                     .collect();
                 output_partitioning = Partitioning::Hash(normalized_exprs, part);
             }
-            eq_properties = eq_properties.project(&projection_mapping, out_schema, &None);
+            eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
         Ok(PlanProperties::new(
             eq_properties,

@@ -343,10 +343,7 @@ impl GroupedHashAggregateStream {
         let (ordering, _) = agg
             .properties()
             .equivalence_properties()
-            .find_longest_permutation(
-                &agg_group_by.output_exprs(),
-                &Some(agg.input_schema()),
-            );
+            .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
