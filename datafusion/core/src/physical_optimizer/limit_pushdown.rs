@@ -36,6 +36,8 @@ use datafusion_common::Result;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
+use super::utils::is_limit_terminator;
+
 #[allow(missing_docs)]
 pub struct LimitPushdown {}
 
@@ -84,6 +86,8 @@ fn push_down_limit(
                 global_limit,
                 coalesce_batches,
             )));
+        } else if is_limit_terminator(global_limit.input()) {
+            return Ok(Transformed::no(plan));
         } else {
             return Ok(Transformed::no(plan));
         }
@@ -116,11 +120,12 @@ fn reset_and_get_new_limit(
     plan: &GlobalLimitExec,
     child: &CoalesceBatchesExec,
 ) -> Arc<dyn ExecutionPlan> {
+    let fetch = match plan.fetch() {
+        Some(0) | None => child.target_batch_size(),
+        Some(fetch_size) => fetch_size,
+    };
     Arc::new(GlobalLimitExec::new(
-        Arc::new(CoalesceBatchesExec::new(
-            child.input().clone(),
-            plan.fetch().unwrap_or(child.target_batch_size()),
-        )),
+        Arc::new(CoalesceBatchesExec::new(child.input().clone(), fetch)),
         plan.skip(),
         plan.fetch(),
     ))

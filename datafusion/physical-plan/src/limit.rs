@@ -167,6 +167,10 @@ impl ExecutionPlan for GlobalLimitExec {
 
         // GlobalLimitExec requires a single input partition
         if 1 != self.input.output_partitioning().partition_count() {
+            println!(
+                "**************** \n partition_count is  {:?} \n **************** \n",
+                self.input.output_partitioning().partition_count()
+            );
             return internal_err!("GlobalLimitExec requires a single input partition");
         }
 
