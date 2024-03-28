@@ -3376,3 +3376,55 @@ SELECT FIRST_VALUE(column1 ORDER BY column2) IGNORE NULLS FROM t;
 
 statement ok
 DROP TABLE t;
+
+# Test for ignore null in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES (3), (4), (null::bigint);
+
+query I
+SELECT LAST_VALUE(column1) FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1) IGNORE NULLS FROM t;
+----
+4
+
+statement ok
+DROP TABLE t;
+
+# Test for ignore null with ORDER BY in LAST_VALUE
+statement ok
+CREATE TABLE t AS VALUES  (3, 3), (4, 4), (null::bigint, 1), (null::bigint, 2);
+
+query I
+SELECT column1 FROM t ORDER BY column2 DESC;
+----
+4
+3
+NULL
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) RESPECT NULLS FROM t;
+----
+NULL
+
+query I
+SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
+----
+3
+
+statement ok
+DROP TABLE t;

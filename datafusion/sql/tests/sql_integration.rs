@@ -38,6 +38,7 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
+use datafusion_functions::unicode;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -88,7 +89,7 @@ fn parse_decimals() {
 fn parse_ident_normalization() {
     let test_data = [
         (
-            "SELECT LENGTH('str')",
+            "SELECT CHARACTER_LENGTH('str')",
             "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
             false,
         ),
@@ -2688,6 +2689,7 @@ fn logical_plan_with_dialect_and_options(
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider::default()
+        .with_udf(unicode::character_length().as_ref().clone())
         .with_udf(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
@@ -4508,26 +4510,27 @@ fn test_field_not_found_window_function() {
 
 #[test]
 fn test_parse_escaped_string_literal_value() {
-    let sql = r"SELECT length('\r\n') AS len";
+    let sql = r"SELECT character_length('\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\r\n') AS len";
+    let sql = r"SELECT character_length(E'\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let sql =
+        r"SELECT character_length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
     let expected =
         "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\000') AS len";
+    let sql = r"SELECT character_length(E'\000') AS len";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 25\")"
     )
 }
 

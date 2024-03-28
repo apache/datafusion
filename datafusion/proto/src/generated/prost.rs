@@ -2862,10 +2862,10 @@ pub enum ScalarFunction {
     Trunc = 19,
     /// 20 was Array
     /// RegexpMatch = 21;
-    BitLength = 22,
+    /// 22 was BitLength
     /// 23 was Btrim
-    CharacterLength = 24,
-    Chr = 25,
+    /// 24 was CharacterLength
+    /// 25 was Chr
     Concat = 26,
     ConcatWithSeparator = 27,
     /// 28 was DatePart
@@ -3001,9 +3001,6 @@ impl ScalarFunction {
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::BitLength => "BitLength",
-            ScalarFunction::CharacterLength => "CharacterLength",
-            ScalarFunction::Chr => "Chr",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
@@ -3057,9 +3054,6 @@ impl ScalarFunction {
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
-            "BitLength" => Some(Self::BitLength),
-            "CharacterLength" => Some(Self::CharacterLength),
-            "Chr" => Some(Self::Chr),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),

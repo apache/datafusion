@@ -35,7 +35,6 @@ use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
-    compute::kernels::length::bit_length,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use arrow_array::Array;
@@ -255,44 +254,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function_inner(math_expressions::cot)(args))
         }
         // string functions
-        BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
-            ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
-            ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
-                    v.as_ref().map(|x| (x.len() * 8) as i32),
-                ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                )),
-                _ => unreachable!(),
-            },
-        }),
-        BuiltinScalarFunction::CharacterLength => {
-            Arc::new(|args| match args[0].data_type() {
-                DataType::Utf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        character_length,
-                        Int32Type,
-                        "character_length"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                DataType::LargeUtf8 => {
-                    let func = invoke_if_unicode_expressions_feature_flag!(
-                        character_length,
-                        Int64Type,
-                        "character_length"
-                    );
-                    make_scalar_function_inner(func)(args)
-                }
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function character_length"
-                ),
-            })
-        }
-        BuiltinScalarFunction::Chr => {
-            Arc::new(|args| make_scalar_function_inner(string_expressions::chr)(args))
-        }
         BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
         BuiltinScalarFunction::ConcatWithSeparator => Arc::new(|args| {
@@ -611,126 +572,6 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        test_function!(
-            BitLength,
-            &[lit("chars")],
-            Ok(Some(40)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            BitLength,
-            &[lit("josé")],
-            Ok(Some(40)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(BitLength, &[lit("")], Ok(Some(0)), i32, Int32, Int32Array);
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("chars")],
-            Ok(Some(5)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("josé")],
-            Ok(Some(4)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit("")],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(feature = "unicode_expressions")]
-        test_function!(
-            CharacterLength,
-            &[lit(ScalarValue::Utf8(None))],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        #[cfg(not(feature = "unicode_expressions"))]
-        test_function!(
-            CharacterLength,
-            &[lit("josé")],
-            internal_err!(
-                "function character_length requires compilation with feature flag: unicode_expressions."
-            ),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
-            Ok(Some("💯")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(120)))],
-            Ok(Some("x")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(128175)))],
-            Ok(Some("💯")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(None))],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(0)))],
-            exec_err!("null character not permitted."),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            Chr,
-            &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            exec_err!("requested character too large for encoding."),
-            &str,
-            Utf8,
-            StringArray
-        );
         test_function!(
             Concat,
             &[lit("aa"), lit("bb"), lit("cc"),],

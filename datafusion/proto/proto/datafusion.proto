@@ -563,10 +563,10 @@ enum ScalarFunction {
   Trunc = 19;
   // 20 was Array
   // RegexpMatch = 21;
-  BitLength = 22;
+  // 22 was BitLength
   // 23 was Btrim
-  CharacterLength = 24;
-  Chr = 25;
+  // 24 was CharacterLength
+  // 25 was Chr
   Concat = 26;
   ConcatWithSeparator = 27;
   // 28 was DatePart

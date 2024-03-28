@@ -312,9 +312,9 @@ select count(*) from hits;
 CREATE EXTERNAL TABLE test
 STORED AS PARQUET
 OPTIONS(
-    'access_key_id' '******',
-    'secret_access_key' '******',
-    'region' 'us-east-2'
+    'aws.access_key_id' '******',
+    'aws.secret_access_key' '******',
+    'aws.region' 'us-east-2'
 )
 LOCATION 's3://bucket/path/file.parquet';
 ```
@@ -365,9 +365,9 @@ Details of the environment variables that can be used are:
 CREATE EXTERNAL TABLE test
 STORED AS PARQUET
 OPTIONS(
-    'access_key_id' '******',
-    'secret_access_key' '******',
-    'endpoint' 'https://bucket.oss-cn-hangzhou.aliyuncs.com'
+    'aws.access_key_id' '******',
+    'aws.secret_access_key' '******',
+    'aws.oss.endpoint' 'https://bucket.oss-cn-hangzhou.aliyuncs.com'
 )
 LOCATION 'oss://bucket/path/file.parquet';
 ```
@@ -380,6 +380,29 @@ The supported OPTIONS are:
 
 Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-region-endpoint}`
 
+## Registering COS Data Sources
+
+[Tencent cloud COS](https://cloud.tencent.com/product/cos) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'aws.access_key_id' '******',
+    'aws.secret_access_key' '******',
+    'aws.cos.endpoint' 'https://cos.ap-singapore.myqcloud.com'
+)
+LOCATION 'cos://bucket/path/file.parquet';
+```
+
+The supported OPTIONS are:
+
+- access_key_id
+- secret_access_key
+- endpoint
+
+Note that the `endpoint` format of urls must be: `https://cos.{cos-region-endpoint}`
+
 ## Registering GCS Data Sources
 
 [Google Cloud Storage](https://cloud.google.com/storage) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
@@ -388,7 +411,7 @@ Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-regio
 CREATE EXTERNAL TABLE test
 STORED AS PARQUET
 OPTIONS(
-    'service_account_path' '/tmp/gcs.json',
+    'gcp.service_account_path' '/tmp/gcs.json',
 )
 LOCATION 'gs://bucket/path/file.parquet';
 ```
