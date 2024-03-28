@@ -2900,7 +2900,7 @@ pub enum ScalarFunction {
     /// 57 was ToTimestampMicros
     /// 58 was ToTimestampSeconds
     /// 59 was Now
-    Translate = 60,
+    /// 60 was Translate
     /// Trim = 61;
     /// Upper = 62;
     Coalesce = 63,
@@ -2964,8 +2964,8 @@ pub enum ScalarFunction {
     /// 123 is ArrayExcept
     /// 124 was ArrayPopFront
     /// 125 was Levenshtein
-    SubstrIndex = 126,
-    FindInSet = 127,
+    /// 126 was SubstrIndex
+    /// 127 was FindInSet
     /// 128 was ArraySort
     /// 129 was ArrayDistinct
     /// 130 was ArrayResize
@@ -3005,7 +3005,6 @@ impl ScalarFunction {
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
@@ -3024,8 +3023,6 @@ impl ScalarFunction {
             ScalarFunction::Cot => "Cot",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Iszero => "Iszero",
-            ScalarFunction::SubstrIndex => "SubstrIndex",
-            ScalarFunction::FindInSet => "FindInSet",
             ScalarFunction::EndsWith => "EndsWith",
         }
     }
@@ -3051,7 +3048,6 @@ impl ScalarFunction {
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
             "Random" => Some(Self::Random),
-            "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),
@@ -3070,8 +3066,6 @@ impl ScalarFunction {
             "Cot" => Some(Self::Cot),
             "Nanvl" => Some(Self::Nanvl),
             "Iszero" => Some(Self::Iszero),
-            "SubstrIndex" => Some(Self::SubstrIndex),
-            "FindInSet" => Some(Self::FindInSet),
             "EndsWith" => Some(Self::EndsWith),
             _ => None,
         }

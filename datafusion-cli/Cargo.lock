@@ -1267,6 +1267,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "hashbrown 0.14.3",
  "hex",
  "itertools",
  "log",

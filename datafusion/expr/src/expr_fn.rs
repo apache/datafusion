@@ -579,7 +579,6 @@ scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
-scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(
@@ -595,9 +594,6 @@ scalar_expr!(
     num,
     "returns true if a given number is +0.0 or -0.0 otherwise returns false"
 );
-
-scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
-scalar_expr!(FindInSet, find_in_set, str strlist, "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -1012,8 +1008,5 @@ mod test {
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
-        test_scalar_expr!(Translate, translate, string, from, to);
-        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
-        test_scalar_expr!(FindInSet, find_in_set, string, stringlist);
     }
 }
