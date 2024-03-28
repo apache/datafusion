@@ -226,6 +226,10 @@ impl DisplayAs for PartialSortExec {
 }
 
 impl ExecutionPlan for PartialSortExec {
+    fn name(&self) -> &'static str {
+        "PartialSortExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

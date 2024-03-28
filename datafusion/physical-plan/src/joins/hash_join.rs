@@ -611,6 +611,10 @@ fn project_index_to_exprs(
 }
 
 impl ExecutionPlan for HashJoinExec {
+    fn name(&self) -> &'static str {
+        "HashJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
