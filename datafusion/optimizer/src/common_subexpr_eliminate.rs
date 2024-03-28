@@ -944,7 +944,7 @@ impl ProjectionAdder {
                 // cannot rewrite
             }
         }
-        Self::trim_expr(expr)?;
+        // Self::trim_expr(expr)?;
         Ok(())
     }
 

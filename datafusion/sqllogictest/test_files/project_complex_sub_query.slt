@@ -37,7 +37,7 @@ FROM t;
 ----
 logical_plan
 WindowAggr: windowExpr=[[SUM(CAST(t.c3 + t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
---Projection: t.c3 + t.c4
+--Projection: t.c3 + t.c4 AS t.c3 + t.c4
 ----TableScan: t projection=[c3, c4]
 physical_plan
 WindowAggExec: wdw=[SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
@@ -90,7 +90,7 @@ FROM t;
 ----
 logical_plan
 WindowAggr: windowExpr=[[SUM(CAST(t.c3 - t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
---Projection: t.c3 - t.c4
+--Projection: t.c3 - t.c4 AS t.c3 - t.c4
 ----TableScan: t projection=[c3, c4]
 physical_plan
 WindowAggExec: wdw=[SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
