@@ -116,6 +116,7 @@ Here are some active projects using DataFusion:
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
+- [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
@@ -146,6 +147,7 @@ Here are some less active projects that used DataFusion:
 [qv]: https://github.com/timvw/qv
 [roapi]: https://github.com/roapi/roapi
 [seafowl]: https://github.com/splitgraph/seafowl
+[spice.ai]: https://github.com/spiceai/spiceai
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
 [vegafusion]: https://vegafusion.io/
