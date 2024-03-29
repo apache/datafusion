@@ -683,8 +683,9 @@ impl<'a, 'b> TreeNodeVisitor for PgJsonVisitor<'a, 'b> {
     ) -> datafusion_common::Result<TreeNodeRecursion> {
         let id = self.parent_ids.pop().unwrap();
 
-        let current_node = self.objects.remove(&id)
-            .ok_or_else(|| DataFusionError::Internal("Missing current node!".to_string()))?;
+        let current_node = self.objects.remove(&id).ok_or_else(|| {
+            DataFusionError::Internal("Missing current node!".to_string())
+        })?;
 
         if let Some(parent_id) = self.parent_ids.last() {
             let parent_node = self
