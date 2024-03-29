@@ -36,17 +36,15 @@ explain SELECT c3+c4, SUM(c3+c4) OVER()
 FROM t;
 ----
 logical_plan
-Projection: t.c3 + t.c4, SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
---WindowAggr: windowExpr=[[SUM(CAST(t.c3 + t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-----Projection: t.c3 + t.c4 AS t.c3 + t.c4, t.c3, t.c4
-------TableScan: t projection=[c3, c4]
+WindowAggr: windowExpr=[[SUM(CAST(t.c3 + t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--Projection: t.c3 + t.c4 AS t.c3 + t.c4
+----TableScan: t projection=[c3, c4]
 physical_plan
-ProjectionExec: expr=[t.c3 + t.c4@0 as t.c3 + t.c4, SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
---WindowAggExec: wdw=[SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-----CoalescePartitionsExec
-------ProjectionExec: expr=[c3@0 + c4@1 as t.c3 + t.c4, c3@0 as c3, c4@1 as c4]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/project_complex_expression.csv]]}, projection=[c3, c4], has_header=true
+WindowAggExec: wdw=[SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 + t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+--CoalescePartitionsExec
+----ProjectionExec: expr=[c3@0 + c4@1 as t.c3 + t.c4]
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/project_complex_expression.csv]]}, projection=[c3, c4], has_header=true
 
 query TT
 explain SELECT c3+c4, SUM(c3+c4) OVER(order by c3+c4)
@@ -91,17 +89,15 @@ explain SELECT c3-c4, SUM(c3-c4) OVER()
 FROM t;
 ----
 logical_plan
-Projection: t.c3 - t.c4, SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
---WindowAggr: windowExpr=[[SUM(CAST(t.c3 - t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-----Projection: t.c3 - t.c4 AS t.c3 - t.c4, t.c3, t.c4
-------TableScan: t projection=[c3, c4]
+WindowAggr: windowExpr=[[SUM(CAST(t.c3 - t.c4 AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--Projection: t.c3 - t.c4 AS t.c3 - t.c4
+----TableScan: t projection=[c3, c4]
 physical_plan
-ProjectionExec: expr=[t.c3 - t.c4@0 as t.c3 - t.c4, SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
---WindowAggExec: wdw=[SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-----CoalescePartitionsExec
-------ProjectionExec: expr=[c3@0 - c4@1 as t.c3 - t.c4, c3@0 as c3, c4@1 as c4]
---------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/project_complex_expression.csv]]}, projection=[c3, c4], has_header=true
+WindowAggExec: wdw=[SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "SUM(t.c3 - t.c4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+--CoalescePartitionsExec
+----ProjectionExec: expr=[c3@0 - c4@1 as t.c3 - t.c4]
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/project_complex_expression.csv]]}, projection=[c3, c4], has_header=true
 
 query II
 SELECT c3+c4, SUM(c3+c4) OVER()
