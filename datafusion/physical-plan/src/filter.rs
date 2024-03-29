@@ -399,10 +399,8 @@ impl RecordBatchStream for FilterExecStream {
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
 fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
-    let mut eq_predicate_columns =
-        Vec::<(&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)>::new();
-    let mut ne_predicate_columns =
-        Vec::<(&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)>::new();
+    let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
+    let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
@@ -421,11 +419,13 @@ fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAnd
 
     (eq_predicate_columns, ne_predicate_columns)
 }
+
+/// Pair of `Arc<dyn PhysicalExpr>`s
+pub type PhysicalExprPairRef<'a> = (&'a Arc<dyn PhysicalExpr>, &'a Arc<dyn PhysicalExpr>);
+
 /// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
-pub type EqualAndNonEqual<'a> = (
-    Vec<(&'a Arc<dyn PhysicalExpr>, &'a Arc<dyn PhysicalExpr>)>,
-    Vec<(&'a Arc<dyn PhysicalExpr>, &'a Arc<dyn PhysicalExpr>)>,
-);
+pub type EqualAndNonEqual<'a> =
+    (Vec<PhysicalExprPairRef<'a>>, Vec<PhysicalExprPairRef<'a>>);
 
 #[cfg(test)]
 mod tests {
