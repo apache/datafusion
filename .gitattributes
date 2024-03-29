@@ -1,2 +1,3 @@
+.github/ export-ignore
 datafusion/proto/src/generated/prost.rs linguist-generated
 datafusion/proto/src/generated/pbjson.rs linguist-generated
