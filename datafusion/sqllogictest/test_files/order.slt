@@ -918,5 +918,54 @@ limit 5;
 11
 12
 
+query TT
+EXPLAIN SELECT CAST(c as VARCHAR) as c_str
+FROM ordered_table
+ORDER BY c_str
+limit 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: c_str ASC NULLS LAST, fetch=5
+----Projection: CAST(ordered_table.c AS Utf8) AS c_str
+------TableScan: ordered_table projection=[c]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
+----SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST]
+------ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+query I
+SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+0
+1
+2
+3
+4
+
+query TT
+EXPLAIN SELECT CAST(c as BIGINT) as c_bigint
+FROM ordered_table
+ORDER BY c_bigint
+limit 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: c_bigint ASC NULLS LAST, fetch=5
+----Projection: CAST(ordered_table.c AS Int64) AS c_bigint
+------TableScan: ordered_table projection=[c]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
+----ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
 statement ok
 drop table ordered_table;
