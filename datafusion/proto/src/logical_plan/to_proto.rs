@@ -1431,8 +1431,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Gcd => Self::Gcd,
             BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
-            BuiltinScalarFunction::Ln => Self::Ln,
-            BuiltinScalarFunction::Log10 => Self::Log10,
             BuiltinScalarFunction::Degrees => Self::Degrees,
             BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
