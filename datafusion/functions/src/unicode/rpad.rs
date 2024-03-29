@@ -178,47 +178,43 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("josé")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("josé ")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("hi   ")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
             Ok(Some("")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),
@@ -226,102 +222,94 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("xy")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from("xy")),
             ],
             Ok(Some("hixyx")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(21))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcdef")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(21i64)),
+                ColumnarValue::Scalar(ScalarValue::from("abcdef")),
             ],
             Ok(Some("hiabcdefabcdefabcdefa")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(" ")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(" ")),
             ],
             Ok(Some("hi   ")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from("")),
             ],
             Ok(Some("hi")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("xy")))),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from("xy")),
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("xy")))),
+                ColumnarValue::Scalar(ScalarValue::from("xy")),
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("hi")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("hi")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],
             Ok(None),
@@ -329,26 +317,24 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(10))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("xy")))),
+                ColumnarValue::Scalar(ScalarValue::from("josé")),
+                ColumnarValue::Scalar(ScalarValue::from(10i64)),
+                ColumnarValue::Scalar(ScalarValue::from("xy")),
             ],
             Ok(Some("joséxyxyxy")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(10))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("éñ")))),
+                ColumnarValue::Scalar(ScalarValue::from("josé")),
+                ColumnarValue::Scalar(ScalarValue::from(10i64)),
+                ColumnarValue::Scalar(ScalarValue::from("éñ")),
             ],
             Ok(Some("josééñéñéñ")),
             &str,
@@ -359,8 +345,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("josé")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             internal_err!(
                 "function rpad requires compilation with feature flag: unicode_expressions."
