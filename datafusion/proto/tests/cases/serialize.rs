@@ -260,10 +260,7 @@ fn test_expression_serialization_roundtrip() {
     let lit = Expr::Literal(ScalarValue::Utf8(None));
     for builtin_fun in BuiltinScalarFunction::iter() {
         // default to 4 args (though some exprs like substr have error checking)
-        let num_args = match builtin_fun {
-            BuiltinScalarFunction::Substr => 3,
-            _ => 4,
-        };
+        let num_args = 4;
         let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
         let expr = Expr::ScalarFunction(ScalarFunction::new(builtin_fun, args));
 

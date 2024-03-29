@@ -1446,8 +1446,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::EndsWith => Self::EndsWith,
             BuiltinScalarFunction::InitCap => Self::InitCap,
             BuiltinScalarFunction::Random => Self::Random,
-            BuiltinScalarFunction::Strpos => Self::Strpos,
-            BuiltinScalarFunction::Substr => Self::Substr,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Pi => Self::Pi,
