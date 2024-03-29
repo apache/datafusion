@@ -21,7 +21,6 @@
 
 //! Unicode expressions
 
-use std::cmp::max;
 use std::sync::Arc;
 
 use arrow::{
@@ -35,100 +34,6 @@ use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
     exec_err, Result,
 };
-
-/// Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)
-/// strpos('high', 'ig') = 2
-/// The implementation uses UTF-8 code points as characters
-pub fn strpos<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    T::Native: OffsetSizeTrait,
-{
-    let string_array: &GenericStringArray<T::Native> =
-        as_generic_string_array::<T::Native>(&args[0])?;
-
-    let substring_array: &GenericStringArray<T::Native> =
-        as_generic_string_array::<T::Native>(&args[1])?;
-
-    let result = string_array
-        .iter()
-        .zip(substring_array.iter())
-        .map(|(string, substring)| match (string, substring) {
-            (Some(string), Some(substring)) => {
-                // the find method returns the byte index of the substring
-                // Next, we count the number of the chars until that byte
-                T::Native::from_usize(
-                    string
-                        .find(substring)
-                        .map(|x| string[..x].chars().count() + 1)
-                        .unwrap_or(0),
-                )
-            }
-            _ => None,
-        })
-        .collect::<PrimitiveArray<T>>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
-/// substr('alphabet', 3) = 'phabet'
-/// substr('alphabet', 3, 2) = 'ph'
-/// The implementation uses UTF-8 code points as characters
-pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        2 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let start_array = as_int64_array(&args[1])?;
-
-            let result = string_array
-                .iter()
-                .zip(start_array.iter())
-                .map(|(string, start)| match (string, start) {
-                    (Some(string), Some(start)) => {
-                        if start <= 0 {
-                            Some(string.to_string())
-                        } else {
-                            Some(string.chars().skip(start as usize - 1).collect())
-                        }
-                    }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        3 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let start_array = as_int64_array(&args[1])?;
-            let count_array = as_int64_array(&args[2])?;
-
-            let result = string_array
-                .iter()
-                .zip(start_array.iter())
-                .zip(count_array.iter())
-                .map(|((string, start), count)| match (string, start, count) {
-                    (Some(string), Some(start), Some(count)) => {
-                        if count < 0 {
-                            exec_err!(
-                                "negative substring length not allowed: substr(<str>, {start}, {count})"
-                            )
-                        } else {
-                            let skip = max(0, start - 1);
-                            let count = max(0, count + (if start < 1 {start - 1} else {0}));
-                            Ok(Some(string.chars().skip(skip as usize).take(count as usize).collect::<String>()))
-                        }
-                    }
-                    _ => Ok(None),
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
-
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
-        }
-    }
-}
 
 /// Replaces each character in string that matches a character in the from set with the corresponding character in the to set. If from is longer than to, occurrences of the extra characters in from are deleted.
 /// translate('12345', '143', 'ax') = 'a2x5'

@@ -579,9 +579,6 @@ scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
-scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
-scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
@@ -1015,9 +1012,6 @@ mod test {
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
-        test_scalar_expr!(Strpos, strpos, string, substring);
-        test_scalar_expr!(Substr, substr, string, position);
-        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
         test_scalar_expr!(FindInSet, find_in_set, string, stringlist);

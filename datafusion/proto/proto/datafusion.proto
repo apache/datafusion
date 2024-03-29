@@ -593,8 +593,8 @@ enum ScalarFunction {
   // 49 was SHA512
   // 50 was SplitPart
   // StartsWith = 51;
-  Strpos = 52;
-  Substr = 53;
+  // 52 was Strpos
+  // 53 was Substr
   // ToHex = 54;
   // 55 was ToTimestamp
   // 56 was ToTimestampMillis

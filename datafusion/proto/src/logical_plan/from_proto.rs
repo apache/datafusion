@@ -42,10 +42,10 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, strpos, substr,
-    substr_index, substring, translate, trunc, AggregateFunction, Between, BinaryExpr,
-    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
-    GetIndexedField, GroupingSet,
+    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, substr_index,
+    translate, trunc, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -455,8 +455,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::Strpos => Self::Strpos,
-            ScalarFunction::Substr => Self::Substr,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
@@ -1389,25 +1387,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Strpos => Ok(strpos(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Substr => {
-                    if args.len() > 2 {
-                        assert_eq!(args.len(), 3);
-                        Ok(substring(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                            parse_expr(&args[2], registry, codec)?,
-                        ))
-                    } else {
-                        Ok(substr(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                        ))
-                    }
-                }
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

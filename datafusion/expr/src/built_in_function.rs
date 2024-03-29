@@ -113,10 +113,6 @@ pub enum BuiltinScalarFunction {
     InitCap,
     /// random
     Random,
-    /// strpos
-    Strpos,
-    /// substr
-    Substr,
     /// translate
     Translate,
     /// substr_index
@@ -211,8 +207,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
-            BuiltinScalarFunction::Strpos => Volatility::Immutable,
-            BuiltinScalarFunction::Substr => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
             BuiltinScalarFunction::FindInSet => Volatility::Immutable,
@@ -252,12 +246,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
-            BuiltinScalarFunction::Strpos => {
-                utf8_to_int_type(&input_expr_types[0], "strpos/instr/position")
-            }
-            BuiltinScalarFunction::Substr => {
-                utf8_to_str_type(&input_expr_types[0], "substr")
-            }
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
@@ -341,24 +329,12 @@ impl BuiltinScalarFunction {
                 Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
             }
 
-            BuiltinScalarFunction::EndsWith | BuiltinScalarFunction::Strpos => {
-                Signature::one_of(
-                    vec![
-                        Exact(vec![Utf8, Utf8]),
-                        Exact(vec![Utf8, LargeUtf8]),
-                        Exact(vec![LargeUtf8, Utf8]),
-                        Exact(vec![LargeUtf8, LargeUtf8]),
-                    ],
-                    self.volatility(),
-                )
-            }
-
-            BuiltinScalarFunction::Substr => Signature::one_of(
+            BuiltinScalarFunction::EndsWith => Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
-                    Exact(vec![Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, Int64, Int64]),
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![Utf8, LargeUtf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8]),
                 ],
                 self.volatility(),
             ),
@@ -537,8 +513,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::Strpos => &["strpos", "instr", "position"],
-            BuiltinScalarFunction::Substr => &["substr"],
             BuiltinScalarFunction::Translate => &["translate"],
             BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
             BuiltinScalarFunction::FindInSet => &["find_in_set"],

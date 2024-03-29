@@ -27,6 +27,8 @@ mod lpad;
 mod reverse;
 mod right;
 mod rpad;
+mod strpos;
+mod substr;
 
 // create UDFs
 make_udf_function!(
@@ -39,6 +41,8 @@ make_udf_function!(lpad::LPadFunc, LPAD, lpad);
 make_udf_function!(right::RightFunc, RIGHT, right);
 make_udf_function!(reverse::ReverseFunc, REVERSE, reverse);
 make_udf_function!(rpad::RPadFunc, RPAD, rpad);
+make_udf_function!(strpos::StrposFunc, STRPOS, strpos);
+make_udf_function!(substr::SubstrFunc, SUBSTR, substr);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
@@ -51,6 +55,11 @@ pub mod expr_fn {
     #[doc = "the number of characters in the `string`"]
     pub fn character_length(string: Expr) -> Expr {
         super::character_length().call(vec![string])
+    }
+
+    #[doc = "finds the position from where the `substring` matches the `string`"]
+    pub fn instr(string: Expr, substring: Expr) -> Expr {
+        strpos(string, substring)
     }
 
     #[doc = "the number of characters in the `string`"]
@@ -68,6 +77,11 @@ pub mod expr_fn {
         super::lpad().call(args)
     }
 
+    #[doc = "finds the position from where the `substring` matches the `string`"]
+    pub fn position(string: Expr, substring: Expr) -> Expr {
+        strpos(string, substring)
+    }
+
     #[doc = "reverses the `string`"]
     pub fn reverse(string: Expr) -> Expr {
         super::reverse().call(vec![string])
@@ -82,6 +96,21 @@ pub mod expr_fn {
     pub fn rpad(args: Vec<Expr>) -> Expr {
         super::rpad().call(args)
     }
+
+    #[doc = "finds the position from where the `substring` matches the `string`"]
+    pub fn strpos(string: Expr, substring: Expr) -> Expr {
+        super::strpos().call(vec![string, substring])
+    }
+
+    #[doc = "substring from the `position` to the end"]
+    pub fn substr(string: Expr, position: Expr) -> Expr {
+        super::substr().call(vec![string, position])
+    }
+
+    #[doc = "substring from the `position` with `length` characters"]
+    pub fn substring(string: Expr, position: Expr, length: Expr) -> Expr {
+        super::substr().call(vec![string, position, length])
+    }
 }
 
 ///   Return a list of all functions in this package
@@ -93,5 +122,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         reverse(),
         right(),
         rpad(),
+        strpos(),
+        substr(),
     ]
 }

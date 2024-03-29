@@ -2892,8 +2892,8 @@ pub enum ScalarFunction {
     /// 49 was SHA512
     /// 50 was SplitPart
     /// StartsWith = 51;
-    Strpos = 52,
-    Substr = 53,
+    /// 52 was Strpos
+    /// 53 was Substr
     /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
@@ -3005,8 +3005,6 @@ impl ScalarFunction {
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Strpos => "Strpos",
-            ScalarFunction::Substr => "Substr",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
@@ -3053,8 +3051,6 @@ impl ScalarFunction {
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
             "Random" => Some(Self::Random),
-            "Strpos" => Some(Self::Strpos),
-            "Substr" => Some(Self::Substr),
             "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
