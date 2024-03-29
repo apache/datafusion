@@ -25,6 +25,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    Operator,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, SetOperator,
@@ -221,37 +222,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let skip = match skip {
-            Some(skip_expr) => match self.sql_to_expr(
-                skip_expr.value,
-                input.schema(),
-                &mut PlannerContext::new(),
-            )? {
-                Expr::Literal(ScalarValue::Int64(Some(s))) => {
-                    if s < 0 {
-                        return plan_err!("Offset must be >= 0, '{s}' was provided.");
-                    }
-                    Ok(s as usize)
-                }
-                _ => plan_err!("Unexpected expression in OFFSET clause"),
-            }?,
-            _ => 0,
-        };
+            Some(skip_expr) => {
+                let expr = self.sql_to_expr(
+                    skip_expr.value,
+                    input.schema(),
+                    &mut PlannerContext::new(),
+                )?;
+                let n = get_constant_result(&expr, "OFFSET")?;
+                convert_usize_with_check(n, "OFFSET")
+            }
+            _ => Ok(0),
+        }?;
 
         let fetch = match fetch {
             Some(limit_expr)
                 if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
             {
-                let n = match self.sql_to_expr(
+                let expr = self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
-                )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
-                        Ok(n as usize)
-                    }
-                    _ => plan_err!("LIMIT must not be negative"),
-                }?;
-                Some(n)
+                )?;
+                let n = get_constant_result(&expr, "LIMIT")?;
+                Some(convert_usize_with_check(n, "LIMIT")?)
             }
             _ => None,
         };
@@ -281,5 +274,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
         }
+    }
+}
+
+/// Retrieves the constant result of an expression, evaluating it if possible.
+///
+/// This function takes an expression and an argument name as input and returns
+/// a `Result<i64>` indicating either the constant result of the expression or an
+/// error if the expression cannot be evaluated.
+///
+/// # Arguments
+///
+/// * `expr` - An `Expr` representing the expression to evaluate.
+/// * `arg_name` - The name of the argument for error messages.
+///
+/// # Returns
+///
+/// * `Result<i64>` - An `Ok` variant containing the constant result if evaluation is successful,
+///   or an `Err` variant containing an error message if evaluation fails.
+///
+/// <https://github.com/apache/arrow-datafusion/issues/9821> tracks a more general solution
+fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
+    match expr {
+        Expr::Literal(ScalarValue::Int64(Some(s))) => Ok(*s),
+        Expr::BinaryExpr(binary_expr) => {
+            let lhs = get_constant_result(&binary_expr.left, arg_name)?;
+            let rhs = get_constant_result(&binary_expr.right, arg_name)?;
+            let res = match binary_expr.op {
+                Operator::Plus => lhs + rhs,
+                Operator::Minus => lhs - rhs,
+                Operator::Multiply => lhs * rhs,
+                _ => return plan_err!("Unsupported operator for {arg_name} clause"),
+            };
+            Ok(res)
+        }
+        _ => plan_err!("Unexpected expression in {arg_name} clause"),
+    }
+}
+
+/// Converts an `i64` to `usize`, performing a boundary check.
+fn convert_usize_with_check(n: i64, arg_name: &str) -> Result<usize> {
+    if n < 0 {
+        plan_err!("{arg_name} must be >= 0, '{n}' was provided.")
+    } else {
+        Ok(n as usize)
     }
 }

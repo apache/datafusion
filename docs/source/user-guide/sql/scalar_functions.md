@@ -731,12 +731,15 @@ btrim(str[, trim_str])
   Can be a constant, column, or function, and any combination of string operators.
 - **trim_str**: String expression to trim from the beginning and end of the input string.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  _Default is whitespace characters_.
+  _Default is whitespace characters._
 
 **Related functions**:
 [ltrim](#ltrim),
-[rtrim](#rtrim),
-[trim](#trim)
+[rtrim](#rtrim)
+
+#### Aliases
+
+- trim
 
 ### `char_length`
 
@@ -919,26 +922,25 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Removes leading spaces from a string.
+Trims the specified trim string from the beginning of a string.
+If no trim string is provided, all whitespace is removed from the start
+of the input string.
 
 ```
-ltrim(str)
+ltrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[rtrim](#rtrim),
-[trim](#trim)
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+[rtrim](#rtrim)
 
 ### `octet_length`
 
@@ -1040,21 +1042,25 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Removes trailing spaces from a string.
+Trims the specified trim string from the end of a string.
+If no trim string is provided, all whitespace is removed from the end
+of the input string.
 
 ```
-rtrim(str)
+rtrim(str[, trim_str])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters._
 
 **Related functions**:
 [btrim](#btrim),
-[ltrim](#ltrim),
-[trim](#trim)
+[ltrim](#ltrim)
 
 ### `split_part`
 
@@ -1154,21 +1160,7 @@ to_hex(int)
 
 ### `trim`
 
-Removes leading and trailing spaces from a string.
-
-```
-trim(str)
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-**Related functions**:
-[btrim](#btrim),
-[ltrim](#ltrim),
-[rtrim](#rtrim)
+_Alias of [btrim](#btrim)._
 
 ### `upper`
 
@@ -1939,6 +1931,7 @@ from_unixtime(expression)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_fill](#array_fill)
@@ -3017,6 +3010,11 @@ empty(array)
 +------------------+
 ```
 
+#### Aliases
+
+- array_empty,
+- list_empty
+
 ### `generate_series`
 
 Similar to the range function, but it includes the upper bound.
@@ -3046,10 +3044,6 @@ generate_series(start, stop, step)
 
 _Alias of [array_append](#array_append)._
 
-### `list_sort`
-
-_Alias of [array_sort](#array_sort)._
-
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -3069,6 +3063,10 @@ _Alias of [array_dims](#array_distinct)._
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
 
 ### `list_except`
 
@@ -3178,13 +3176,17 @@ _Alias of [array_reverse](#array_reverse)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
 
 ### `list_union`
 
-_Alias of [array_to_string](#array_union)._
+_Alias of [array_union](#array_union)._
 
 ### `make_array`
 
@@ -3193,6 +3195,10 @@ Returns an Arrow array using the specified input expressions.
 ```
 make_array(expression1[, ..., expression_n])
 ```
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
 
 #### Arguments
 

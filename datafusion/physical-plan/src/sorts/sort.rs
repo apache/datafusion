@@ -860,6 +860,10 @@ impl DisplayAs for SortExec {
 }
 
 impl ExecutionPlan for SortExec {
+    fn name(&self) -> &'static str {
+        "SortExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -278,7 +278,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
 /// `CREATE EXTERNAL TABLE` have special syntax in DataFusion. See
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
-    parser: Parser<'a>,
+    pub parser: Parser<'a>,
 }
 
 impl<'a> DFParser<'a> {
