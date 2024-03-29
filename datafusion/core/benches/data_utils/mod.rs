@@ -40,7 +40,6 @@ use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
 use std::fmt::Write;
 use std::sync::Arc;
-use arrow::util::pretty::print_batches;
 
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
@@ -88,8 +87,7 @@ pub fn create_ordered_table_provider(
             new_partition.push(single_chunk.slice(offset, chunk_size));
             offset += chunk_size;
         }
-        print_batches(&new_partition)?;
-        assert!(false);
+        assert_eq!(offset, single_chunk.num_rows());
         *partition = new_partition;
     }
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
