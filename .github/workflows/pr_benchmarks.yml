@@ -47,7 +47,6 @@ jobs:
           ./bench.sh run tpch
           ./bench.sh run tpch_mem
           ./bench.sh run tpch10
-          ./bench.sh run tpch_mem10
           
           # For some reason this step doesn't seem to propagate the env var down into the script
           if [ -d "results/HEAD" ]; then
@@ -70,7 +69,6 @@ jobs:
           ./bench.sh run tpch
           ./bench.sh run tpch_mem
           ./bench.sh run tpch10
-          ./bench.sh run tpch_mem10
           
           echo ${{ github.event.issue.number }} > pr
           
