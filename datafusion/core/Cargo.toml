@@ -159,6 +159,10 @@ name = "aggregate_query_sql"
 
 [[bench]]
 harness = false
+name = "aggregate_query_ordered_sql"
+
+[[bench]]
+harness = false
 name = "distinct_query_sql"
 
 [[bench]]
