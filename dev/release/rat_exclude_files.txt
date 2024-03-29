@@ -8,8 +8,6 @@
 *.csv
 *.json
 *.snap
-.github/ISSUE_TEMPLATE/*.md
-.github/pull_request_template.md
 ci/etc/rprofile
 ci/etc/*.patch
 ci/vcpkg/*.patch
@@ -132,9 +130,6 @@ parquet-testing/*
 *rat.txt
 datafusion/proto/src/generated/pbjson.rs
 datafusion/proto/src/generated/prost.rs
-.github/ISSUE_TEMPLATE/bug_report.yml
-.github/ISSUE_TEMPLATE/feature_request.yml
-.github/workflows/docs.yaml
 **/node_modules/*
 datafusion/wasmtest/pkg/*
 clippy.toml
