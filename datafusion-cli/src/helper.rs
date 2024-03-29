@@ -206,15 +206,33 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
 
 /// Splits a string which consists of multiple queries.
 pub(crate) fn split_from_semicolon(sql: String) -> Vec<String> {
-    sql.split(';')
-        .filter_map(|s| {
-            if !s.trim().is_empty() {
-                Some(format!("{};", s.trim()))
-            } else {
-                None
+    let mut commands = Vec::new();
+    let mut current_command = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    for c in sql.chars() {
+        if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        }
+
+        if c == ';' && !in_single_quote && !in_double_quote {
+            if !current_command.trim().is_empty() {
+                commands.push(format!("{};", current_command.trim()));
+                current_command.clear();
             }
-        })
-        .collect::<Vec<_>>()
+        } else {
+            current_command.push(c);
+        }
+    }
+
+    if !current_command.trim().is_empty() {
+        commands.push(format!("{};", current_command.trim()));
+    }
+
+    commands
 }
 
 #[cfg(test)]
