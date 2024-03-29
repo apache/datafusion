@@ -17,6 +17,8 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
+use arrow::compute::concat_batches;
+use arrow::compute::sort;
 use arrow::{
     array::Float32Array,
     array::Float64Array,
@@ -26,9 +28,11 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::builder::{Int64Builder, StringBuilder};
+use arrow_schema::SortOptions;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion_common::DataFusionError;
+use datafusion_common::{Column, DataFusionError};
+use datafusion_expr::{Expr, SortExpr};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -36,6 +40,7 @@ use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
 use std::fmt::Write;
 use std::sync::Arc;
+use arrow::util::pretty::print_batches;
 
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
@@ -50,6 +55,56 @@ pub fn create_table_provider(
         create_record_batches(schema.clone(), array_len, partitions_len, batch_size);
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     MemTable::try_new(schema, partitions).map(Arc::new)
+}
+
+/// create an in-memory table given the partition len, array len, and batch size,
+/// and the result table will be of array_len in total, and then partitioned, and batched.
+#[allow(dead_code)]
+pub fn create_ordered_table_provider(
+    partitions_len: usize,
+    array_len: usize,
+    batch_size: usize,
+) -> Result<Arc<MemTable>> {
+    let schema = Arc::new(create_schema());
+    let mut partitions =
+        create_record_batches(schema.clone(), array_len, partitions_len, batch_size);
+    let options = SortOptions::default();
+    for partition in &mut partitions {
+        let chunk_lengths = partition
+            .iter()
+            .map(|batch| batch.num_rows())
+            .collect::<Vec<_>>();
+        let single_chunk = concat_batches(&schema, &*partition)?;
+        // TODO: Order each column
+        let mut ordered_columns = vec![];
+        for col in single_chunk.columns() {
+            let ordered_col = sort(col, Some(options))?;
+            ordered_columns.push(ordered_col);
+        }
+        let single_chunk = RecordBatch::try_new(schema.clone(), ordered_columns)?;
+        let mut offset = 0;
+        let mut new_partition = vec![];
+        for chunk_size in chunk_lengths {
+            new_partition.push(single_chunk.slice(offset, chunk_size));
+            offset += chunk_size;
+        }
+        print_batches(&new_partition)?;
+        assert!(false);
+        *partition = new_partition;
+    }
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    let mut sort_orders = vec![];
+    for field in &schema.fields {
+        let expr = Expr::Column(Column::from_qualified_name(field.name()));
+        let ordering = Expr::Sort(SortExpr {
+            expr: Box::new(expr),
+            asc: !options.descending,
+            nulls_first: options.nulls_first,
+        });
+        sort_orders.push(vec![ordering]);
+    }
+    let table = MemTable::try_new(schema, partitions)?.with_sort_order(sort_orders);
+    Ok(Arc::new(table))
 }
 
 /// create a seedable [`StdRng`](rand::StdRng)
