@@ -52,13 +52,9 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-<<<<<<< HEAD
 string_expressions = ["uuid"]
-=======
-string_expressions = []
 # enable unicode functions
 unicode_expressions = ["unicode-segmentation"]
->>>>>>> apache/main
 
 [lib]
 name = "datafusion_functions"
