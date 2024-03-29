@@ -70,6 +70,7 @@ unicode_expressions = [
     "datafusion-physical-expr/unicode_expressions",
     "datafusion-optimizer/unicode_expressions",
     "datafusion-sql/unicode_expressions",
+    "datafusion-functions/unicode_expressions",
 ]
 
 [dependencies]

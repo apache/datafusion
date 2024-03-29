@@ -89,6 +89,10 @@ impl DisplayAs for CoalescePartitionsExec {
 }
 
 impl ExecutionPlan for CoalescePartitionsExec {
+    fn name(&self) -> &'static str {
+        "CoalescePartitionsExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

@@ -22,7 +22,7 @@ use arrow_array::{ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow_schema::DataType;
 use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
 use datafusion_common::cast::{as_generic_list_array, as_null_array};
-use datafusion_common::{exec_err, plan_err};
+use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -45,7 +45,11 @@ impl ArrayEmpty {
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
-            aliases: vec![String::from("empty")],
+            aliases: vec![
+                "empty".to_string(),
+                "array_empty".to_string(),
+                "list_empty".to_string(),
+            ],
         }
     }
 }
@@ -62,7 +66,7 @@ impl ScalarUDFImpl for ArrayEmpty {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Boolean,
             _ => {
@@ -71,7 +75,7 @@ impl ScalarUDFImpl for ArrayEmpty {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(array_empty_inner)(args)
     }
 
@@ -81,7 +85,7 @@ impl ScalarUDFImpl for ArrayEmpty {
 }
 
 /// Array_empty SQL function
-pub fn array_empty_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
+pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("array_empty expects one argument");
     }
@@ -99,9 +103,7 @@ pub fn array_empty_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRe
     }
 }
 
-fn general_array_empty<O: OffsetSizeTrait>(
-    array: &ArrayRef,
-) -> datafusion_common::Result<ArrayRef> {
+fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let array = as_generic_list_array::<O>(array)?;
     let builder = array
         .iter()
