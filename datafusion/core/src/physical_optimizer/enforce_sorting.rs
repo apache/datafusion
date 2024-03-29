@@ -36,7 +36,7 @@
 
 use std::sync::Arc;
 
-use super::utils::add_sort_above;
+use super::utils::{add_sort_above, add_sort_above_with_check};
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
@@ -285,13 +285,7 @@ fn parallelize_sorts(
         // deals with the children and their children and so on.
         requirements = requirements.children.swap_remove(0);
 
-        if !requirements
-            .plan
-            .equivalence_properties()
-            .ordering_satisfy_requirement(&sort_reqs)
-        {
-            requirements = add_sort_above(requirements, sort_reqs, fetch);
-        }
+        requirements = add_sort_above_with_check(requirements, sort_reqs, fetch);
 
         let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
         Ok(Transformed::yes(

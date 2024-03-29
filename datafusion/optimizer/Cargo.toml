@@ -33,9 +33,8 @@ name = "datafusion_optimizer"
 path = "src/lib.rs"
 
 [features]
-array_expressions = ["datafusion-functions-array"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
-default = ["unicode_expressions", "crypto_expressions", "regex_expressions", "array_expressions"]
+default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
@@ -45,7 +44,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
-datafusion-functions-array = { workspace = true, optional = true }
 datafusion-physical-expr = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { workspace = true }

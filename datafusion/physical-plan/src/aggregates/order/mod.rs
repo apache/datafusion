@@ -40,7 +40,7 @@ pub(crate) enum GroupOrdering {
 }
 
 impl GroupOrdering {
-    /// Create a `GroupOrdering` for the the specified ordering
+    /// Create a `GroupOrdering` for the specified ordering
     pub fn try_new(
         input_schema: &Schema,
         mode: &InputOrderMode,

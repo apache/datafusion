@@ -150,6 +150,8 @@ Benchmark tpch_mem.json
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
+Note that you can also execute an automatic comparison of the changes in a given PR against the base 
+just by including the trigger `/benchmark` in any comment.
 
 ### Running Benchmarks Manually
 

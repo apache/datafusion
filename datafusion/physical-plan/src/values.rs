@@ -154,6 +154,10 @@ impl DisplayAs for ValuesExec {
 }
 
 impl ExecutionPlan for ValuesExec {
+    fn name(&self) -> &'static str {
+        "ValuesExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

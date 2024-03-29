@@ -31,6 +31,7 @@ use super::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
@@ -102,6 +103,10 @@ impl DisplayAs for MemoryExec {
 }
 
 impl ExecutionPlan for MemoryExec {
+    fn name(&self) -> &'static str {
+        "MemoryExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -236,6 +241,8 @@ impl MemoryExec {
 pub struct MemoryStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
+    /// Optional memory reservation bound to the data, freed on drop
+    reservation: Option<MemoryReservation>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
@@ -253,10 +260,17 @@ impl MemoryStream {
     ) -> Result<Self> {
         Ok(Self {
             data,
+            reservation: None,
             schema,
             projection,
             index: 0,
         })
+    }
+
+    /// Set the memory reservation for the data
+    pub(super) fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
+        self.reservation = Some(reservation);
+        self
     }
 }
 

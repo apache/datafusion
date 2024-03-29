@@ -18,12 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::cast::AsArray;
+use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{
+    Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
+};
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, StringArray};
-use arrow_schema::DataType::{Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8};
-use arrow_schema::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
@@ -106,7 +109,6 @@ impl ScalarUDFImpl for ToCharFunc {
         }
 
         match &args[1] {
-            // null format, use default formats
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
                 _to_char_scalar(args[0].clone(), None)
@@ -172,13 +174,25 @@ fn _to_char_scalar(
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
+
+    if format.is_none() {
+        if is_scalar_expression {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        } else {
+            return Ok(ColumnarValue::Array(new_null_array(
+                &DataType::Utf8,
+                array.len(),
+            )));
+        }
+    }
+
     let format_options = match _build_format_options(data_type, format) {
         Ok(value) => value,
         Err(value) => return value,
     };
 
     let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
-    let formatted: Result<Vec<_>, arrow_schema::ArrowError> = (0..array.len())
+    let formatted: Result<Vec<_>, ArrowError> = (0..array.len())
         .map(|i| formatter.value(i).try_to_string())
         .collect();
 
@@ -199,7 +213,7 @@ fn _to_char_scalar(
 
 fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
-    let mut results: Vec<String> = vec![];
+    let mut results: Vec<Option<String>> = vec![];
     let format_array = arrays[1].as_string::<i32>();
     let data_type = arrays[0].data_type();
 
@@ -209,6 +223,10 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         } else {
             Some(format_array.value(idx))
         };
+        if format.is_none() {
+            results.push(None);
+            continue;
+        }
         let format_options = match _build_format_options(data_type, format) {
             Ok(value) => value,
             Err(value) => return value,
@@ -218,7 +236,7 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
-            Ok(value) => results.push(value),
+            Ok(value) => results.push(Some(value)),
             Err(e) => return exec_err!("{}", e),
         }
     }
@@ -227,16 +245,19 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
             results,
         )) as ArrayRef)),
-        ColumnarValue::Scalar(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            results.first().unwrap().to_string(),
-        )))),
+        ColumnarValue::Scalar(_) => match results.first().unwrap() {
+            Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                value.to_string(),
+            )))),
+            None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::datetime::to_char::ToCharFunc;
-    use arrow_array::{
+    use arrow::array::{
         Array, ArrayRef, Date32Array, Date64Array, StringArray, Time32MillisecondArray,
         Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
