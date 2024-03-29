@@ -27,11 +27,16 @@ use std::sync::Arc;
 fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return exec_err!("named_struct requires at least one pair of arguments, got 0 instead");
+        return exec_err!(
+            "named_struct requires at least one pair of arguments, got 0 instead"
+        );
     }
 
     if args.len() % 2 != 0 {
-        return exec_err!("named_struct requires an even number of arguments, got {} instead", args.len());
+        return exec_err!(
+            "named_struct requires an even number of arguments, got {} instead",
+            args.len()
+        );
     }
 
     let (names, values): (Vec<_>, Vec<_>) = args
@@ -54,15 +59,12 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let arrays = ColumnarValue::values_to_arrays(&values)?;
 
-    let fields = names.into_iter()
+    let fields = names
+        .into_iter()
         .zip(arrays)
         .map(|(name, value)| {
             (
-                Arc::new(Field::new(
-                    name,
-                    value.data_type().clone(),
-                    true,
-                )),
+                Arc::new(Field::new(name, value.data_type().clone(), true)),
                 value,
             )
         })
@@ -98,7 +100,9 @@ impl ScalarUDFImpl for NamedStructFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("named_struct: return_type called instead of return_type_from_exprs")
+        internal_err!(
+            "named_struct: return_type called instead of return_type_from_exprs"
+        )
     }
 
     fn return_type_from_exprs(
@@ -109,11 +113,16 @@ impl ScalarUDFImpl for NamedStructFunc {
     ) -> Result<DataType> {
         // do not accept 0 arguments.
         if args.is_empty() {
-            return exec_err!("named_struct requires at least one pair of arguments, got 0 instead");
+            return exec_err!(
+                "named_struct requires at least one pair of arguments, got 0 instead"
+            );
         }
 
         if args.len() % 2 != 0 {
-            return exec_err!("named_struct requires an even number of arguments, got {} instead", args.len());
+            return exec_err!(
+                "named_struct requires an even number of arguments, got {} instead",
+                args.len()
+            );
         }
 
         let return_fields = args
