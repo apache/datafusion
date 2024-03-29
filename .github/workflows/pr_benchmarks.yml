@@ -28,9 +28,8 @@ jobs:
           cd benchmarks
           mkdir data
           
-          # Setup the TPC-H data sets for scale factors 1 and 10
+          # Setup the TPC-H data sets for scale factor 1
           ./bench.sh data tpch
-          ./bench.sh data tpch10
 
       - name: Generate unique result names
         run: |
@@ -46,8 +45,6 @@ jobs:
 
           ./bench.sh run tpch
           ./bench.sh run tpch_mem
-          ./bench.sh run tpch10
-          ./bench.sh run tpch_mem10
           
           # For some reason this step doesn't seem to propagate the env var down into the script
           if [ -d "results/HEAD" ]; then
