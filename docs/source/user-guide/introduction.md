@@ -140,7 +140,7 @@ Here are some less active projects that used DataFusion:
 [kamu]: https://github.com/kamu-data/kamu-cli
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
 [horaedb]: https://github.com/apache/incubator-horaedb
-[influxdb iox]: https://github.com/influxdata/influxdb_iox
+[influxdb]: https://github.com/influxdata/influxdb
 [parseable]: https://github.com/parseablehq/parseable
 [prql-query]: https://github.com/prql/prql-query
 [qv]: https://github.com/timvw/qv
@@ -167,6 +167,7 @@ provide integrations with other systems, some of which are described below:
 
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
+- [datafusion-federation](https://github.com/datafusion-contrib/datafusion-federation)
 
 ## Why DataFusion?
 
