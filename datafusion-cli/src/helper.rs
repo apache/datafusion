@@ -330,4 +330,39 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_split_from_semicolon() {
+        let sql = "SELECT 1; SELECT 2;";
+        let expected = vec!["SELECT 1;", "SELECT 2;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = r#"SELECT ";";"#;
+        let expected = vec![r#"SELECT ";";"#];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT ';';";
+        let expected = vec!["SELECT ';';"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = r#"SELECT 1; SELECT 'value;value'; SELECT 1 as "text;text";"#;
+        let expected = vec![
+            "SELECT 1;",
+            "SELECT 'value;value';",
+            r#"SELECT 1 as "text;text";"#,
+        ];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "";
+        let expected: Vec<String> = Vec::new();
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT 1";
+        let expected = vec!["SELECT 1;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT 1;   ";
+        let expected = vec!["SELECT 1;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+    }
 }
