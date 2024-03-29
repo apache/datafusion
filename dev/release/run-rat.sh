@@ -31,8 +31,13 @@ RELEASE_DIR=$(cd "$(dirname "$BASH_SOURCE")"; pwd)
 
 # generate the rat report
 echo "Running RAT check in directory: $(pwd)"
+
+echo "before find .github"
+ls -al
+find .github
+echo "after find .github"
+
 $RAT $1 > rat.txt
-cat rat.txt
 python $RELEASE_DIR/check-rat-report.py $RELEASE_DIR/rat_exclude_files.txt rat.txt > filtered_rat.txt
 cat filtered_rat.txt
 UNAPPROVED=`cat filtered_rat.txt  | grep "NOT APPROVED" | wc -l`
