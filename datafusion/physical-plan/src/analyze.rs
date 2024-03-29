@@ -111,6 +111,10 @@ impl DisplayAs for AnalyzeExec {
 }
 
 impl ExecutionPlan for AnalyzeExec {
+    fn name(&self) -> &'static str {
+        "AnalyzeExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

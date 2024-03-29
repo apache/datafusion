@@ -2616,6 +2616,10 @@ mod tests {
     }
 
     impl ExecutionPlan for NoOpExecutionPlan {
+        fn name(&self) -> &'static str {
+            "NoOpExecutionPlan"
+        }
+
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
             self

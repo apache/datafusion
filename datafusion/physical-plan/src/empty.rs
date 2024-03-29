@@ -101,6 +101,10 @@ impl DisplayAs for EmptyExec {
 }
 
 impl ExecutionPlan for EmptyExec {
+    fn name(&self) -> &'static str {
+        "EmptyExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

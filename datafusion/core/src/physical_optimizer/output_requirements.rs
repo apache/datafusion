@@ -133,6 +133,10 @@ impl DisplayAs for OutputRequirementExec {
 }
 
 impl ExecutionPlan for OutputRequirementExec {
+    fn name(&self) -> &'static str {
+        "OutputRequirementExec"
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

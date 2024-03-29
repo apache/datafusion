@@ -191,6 +191,10 @@ impl DisplayAs for StreamingTableExec {
 
 #[async_trait]
 impl ExecutionPlan for StreamingTableExec {
+    fn name(&self) -> &'static str {
+        "StreamingTableExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
