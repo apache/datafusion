@@ -223,17 +223,17 @@ impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::bare(table))
+                Ok(OwnedTableReference::bare(&table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::partial(schema, table)),
+            }) => Ok(OwnedTableReference::partial(&schema, &table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
+            }) => Ok(OwnedTableReference::full(&catalog, &schema, &table)),
         }
     }
 }

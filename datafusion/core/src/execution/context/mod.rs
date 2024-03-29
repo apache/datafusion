@@ -704,6 +704,7 @@ impl SessionContext {
                 SchemaReference::Bare { .. } => {
                     state.config_options().catalog.default_catalog.to_string()
                 }
+                _ => todo!(),
             };
             if let Some(catalog) = state.catalog_list.catalog(&catalog_name) {
                 catalog
@@ -1533,7 +1534,8 @@ impl SessionState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config.information_schema() && resolved_ref.schema == INFORMATION_SCHEMA {
+        if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
+        {
             return Ok(Arc::new(InformationSchemaProvider::new(
                 self.catalog_list.clone(),
             )));

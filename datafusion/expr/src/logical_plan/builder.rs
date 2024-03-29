@@ -1911,7 +1911,7 @@ mod tests {
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1941,7 +1941,7 @@ mod tests {
                 },
                 _,
             )) => {
-                assert_eq!("employee_csv", table);
+                assert_eq!(*"employee_csv", *table);
                 assert_eq!("state", &name);
                 Ok(())
             }
