@@ -18,11 +18,13 @@
 //! "math" DataFusion functions
 
 mod abs;
+mod log2;
 mod nans;
 
 // Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
+make_udf_function!(log2::Log2Func, LOG2, log2);
 
 make_math_unary_udf!(TanhFunc, TANH, tanh, tanh);
 make_math_unary_udf!(AcosFunc, ACOS, acos, acos);
@@ -37,6 +39,7 @@ export_functions!(
         "returns true if a given number is +NaN or -NaN otherwise returns false"
     ),
     (abs, num, "returns the absolute value of a given number"),
+    (log2, num, "base 2 logarithm of number"),
     (
         acos,
         num,
