@@ -1342,7 +1342,6 @@ dependencies = [
  "rand",
  "regex",
  "sha2",
- "unicode-segmentation",
 ]
 
 [[package]]
