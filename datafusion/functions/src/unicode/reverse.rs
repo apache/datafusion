@@ -100,40 +100,30 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             ReverseFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("abcde")
-            )))],
+            &[ColumnarValue::Scalar(ScalarValue::from("abcde"))],
             Ok(Some("edcba")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             ReverseFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("loẅks")
-            )))],
+            &[ColumnarValue::Scalar(ScalarValue::from("loẅks"))],
             Ok(Some("sk̈wol")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             ReverseFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("loẅks")
-            )))],
+            &[ColumnarValue::Scalar(ScalarValue::from("loẅks"))],
             Ok(Some("sk̈wol")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             ReverseFunc::new(),
             &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
@@ -145,7 +135,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             ReverseFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde"))))],
+            &[ColumnarValue::Scalar(ScalarValue::from("abcde"))],
             internal_err!(
                 "function reverse requires compilation with feature flag: unicode_expressions."
             ),

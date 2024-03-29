@@ -150,107 +150,98 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
             Ok(Some("alphabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("joséésoj")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("ésoj")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("joséésoj")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-5))),
+                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
             ],
             Ok(Some("joséésoj")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
             Ok(Some("alphabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             Ok(Some("lphabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(3i64)),
             ],
             Ok(Some("phabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-3))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],
             Ok(Some("alphabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(30))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(30i64)),
             ],
             Ok(Some("")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),
@@ -258,39 +249,36 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(3i64)),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             Ok(Some("ph")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(20))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(3i64)),
+                ColumnarValue::Scalar(ScalarValue::from(20i64)),
             ],
             Ok(Some("phabet")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("alph")),
             &str,
@@ -298,13 +286,12 @@ mod tests {
             StringArray
         );
         // starting from 5 (10 + -5)
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-5))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(10))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(10i64)),
             ],
             Ok(Some("alph")),
             &str,
@@ -312,13 +299,12 @@ mod tests {
             StringArray
         );
         // starting from -1 (4 + -5)
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-5))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(4i64)),
             ],
             Ok(Some("")),
             &str,
@@ -326,38 +312,35 @@ mod tests {
             StringArray
         );
         // starting from 0 (5 + -5)
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-5))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(20))),
+                ColumnarValue::Scalar(ScalarValue::from(20i64)),
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),
@@ -365,26 +348,24 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::Scalar(ScalarValue::from(-1i64)),
             ],
             exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("joséésoj")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             Ok(Some("és")),
             &str,
@@ -395,8 +376,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
             internal_err!(
                 "function substr requires compilation with feature flag: unicode_expressions."

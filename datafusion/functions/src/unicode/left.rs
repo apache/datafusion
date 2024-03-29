@@ -117,83 +117,76 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             Ok(Some("ab")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(200))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
             Ok(Some("abcde")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-2))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
             Ok(Some("abc")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-200))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(-200i64)),
             ],
             Ok(Some("")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
             Ok(Some("")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),
@@ -201,24 +194,22 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("joséésoj")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
             Ok(Some("joséé")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("joséésoj")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-3))),
+                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
+                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],
             Ok(Some("joséé")),
             &str,
@@ -227,10 +218,10 @@ mod tests {
         );
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
-            LeftFunc::new90,
+            LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcde")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
             internal_err!(
                 "function left requires compilation with feature flag: unicode_expressions."
