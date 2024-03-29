@@ -1303,7 +1303,7 @@ impl LogicalPlan {
         Wrapper(self)
     }
 
-    /// Return a `format`able structure that produces plan in postgresql JSON format.
+    /// Return a displayable structure that produces plan in postgresql JSON format.
     ///
     /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
     pub fn display_pg_json(&self) -> impl Display + '_ {
@@ -2806,7 +2806,7 @@ digraph {
     fn test_display_pg_json() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_graphviz = r#"[
+        let expected_pg_json = r#"[
   {
     "Plan": {
       "Expressions": [
@@ -2856,13 +2856,10 @@ digraph {
     }
   }
 ]"#;
-        println!("{}", plan.display_pg_json());
 
-        // just test for a few key lines in the output rather than the
-        // whole thing to make test mainteance easier.
-        let graphviz = format!("{}", plan.display_pg_json());
+        let pg_json = format!("{}", plan.display_pg_json());
 
-        assert_eq!(expected_graphviz, graphviz);
+        assert_eq!(expected_pg_json, pg_json);
         Ok(())
     }
 
