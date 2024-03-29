@@ -132,51 +132,47 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("12345")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("143")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ax"))))
+                ColumnarValue::Scalar(ScalarValue::from("12345")),
+                ColumnarValue::Scalar(ScalarValue::from("143")),
+                ColumnarValue::Scalar(ScalarValue::from("ax"))
             ],
             Ok(Some("a2x5")),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             TranslateFunc::new(),
             &[
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("143")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ax"))))
+                ColumnarValue::Scalar(ScalarValue::from("143")),
+                ColumnarValue::Scalar(ScalarValue::from("ax"))
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("12345")))),
+                ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ax"))))
+                ColumnarValue::Scalar(ScalarValue::from("ax"))
             ],
             Ok(None),
             &str,
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("12345")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("143")))),
+                ColumnarValue::Scalar(ScalarValue::from("12345")),
+                ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None))
             ],
             Ok(None),
@@ -184,13 +180,12 @@ mod tests {
             Utf8,
             StringArray
         );
-        #[cfg(feature = "unicode_expressions")]
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("é2íñ5")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("éñí")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("óü")))),
+                ColumnarValue::Scalar(ScalarValue::from("é2íñ5")),
+                ColumnarValue::Scalar(ScalarValue::from("éñí")),
+                ColumnarValue::Scalar(ScalarValue::from("óü")),
             ],
             Ok(Some("ó2ü5")),
             &str,
@@ -201,9 +196,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("12345")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("143")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ax")))),
+                ColumnarValue::Scalar(ScalarValue::from("12345")),
+                ColumnarValue::Scalar(ScalarValue::from("143")),
+                ColumnarValue::Scalar(ScalarValue::from("ax")),
             ],
             internal_err!(
                 "function translate requires compilation with feature flag: unicode_expressions."

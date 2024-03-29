@@ -136,13 +136,3 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
-
-#[cfg(test)]
-mod tests {
-    use datafusion_common::Result;
-
-    #[test]
-    fn test_functions() -> Result<()> {
-        Ok(())
-    }
-}

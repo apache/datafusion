@@ -117,13 +117,3 @@ where
         .collect::<PrimitiveArray<T>>();
     Ok(Arc::new(result) as ArrayRef)
 }
-
-#[cfg(test)]
-mod tests {
-    use datafusion_common::Result;
-
-    #[test]
-    fn test_functions() -> Result<()> {
-        Ok(())
-    }
-}
