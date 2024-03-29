@@ -175,3 +175,8 @@ select named_struct('field_a', 1, 'field_b', 2);
 
 statement ok
 drop table values;
+
+query T
+select arrow_typeof(named_struct('first', 1, 'second', 2, 'third', 3));
+----
+Struct([Field { name: "first", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "second", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "third", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
