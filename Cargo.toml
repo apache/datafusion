@@ -25,7 +25,6 @@ members = [
     "datafusion/execution",
     "datafusion/functions",
     "datafusion/functions-array",
-    "datafusion/aggregate-functions",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-plan",
@@ -73,7 +72,6 @@ chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
 dashmap = "5.4.0"
 datafusion = { path = "datafusion/core", version = "36.0.0", default-features = false }
-datafusion-aggrefate-functions = { path = "datafusion/aggreagate-functions", version = "36.0.0" }
 datafusion-common = { path = "datafusion/common", version = "36.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "36.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "36.0.0" }
