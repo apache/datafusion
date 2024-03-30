@@ -541,10 +541,6 @@ scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
-scalar_expr!(Atan, atan, num, "inverse tangent");
-scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
-scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
-scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
 scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
     Floor,
@@ -983,10 +979,6 @@ mod test {
         test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
-        test_unary_scalar_expr!(Atan, atan);
-        test_unary_scalar_expr!(Asinh, asinh);
-        test_unary_scalar_expr!(Acosh, acosh);
-        test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);

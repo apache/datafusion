@@ -33,6 +33,11 @@ make_math_unary_udf!(AcosFunc, ACOS, acos, acos, None);
 make_math_unary_udf!(AsinFunc, ASIN, asin, asin, None);
 make_math_unary_udf!(TanFunc, TAN, tan, tan, None);
 
+make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh);
+make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh);
+make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh);
+make_math_unary_udf!(AtanFunc, ATAN, atan, atan);
+
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
     (
@@ -55,5 +60,9 @@ export_functions!(
         "returns the arc sine or inverse sine of a number"
     ),
     (tan, num, "returns the tangent of a number"),
-    (tanh, num, "returns the hyperbolic tangent of a number")
+    (tanh, num, "returns the hyperbolic tangent of a number"),
+    (atanh, num, "returnd inverse hyperbolic tangent"),
+    (asinh, num, "returnd inverse hyperbolic sine"),
+    (acosh, num, "returnd inverse hyperbolic cosine"),
+    (atan, num, "returnd inverse tangent")
 );

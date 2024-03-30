@@ -2843,7 +2843,7 @@ pub enum ScalarFunction {
     Unknown = 0,
     ///   1 was Acos
     ///   2 was Asin
-    Atan = 3,
+    /// 3 was Atan
     /// 4 was Ascii
     Ceil = 5,
     Cos = 6,
@@ -2914,9 +2914,9 @@ pub enum ScalarFunction {
     /// 71 was CurrentTime
     /// 72 was Uuid
     Cbrt = 73,
-    Acosh = 74,
-    Asinh = 75,
-    Atanh = 76,
+    /// 74 Acosh
+    /// 75 was Asinh
+    /// 76 was Atanh
     Sinh = 77,
     Cosh = 78,
     /// Tanh = 79;
@@ -2987,7 +2987,6 @@ impl ScalarFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             ScalarFunction::Unknown => "unknown",
-            ScalarFunction::Atan => "Atan",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
@@ -3007,9 +3006,6 @@ impl ScalarFunction {
             ScalarFunction::Power => "Power",
             ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::Cbrt => "Cbrt",
-            ScalarFunction::Acosh => "Acosh",
-            ScalarFunction::Asinh => "Asinh",
-            ScalarFunction::Atanh => "Atanh",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Pi => "Pi",
@@ -3030,7 +3026,6 @@ impl ScalarFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "unknown" => Some(Self::Unknown),
-            "Atan" => Some(Self::Atan),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
@@ -3050,9 +3045,6 @@ impl ScalarFunction {
             "Power" => Some(Self::Power),
             "Atan2" => Some(Self::Atan2),
             "Cbrt" => Some(Self::Cbrt),
-            "Acosh" => Some(Self::Acosh),
-            "Asinh" => Some(Self::Asinh),
-            "Atanh" => Some(Self::Atanh),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Pi" => Some(Self::Pi),

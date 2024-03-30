@@ -544,7 +544,7 @@ enum ScalarFunction {
   unknown = 0;
   //  1 was Acos
   //  2 was Asin
-  Atan = 3;
+  // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
   Cos = 6;
@@ -615,9 +615,9 @@ enum ScalarFunction {
   // 71 was CurrentTime
   // 72 was Uuid
   Cbrt = 73;
-  Acosh = 74;
-  Asinh = 75;
-  Atanh = 76;
+  // 74 Acosh
+  // 75 was Asinh
+  // 76 was Atanh
   Sinh = 77;
   Cosh = 78;
   // Tanh = 79;

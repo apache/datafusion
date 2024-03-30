@@ -199,10 +199,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
-        BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
-        BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),
-        BuiltinScalarFunction::Atanh => Arc::new(math_expressions::atanh),
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
         BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
