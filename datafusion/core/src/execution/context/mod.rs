@@ -797,7 +797,7 @@ impl SessionContext {
             let function_factory = &state.function_factory;
 
             match function_factory {
-                Some(f) => f.create(state.config(), stmt).await?,
+                Some(f) => f.create(&state, stmt).await?,
                 _ => Err(DataFusionError::Configuration(
                     "Function factory has not been configured".into(),
                 ))?,
@@ -1291,7 +1291,7 @@ pub trait FunctionFactory: Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
-        state: &SessionConfig,
+        state: &SessionState,
         statement: CreateFunction,
     ) -> Result<RegisterFunction>;
 }

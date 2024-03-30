@@ -714,3 +714,33 @@ RecursiveQueryExec: name=recursive_cte, is_distinct=false
 --------------WorkTableExec: name=recursive_cte
 ------ProjectionExec: expr=[2 as val]
 --------PlaceholderRowExec
+
+# Test issue: https://github.com/apache/arrow-datafusion/issues/9794
+# Non-recursive term and recursive term have different types
+query IT
+WITH RECURSIVE my_cte AS(
+    SELECT 1::int AS a
+    UNION ALL
+    SELECT a::bigint+2 FROM my_cte WHERE a<3
+) SELECT *, arrow_typeof(a) FROM my_cte;
+----
+1 Int32
+3 Int32
+
+# Test issue: https://github.com/apache/arrow-datafusion/issues/9794
+# Non-recursive term and recursive term have different number of columns
+query error DataFusion error: Error during planning: Non\-recursive term and recursive term must have the same number of columns \(1 != 3\)
+WITH RECURSIVE my_cte AS (
+    SELECT 1::bigint AS a
+    UNION ALL
+    SELECT a+2, 'a','c' FROM my_cte WHERE a<3
+) SELECT * FROM my_cte;
+
+# Test issue: https://github.com/apache/arrow-datafusion/issues/9794
+# Non-recursive term and recursive term have different types, and cannot be casted
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'abc' to value of Int64 type
+WITH RECURSIVE my_cte AS (
+    SELECT 1 AS a
+    UNION ALL
+    SELECT 'abc' FROM my_cte WHERE CAST(a AS text) !='abc'
+) SELECT * FROM my_cte;

@@ -1931,6 +1931,7 @@ from_unixtime(expression)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
 - [array_element](#array_element)
+- [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_fill](#array_fill)
@@ -3009,6 +3010,11 @@ empty(array)
 +------------------+
 ```
 
+#### Aliases
+
+- array_empty,
+- list_empty
+
 ### `generate_series`
 
 Similar to the range function, but it includes the upper bound.
@@ -3038,10 +3044,6 @@ generate_series(start, stop, step)
 
 _Alias of [array_append](#array_append)._
 
-### `list_sort`
-
-_Alias of [array_sort](#array_sort)._
-
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -3061,6 +3063,10 @@ _Alias of [array_dims](#array_distinct)._
 ### `list_element`
 
 _Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
 
 ### `list_except`
 
@@ -3170,13 +3176,17 @@ _Alias of [array_reverse](#array_reverse)._
 
 _Alias of [array_slice](#array_slice)._
 
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
 
 ### `list_union`
 
-_Alias of [array_to_string](#array_union)._
+_Alias of [array_union](#array_union)._
 
 ### `make_array`
 
@@ -3185,6 +3195,10 @@ Returns an Arrow array using the specified input expressions.
 ```
 make_array(expression1[, ..., expression_n])
 ```
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
 
 #### Arguments
 

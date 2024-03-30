@@ -636,6 +636,10 @@ impl DisplayAs for AggregateExec {
 }
 
 impl ExecutionPlan for AggregateExec {
+    fn name(&self) -> &'static str {
+        "AggregateExec"
+    }
+
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
         self
@@ -1658,6 +1662,10 @@ mod tests {
     }
 
     impl ExecutionPlan for TestYieldingExec {
+        fn name(&self) -> &'static str {
+            "TestYieldingExec"
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }

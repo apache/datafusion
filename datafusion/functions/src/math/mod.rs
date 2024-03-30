@@ -24,10 +24,14 @@ mod nans;
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
 
-make_math_unary_udf!(TanhFunc, TANH, tanh, tanh);
-make_math_unary_udf!(AcosFunc, ACOS, acos, acos);
-make_math_unary_udf!(AsinFunc, ASIN, asin, asin);
-make_math_unary_udf!(TanFunc, TAN, tan, tan);
+make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
+make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
+make_math_unary_udf!(LnFunc, LN, ln, ln, Some(vec![Some(true)]));
+
+make_math_unary_udf!(TanhFunc, TANH, tanh, tanh, None);
+make_math_unary_udf!(AcosFunc, ACOS, acos, acos, None);
+make_math_unary_udf!(AsinFunc, ASIN, asin, asin, None);
+make_math_unary_udf!(TanFunc, TAN, tan, tan, None);
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
@@ -37,6 +41,9 @@ export_functions!(
         "returns true if a given number is +NaN or -NaN otherwise returns false"
     ),
     (abs, num, "returns the absolute value of a given number"),
+    (log2, num, "base 2 logarithm of a number"),
+    (log10, num, "base 10 logarithm of a number"),
+    (ln, num, "natural logarithm (base e) of a number"),
     (
         acos,
         num,

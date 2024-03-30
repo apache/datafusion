@@ -823,12 +823,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let fun = BuiltinScalarFunction::Strpos;
+        let fun = self
+            .context_provider
+            .get_function_meta("strpos")
+            .ok_or_else(|| {
+                internal_datafusion_err!("Unable to find expected 'strpos' function")
+            })?;
         let substr =
             self.sql_expr_to_logical_expr(substr_expr, schema, planner_context)?;
         let fullstr = self.sql_expr_to_logical_expr(str_expr, schema, planner_context)?;
         let args = vec![fullstr, substr];
-        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
     fn sql_agg_with_filter_to_expr(
         &self,

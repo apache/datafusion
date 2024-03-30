@@ -53,7 +53,7 @@ pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     PhysicalExpr, PhysicalExprRef,
 };
-pub use planner::create_physical_expr;
+pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,

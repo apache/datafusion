@@ -2850,10 +2850,10 @@ pub enum ScalarFunction {
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
-    Ln = 10,
+    /// 10 was Ln
     Log = 11,
-    Log10 = 12,
-    Log2 = 13,
+    /// 12 was Log10
+    /// 13 was Log2
     Round = 14,
     Signum = 15,
     Sin = 16,
@@ -2864,15 +2864,15 @@ pub enum ScalarFunction {
     /// RegexpMatch = 21;
     /// 22 was BitLength
     /// 23 was Btrim
-    CharacterLength = 24,
+    /// 24 was CharacterLength
     /// 25 was Chr
     Concat = 26,
     ConcatWithSeparator = 27,
     /// 28 was DatePart
     /// 29 was DateTrunc
     InitCap = 30,
-    Left = 31,
-    Lpad = 32,
+    /// 31 was Left
+    /// 32 was Lpad
     /// 33 was Lower
     /// 34 was Ltrim
     /// 35 was MD5
@@ -2882,9 +2882,9 @@ pub enum ScalarFunction {
     /// 39 was RegexpReplace
     /// 40 was Repeat
     /// 41 was Replace
-    Reverse = 42,
-    Right = 43,
-    Rpad = 44,
+    /// 42 was Reverse
+    /// 43 was Right
+    /// 44 was Rpad
     /// 45 was Rtrim
     /// 46 was SHA224
     /// 47 was SHA256
@@ -2892,8 +2892,8 @@ pub enum ScalarFunction {
     /// 49 was SHA512
     /// 50 was SplitPart
     /// StartsWith = 51;
-    Strpos = 52,
-    Substr = 53,
+    /// 52 was Strpos
+    /// 53 was Substr
     /// ToHex = 54;
     /// 55 was ToTimestamp
     /// 56 was ToTimestampMillis
@@ -2992,27 +2992,16 @@ impl ScalarFunction {
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
-            ScalarFunction::Ln => "Ln",
             ScalarFunction::Log => "Log",
-            ScalarFunction::Log10 => "Log10",
-            ScalarFunction::Log2 => "Log2",
             ScalarFunction::Round => "Round",
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
             ScalarFunction::Trunc => "Trunc",
-            ScalarFunction::CharacterLength => "CharacterLength",
             ScalarFunction::Concat => "Concat",
             ScalarFunction::ConcatWithSeparator => "ConcatWithSeparator",
             ScalarFunction::InitCap => "InitCap",
-            ScalarFunction::Left => "Left",
-            ScalarFunction::Lpad => "Lpad",
             ScalarFunction::Random => "Random",
-            ScalarFunction::Reverse => "Reverse",
-            ScalarFunction::Right => "Right",
-            ScalarFunction::Rpad => "Rpad",
-            ScalarFunction::Strpos => "Strpos",
-            ScalarFunction::Substr => "Substr",
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
@@ -3046,27 +3035,16 @@ impl ScalarFunction {
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
-            "Ln" => Some(Self::Ln),
             "Log" => Some(Self::Log),
-            "Log10" => Some(Self::Log10),
-            "Log2" => Some(Self::Log2),
             "Round" => Some(Self::Round),
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
             "Trunc" => Some(Self::Trunc),
-            "CharacterLength" => Some(Self::CharacterLength),
             "Concat" => Some(Self::Concat),
             "ConcatWithSeparator" => Some(Self::ConcatWithSeparator),
             "InitCap" => Some(Self::InitCap),
-            "Left" => Some(Self::Left),
-            "Lpad" => Some(Self::Lpad),
             "Random" => Some(Self::Random),
-            "Reverse" => Some(Self::Reverse),
-            "Right" => Some(Self::Right),
-            "Rpad" => Some(Self::Rpad),
-            "Strpos" => Some(Self::Strpos),
-            "Substr" => Some(Self::Substr),
             "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),

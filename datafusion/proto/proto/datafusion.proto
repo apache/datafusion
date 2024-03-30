@@ -551,10 +551,10 @@ enum ScalarFunction {
   // 7 was Digest
   Exp = 8;
   Floor = 9;
-  Ln = 10;
+  // 10 was Ln
   Log = 11;
-  Log10 = 12;
-  Log2 = 13;
+  // 12 was Log10
+  // 13 was Log2
   Round = 14;
   Signum = 15;
   Sin = 16;
@@ -565,15 +565,15 @@ enum ScalarFunction {
   // RegexpMatch = 21;
   // 22 was BitLength
   // 23 was Btrim
-  CharacterLength = 24;
+  // 24 was CharacterLength
   // 25 was Chr
   Concat = 26;
   ConcatWithSeparator = 27;
   // 28 was DatePart
   // 29 was DateTrunc
   InitCap = 30;
-  Left = 31;
-  Lpad = 32;
+  // 31 was Left
+  // 32 was Lpad
   // 33 was Lower
   // 34 was Ltrim
   // 35 was MD5
@@ -583,9 +583,9 @@ enum ScalarFunction {
   // 39 was RegexpReplace
   // 40 was Repeat
   // 41 was Replace
-  Reverse = 42;
-  Right = 43;
-  Rpad = 44;
+  // 42 was Reverse
+  // 43 was Right
+  // 44 was Rpad
   // 45 was Rtrim
   // 46 was SHA224
   // 47 was SHA256
@@ -593,8 +593,8 @@ enum ScalarFunction {
   // 49 was SHA512
   // 50 was SplitPart
   // StartsWith = 51;
-  Strpos = 52;
-  Substr = 53;
+  // 52 was Strpos
+  // 53 was Substr
   // ToHex = 54;
   // 55 was ToTimestamp
   // 56 was ToTimestampMillis
