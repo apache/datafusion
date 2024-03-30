@@ -28,9 +28,10 @@ jobs:
           cd benchmarks
           mkdir data
           
-          # Setup the TPC-H data set with a scale factor of 10
+          # Setup the TPC-H data sets for scale factors 1 and 10
           ./bench.sh data tpch
-          
+          ./bench.sh data tpch10
+
       - name: Generate unique result names
         run: |
           echo "HEAD_LONG_SHA=$(git log -1 --format='%H')" >> "$GITHUB_ENV" 
@@ -44,6 +45,8 @@ jobs:
           cd benchmarks
 
           ./bench.sh run tpch
+          ./bench.sh run tpch_mem
+          ./bench.sh run tpch10
           
           # For some reason this step doesn't seem to propagate the env var down into the script
           if [ -d "results/HEAD" ]; then
@@ -64,6 +67,8 @@ jobs:
           cd benchmarks
 
           ./bench.sh run tpch
+          ./bench.sh run tpch_mem
+          ./bench.sh run tpch10
           
           echo ${{ github.event.issue.number }} > pr
           

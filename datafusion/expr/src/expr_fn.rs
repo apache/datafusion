@@ -570,40 +570,13 @@ scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
 scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
 scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
-scalar_expr!(Log2, log2, num, "base 2 logarithm of number");
-scalar_expr!(Log10, log10, num, "base 10 logarithm of number");
-scalar_expr!(Ln, ln, num, "natural logarithm (base e) of number");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
-// string functions
-scalar_expr!(
-    CharacterLength,
-    character_length,
-    string,
-    "the number of characters in the `string`"
-);
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
-scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
-scalar_expr!(Reverse, reverse, string, "reverses the `string`");
-scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
 scalar_expr!(EndsWith, ends_with, string suffix, "whether the `string` ends with the `suffix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
-scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
-scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
-//use vec as parameter
-nary_scalar_expr!(
-    Lpad,
-    lpad,
-    "fill up a string to the length by prepending the characters"
-);
-nary_scalar_expr!(
-    Rpad,
-    rpad,
-    "fill up a string to the length by appending the characters"
-);
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(
@@ -1025,28 +998,14 @@ mod test {
         test_nary_scalar_expr!(Trunc, trunc, num, precision);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
-        test_unary_scalar_expr!(Log2, log2);
-        test_unary_scalar_expr!(Log10, log10);
-        test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
         test_scalar_expr!(Nanvl, nanvl, x, y);
         test_scalar_expr!(Iszero, iszero, input);
 
-        test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
-        test_scalar_expr!(Left, left, string, count);
-        test_nary_scalar_expr!(Lpad, lpad, string, count);
-        test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
-        test_scalar_expr!(Reverse, reverse, string);
-        test_scalar_expr!(Right, right, string, count);
-        test_nary_scalar_expr!(Rpad, rpad, string, count);
-        test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
         test_scalar_expr!(EndsWith, ends_with, string, characters);
-        test_scalar_expr!(Strpos, strpos, string, substring);
-        test_scalar_expr!(Substr, substr, string, position);
-        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
         test_scalar_expr!(FindInSet, find_in_set, string, stringlist);

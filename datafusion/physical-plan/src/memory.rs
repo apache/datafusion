@@ -103,6 +103,10 @@ impl DisplayAs for MemoryExec {
 }
 
 impl ExecutionPlan for MemoryExec {
+    fn name(&self) -> &'static str {
+        "MemoryExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

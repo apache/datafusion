@@ -17,18 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{
-    self,
-    plan_type::PlanTypeEnum::{
-        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
-        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan,
-    },
-    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-};
-
 use arrow::{
     array::AsArray,
     buffer::Buffer,
@@ -38,6 +26,7 @@ use arrow::{
     },
     ipc::{reader::read_record_batch, root_as_message},
 };
+
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
@@ -48,18 +37,30 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, asinh, atan, atan2, atanh, cbrt, ceil, character_length, coalesce,
-    concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
+    acosh, asinh, atan, atan2, atanh, cbrt, ceil, coalesce, concat_expr, concat_ws_expr,
+    cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, ln, log, log10, log2,
+    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
-    lpad, nanvl, pi, power, radians, random, reverse, right, round, rpad, signum, sin,
-    sinh, sqrt, strpos, substr, substr_index, substring, translate, trunc,
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, substr_index,
+    translate, trunc, AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction,
+    BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess, GetIndexedField,
+    GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+
+use crate::protobuf::{
+    self,
+    plan_type::PlanTypeEnum::{
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
+    },
+    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 
 use super::LogicalExtensionCodec;
@@ -436,8 +437,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
-            ScalarFunction::Ln => Self::Ln,
-            ScalarFunction::Log10 => Self::Log10,
             ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Factorial => Self::Factorial,
@@ -448,20 +447,11 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
-            ScalarFunction::CharacterLength => Self::CharacterLength,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Left => Self::Left,
-            ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::Reverse => Self::Reverse,
-            ScalarFunction::Right => Self::Right,
-            ScalarFunction::Rpad => Self::Rpad,
-            ScalarFunction::Strpos => Self::Strpos,
-            ScalarFunction::Substr => Self::Substr,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
@@ -1355,11 +1345,6 @@ pub fn parse_expr(
                 ScalarFunction::Radians => {
                     Ok(radians(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Log10 => {
-                    Ok(log10(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1372,9 +1357,6 @@ pub fn parse_expr(
                 ScalarFunction::Signum => {
                     Ok(signum(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::CharacterLength => {
-                    Ok(character_length(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1386,49 +1368,17 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Left => Ok(left(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Random => Ok(random()),
-                ScalarFunction::Reverse => {
-                    Ok(reverse(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Right => Ok(right(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Concat => {
                     Ok(concat_expr(parse_exprs(args, registry, codec)?))
                 }
                 ScalarFunction::ConcatWithSeparator => {
                     Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Lpad => Ok(lpad(parse_exprs(args, registry, codec)?)),
-                ScalarFunction::Rpad => Ok(rpad(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::EndsWith => Ok(ends_with(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Strpos => Ok(strpos(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Substr => {
-                    if args.len() > 2 {
-                        assert_eq!(args.len(), 3);
-                        Ok(substring(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                            parse_expr(&args[2], registry, codec)?,
-                        ))
-                    } else {
-                        Ok(substr(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                        ))
-                    }
-                }
                 ScalarFunction::Translate => Ok(translate(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,

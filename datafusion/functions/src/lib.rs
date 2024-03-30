@@ -124,6 +124,12 @@ make_stub_package!(regex, "regex_expressions");
 pub mod crypto;
 make_stub_package!(crypto, "crypto_expressions");
 
+#[cfg(feature = "unicode_expressions")]
+pub mod unicode;
+make_stub_package!(unicode, "unicode_expressions");
+
+mod utils;
+
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     #[cfg(feature = "core_expressions")]
@@ -140,6 +146,8 @@ pub mod expr_fn {
     pub use super::regex::expr_fn::*;
     #[cfg(feature = "string_expressions")]
     pub use super::string::expr_fn::*;
+    #[cfg(feature = "unicode_expressions")]
+    pub use super::unicode::expr_fn::*;
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
@@ -151,6 +159,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         .chain(math::functions())
         .chain(regex::functions())
         .chain(crypto::functions())
+        .chain(unicode::functions())
         .chain(string::functions());
 
     all_functions.try_for_each(|udf| {

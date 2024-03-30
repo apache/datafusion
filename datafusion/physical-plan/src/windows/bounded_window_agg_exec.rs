@@ -237,6 +237,10 @@ impl DisplayAs for BoundedWindowAggExec {
 }
 
 impl ExecutionPlan for BoundedWindowAggExec {
+    fn name(&self) -> &'static str {
+        "BoundedWindowAggExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

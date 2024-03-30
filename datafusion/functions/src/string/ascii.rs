@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::make_scalar_function;
+use crate::utils::make_scalar_function;
 use arrow::array::Int32Array;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;

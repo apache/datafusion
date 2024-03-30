@@ -385,6 +385,10 @@ impl DisplayAs for SymmetricHashJoinExec {
 }
 
 impl ExecutionPlan for SymmetricHashJoinExec {
+    fn name(&self) -> &'static str {
+        "SymmetricHashJoinExec"
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
