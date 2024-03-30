@@ -48,7 +48,7 @@ unicode_expressions = ["unicode-segmentation"]
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { workspace = true, features = ["test_utils"] }
+arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
@@ -76,6 +76,7 @@ sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
 rstest = { workspace = true }
