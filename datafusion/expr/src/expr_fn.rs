@@ -33,7 +33,7 @@ use crate::{
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{Column, Result};
+use datafusion_common::{internal_err, Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Not;
@@ -884,7 +884,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
-        unreachable!()
+        internal_err!("FirstValue does not have a state type")
     }
 
     fn state_fields(

@@ -436,7 +436,6 @@ pub fn create_first_value_accumulator(
         ignore_nulls,
     )
     .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
-    // Ok(Box::new(acc))
 }
 
 /// LAST_VALUE aggregate expression
