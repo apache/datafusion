@@ -121,7 +121,7 @@ impl AggregateExpr for AggregateFunctionExpr {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         self.fun.accumulator(
             &self.data_type,
-            self.sort_exprs.as_slice(),
+            &self.sort_exprs,
             &self.schema,
             self.ignore_nulls,
             self.requirement_satisfied,

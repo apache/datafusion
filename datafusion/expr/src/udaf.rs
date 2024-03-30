@@ -171,14 +171,14 @@ impl AggregateUDF {
     /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(
         &self,
-        return_type: &DataType,
+        arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
         ignore_nulls: bool,
         requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(
-            return_type,
+            arg,
             sort_exprs,
             schema,
             ignore_nulls,

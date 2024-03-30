@@ -46,6 +46,8 @@ pub type AccumulatorFactoryFunction = Arc<
 
 /// Factory that returns an accumulator for the given aggregate, given
 /// its return datatype, the sorting expressions and the schema for ordering.
+/// FirstValue needs additional `ignore_nulls` and `requirement_satisfied` flags.
+// TODO: It would be nice if we can have flexible design for arbitrary arguments.
 pub type AccumulatorFactoryFunctionForFirstValue = Arc<
     dyn Fn(&DataType, &[Expr], &Schema, bool, bool) -> Result<Box<dyn Accumulator>>
         + Send
