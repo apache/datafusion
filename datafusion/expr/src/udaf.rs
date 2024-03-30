@@ -184,7 +184,11 @@ impl AggregateUDF {
         self.inner.state_type(return_type)
     }
 
-    pub fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+    pub fn state_fields(
+        &self,
+        value_field: Field,
+        ordering_field: Vec<Field>,
+    ) -> Result<Vec<Field>> {
         self.inner.state_fields(value_field, ordering_field)
     }
 
@@ -300,7 +304,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
 
     /// Default fields including the value field and ordering fields
-    fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+    fn state_fields(
+        &self,
+        value_field: Field,
+        ordering_field: Vec<Field>,
+    ) -> Result<Vec<Field>> {
         let mut fields = vec![value_field];
         fields.extend(ordering_field);
         Ok(fields)

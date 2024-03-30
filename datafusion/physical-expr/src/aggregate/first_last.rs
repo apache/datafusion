@@ -34,7 +34,189 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Expr};
+use datafusion_expr::{Accumulator, Expr};
+
+
+#[derive(Debug, Clone)]
+pub struct FirstValueUDF {
+    name: String,
+    input_data_type: DataType,
+    order_by_data_types: Vec<DataType>,
+    expr: Arc<dyn PhysicalExpr>,
+    ordering_req: LexOrdering,
+    requirement_satisfied: bool,
+    ignore_nulls: bool,
+    state_fields: Vec<Field>,
+}
+
+impl FirstValueUDF {
+    /// Creates a new FIRST_VALUE aggregation function.
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        input_data_type: DataType,
+        ordering_req: LexOrdering,
+        order_by_data_types: Vec<DataType>,
+        state_fields: Vec<Field>,
+    ) -> Self {
+        let requirement_satisfied = ordering_req.is_empty();
+        Self {
+            name: name.into(),
+            input_data_type,
+            order_by_data_types,
+            expr,
+            ordering_req,
+            requirement_satisfied,
+            ignore_nulls: false,
+            state_fields,
+        }
+    }
+
+    pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
+        self.ignore_nulls = ignore_nulls;
+        self
+    }
+
+    /// Returns the name of the aggregate expression.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the input data type of the aggregate expression.
+    pub fn input_data_type(&self) -> &DataType {
+        &self.input_data_type
+    }
+
+    /// Returns the data types of the order-by columns.
+    pub fn order_by_data_types(&self) -> &Vec<DataType> {
+        &self.order_by_data_types
+    }
+
+    /// Returns the expression associated with the aggregate function.
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    /// Returns the lexical ordering requirements of the aggregate expression.
+    pub fn ordering_req(&self) -> &LexOrdering {
+        &self.ordering_req
+    }
+
+    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
+    }
+
+    pub fn convert_to_last(self) -> LastValue {
+        let name = if self.name.starts_with("FIRST") {
+            format!("LAST{}", &self.name[5..])
+        } else {
+            format!("LAST_VALUE({})", self.expr)
+        };
+        let FirstValueUDF {
+            expr,
+            input_data_type,
+            ordering_req,
+            order_by_data_types,
+            ..
+        } = self;
+        LastValue::new(
+            expr,
+            name,
+            input_data_type,
+            reverse_order_bys(&ordering_req),
+            order_by_data_types,
+        )
+    }
+}
+
+impl AggregateExpr for FirstValueUDF {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        FirstValueAccumulator::try_new(
+            &self.input_data_type,
+            &self.order_by_data_types,
+            self.ordering_req.clone(),
+            self.ignore_nulls,
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        if !self.state_fields.is_empty() {
+            return Ok(self.state_fields.clone());
+        }
+
+        let mut fields = vec![Field::new(
+            format_state_name(&self.name, "first_value"),
+            self.input_data_type.clone(),
+            true,
+        )];
+        fields.extend(ordering_fields(
+            &self.ordering_req,
+            &self.order_by_data_types,
+        ));
+        fields.push(Field::new(
+            format_state_name(&self.name, "is_set"),
+            DataType::Boolean,
+            true,
+        ));
+        Ok(fields)
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        (!self.ordering_req.is_empty()).then_some(&self.ordering_req)
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone().convert_to_last()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        FirstValueAccumulator::try_new(
+            &self.input_data_type,
+            &self.order_by_data_types,
+            self.ordering_req.clone(),
+            self.ignore_nulls,
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
+    }
+}
+
+impl PartialEq<dyn Any> for FirstValueUDF {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.input_data_type == x.input_data_type
+                    && self.order_by_data_types == x.order_by_data_types
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
+    }
+}
+
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug, Clone)]
@@ -48,75 +230,6 @@ pub struct FirstValue {
     ignore_nulls: bool,
     state_fields: Vec<Field>,
 }
-
-#[derive(Debug, Clone)]
-pub struct FirstValueUDF {
-    name: String,
-    input_data_type: DataType,
-    order_by_data_types: Vec<DataType>,
-    expr: Arc<dyn PhysicalExpr>,
-    ordering_req: LexOrdering,
-    requirement_satisfied: bool,
-    ignore_nulls: bool,
-}
-
-// impl AggregateUDFImpl for FirstValue {
-//     fn as_any(&self) -> &dyn Any {
-//         self
-//     }
-
-//     fn name(&self) -> &str {
-//         self.name.as_str()
-//     }
-
-//     fn signature(&self) -> &datafusion_expr::Signature {
-//         todo!()
-//     }
-
-//     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-//         Ok(arg_types[0].clone())
-//     }
-
-//     fn accumulator(
-//         &self,
-//         _arg: &DataType,
-//         _sort_exprs: &[datafusion_expr::Expr],
-//         _schema: &arrow_schema::Schema,
-//     ) -> Result<Box<dyn Accumulator>> {
-//         FirstValueAccumulator::try_new(
-//             &self.input_data_type,
-//             &self.order_by_data_types,
-//             self.ordering_req.clone(),
-//             self.ignore_nulls,
-//         )
-//         .map(|acc| {
-//             Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-//         })
-//     }
-
-//     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
-//         todo!()
-//     }
-
-//     fn state_fields(&self) -> Result<Vec<Field>> {
-//         let mut fields = vec![Field::new(
-//             format_state_name(&self.name, "first_value"),
-//             self.input_data_type.clone(),
-//             true,
-//         )];
-//         fields.extend(ordering_fields(
-//             &self.ordering_req,
-//             &self.order_by_data_types,
-//         ));
-//         fields.push(Field::new(
-//             format_state_name(&self.name, "is_set"),
-//             DataType::Boolean,
-//             true,
-//         ));
-
-//         Ok(fields)
-//     }
-// }
 
 impl FirstValue {
     /// Creates a new FIRST_VALUE aggregation function.
@@ -581,7 +694,7 @@ impl LastValue {
             input_data_type,
             reverse_order_bys(&ordering_req),
             order_by_data_types,
-            vec![]
+            vec![],
         )
     }
 }

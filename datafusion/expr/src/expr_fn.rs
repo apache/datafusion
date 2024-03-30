@@ -28,7 +28,7 @@ use crate::{
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
     ScalarUDF, Signature, Volatility,
 };
-use crate::{signature, AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
+use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{Column, Result};
 use std::any::Any;
@@ -963,7 +963,11 @@ impl AggregateUDFImpl for FirstValue {
         unreachable!()
     }
 
-    fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+    fn state_fields(
+        &self,
+        value_field: Field,
+        ordering_field: Vec<Field>,
+    ) -> Result<Vec<Field>> {
         let mut fields = vec![value_field];
         fields.extend(ordering_field);
         fields.push(Field::new("is_set", DataType::Boolean, true));

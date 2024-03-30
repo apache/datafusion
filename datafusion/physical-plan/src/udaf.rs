@@ -17,7 +17,9 @@
 
 //! This module contains functions and structs supporting user-defined aggregate functions.
 
-use datafusion_expr::{Expr, GroupsAccumulator};
+use arrow_schema::SortOptions;
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::{expr, Expr, GroupsAccumulator};
 use fmt::Debug;
 use std::any::Any;
 use std::fmt;
@@ -25,9 +27,11 @@ use std::fmt;
 use arrow::datatypes::{DataType, Field, Schema};
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 pub use datafusion_expr::AggregateUDF;
-use datafusion_physical_expr::{expressions, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    create_physical_expr, expressions, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+};
 
 use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
 use std::sync::Arc;
@@ -42,10 +46,6 @@ pub fn create_aggregate_expr(
     schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    let name: String = name.into();
-    println!("name: {}", name);
-
-
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(schema))
@@ -62,20 +62,57 @@ pub fn create_aggregate_expr(
     }))
 }
 
+// TODO: Duplicated functoin from `datafusion/core/src/physical_planner.rs`, remove one of them
+// TODO: Maybe move to physical-expr
+/// Create a physical sort expression from a logical expression
+pub fn create_physical_sort_expr(
+    e: &Expr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<PhysicalSortExpr> {
+    if let Expr::Sort(expr::Sort {
+        expr,
+        asc,
+        nulls_first,
+    }) = e
+    {
+        Ok(PhysicalSortExpr {
+            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+            options: SortOptions {
+                descending: !asc,
+                nulls_first: *nulls_first,
+            },
+        })
+    } else {
+        internal_err!("Expects a sort expression")
+    }
+}
+
 pub fn create_aggregate_expr_first_value(
     fun: &AggregateUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    args: &[Expr],
+    // input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     sort_exprs: &[Expr],
-    ordering_req: &[PhysicalSortExpr],
+    dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+    // ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
     name: impl Into<String>,
     ignore_nulls: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
-    let input_exprs_types = input_phy_exprs
+    let args = args
+        .iter()
+        .map(|e| create_physical_expr(e, dfschema, execution_props))
+        .collect::<Result<Vec<_>>>()?;
+    let input_exprs_types = args
         .iter()
         .map(|arg| arg.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
+    let ordering_req = sort_exprs
+        .iter()
+        .map(|e| create_physical_sort_expr(e, dfschema, execution_props))
+        .collect::<Result<Vec<_>>>()?;
     let ordering_types = ordering_req
         .iter()
         .map(|e| e.expr.data_type(schema))
@@ -85,17 +122,18 @@ pub fn create_aggregate_expr_first_value(
 
     let input_data_type = fun.return_type(&input_exprs_types)?;
 
-        let value_field = Field::new(
-            format_state_name(&name, "first_value"),
-            input_data_type.clone(),
-            true,
-        );
+    let value_field = Field::new(
+        format_state_name(&name, "first_value"),
+        input_data_type.clone(),
+        true,
+    );
     let ordering_fields = ordering_fields(&ordering_req, &ordering_types);
 
     let state_fields = fun.state_fields(value_field, ordering_fields)?;
 
-    let first_value = expressions::FirstValue::new(
-        input_phy_exprs[0].clone(),
+    let first_value = expressions::FirstValueUDF::new(
+        args[0].clone(),
+        // input_phy_exprs[0].clone(),
         name,
         input_data_type,
         ordering_req.to_vec(),
@@ -106,6 +144,7 @@ pub fn create_aggregate_expr_first_value(
     return Ok(Arc::new(first_value));
 }
 
+// TODO: Duplicated functoin.
 fn ordering_fields(
     ordering_req: &[PhysicalSortExpr],
     // Data type of each expression in the ordering requirement

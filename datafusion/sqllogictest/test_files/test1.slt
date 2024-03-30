@@ -1,0 +1,12 @@
+statement ok
+CREATE TABLE t AS VALUES (null::bigint), (3), (4);
+
+query I
+SELECT first_value(column1) FROM t;
+----
+NULL
+
+query I
+SELECT my_first(column1) FROM t;
+----
+NULL

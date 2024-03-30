@@ -90,7 +90,7 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::expressions::{self, FirstValue, Literal};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -1661,15 +1661,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
         Expr::AggregateFunction(AggregateFunction {
             func_def,
             distinct,
-            args,
+            args: origin_args,
             filter,
             order_by,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
@@ -1679,26 +1675,31 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
 
-            let sort_exprs = order_by.clone().unwrap_or(vec![]);
-            let order_by = match order_by {
-                Some(e) => Some(
-                    e.iter()
-                        .map(|expr| {
-                            create_physical_sort_expr(
-                                expr,
-                                logical_input_schema,
-                                execution_props,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                None => None,
-            };
             let ignore_nulls = null_treatment
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
             let (agg_expr, filter, order_by) = match func_def {
                 AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let args = origin_args
+                        .iter()
+                        .map(|e| {
+                            create_physical_expr(e, logical_input_schema, execution_props)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let order_by = match order_by {
+                        Some(e) => Some(
+                            e.iter()
+                                .map(|expr| {
+                                    create_physical_sort_expr(
+                                        expr,
+                                        logical_input_schema,
+                                        execution_props,
+                                    )
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                        None => None,
+                    };
                     let ordering_reqs = order_by.clone().unwrap_or(vec![]);
                     let agg_expr = aggregates::create_aggregate_expr(
                         fun,
@@ -1712,16 +1713,48 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     (agg_expr, filter, order_by)
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
-                    let ordering_reqs: Vec<PhysicalSortExpr> =
-                        order_by.clone().unwrap_or(vec![]);
+                    let sort_exprs = order_by.clone().unwrap_or(vec![]);
+                    let order_by = match order_by {
+                        Some(e) => Some(
+                            e.iter()
+                                .map(|expr| {
+                                    create_physical_sort_expr(
+                                        expr,
+                                        logical_input_schema,
+                                        execution_props,
+                                    )
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                        None => None,
+                    };
 
                     // TODO: fix the name
                     if fun.name() == "my_first" {
                         let agg_expr = udaf::create_aggregate_expr_first_value(
-                            fun, &args, &sort_exprs, &ordering_reqs,
-                            physical_input_schema, name, ignore_nulls)?;
+                            fun,
+                            origin_args,
+                            // &args,
+                            &sort_exprs,
+                            logical_input_schema,
+                            execution_props,
+                            // &ordering_reqs,
+                            physical_input_schema,
+                            name,
+                            ignore_nulls,
+                        )?;
                         return Ok((agg_expr, filter, order_by));
                     }
+                    
+                    let ordering_reqs: Vec<PhysicalSortExpr> =
+                        order_by.clone().unwrap_or(vec![]);
+
+                    let args = origin_args
+                        .iter()
+                        .map(|e| {
+                            create_physical_expr(e, logical_input_schema, execution_props)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,
