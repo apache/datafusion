@@ -40,7 +40,7 @@ use datafusion_expr::{
     acosh, asinh, atan, atan2, atanh, cbrt, ceil, coalesce, concat_expr, concat_ws_expr,
     cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, floor, gcd, initcap, iszero, lcm, ln, log, log10, log2,
+    factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
     nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, trunc,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
@@ -436,8 +436,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
-            ScalarFunction::Ln => Self::Ln,
-            ScalarFunction::Log10 => Self::Log10,
             ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Factorial => Self::Factorial,
@@ -448,7 +446,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
@@ -1343,11 +1340,6 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Radians => {
                     Ok(radians(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Log10 => {
-                    Ok(log10(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))

@@ -2850,10 +2850,10 @@ pub enum ScalarFunction {
     /// 7 was Digest
     Exp = 8,
     Floor = 9,
-    Ln = 10,
+    /// 10 was Ln
     Log = 11,
-    Log10 = 12,
-    Log2 = 13,
+    /// 12 was Log10
+    /// 13 was Log2
     Round = 14,
     Signum = 15,
     Sin = 16,
@@ -2992,10 +2992,7 @@ impl ScalarFunction {
             ScalarFunction::Cos => "Cos",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
-            ScalarFunction::Ln => "Ln",
             ScalarFunction::Log => "Log",
-            ScalarFunction::Log10 => "Log10",
-            ScalarFunction::Log2 => "Log2",
             ScalarFunction::Round => "Round",
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
@@ -3035,10 +3032,7 @@ impl ScalarFunction {
             "Cos" => Some(Self::Cos),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
-            "Ln" => Some(Self::Ln),
             "Log" => Some(Self::Log),
-            "Log10" => Some(Self::Log10),
-            "Log2" => Some(Self::Log2),
             "Round" => Some(Self::Round),
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),

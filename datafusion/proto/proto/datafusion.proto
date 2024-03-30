@@ -551,10 +551,10 @@ enum ScalarFunction {
   // 7 was Digest
   Exp = 8;
   Floor = 9;
-  Ln = 10;
+  // 10 was Ln
   Log = 11;
-  Log10 = 12;
-  Log2 = 13;
+  // 12 was Log10
+  // 13 was Log2
   Round = 14;
   Signum = 15;
   Sin = 16;
