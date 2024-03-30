@@ -22929,7 +22929,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ConcatWithSeparator => "ConcatWithSeparator",
             Self::InitCap => "InitCap",
             Self::Random => "Random",
-            Self::Translate => "Translate",
             Self::Coalesce => "Coalesce",
             Self::Power => "Power",
             Self::Atan2 => "Atan2",
@@ -22948,8 +22947,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Cot => "Cot",
             Self::Nanvl => "Nanvl",
             Self::Iszero => "Iszero",
-            Self::SubstrIndex => "SubstrIndex",
-            Self::FindInSet => "FindInSet",
             Self::EndsWith => "EndsWith",
         };
         serializer.serialize_str(variant)
@@ -22978,7 +22975,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ConcatWithSeparator",
             "InitCap",
             "Random",
-            "Translate",
             "Coalesce",
             "Power",
             "Atan2",
@@ -22997,8 +22993,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cot",
             "Nanvl",
             "Iszero",
-            "SubstrIndex",
-            "FindInSet",
             "EndsWith",
         ];
 
@@ -23056,7 +23050,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ConcatWithSeparator" => Ok(ScalarFunction::ConcatWithSeparator),
                     "InitCap" => Ok(ScalarFunction::InitCap),
                     "Random" => Ok(ScalarFunction::Random),
-                    "Translate" => Ok(ScalarFunction::Translate),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
                     "Power" => Ok(ScalarFunction::Power),
                     "Atan2" => Ok(ScalarFunction::Atan2),
@@ -23075,8 +23068,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cot" => Ok(ScalarFunction::Cot),
                     "Nanvl" => Ok(ScalarFunction::Nanvl),
                     "Iszero" => Ok(ScalarFunction::Iszero),
-                    "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
-                    "FindInSet" => Ok(ScalarFunction::FindInSet),
                     "EndsWith" => Ok(ScalarFunction::EndsWith),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
