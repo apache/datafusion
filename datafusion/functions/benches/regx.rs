@@ -103,20 +103,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("regexp_match_1000", |b| {
-        let mut rng = rand::thread_rng();
-        let data = Arc::new(data(&mut rng)) as ArrayRef;
-        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
-        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
-
-        b.iter(|| {
-            black_box(
-                regexp_match::<i32>(&[data.clone(), regex.clone(), flags.clone()])
-                    .expect("regexp_match should work on valid values"),
-            )
-        })
-    });
-
     c.bench_function("regexp_replace_1000", |b| {
         let mut rng = rand::thread_rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
