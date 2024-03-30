@@ -187,7 +187,6 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     }
 }
 
-// TOOD: Remove
 /// Construct corresponding fields for lexicographical ordering requirement expression
 pub fn ordering_fields(
     ordering_req: &[PhysicalSortExpr],

@@ -1460,17 +1460,12 @@ impl SessionState {
         datafusion_functions_array::register_all(&mut new_self)
             .expect("can not register array expressions");
 
-        // TODO: FIX the name
-        let my_first = create_first_value(
-            "my_first",
-            // vec![DataType::Int32],
-            // Arc::new(DataType::Int32),
-            // Volatility::Immutable,
+        let first_value = create_first_value(
+            "FIRST_VALUE",
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
             Arc::new(create_first_value_accumulator),
-            // Arc::new(vec![DataType::Int32, DataType::Int32, DataType::Boolean]),
         );
-        let _ = new_self.register_udaf(Arc::new(my_first));
+        let _ = new_self.register_udaf(Arc::new(first_value));
 
         new_self
     }
