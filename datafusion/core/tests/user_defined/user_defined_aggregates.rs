@@ -820,6 +820,8 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
         _arg: &DataType,
         _sort_exprs: &[Expr],
         _schema: &Schema,
+        _ignore_nulls: bool,
+        _requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
         // should use groups accumulator
         panic!("accumulator shouldn't invoke");

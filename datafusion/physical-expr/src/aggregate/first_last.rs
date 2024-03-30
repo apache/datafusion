@@ -65,7 +65,7 @@ impl FirstValueUDF {
         sort_exprs: Vec<Expr>,
         schema: Schema,
     ) -> Self {
-        let requirement_satisfied = ordering_req.is_empty();
+        let requirement_satisfied = sort_exprs.is_empty();
         Self {
             fun,
             name: name.into(),
@@ -160,25 +160,7 @@ impl AggregateExpr for FirstValueUDF {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        if !self.state_fields.is_empty() {
-            return Ok(self.state_fields.clone());
-        }
-
-        let mut fields = vec![Field::new(
-            format_state_name(&self.name, "first_value"),
-            self.return_type.clone(),
-            true,
-        )];
-        fields.extend(ordering_fields(
-            &self.ordering_req,
-            &self.order_by_data_types,
-        ));
-        fields.push(Field::new(
-            format_state_name(&self.name, "is_set"),
-            DataType::Boolean,
-            true,
-        ));
-        Ok(fields)
+        Ok(self.state_fields.clone())
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
