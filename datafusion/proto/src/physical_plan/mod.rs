@@ -520,7 +520,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                             // TODO: `order by` is not supported for UDAF yet
                                             let sort_exprs = &[];
                                             let ordering_req = &[];
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, sort_exprs, ordering_req, &physical_schema, name)
+                                            let ignore_nulls = false;
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, sort_exprs, ordering_req, &physical_schema, name, ignore_nulls)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {

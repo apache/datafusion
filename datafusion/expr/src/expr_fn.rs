@@ -21,7 +21,9 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     Placeholder, ScalarFunction, TryCast,
 };
-use crate::function::{AccumulatorFactoryFunctionForFirstValue, PartitionEvaluatorFactory};
+use crate::function::{
+    AccumulatorFactoryFunctionForFirstValue, PartitionEvaluatorFactory,
+};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,

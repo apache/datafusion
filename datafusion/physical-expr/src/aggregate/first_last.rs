@@ -36,8 +36,6 @@ use datafusion_common::{
 };
 use datafusion_expr::{Accumulator, AggregateUDF, Expr};
 
-
-
 // Equivalent to AggregateFunctionExpr
 #[derive(Debug, Clone)]
 pub struct FirstValueUDF {
@@ -152,7 +150,13 @@ impl AggregateExpr for FirstValueUDF {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.fun.accumulator(&self.return_type, &self.sort_exprs, &self.schema, self.ignore_nulls, self.requirement_satisfied)
+        self.fun.accumulator(
+            &self.return_type,
+            &self.sort_exprs,
+            &self.schema,
+            self.ignore_nulls,
+            self.requirement_satisfied,
+        )
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -219,7 +223,6 @@ impl PartialEq<dyn Any> for FirstValueUDF {
             .unwrap_or(false)
     }
 }
-
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug, Clone)]
@@ -614,9 +617,13 @@ pub fn create_first_value_accumulator(
         .map(|e| e.expr.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    
-        FirstValueAccumulator::try_new(data_type, &ordering_dtypes, ordering_req, ignore_nulls)
-        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+    FirstValueAccumulator::try_new(
+        data_type,
+        &ordering_dtypes,
+        ordering_req,
+        ignore_nulls,
+    )
+    .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     // Ok(Box::new(acc))
 }
 

@@ -177,7 +177,13 @@ impl AggregateUDF {
         ignore_nulls: bool,
         requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(return_type, sort_exprs, schema, ignore_nulls, requirement_satisfied)
+        self.inner.accumulator(
+            return_type,
+            sort_exprs,
+            schema,
+            ignore_nulls,
+            requirement_satisfied,
+        )
     }
 
     /// Return the type of the intermediate state used by this aggregator, given
@@ -388,7 +394,13 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         ignore_nulls: bool,
         requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(arg, sort_exprs, schema, ignore_nulls, requirement_satisfied)
+        self.inner.accumulator(
+            arg,
+            sort_exprs,
+            schema,
+            ignore_nulls,
+            requirement_satisfied,
+        )
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
