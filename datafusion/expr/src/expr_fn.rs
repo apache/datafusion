@@ -24,6 +24,7 @@ use crate::expr::{
 use crate::function::{
     AccumulatorFactoryFunctionForFirstValue, PartitionEvaluatorFactory,
 };
+use crate::udaf::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
@@ -971,11 +972,16 @@ impl AggregateUDFImpl for FirstValue {
 
     fn state_fields(
         &self,
-        value_field: Field,
-        ordering_field: Vec<Field>,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
-        let mut fields = vec![value_field];
-        fields.extend(ordering_field);
+        let mut fields = vec![Field::new(
+            format_state_name(name, "first_value"),
+            value_type,
+            true,
+        )];
+        fields.extend(ordering_fields);
         fields.push(Field::new("is_set", DataType::Boolean, true));
         Ok(fields)
     }

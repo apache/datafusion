@@ -17,23 +17,19 @@
 
 //! This module contains functions and structs supporting user-defined aggregate functions.
 
-use arrow_schema::SortOptions;
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{expr, Expr, GroupsAccumulator};
+use datafusion_expr::{Expr, GroupsAccumulator};
 use fmt::Debug;
 use std::any::Any;
 use std::fmt;
 
 use arrow::datatypes::{DataType, Field, Schema};
 
-use super::{expressions::format_state_name, Accumulator, AggregateExpr};
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use super::{Accumulator, AggregateExpr};
+use datafusion_common::{not_impl_err, Result};
 pub use datafusion_expr::AggregateUDF;
-use datafusion_physical_expr::{
-    create_physical_expr, expressions, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
-use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
+use datafusion_physical_expr::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use std::sync::Arc;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
@@ -54,6 +50,13 @@ pub fn create_aggregate_expr(
 
     let requirement_satisfied = ordering_req.is_empty();
 
+    let ordering_types = ordering_req
+        .iter()
+        .map(|e| e.expr.data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let ordering_fields = ordering_fields(ordering_req, &ordering_types);
+
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
         args: input_phy_exprs.to_vec(),
@@ -64,115 +67,8 @@ pub fn create_aggregate_expr(
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
         requirement_satisfied,
+        ordering_fields,
     }))
-}
-
-//TODO: fix this clippy
-#[allow(clippy::too_many_arguments)]
-pub fn create_aggregate_expr_first_value(
-    fun: &AggregateUDF,
-    args: &[Expr],
-    // input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    sort_exprs: &[Expr],
-    dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-    // ordering_req: &[PhysicalSortExpr],
-    schema: &Schema,
-    name: impl Into<String>,
-    ignore_nulls: bool,
-) -> Result<Arc<dyn AggregateExpr>> {
-    let args = args
-        .iter()
-        .map(|e| create_physical_expr(e, dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()?;
-    let input_exprs_types = args
-        .iter()
-        .map(|arg| arg.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let ordering_req = sort_exprs
-        .iter()
-        .map(|e| create_physical_sort_expr(e, dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()?;
-    let ordering_types = ordering_req
-        .iter()
-        .map(|e| e.expr.data_type(schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let name: String = name.into();
-
-    let return_type = fun.return_type(&input_exprs_types)?;
-
-    let value_field = Field::new(
-        format_state_name(&name, "first_value"),
-        return_type.clone(),
-        true,
-    );
-    let ordering_fields = ordering_fields(&ordering_req, &ordering_types);
-
-    let state_fields = fun.state_fields(value_field, ordering_fields)?;
-
-    let requirement_satisfied = sort_exprs.is_empty();
-    let first_value = expressions::FirstValueUDF::new(
-        fun.clone(),
-        args[0].clone(),
-        name,
-        return_type,
-        ordering_req.to_vec(),
-        state_fields,
-        sort_exprs.to_vec(),
-        schema.clone(),
-        requirement_satisfied,
-    )
-    .with_ignore_nulls(ignore_nulls);
-
-    Ok(Arc::new(first_value))
-}
-
-// TODO: Duplicated functoin.
-fn ordering_fields(
-    ordering_req: &[PhysicalSortExpr],
-    // Data type of each expression in the ordering requirement
-    data_types: &[DataType],
-) -> Vec<Field> {
-    ordering_req
-        .iter()
-        .zip(data_types.iter())
-        .map(|(sort_expr, dtype)| {
-            Field::new(
-                sort_expr.expr.to_string().as_str(),
-                dtype.clone(),
-                // Multi partitions may be empty hence field should be nullable.
-                true,
-            )
-        })
-        .collect()
-}
-
-// TODO: Duplicated functoin from `datafusion/core/src/physical_planner.rs`, remove one of them
-// TODO: Maybe move to physical-expr
-/// Create a physical sort expression from a logical expression
-pub fn create_physical_sort_expr(
-    e: &Expr,
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<PhysicalSortExpr> {
-    if let Expr::Sort(expr::Sort {
-        expr,
-        asc,
-        nulls_first,
-    }) = e
-    {
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    } else {
-        internal_err!("Expects a sort expression")
-    }
 }
 
 /// Physical aggregate expression of a UDAF.
@@ -190,6 +86,7 @@ pub struct AggregateFunctionExpr {
     ordering_req: LexOrdering,
     ignore_nulls: bool,
     requirement_satisfied: bool,
+    ordering_fields: Vec<Field>,
 }
 
 impl AggregateFunctionExpr {
@@ -210,21 +107,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        let fields = self
-            .fun
-            .state_type(&self.data_type)?
-            .iter()
-            .enumerate()
-            .map(|(i, data_type)| {
-                Field::new(
-                    format_state_name(&self.name, &format!("{i}")),
-                    data_type.clone(),
-                    true,
-                )
-            })
-            .collect::<Vec<Field>>();
-
-        Ok(fields)
+        self.fun.state_fields(
+            self.name(),
+            self.data_type.clone(),
+            self.ordering_fields.clone(),
+        )
     }
 
     fn field(&self) -> Result<Field> {

@@ -1729,21 +1729,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         None => None,
                     };
 
-                    // TODO: fix the name
-                    if fun.name() == "my_first" {
-                        let agg_expr = udaf::create_aggregate_expr_first_value(
-                            fun,
-                            origin_args,
-                            &sort_exprs,
-                            logical_input_schema,
-                            execution_props,
-                            physical_input_schema,
-                            name,
-                            ignore_nulls,
-                        )?;
-                        return Ok((agg_expr, filter, order_by));
-                    }
-
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         order_by.clone().unwrap_or(vec![]);
 

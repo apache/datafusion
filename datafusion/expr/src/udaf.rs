@@ -194,10 +194,11 @@ impl AggregateUDF {
 
     pub fn state_fields(
         &self,
-        value_field: Field,
-        ordering_field: Vec<Field>,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
-        self.inner.state_fields(value_field, ordering_field)
+        self.inner.state_fields(name, value_type, ordering_fields)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -316,11 +317,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Default fields including the value field and ordering fields
     fn state_fields(
         &self,
-        value_field: Field,
-        ordering_field: Vec<Field>,
+        name: &str,
+        value_type: DataType,
+        ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
+        let value_field = Field::new(
+            format_state_name(name, "default_state_name"),
+            value_type,
+            true,
+        );
+
         let mut fields = vec![value_field];
-        fields.extend(ordering_field);
+        fields.extend(ordering_fields);
         Ok(fields)
     }
 
@@ -479,4 +487,9 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     // fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
     //     not_impl_err!("state_fields not implemented for legacy AggregateUDF")
     // }
+}
+
+/// returns the name of the state
+pub(crate) fn format_state_name(name: &str, state_name: &str) -> String {
+    format!("{name}[{state_name}]")
 }
