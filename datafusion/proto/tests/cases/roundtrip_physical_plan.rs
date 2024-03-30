@@ -436,6 +436,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         &[],
         &schema,
         "example_agg",
+        false,
     )?];
 
     roundtrip_test_with_context(
