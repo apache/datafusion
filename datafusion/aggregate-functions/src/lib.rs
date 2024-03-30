@@ -31,16 +31,15 @@ mod core;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
-use datafusion_expr::AggregateUDF;
-use log::debug;
-use std::sync::Arc;
+// use datafusion_expr::AggregateUDF;
+// use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {}
 
 /// Registers all enabled packages with a [`FunctionRegistry`]
-pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    let functions: Vec<Arc<AggregateUDF>> = vec![];
+pub fn register_all(_registry: &mut dyn FunctionRegistry) -> Result<()> {
+    // let functions: Vec<Arc<AggregateUDF>> = vec![];
     // functions.into_iter().try_for_each(|udf| {
     //     let existing_udf = registry.register_udf(udf)?;
     //     if let Some(existing_udf) = existing_udf {

@@ -37,47 +37,46 @@ use datafusion_common::{
 use datafusion_expr::{Accumulator, AggregateUDF, Expr};
 
 // Equivalent to AggregateFunctionExpr
+// TODO: Make it similar to AggregateFunctionExpr
 #[derive(Debug, Clone)]
 pub struct FirstValueUDF {
     fun: AggregateUDF,
     name: String,
     return_type: DataType,
-    order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
-    requirement_satisfied: bool,
     ignore_nulls: bool,
     state_fields: Vec<Field>,
     sort_exprs: Vec<Expr>,
     schema: Schema,
+    requirement_satisfied: bool,
 }
 
 impl FirstValueUDF {
     /// Creates a new FIRST_VALUE aggregation function.
+    #[allow(clippy::too_many_arguments)] // TODO: Fix this clippy if better
     pub fn new(
         fun: AggregateUDF,
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         return_type: DataType,
         ordering_req: LexOrdering,
-        order_by_data_types: Vec<DataType>,
         state_fields: Vec<Field>,
         sort_exprs: Vec<Expr>,
         schema: Schema,
+        requirement_satisfied: bool,
     ) -> Self {
-        let requirement_satisfied = sort_exprs.is_empty();
         Self {
             fun,
             name: name.into(),
             return_type,
-            order_by_data_types,
             expr,
             ordering_req,
-            requirement_satisfied,
             ignore_nulls: false,
             state_fields,
             sort_exprs,
             schema,
+            requirement_satisfied,
         }
     }
 
@@ -96,11 +95,6 @@ impl FirstValueUDF {
         &self.return_type
     }
 
-    /// Returns the data types of the order-by columns.
-    pub fn order_by_data_types(&self) -> &Vec<DataType> {
-        &self.order_by_data_types
-    }
-
     /// Returns the expression associated with the aggregate function.
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
@@ -116,7 +110,7 @@ impl FirstValueUDF {
         self
     }
 
-    pub fn convert_to_last(self) -> LastValue {
+    pub fn convert_to_last(self) -> Result<LastValue> {
         let name = if self.name.starts_with("FIRST") {
             format!("LAST{}", &self.name[5..])
         } else {
@@ -126,16 +120,21 @@ impl FirstValueUDF {
             expr,
             return_type,
             ordering_req,
-            order_by_data_types,
             ..
         } = self;
-        LastValue::new(
+
+        let order_by_data_types = ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(&self.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LastValue::new(
             expr,
             name,
             return_type,
             reverse_order_bys(&ordering_req),
             order_by_data_types,
-        )
+        ))
     }
 }
 
@@ -176,19 +175,14 @@ impl AggregateExpr for FirstValueUDF {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone().convert_to_last()))
+        self.clone()
+            .convert_to_last()
+            .ok()
+            .map(|l| Arc::new(l) as _)
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        FirstValueAccumulator::try_new(
-            &self.return_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+        self.create_accumulator()
     }
 }
 
@@ -199,7 +193,6 @@ impl PartialEq<dyn Any> for FirstValueUDF {
             .map(|x| {
                 self.name == x.name
                     && self.return_type == x.return_type
-                    && self.order_by_data_types == x.order_by_data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)

@@ -67,32 +67,8 @@ pub fn create_aggregate_expr(
     }))
 }
 
-// TODO: Duplicated functoin from `datafusion/core/src/physical_planner.rs`, remove one of them
-// TODO: Maybe move to physical-expr
-/// Create a physical sort expression from a logical expression
-pub fn create_physical_sort_expr(
-    e: &Expr,
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<PhysicalSortExpr> {
-    if let Expr::Sort(expr::Sort {
-        expr,
-        asc,
-        nulls_first,
-    }) = e
-    {
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    } else {
-        internal_err!("Expects a sort expression")
-    }
-}
-
+//TODO: fix this clippy
+#[allow(clippy::too_many_arguments)]
 pub fn create_aggregate_expr_first_value(
     fun: &AggregateUDF,
     args: &[Expr],
@@ -136,19 +112,21 @@ pub fn create_aggregate_expr_first_value(
 
     let state_fields = fun.state_fields(value_field, ordering_fields)?;
 
+    let requirement_satisfied = sort_exprs.is_empty();
     let first_value = expressions::FirstValueUDF::new(
         fun.clone(),
         args[0].clone(),
         name,
         return_type,
         ordering_req.to_vec(),
-        ordering_types,
         state_fields,
         sort_exprs.to_vec(),
         schema.clone(),
+        requirement_satisfied,
     )
     .with_ignore_nulls(ignore_nulls);
-    return Ok(Arc::new(first_value));
+
+    Ok(Arc::new(first_value))
 }
 
 // TODO: Duplicated functoin.
@@ -169,6 +147,32 @@ fn ordering_fields(
             )
         })
         .collect()
+}
+
+// TODO: Duplicated functoin from `datafusion/core/src/physical_planner.rs`, remove one of them
+// TODO: Maybe move to physical-expr
+/// Create a physical sort expression from a logical expression
+pub fn create_physical_sort_expr(
+    e: &Expr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<PhysicalSortExpr> {
+    if let Expr::Sort(expr::Sort {
+        expr,
+        asc,
+        nulls_first,
+    }) = e
+    {
+        Ok(PhysicalSortExpr {
+            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+            options: SortOptions {
+                descending: !asc,
+                nulls_first: *nulls_first,
+            },
+        })
+    } else {
+        internal_err!("Expects a sort expression")
+    }
 }
 
 /// Physical aggregate expression of a UDAF.

@@ -1734,11 +1734,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         let agg_expr = udaf::create_aggregate_expr_first_value(
                             fun,
                             origin_args,
-                            // &args,
                             &sort_exprs,
                             logical_input_schema,
                             execution_props,
-                            // &ordering_reqs,
                             physical_input_schema,
                             name,
                             ignore_nulls,
