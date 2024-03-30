@@ -415,10 +415,6 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.state_type(return_type)
     }
 
-    // fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
-    //     self.inner.state_fields(value_field, ordering_field)
-    // }
-
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
