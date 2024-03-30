@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 mod character_length;
+mod find_in_set;
 mod left;
 mod lpad;
 mod reverse;
@@ -29,6 +30,8 @@ mod right;
 mod rpad;
 mod strpos;
 mod substr;
+mod substrindex;
+mod translate;
 
 // create UDFs
 make_udf_function!(
@@ -36,6 +39,7 @@ make_udf_function!(
     CHARACTER_LENGTH,
     character_length
 );
+make_udf_function!(find_in_set::FindInSetFunc, FIND_IN_SET, find_in_set);
 make_udf_function!(left::LeftFunc, LEFT, left);
 make_udf_function!(lpad::LPadFunc, LPAD, lpad);
 make_udf_function!(right::RightFunc, RIGHT, right);
@@ -43,6 +47,8 @@ make_udf_function!(reverse::ReverseFunc, REVERSE, reverse);
 make_udf_function!(rpad::RPadFunc, RPAD, rpad);
 make_udf_function!(strpos::StrposFunc, STRPOS, strpos);
 make_udf_function!(substr::SubstrFunc, SUBSTR, substr);
+make_udf_function!(substrindex::SubstrIndexFunc, SUBSTR_INDEX, substr_index);
+make_udf_function!(translate::TranslateFunc, TRANSLATE, translate);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
@@ -55,6 +61,11 @@ pub mod expr_fn {
     #[doc = "the number of characters in the `string`"]
     pub fn character_length(string: Expr) -> Expr {
         super::character_length().call(vec![string])
+    }
+
+    #[doc = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings"]
+    pub fn find_in_set(string: Expr, strlist: Expr) -> Expr {
+        super::find_in_set().call(vec![string, strlist])
     }
 
     #[doc = "finds the position from where the `substring` matches the `string`"]
@@ -111,12 +122,23 @@ pub mod expr_fn {
     pub fn substring(string: Expr, position: Expr, length: Expr) -> Expr {
         super::substr().call(vec![string, position, length])
     }
+
+    #[doc = "Returns the substring from str before count occurrences of the delimiter"]
+    pub fn substr_index(string: Expr, delimiter: Expr, count: Expr) -> Expr {
+        super::substr_index().call(vec![string, delimiter, count])
+    }
+
+    #[doc = "replaces the characters in `from` with the counterpart in `to`"]
+    pub fn translate(string: Expr, from: Expr, to: Expr) -> Expr {
+        super::translate().call(vec![string, from, to])
+    }
 }
 
 ///   Return a list of all functions in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         character_length(),
+        find_in_set(),
         left(),
         lpad(),
         reverse(),
@@ -124,5 +146,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         rpad(),
         strpos(),
         substr(),
+        substr_index(),
+        translate(),
     ]
 }

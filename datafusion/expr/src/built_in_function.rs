@@ -107,12 +107,6 @@ pub enum BuiltinScalarFunction {
     InitCap,
     /// random
     Random,
-    /// translate
-    Translate,
-    /// substr_index
-    SubstrIndex,
-    /// find_in_set
-    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -198,9 +192,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::EndsWith => Volatility::Immutable,
             BuiltinScalarFunction::InitCap => Volatility::Immutable,
             BuiltinScalarFunction::Radians => Volatility::Immutable,
-            BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
-            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -237,15 +228,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Ok(Float64),
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::EndsWith => Ok(Boolean),
-            BuiltinScalarFunction::SubstrIndex => {
-                utf8_to_str_type(&input_expr_types[0], "substr_index")
-            }
-            BuiltinScalarFunction::FindInSet => {
-                utf8_to_int_type(&input_expr_types[0], "find_in_set")
-            }
-            BuiltinScalarFunction::Translate => {
-                utf8_to_str_type(&input_expr_types[0], "translate")
-            }
 
             BuiltinScalarFunction::Factorial
             | BuiltinScalarFunction::Gcd
@@ -326,22 +308,6 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-
-            BuiltinScalarFunction::SubstrIndex => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
-                ],
-                self.volatility(),
-            ),
-            BuiltinScalarFunction::FindInSet => Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
-                self.volatility(),
-            ),
-
-            BuiltinScalarFunction::Translate => {
-                Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
-            }
             BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
             BuiltinScalarFunction::Power => Signature::one_of(
@@ -492,9 +458,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
             BuiltinScalarFunction::EndsWith => &["ends_with"],
             BuiltinScalarFunction::InitCap => &["initcap"],
-            BuiltinScalarFunction::Translate => &["translate"],
-            BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
-            BuiltinScalarFunction::FindInSet => &["find_in_set"],
         }
     }
 }
@@ -558,9 +521,6 @@ macro_rules! get_optimal_return_type {
 
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
-
-// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
-get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 #[cfg(test)]
 mod tests {
