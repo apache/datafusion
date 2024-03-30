@@ -601,7 +601,7 @@ enum ScalarFunction {
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
   // 59 was Now
-  Translate = 60;
+  // 60 was Translate
   // Trim = 61;
   // Upper = 62;
   Coalesce = 63;
@@ -665,8 +665,8 @@ enum ScalarFunction {
   // 123 is ArrayExcept
   // 124 was ArrayPopFront
   // 125 was Levenshtein
-  SubstrIndex = 126;
-  FindInSet = 127;
+  // 126 was SubstrIndex
+  // 127 was FindInSet
   // 128 was ArraySort
   // 129 was ArrayDistinct
   // 130 was ArrayResize
