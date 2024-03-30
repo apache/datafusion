@@ -67,7 +67,10 @@ pub struct PartitionedFile {
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
-    /// Optional statistics that describe the data in this file
+    /// Optional statistics that describe the data in this file if known.
+    ///
+    /// DataFusion relies on these statistics for planning so if they are incorrect
+    /// incorrect answers may result.
     pub statistics: Option<Statistics>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
