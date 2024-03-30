@@ -221,9 +221,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Lcm => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::lcm)(args))
         }
-        BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
-        BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
-        BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
         BuiltinScalarFunction::Nanvl => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::nanvl)(args))
         }

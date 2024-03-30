@@ -157,14 +157,16 @@ macro_rules! downcast_arg {
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $MONOTONICITY:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
-            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility,
+            };
             use std::any::Any;
             use std::sync::Arc;
 
@@ -206,6 +208,10 @@ macro_rules! make_math_unary_udf {
                         // For other types (possible values float64/null/int), use Float64
                         _ => Ok(DataType::Float64),
                     }
+                }
+
+                fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+                    Ok($MONOTONICITY)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
