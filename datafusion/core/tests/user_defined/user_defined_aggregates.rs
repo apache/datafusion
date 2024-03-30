@@ -20,7 +20,7 @@
 
 use arrow::{array::AsArray, datatypes::Fields};
 use arrow_array::{types::UInt64Type, Int32Array, PrimitiveArray, StructArray};
-use arrow_schema::{Schema, SortOptions};
+use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

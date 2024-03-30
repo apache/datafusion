@@ -483,13 +483,10 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         let res = (self.state_type)(return_type)?;
         Ok(res.as_ref().clone())
     }
-
-    // fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
-    //     not_impl_err!("state_fields not implemented for legacy AggregateUDF")
-    // }
 }
 
 /// returns the name of the state
+/// TODO: Remove duplicated function in physical-expr
 pub(crate) fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
