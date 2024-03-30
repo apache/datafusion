@@ -21,6 +21,6 @@ This directory contains a tool that ensures there are no circular dependencies
 in the DataFusion codebase.
 
 Specifically, it checks that no create's tests depend on another crate which
-depends on the first, which prevents publishing to crates.io, for exmample
+depends on the first, which prevents publishing to crates.io, for example
 
 [issue 9272]: https://github.com/apache/arrow-datafusion/issues/9277:
