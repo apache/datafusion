@@ -44,6 +44,12 @@ pub type AccumulatorFactoryFunction = Arc<
     dyn Fn(&DataType, &[Expr], &Schema) -> Result<Box<dyn Accumulator>> + Send + Sync,
 >;
 
+/// Factory that returns an accumulator for the given aggregate, given
+/// its return datatype, the sorting expressions and the schema for ordering.
+pub type AccumulatorFactoryFunctionForFirstValue = Arc<
+    dyn Fn(&DataType, &[Expr], &Schema, bool, bool) -> Result<Box<dyn Accumulator>> + Send + Sync,
+>;
+
 /// Factory that creates a PartitionEvaluator for the given window
 /// function
 pub type PartitionEvaluatorFactory =

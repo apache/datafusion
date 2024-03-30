@@ -34,41 +34,52 @@ use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::{Accumulator, Expr};
+use datafusion_expr::{Accumulator, AggregateUDF, Expr};
 
 
+
+// Equivalent to AggregateFunctionExpr
 #[derive(Debug, Clone)]
 pub struct FirstValueUDF {
+    fun: AggregateUDF,
     name: String,
-    input_data_type: DataType,
+    return_type: DataType,
     order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
     requirement_satisfied: bool,
     ignore_nulls: bool,
     state_fields: Vec<Field>,
+    sort_exprs: Vec<Expr>,
+    schema: Schema,
 }
 
 impl FirstValueUDF {
     /// Creates a new FIRST_VALUE aggregation function.
     pub fn new(
+        fun: AggregateUDF,
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        input_data_type: DataType,
+        return_type: DataType,
         ordering_req: LexOrdering,
         order_by_data_types: Vec<DataType>,
         state_fields: Vec<Field>,
+        sort_exprs: Vec<Expr>,
+        schema: Schema,
     ) -> Self {
         let requirement_satisfied = ordering_req.is_empty();
         Self {
+            fun,
             name: name.into(),
-            input_data_type,
+            return_type,
             order_by_data_types,
             expr,
             ordering_req,
             requirement_satisfied,
             ignore_nulls: false,
             state_fields,
+            sort_exprs,
+            schema,
         }
     }
 
@@ -83,8 +94,8 @@ impl FirstValueUDF {
     }
 
     /// Returns the input data type of the aggregate expression.
-    pub fn input_data_type(&self) -> &DataType {
-        &self.input_data_type
+    pub fn return_type(&self) -> &DataType {
+        &self.return_type
     }
 
     /// Returns the data types of the order-by columns.
@@ -115,7 +126,7 @@ impl FirstValueUDF {
         };
         let FirstValueUDF {
             expr,
-            input_data_type,
+            return_type,
             ordering_req,
             order_by_data_types,
             ..
@@ -123,7 +134,7 @@ impl FirstValueUDF {
         LastValue::new(
             expr,
             name,
-            input_data_type,
+            return_type,
             reverse_order_bys(&ordering_req),
             order_by_data_types,
         )
@@ -137,19 +148,11 @@ impl AggregateExpr for FirstValueUDF {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
+        Ok(Field::new(&self.name, self.return_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        FirstValueAccumulator::try_new(
-            &self.input_data_type,
-            &self.order_by_data_types,
-            self.ordering_req.clone(),
-            self.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+        self.fun.accumulator(&self.return_type, &self.sort_exprs, &self.schema, self.ignore_nulls, self.requirement_satisfied)
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -159,7 +162,7 @@ impl AggregateExpr for FirstValueUDF {
 
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "first_value"),
-            self.input_data_type.clone(),
+            self.return_type.clone(),
             true,
         )];
         fields.extend(ordering_fields(
@@ -192,7 +195,7 @@ impl AggregateExpr for FirstValueUDF {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         FirstValueAccumulator::try_new(
-            &self.input_data_type,
+            &self.return_type,
             &self.order_by_data_types,
             self.ordering_req.clone(),
             self.ignore_nulls,
@@ -209,7 +212,7 @@ impl PartialEq<dyn Any> for FirstValueUDF {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.input_data_type == x.input_data_type
+                    && self.return_type == x.return_type
                     && self.order_by_data_types == x.order_by_data_types
                     && self.expr.eq(&x.expr)
             })
@@ -578,6 +581,8 @@ pub fn create_first_value_accumulator(
     data_type: &DataType,
     order_by: &[Expr],
     schema: &Schema,
+    ignore_nulls: bool,
+    requirement_satisfied: bool,
 ) -> Result<Box<dyn Accumulator>> {
     let mut all_sort_orders = vec![];
 
@@ -609,9 +614,10 @@ pub fn create_first_value_accumulator(
         .map(|e| e.expr.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let acc =
-        FirstValueAccumulator::try_new(data_type, &ordering_dtypes, ordering_req, false)?;
-    Ok(Box::new(acc))
+    
+        FirstValueAccumulator::try_new(data_type, &ordering_dtypes, ordering_req, ignore_nulls)
+        .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
+    // Ok(Box::new(acc))
 }
 
 /// LAST_VALUE aggregate expression

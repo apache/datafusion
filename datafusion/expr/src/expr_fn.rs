@@ -21,7 +21,7 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     Placeholder, ScalarFunction, TryCast,
 };
-use crate::function::PartitionEvaluatorFactory;
+use crate::function::{AccumulatorFactoryFunctionForFirstValue, PartitionEvaluatorFactory};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
@@ -777,7 +777,7 @@ pub fn create_first_value(
     // return_type: Arc<DataType>,
     // volatility: Volatility,
     signature: Signature,
-    accumulator: AccumulatorFactoryFunction,
+    accumulator: AccumulatorFactoryFunctionForFirstValue,
     // state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
     // let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
@@ -876,6 +876,8 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        _ignore_nulls: bool,
+        _requirement_satisfied: bool,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(arg, sort_exprs, schema)
     }
@@ -898,7 +900,7 @@ pub struct FirstValue {
     name: String,
     signature: Signature,
     // return_type: DataType,
-    accumulator: AccumulatorFactoryFunction,
+    accumulator: AccumulatorFactoryFunctionForFirstValue,
     // state_type: Vec<DataType>,
 }
 
@@ -918,7 +920,7 @@ impl FirstValue {
         // return_type: DataType,
         // volatility: Volatility,
         signature: Signature,
-        accumulator: AccumulatorFactoryFunction,
+        accumulator: AccumulatorFactoryFunctionForFirstValue,
         // state_type: Vec<DataType>,
     ) -> Self {
         let name = name.into();
@@ -955,8 +957,10 @@ impl AggregateUDFImpl for FirstValue {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        ignore_nulls: bool,
+        requirement_satisfied: bool,
     ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(arg, sort_exprs, schema)
+        (self.accumulator)(arg, sort_exprs, schema, ignore_nulls, requirement_satisfied)
     }
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
@@ -1040,6 +1044,8 @@ impl AggregateUDFImpl for SimpleOrderedAggregateUDF {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        _ignore_nulls: bool,
+        _requirement_satisfied: bool,
     ) -> Result<Box<dyn crate::Accumulator>> {
         (self.accumulator)(arg, sort_exprs, schema)
     }

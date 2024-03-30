@@ -174,8 +174,10 @@ impl AggregateUDF {
         return_type: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        ignore_nulls: bool,
+        requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(return_type, sort_exprs, schema)
+        self.inner.accumulator(return_type, sort_exprs, schema, ignore_nulls, requirement_satisfied)
     }
 
     /// Return the type of the intermediate state used by this aggregator, given
@@ -297,6 +299,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        ignore_nulls: bool,
+        requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>>;
 
     /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
@@ -381,8 +385,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        ignore_nulls: bool,
+        requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(arg, sort_exprs, schema)
+        self.inner.accumulator(arg, sort_exprs, schema, ignore_nulls, requirement_satisfied)
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
@@ -447,6 +453,8 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         arg: &DataType,
         sort_exprs: &[Expr],
         schema: &Schema,
+        _ignore_nulls: bool,
+        _requirement_satisfied: bool,
     ) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(arg, sort_exprs, schema)
     }

@@ -45,11 +45,14 @@ pub fn create_aggregate_expr(
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
     name: impl Into<String>,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
+
+    let requirement_satisfied = ordering_req.is_empty();
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
@@ -59,6 +62,8 @@ pub fn create_aggregate_expr(
         schema: schema.clone(),
         sort_exprs: sort_exprs.to_vec(),
         ordering_req: ordering_req.to_vec(),
+        ignore_nulls,
+        requirement_satisfied,
     }))
 }
 
@@ -120,11 +125,11 @@ pub fn create_aggregate_expr_first_value(
 
     let name: String = name.into();
 
-    let input_data_type = fun.return_type(&input_exprs_types)?;
+    let return_type = fun.return_type(&input_exprs_types)?;
 
     let value_field = Field::new(
         format_state_name(&name, "first_value"),
-        input_data_type.clone(),
+        return_type.clone(),
         true,
     );
     let ordering_fields = ordering_fields(&ordering_req, &ordering_types);
@@ -132,13 +137,15 @@ pub fn create_aggregate_expr_first_value(
     let state_fields = fun.state_fields(value_field, ordering_fields)?;
 
     let first_value = expressions::FirstValueUDF::new(
+        fun.clone(),
         args[0].clone(),
-        // input_phy_exprs[0].clone(),
         name,
-        input_data_type,
+        return_type,
         ordering_req.to_vec(),
         ordering_types,
         state_fields,
+        sort_exprs.to_vec(),
+        schema.clone(),
     )
     .with_ignore_nulls(ignore_nulls);
     return Ok(Arc::new(first_value));
@@ -177,6 +184,8 @@ pub struct AggregateFunctionExpr {
     sort_exprs: Vec<Expr>,
     // The physical order by expressions
     ordering_req: LexOrdering,
+    ignore_nulls: bool,
+    requirement_satisfied: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -220,13 +229,13 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         self.fun
-            .accumulator(&self.data_type, self.sort_exprs.as_slice(), &self.schema)
+            .accumulator(&self.data_type, self.sort_exprs.as_slice(), &self.schema, self.ignore_nulls, self.requirement_satisfied)
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let accumulator =
             self.fun
-                .accumulator(&self.data_type, &self.sort_exprs, &self.schema)?;
+                .accumulator(&self.data_type, &self.sort_exprs, &self.schema, self.ignore_nulls, self.requirement_satisfied)?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to

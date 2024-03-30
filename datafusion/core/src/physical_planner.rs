@@ -1745,7 +1745,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         )?;
                         return Ok((agg_expr, filter, order_by));
                     }
-                    
+
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         order_by.clone().unwrap_or(vec![]);
 
@@ -1763,6 +1763,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         &ordering_reqs,
                         physical_input_schema,
                         name,
+                        ignore_nulls,
                     )?;
                     (agg_expr, filter, order_by)
                 }
