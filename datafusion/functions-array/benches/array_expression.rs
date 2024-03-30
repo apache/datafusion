@@ -19,7 +19,6 @@
 extern crate criterion;
 extern crate arrow;
 
-//mod data_utils;
 use crate::criterion::Criterion;
 use datafusion_expr::lit;
 use datafusion_functions_array::expr_fn::{array_replace_all, make_array};
