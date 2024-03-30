@@ -22,7 +22,7 @@ use crate::{Accumulator, Expr};
 use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
@@ -131,10 +131,12 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
+        // TODO: Support dictinct, filter, order by and null_treatment
         Expr::AggregateFunction(crate::expr::AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,
+            None,
             None,
             None,
         ))
@@ -180,6 +182,10 @@ impl AggregateUDF {
     /// its return datatype. Supports multi-phase aggregations
     pub fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
         self.inner.state_type(return_type)
+    }
+
+    pub fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+        self.inner.state_fields(value_field, ordering_field)
     }
 
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
@@ -293,6 +299,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// See [`Accumulator::state()`] for more details
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
 
+    /// Default fields including the value field and ordering fields
+    fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+        let mut fields = vec![value_field];
+        fields.extend(ordering_field);
+        Ok(fields)
+    }
+
     /// If the aggregate expression has a specialized
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator]` will be called.
@@ -368,6 +381,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.state_type(return_type)
     }
 
+    // fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+    //     self.inner.state_fields(value_field, ordering_field)
+    // }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -430,4 +447,8 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         let res = (self.state_type)(return_type)?;
         Ok(res.as_ref().clone())
     }
+
+    // fn state_fields(&self, value_field: Field, ordering_field: Vec<Field>) -> Result<Vec<Field>> {
+    //     not_impl_err!("state_fields not implemented for legacy AggregateUDF")
+    // }
 }

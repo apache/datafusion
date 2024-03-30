@@ -836,6 +836,10 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(self.clone()))
     }
+
+    // fn state_fields(&self) -> Result<Vec<Field>> {
+    //     Ok(vec![Field::new("item", DataType::UInt64, true)])
+    // }
 }
 
 impl Accumulator for TestGroupsAccumulator {

@@ -225,8 +225,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.order_by_to_sort_expr(&order_by, schema, planner_context, true)?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+                // TODO: Support filter and distinct for UDAFs
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    fm, args, false, None, order_by,
+                    fm,
+                    args,
+                    false,
+                    None,
+                    order_by,
+                    null_treatment,
                 )));
             }
 

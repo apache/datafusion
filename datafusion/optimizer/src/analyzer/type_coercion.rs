@@ -366,7 +366,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     )?;
                     Ok(Transformed::yes(Expr::AggregateFunction(
                         expr::AggregateFunction::new_udf(
-                            fun, new_expr, false, filter, order_by,
+                            fun,
+                            new_expr,
+                            false,
+                            filter,
+                            order_by,
+                            null_treatment,
                         ),
                     )))
                 }
@@ -896,6 +901,7 @@ mod test {
             false,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
@@ -920,6 +926,7 @@ mod test {
             Arc::new(my_avg),
             vec![lit("10")],
             false,
+            None,
             None,
             None,
         ));

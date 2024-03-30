@@ -90,7 +90,7 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, RecursiveQuery, ScalarFunctionDefinition,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{self, FirstValue, Literal};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -1714,6 +1714,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 AggregateFunctionDefinition::UDF(fun) => {
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         order_by.clone().unwrap_or(vec![]);
+
+                    // TODO: fix the name
+                    if fun.name() == "my_first" {
+                        let agg_expr = udaf::create_aggregate_expr_first_value(
+                            fun, &args, &sort_exprs, &ordering_reqs,
+                            physical_input_schema, name, ignore_nulls)?;
+                        return Ok((agg_expr, filter, order_by));
+                    }
 
                     let agg_expr = udaf::create_aggregate_expr(
                         fun,

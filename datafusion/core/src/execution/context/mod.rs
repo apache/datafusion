@@ -69,11 +69,14 @@ use datafusion_common::{
     OwnedTableReference, SchemaReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::{create_first_value, Signature, Volatility};
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     var_provider::is_system_variables,
     Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_physical_expr::create_first_value_accumulator;
 use datafusion_sql::{
     parser::{CopyToSource, CopyToStatement, DFParser},
     planner::{object_name_to_table_reference, ContextProvider, ParserOptions, SqlToRel},
@@ -1456,6 +1459,18 @@ impl SessionState {
         #[cfg(feature = "array_expressions")]
         datafusion_functions_array::register_all(&mut new_self)
             .expect("can not register array expressions");
+
+        // TODO: FIX the name
+        let my_first = create_first_value(
+            "my_first",
+            // vec![DataType::Int32],
+            // Arc::new(DataType::Int32),
+            // Volatility::Immutable,
+            Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            Arc::new(create_first_value_accumulator),
+            // Arc::new(vec![DataType::Int32, DataType::Int32, DataType::Boolean]),
+        );
+        let _ = new_self.register_udaf(Arc::new(my_first));
 
         new_self
     }
