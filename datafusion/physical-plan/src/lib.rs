@@ -33,7 +33,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -113,6 +112,15 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
+    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    fn name(&self) -> &'static str {
+        let full_name = std::any::type_name::<Self>();
+        let maybe_start_idx = full_name.rfind(':');
+        match maybe_start_idx {
+            Some(start_idx) => &full_name[start_idx + 1..],
+            None => "UNKNOWN",
+        }
+    }
     /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -777,5 +785,136 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 #[cfg(test)]
 #[allow(clippy::single_component_path_imports)]
 use rstest_reuse;
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use arrow_schema::{Schema, SchemaRef};
+    use datafusion_common::{Result, Statistics};
+    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+    #[derive(Debug)]
+    pub struct EmptyExec;
+
+    impl EmptyExec {
+        pub fn new(_schema: SchemaRef) -> Self {
+            Self
+        }
+    }
+
+    impl DisplayAs for EmptyExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for EmptyExec {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct RenamedEmptyExec;
+
+    impl RenamedEmptyExec {
+        pub fn new(_schema: SchemaRef) -> Self {
+            Self
+        }
+    }
+
+    impl DisplayAs for RenamedEmptyExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for RenamedEmptyExec {
+        fn name(&self) -> &'static str {
+            "MyRenamedEmptyExec"
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_execution_plan_name() {
+        let schema1 = Arc::new(Schema::empty());
+        let default_name_exec = EmptyExec::new(schema1);
+        assert_eq!(default_name_exec.name(), "EmptyExec");
+
+        let schema2 = Arc::new(Schema::empty());
+        let renamed_exec = RenamedEmptyExec::new(schema2);
+        assert_eq!(renamed_exec.name(), "MyRenamedEmptyExec");
+    }
+}
 
 pub mod test;

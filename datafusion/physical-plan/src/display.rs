@@ -489,6 +489,10 @@ mod tests {
     }
 
     impl ExecutionPlan for TestStatsExecPlan {
+        fn name(&self) -> &'static str {
+            "TestStatsExecPlan"
+        }
+
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }

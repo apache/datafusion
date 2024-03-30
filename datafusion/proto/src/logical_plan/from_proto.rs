@@ -17,18 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{
-    self,
-    plan_type::PlanTypeEnum::{
-        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
-        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan,
-    },
-    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-};
-
 use arrow::{
     array::AsArray,
     buffer::Buffer,
@@ -38,6 +26,7 @@ use arrow::{
     },
     ipc::{reader::read_record_batch, root_as_message},
 };
+
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, Column, Constraint,
@@ -48,20 +37,29 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, asinh, atan, atan2, atanh, bit_length, cbrt, ceil, character_length, chr,
-    coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees, ends_with, exp,
+    acosh, asinh, atan, atan2, atanh, cbrt, ceil, coalesce, concat_expr, concat_ws_expr,
+    cos, cosh, cot, degrees, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, find_in_set, floor, gcd, initcap, iszero, lcm, left, levenshtein, ln, log,
-    log10, log2,
+    factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
-    lpad, nanvl, overlay, pi, power, radians, random, repeat, replace, reverse, right,
-    round, rpad, signum, sin, sinh, split_part, sqrt, strpos, substr, substr_index,
-    substring, translate, trunc, uuid, AggregateFunction, Between, BinaryExpr,
-    BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr, GetFieldAccess,
-    GetIndexedField, GroupingSet,
+    nanvl, pi, power, radians, random, round, signum, sin, sinh, sqrt, trunc,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+
+use crate::protobuf::{
+    self,
+    plan_type::PlanTypeEnum::{
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
+    },
+    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 
 use super::LogicalExtensionCodec;
@@ -325,11 +323,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
-                strct
-                    .sub_field_types
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<_, _>>()?,
+                parse_proto_fields_to_fields(&strct.sub_field_types)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::try_from(union.union_mode)
@@ -338,11 +332,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
                 };
-                let union_fields = union
-                    .union_types
-                    .iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<Field>, _>>()?;
+                let union_fields = parse_proto_fields_to_fields(&union.union_types)?;
 
                 // Default to index based type ids if not provided
                 let type_ids: Vec<_> = match union.type_ids.is_empty() {
@@ -446,8 +436,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
-            ScalarFunction::Ln => Self::Ln,
-            ScalarFunction::Log10 => Self::Log10,
             ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Factorial => Self::Factorial,
@@ -458,37 +446,17 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Round => Self::Round,
             ScalarFunction::Trunc => Self::Trunc,
             ScalarFunction::Concat => Self::Concat,
-            ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
-            ScalarFunction::BitLength => Self::BitLength,
-            ScalarFunction::CharacterLength => Self::CharacterLength,
-            ScalarFunction::Chr => Self::Chr,
             ScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
             ScalarFunction::EndsWith => Self::EndsWith,
             ScalarFunction::InitCap => Self::InitCap,
-            ScalarFunction::Left => Self::Left,
-            ScalarFunction::Lpad => Self::Lpad,
             ScalarFunction::Random => Self::Random,
-            ScalarFunction::Repeat => Self::Repeat,
-            ScalarFunction::Replace => Self::Replace,
-            ScalarFunction::Reverse => Self::Reverse,
-            ScalarFunction::Right => Self::Right,
-            ScalarFunction::Rpad => Self::Rpad,
-            ScalarFunction::SplitPart => Self::SplitPart,
-            ScalarFunction::Strpos => Self::Strpos,
-            ScalarFunction::Substr => Self::Substr,
-            ScalarFunction::Uuid => Self::Uuid,
-            ScalarFunction::Translate => Self::Translate,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
-            ScalarFunction::OverLay => Self::OverLay,
-            ScalarFunction::Levenshtein => Self::Levenshtein,
-            ScalarFunction::SubstrIndex => Self::SubstrIndex,
-            ScalarFunction::FindInSet => Self::FindInSet,
         }
     }
 }
@@ -773,10 +741,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .map(|f| f.field.clone())
                     .collect::<Option<Vec<_>>>();
                 let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
-                let fields = fields
-                    .iter()
-                    .map(Field::try_from)
-                    .collect::<Result<Vec<_>, _>>()?;
+                let fields = parse_proto_fields_to_fields(&fields)?;
                 let fields = UnionFields::new(ids, fields);
                 let v_id = val.value_id as i8;
                 let val = match &val.value {
@@ -947,11 +912,7 @@ pub fn parse_expr(
     match expr_type {
         ExprType::BinaryExpr(binary_expr) => {
             let op = from_proto_binary_op(&binary_expr.op)?;
-            let operands = binary_expr
-                .operands
-                .iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let operands = parse_exprs(&binary_expr.operands, registry, codec)?;
 
             if operands.len() < 2 {
                 return Err(proto_error(
@@ -1035,16 +996,8 @@ pub fn parse_expr(
                 .window_function
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
-            let partition_by = expr
-                .partition_by
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut order_by = expr
-                .order_by
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
+            let mut order_by = parse_exprs(&expr.order_by, registry, codec)?;
             let window_frame = expr
                 .window_frame
                 .as_ref()
@@ -1140,10 +1093,7 @@ pub fn parse_expr(
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
-                expr.expr
-                    .iter()
-                    .map(|e| parse_expr(e, registry, codec))
-                    .collect::<Result<Vec<_>, _>>()?,
+                parse_exprs(&expr.expr, registry, codec)?,
                 expr.distinct,
                 parse_optional_expr(expr.filter.as_deref(), registry, codec)?
                     .map(Box::new),
@@ -1341,11 +1291,7 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let exprs = unnest
-                .exprs
-                .iter()
-                .map(|e| parse_expr(e, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?;
+            let exprs = parse_exprs(&unnest.exprs, registry, codec)?;
             Ok(Expr::Unnest(Unnest { exprs }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
@@ -1355,11 +1301,7 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?),
-            in_list
-                .list
-                .iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, _>>()?,
+            parse_exprs(&in_list.list, registry, codec)?,
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
@@ -1399,11 +1341,6 @@ pub fn parse_expr(
                 ScalarFunction::Radians => {
                     Ok(radians(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Log10 => {
-                    Ok(log10(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1411,28 +1348,11 @@ pub fn parse_expr(
                     Ok(factorial(parse_expr(&args[0], registry, codec)?))
                 }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Round => Ok(round(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::Trunc => Ok(trunc(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
+                ScalarFunction::Round => Ok(round(parse_exprs(args, registry, codec)?)),
+                ScalarFunction::Trunc => Ok(trunc(parse_exprs(args, registry, codec)?)),
                 ScalarFunction::Signum => {
                     Ok(signum(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::BitLength => {
-                    Ok(bit_length(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::CharacterLength => {
-                    Ok(character_length(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::InitCap => {
                     Ok(initcap(parse_expr(&args[0], registry, codec)?))
                 }
@@ -1444,95 +1364,20 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Left => Ok(left(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
                 ScalarFunction::Random => Ok(random()),
-                ScalarFunction::Uuid => Ok(uuid()),
-                ScalarFunction::Repeat => Ok(repeat(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Replace => Ok(replace(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::Reverse => {
-                    Ok(reverse(parse_expr(&args[0], registry, codec)?))
+                ScalarFunction::Concat => {
+                    Ok(concat_expr(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Right => Ok(right(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Concat => Ok(concat_expr(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::Lpad => Ok(lpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::Rpad => Ok(rpad(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::SplitPart => Ok(split_part(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
+                ScalarFunction::ConcatWithSeparator => {
+                    Ok(concat_ws_expr(parse_exprs(args, registry, codec)?))
+                }
                 ScalarFunction::EndsWith => Ok(ends_with(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
-                ScalarFunction::Strpos => Ok(strpos(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Substr => {
-                    if args.len() > 2 {
-                        assert_eq!(args.len(), 3);
-                        Ok(substring(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                            parse_expr(&args[2], registry, codec)?,
-                        ))
-                    } else {
-                        Ok(substr(
-                            parse_expr(&args[0], registry, codec)?,
-                            parse_expr(&args[1], registry, codec)?,
-                        ))
-                    }
+                ScalarFunction::Coalesce => {
+                    Ok(coalesce(parse_exprs(args, registry, codec)?))
                 }
-                ScalarFunction::Levenshtein => Ok(levenshtein(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Translate => Ok(translate(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::Coalesce => Ok(coalesce(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
                 ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
                     parse_expr(&args[0], registry, codec)?,
@@ -1554,21 +1399,6 @@ pub fn parse_expr(
                 ScalarFunction::Iszero => {
                     Ok(iszero(parse_expr(&args[0], registry, codec)?))
                 }
-                ScalarFunction::OverLay => Ok(overlay(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry, codec))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )),
-                ScalarFunction::SubstrIndex => Ok(substr_index(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                    parse_expr(&args[2], registry, codec)?,
-                )),
-                ScalarFunction::FindInSet => Ok(find_in_set(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
@@ -1582,9 +1412,7 @@ pub fn parse_expr(
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
-                args.iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                parse_exprs(args, registry, codec)?,
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
@@ -1592,10 +1420,7 @@ pub fn parse_expr(
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
-                pb.args
-                    .iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
+                parse_exprs(&pb.args, registry, codec)?,
                 false,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
                 parse_vec_expr(&pb.order_by, registry, codec)?,
@@ -1605,28 +1430,16 @@ pub fn parse_expr(
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
-                    .map(|expr_list| {
-                        expr_list
-                            .expr
-                            .iter()
-                            .map(|expr| parse_expr(expr, registry, codec))
-                            .collect::<Result<Vec<_>, Error>>()
-                    })
+                    .map(|expr_list| parse_exprs(&expr_list.expr, registry, codec))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
         ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
-            expr.iter()
-                .map(|expr| parse_expr(expr, registry, codec))
-                .collect::<Result<Vec<_>, Error>>()?,
+            parse_exprs(expr, registry, codec)?,
         ))),
-        ExprType::Rollup(RollupNode { expr }) => {
-            Ok(Expr::GroupingSet(GroupingSet::Rollup(
-                expr.iter()
-                    .map(|expr| parse_expr(expr, registry, codec))
-                    .collect::<Result<Vec<_>, Error>>()?,
-            )))
-        }
+        ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
+            GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
+        )),
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
             None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
             Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
@@ -1635,6 +1448,24 @@ pub fn parse_expr(
             ))),
         },
     }
+}
+
+/// Parse a vector of `protobuf::LogicalExprNode`s.
+pub fn parse_exprs<'a, I>(
+    protos: I,
+    registry: &dyn FunctionRegistry,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<Expr>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::LogicalExprNode>,
+{
+    let res = protos
+        .into_iter()
+        .map(|elem| {
+            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(res)
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
@@ -1693,12 +1524,7 @@ fn parse_vec_expr(
     registry: &dyn FunctionRegistry,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Option<Vec<Expr>>, Error> {
-    let res = p
-        .iter()
-        .map(|elem| {
-            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let res = parse_exprs(p, registry, codec)?;
     // Convert empty vector to None.
     Ok((!res.is_empty()).then_some(res))
 }
@@ -1728,4 +1554,17 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+/// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
+fn parse_proto_fields_to_fields<'a, I>(
+    fields: I,
+) -> std::result::Result<Vec<Field>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::Field>,
+{
+    fields
+        .into_iter()
+        .map(Field::try_from)
+        .collect::<Result<_, _>>()
 }

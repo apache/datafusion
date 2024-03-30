@@ -406,6 +406,10 @@ impl DisplayAs for RepartitionExec {
 }
 
 impl ExecutionPlan for RepartitionExec {
+    fn name(&self) -> &'static str {
+        "RepartitionExec"
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
