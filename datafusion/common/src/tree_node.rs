@@ -532,7 +532,7 @@ impl<T> Transformed<T> {
     }
 }
 
-/// Transformation helper to process tree nodes that are siblings.
+/// Transformation helper to process sequence of iterable tree nodes that are siblings.
 pub trait TransformedIterator: Iterator {
     fn map_until_stop_and_collect<
         F: FnMut(Self::Item) -> Result<Transformed<Self::Item>>,
@@ -551,20 +551,45 @@ impl<I: Iterator> TransformedIterator for I {
     ) -> Result<Transformed<Vec<Self::Item>>> {
         let mut tnr = TreeNodeRecursion::Continue;
         let mut transformed = false;
-        let data = self
-            .map(|item| match tnr {
-                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
-                    f(item).map(|result| {
+        self.map(|item| match tnr {
+            TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
+                f(item).map(|result| {
+                    tnr = result.tnr;
+                    transformed |= result.transformed;
+                    result.data
+                })
+            }
+            TreeNodeRecursion::Stop => Ok(item),
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|data| Transformed::new(data, transformed, tnr))
+    }
+}
+
+/// Transformation helper to process sequence of tree node containing expressions.
+/// This macro is very similar to [TransformedIterator::map_until_stop_and_collect] to
+/// process nodes that are siblings, but it accepts a sequence of pairs of an expression
+/// and a transformation.
+#[macro_export]
+macro_rules! map_until_stop_and_collect {
+    ($($EXPR:expr, $F:expr),*) => {{
+        let mut tnr = TreeNodeRecursion::Continue;
+        let mut transformed = false;
+        let data = (
+            $(
+                if tnr == TreeNodeRecursion::Continue || tnr == TreeNodeRecursion::Jump {
+                    $F($EXPR).map(|result| {
                         tnr = result.tnr;
                         transformed |= result.transformed;
                         result.data
-                    })
-                }
-                TreeNodeRecursion::Stop => Ok(item),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Transformed::new(data, transformed, tnr))
-    }
+                    })?
+                } else {
+                    $EXPR
+                },
+            )*
+        );
+        Transformed::new(data, transformed, tnr)
+    }}
 }
 
 /// Transformation helper to access [`Transformed`] fields in a [`Result`] easily.
