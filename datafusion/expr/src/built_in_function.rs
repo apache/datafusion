@@ -37,16 +37,6 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// atan
-    Atan,
-    /// atan2
-    Atan2,
-    /// acosh
-    Acosh,
-    /// asinh
-    Asinh,
-    /// atanh
-    Atanh,
     /// cbrt
     Cbrt,
     /// ceil
@@ -159,11 +149,6 @@ impl BuiltinScalarFunction {
     pub fn volatility(&self) -> Volatility {
         match self {
             // Immutable scalar builtins
-            BuiltinScalarFunction::Atan => Volatility::Immutable,
-            BuiltinScalarFunction::Atan2 => Volatility::Immutable,
-            BuiltinScalarFunction::Acosh => Volatility::Immutable,
-            BuiltinScalarFunction::Asinh => Volatility::Immutable,
-            BuiltinScalarFunction::Atanh => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
@@ -238,11 +223,6 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
-            BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
-                Float32 => Ok(Float32),
-                _ => Ok(Float64),
-            },
-
             BuiltinScalarFunction::Log => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),
@@ -255,11 +235,7 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::Iszero => Ok(Boolean),
 
-            BuiltinScalarFunction::Atan
-            | BuiltinScalarFunction::Acosh
-            | BuiltinScalarFunction::Asinh
-            | BuiltinScalarFunction::Atanh
-            | BuiltinScalarFunction::Ceil
+            BuiltinScalarFunction::Ceil
             | BuiltinScalarFunction::Cos
             | BuiltinScalarFunction::Cosh
             | BuiltinScalarFunction::Degrees
@@ -332,10 +308,7 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::Atan2 => Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
-                self.volatility(),
-            ),
+
             BuiltinScalarFunction::Log => Signature::one_of(
                 vec![
                     Exact(vec![Float32]),
@@ -355,11 +328,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::Atan
-            | BuiltinScalarFunction::Acosh
-            | BuiltinScalarFunction::Asinh
-            | BuiltinScalarFunction::Atanh
-            | BuiltinScalarFunction::Cbrt
+            BuiltinScalarFunction::Cbrt
             | BuiltinScalarFunction::Ceil
             | BuiltinScalarFunction::Cos
             | BuiltinScalarFunction::Cosh
@@ -392,11 +361,7 @@ impl BuiltinScalarFunction {
     pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
         if matches!(
             &self,
-            BuiltinScalarFunction::Atan
-                | BuiltinScalarFunction::Acosh
-                | BuiltinScalarFunction::Asinh
-                | BuiltinScalarFunction::Atanh
-                | BuiltinScalarFunction::Ceil
+            BuiltinScalarFunction::Ceil
                 | BuiltinScalarFunction::Degrees
                 | BuiltinScalarFunction::Exp
                 | BuiltinScalarFunction::Factorial
@@ -421,11 +386,6 @@ impl BuiltinScalarFunction {
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Acosh => &["acosh"],
-            BuiltinScalarFunction::Asinh => &["asinh"],
-            BuiltinScalarFunction::Atan => &["atan"],
-            BuiltinScalarFunction::Atanh => &["atanh"],
-            BuiltinScalarFunction::Atan2 => &["atan2"],
             BuiltinScalarFunction::Cbrt => &["cbrt"],
             BuiltinScalarFunction::Ceil => &["ceil"],
             BuiltinScalarFunction::Cos => &["cos"],
