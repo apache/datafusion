@@ -76,4 +76,4 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.11"
 url = { workspace = true }
-uuid = "1.2"
+uuid = "1.7"

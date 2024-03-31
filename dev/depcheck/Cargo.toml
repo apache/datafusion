@@ -15,27 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import conbench.runner
+# Circular dependency checker for DataFusion
+[package]
+name = "depcheck"
 
-import _criterion
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-
-@conbench.runner.register_benchmark
-class TestBenchmark(conbench.runner.Benchmark):
-    name = "test"
-
-    def run(self, **kwargs):
-        yield self.conbench.benchmark(
-            self._f(),
-            self.name,
-            options=kwargs,
-        )
-
-    def _f(self):
-        return lambda: 1 + 1
-
-
-@conbench.runner.register_benchmark
-class CargoBenchmarks(_criterion.CriterionBenchmark):
-    name = "datafusion"
-    description = "Run Arrow DataFusion micro benchmarks."
+[dependencies]
+cargo = "0.78.1"

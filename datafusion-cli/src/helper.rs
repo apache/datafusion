@@ -86,16 +86,23 @@ impl CliHelper {
                     ))))
                 }
             };
-
-            match DFParser::parse_sql_with_dialect(&sql, dialect.as_ref()) {
-                Ok(statements) if statements.is_empty() => Ok(ValidationResult::Invalid(
-                    Some("  🤔 You entered an empty statement".to_string()),
-                )),
-                Ok(_statements) => Ok(ValidationResult::Valid(None)),
-                Err(err) => Ok(ValidationResult::Invalid(Some(format!(
-                    "  🤔 Invalid statement: {err}",
-                )))),
+            let lines = split_from_semicolon(sql);
+            for line in lines {
+                match DFParser::parse_sql_with_dialect(&line, dialect.as_ref()) {
+                    Ok(statements) if statements.is_empty() => {
+                        return Ok(ValidationResult::Invalid(Some(
+                            "  🤔 You entered an empty statement".to_string(),
+                        )));
+                    }
+                    Ok(_statements) => {}
+                    Err(err) => {
+                        return Ok(ValidationResult::Invalid(Some(format!(
+                            "  🤔 Invalid statement: {err}",
+                        ))));
+                    }
+                }
             }
+            Ok(ValidationResult::Valid(None))
         } else if input.starts_with('\\') {
             // command
             Ok(ValidationResult::Valid(None))
@@ -197,6 +204,37 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
     Ok(result)
 }
 
+/// Splits a string which consists of multiple queries.
+pub(crate) fn split_from_semicolon(sql: String) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut current_command = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    for c in sql.chars() {
+        if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        }
+
+        if c == ';' && !in_single_quote && !in_double_quote {
+            if !current_command.trim().is_empty() {
+                commands.push(format!("{};", current_command.trim()));
+                current_command.clear();
+            }
+        } else {
+            current_command.push(c);
+        }
+    }
+
+    if !current_command.trim().is_empty() {
+        commands.push(format!("{};", current_command.trim()));
+    }
+
+    commands
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, Cursor};
@@ -291,5 +329,40 @@ mod tests {
         assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_split_from_semicolon() {
+        let sql = "SELECT 1; SELECT 2;";
+        let expected = vec!["SELECT 1;", "SELECT 2;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = r#"SELECT ";";"#;
+        let expected = vec![r#"SELECT ";";"#];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT ';';";
+        let expected = vec!["SELECT ';';"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = r#"SELECT 1; SELECT 'value;value'; SELECT 1 as "text;text";"#;
+        let expected = vec![
+            "SELECT 1;",
+            "SELECT 'value;value';",
+            r#"SELECT 1 as "text;text";"#,
+        ];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "";
+        let expected: Vec<String> = Vec::new();
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT 1";
+        let expected = vec!["SELECT 1;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+
+        let sql = "SELECT 1;   ";
+        let expected = vec!["SELECT 1;"];
+        assert_eq!(split_from_semicolon(sql.to_string()), expected);
     }
 }

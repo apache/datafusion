@@ -37,6 +37,7 @@ use datafusion::assert_batches_eq;
 use datafusion_common::DFSchema;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{approx_median, cast, ExprSchemable};
+use datafusion_functions::unicode::expr_fn::character_length;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![

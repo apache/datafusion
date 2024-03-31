@@ -24,7 +24,8 @@ use arrow_schema::TimeUnit::Nanosecond;
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    plan_err, DFSchema, DataFusionError, ParamValues, Result, ScalarValue, TableReference,
+    assert_contains, plan_err, DFSchema, DataFusionError, ParamValues, Result,
+    ScalarValue, TableReference,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
@@ -37,6 +38,7 @@ use datafusion_sql::{
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
 };
 
+use datafusion_functions::unicode;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -87,7 +89,7 @@ fn parse_decimals() {
 fn parse_ident_normalization() {
     let test_data = [
         (
-            "SELECT LENGTH('str')",
+            "SELECT CHARACTER_LENGTH('str')",
             "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
             false,
         ),
@@ -2687,6 +2689,7 @@ fn logical_plan_with_dialect_and_options(
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider::default()
+        .with_udf(unicode::character_length().as_ref().clone())
         .with_udf(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
@@ -4365,6 +4368,40 @@ fn test_prepare_statement_to_plan_value_list() {
 }
 
 #[test]
+fn test_prepare_statement_unknown_list_param() {
+    let sql = "SELECT id from person where id = $2";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::List(vec![]);
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: No value found for placeholder with id $2"
+    );
+}
+
+#[test]
+fn test_prepare_statement_unknown_hash_param() {
+    let sql = "SELECT id from person where id = $bar";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::Map(HashMap::new());
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: No value found for placeholder with name $bar"
+    );
+}
+
+#[test]
+fn test_prepare_statement_bad_list_idx() {
+    let sql = "SELECT id from person where id = $foo";
+    let plan = logical_plan(sql).unwrap();
+    let param_values = ParamValues::List(vec![]);
+
+    let err = plan.replace_params_with_values(&param_values).unwrap_err();
+    assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
+}
+
+#[test]
 fn test_table_alias() {
     let sql = "select * from (\
           (select id from person) t1 \
@@ -4473,26 +4510,27 @@ fn test_field_not_found_window_function() {
 
 #[test]
 fn test_parse_escaped_string_literal_value() {
-    let sql = r"SELECT length('\r\n') AS len";
+    let sql = r"SELECT character_length('\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\r\n') AS len";
+    let sql = r"SELECT character_length(E'\r\n') AS len";
     let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
+    let sql =
+        r"SELECT character_length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
     let expected =
         "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
     \n  EmptyRelation";
     quick_test(sql, expected);
 
-    let sql = r"SELECT length(E'\000') AS len";
+    let sql = r"SELECT character_length(E'\000') AS len";
     assert_eq!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 15\")"
+        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column 25\")"
     )
 }
 
