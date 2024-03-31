@@ -180,9 +180,6 @@ pub fn create_physical_fun(
     Ok(match fun {
         // math functions
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
-        BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
-        BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
-        BuiltinScalarFunction::Degrees => Arc::new(math_expressions::to_degrees),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
         BuiltinScalarFunction::Factorial => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::factorial)(args))
@@ -204,7 +201,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Round => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::round)(args))
         }
-        BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Trunc => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::trunc)(args))
         }

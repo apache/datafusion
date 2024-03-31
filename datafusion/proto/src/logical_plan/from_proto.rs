@@ -37,8 +37,7 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
-    ends_with, exp,
+    ceil, coalesce, concat_expr, concat_ws_expr, cot, ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
@@ -421,13 +420,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Unknown => todo!(),
-            ScalarFunction::Cbrt => Self::Cbrt,
-            ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Cosh => Self::Cosh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
-            ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Factorial => Self::Factorial,
             ScalarFunction::Gcd => Self::Gcd,
             ScalarFunction::Lcm => Self::Lcm,
@@ -1306,13 +1301,7 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Degrees => {
-                    Ok(degrees(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Floor => {
                     Ok(floor(parse_expr(&args[0], registry, codec)?))
                 }

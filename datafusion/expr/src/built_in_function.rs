@@ -37,18 +37,10 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
-    /// cbrt
-    Cbrt,
     /// ceil
     Ceil,
     /// coalesce
     Coalesce,
-    /// cos
-    Cos,
-    /// cos
-    Cosh,
-    /// degrees
-    Degrees,
     /// exp
     Exp,
     /// factorial
@@ -141,9 +133,6 @@ impl BuiltinScalarFunction {
             // Immutable scalar builtins
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
-            BuiltinScalarFunction::Cos => Volatility::Immutable,
-            BuiltinScalarFunction::Cosh => Volatility::Immutable,
-            BuiltinScalarFunction::Degrees => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
@@ -155,7 +144,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Pi => Volatility::Immutable,
             BuiltinScalarFunction::Power => Volatility::Immutable,
             BuiltinScalarFunction::Round => Volatility::Immutable,
-            BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::Concat => Volatility::Immutable,
@@ -221,13 +209,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Iszero => Ok(Boolean),
 
             BuiltinScalarFunction::Ceil
-            | BuiltinScalarFunction::Cos
-            | BuiltinScalarFunction::Cosh
-            | BuiltinScalarFunction::Degrees
             | BuiltinScalarFunction::Exp
             | BuiltinScalarFunction::Floor
             | BuiltinScalarFunction::Round
-            | BuiltinScalarFunction::Cbrt
             | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Cot => match input_expr_types[0] {
                 Float32 => Ok(Float32),
@@ -308,11 +292,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
-            BuiltinScalarFunction::Cbrt
-            | BuiltinScalarFunction::Ceil
-            | BuiltinScalarFunction::Cos
-            | BuiltinScalarFunction::Cosh
-            | BuiltinScalarFunction::Degrees
+            BuiltinScalarFunction::Ceil
             | BuiltinScalarFunction::Exp
             | BuiltinScalarFunction::Floor
             | BuiltinScalarFunction::Cot => {
@@ -337,12 +317,10 @@ impl BuiltinScalarFunction {
         if matches!(
             &self,
             BuiltinScalarFunction::Ceil
-                | BuiltinScalarFunction::Degrees
                 | BuiltinScalarFunction::Exp
                 | BuiltinScalarFunction::Factorial
                 | BuiltinScalarFunction::Floor
                 | BuiltinScalarFunction::Round
-                | BuiltinScalarFunction::Cbrt
                 | BuiltinScalarFunction::Trunc
                 | BuiltinScalarFunction::Pi
         ) {
@@ -357,12 +335,8 @@ impl BuiltinScalarFunction {
     /// Returns all names that can be used to call this function
     pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            BuiltinScalarFunction::Cbrt => &["cbrt"],
             BuiltinScalarFunction::Ceil => &["ceil"],
-            BuiltinScalarFunction::Cos => &["cos"],
             BuiltinScalarFunction::Cot => &["cot"],
-            BuiltinScalarFunction::Cosh => &["cosh"],
-            BuiltinScalarFunction::Degrees => &["degrees"],
             BuiltinScalarFunction::Exp => &["exp"],
             BuiltinScalarFunction::Factorial => &["factorial"],
             BuiltinScalarFunction::Floor => &["floor"],

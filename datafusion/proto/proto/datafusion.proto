@@ -547,7 +547,7 @@ enum ScalarFunction {
   // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
-  Cos = 6;
+  // 6 was Cos
   // 7 was Digest
   Exp = 8;
   Floor = 9;
@@ -614,15 +614,15 @@ enum ScalarFunction {
   // 70 was CurrentDate
   // 71 was CurrentTime
   // 72 was Uuid
-  Cbrt = 73;
+  // 73 was Cbrt
   // 74 Acosh
   // 75 was Asinh
   // 76 was Atanh
   // 77 was Sinh
-  Cosh = 78;
-  // Tanh = 79;
+  // 78 was Cosh
+  // Tanh = 79
   Pi = 80;
-  Degrees = 81;
+  // 81 was Degrees
   // 82 was Radians
   Factorial = 83;
   Lcm = 84;
