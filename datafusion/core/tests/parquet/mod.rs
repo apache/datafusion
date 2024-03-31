@@ -22,7 +22,7 @@ use arrow::{
         Array, ArrayRef, BinaryArray, Date32Array, Date64Array, FixedSizeBinaryArray,
         Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -65,6 +65,7 @@ enum Scenario {
     Dates,
     Int,
     Int32Range,
+    UInt,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
@@ -387,7 +388,7 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     .unwrap()
 }
 
-/// Return record batch with i32 sequence
+/// Return record batch with i8, i16, i32, and i64 sequences
 ///
 /// Columns are named
 /// "i8" -> Int8Array
@@ -412,6 +413,36 @@ fn make_int_batches(start: i8, end: i8) -> RecordBatch {
             Arc::new(Int16Array::from(v16)) as ArrayRef,
             Arc::new(Int32Array::from(v32)) as ArrayRef,
             Arc::new(Int64Array::from(v64)) as ArrayRef,
+        ],
+    )
+    .unwrap()
+}
+
+/// Return record batch with i8, i16, i32, and i64 sequences
+///
+/// Columns are named
+/// "u8" -> UInt8Array
+/// "u16" -> UInt16Array
+/// "u32" -> UInt32Array
+/// "u64" -> UInt64Array
+fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("u8", DataType::UInt8, true),
+        Field::new("u16", DataType::UInt16, true),
+        Field::new("u32", DataType::UInt32, true),
+        Field::new("u64", DataType::UInt64, true),
+    ]));
+    let v8: Vec<u8> = (start..end).collect();
+    let v16: Vec<u16> = (start as _..end as _).collect();
+    let v32: Vec<u32> = (start as _..end as _).collect();
+    let v64: Vec<u64> = (start as _..end as _).collect();
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt8Array::from(v8)) as ArrayRef,
+            Arc::new(UInt16Array::from(v16)) as ArrayRef,
+            Arc::new(UInt32Array::from(v32)) as ArrayRef,
+            Arc::new(UInt64Array::from(v64)) as ArrayRef,
         ],
     )
     .unwrap()
@@ -619,6 +650,14 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         }
         Scenario::Int32Range => {
             vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
+        }
+        Scenario::UInt => {
+            vec![
+                make_uint_batches(0, 5),
+                make_uint_batches(1, 6),
+                make_uint_batches(5, 10),
+                make_uint_batches(250, 255),
+            ]
         }
         Scenario::Float64 => {
             vec![
