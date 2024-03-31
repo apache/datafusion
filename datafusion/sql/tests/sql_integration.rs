@@ -2704,7 +2704,8 @@ fn logical_plan_with_dialect_and_options(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
-        ));
+        ))
+        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64));
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
