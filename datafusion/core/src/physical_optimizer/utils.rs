@@ -117,29 +117,3 @@ pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
 }
-
-/// Check whether the given operator is a [`GlobalLimitExec`].
-pub fn is_global_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<GlobalLimitExec>()
-}
-/// Check whether the given plan is a terminator of [`GlobalLimitExec`].
-pub fn is_limit_terminator(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<HashJoinExec>()
-        || plan.as_any().is::<CrossJoinExec>()
-        || plan.as_any().is::<MemoryExec>()
-        || plan.as_any().is::<NestedLoopJoinExec>()
-        || plan.as_any().is::<UnionExec>()
-        || plan.as_any().is::<MemoryExec>()
-        || plan.as_any().is::<PartialSortExec>()
-        || plan.as_any().is::<ArrowExec>()
-        || plan.as_any().is::<AvroExec>()
-        || plan.as_any().is::<CsvExec>()
-        || plan.as_any().is::<NdJsonExec>()
-        || plan.as_any().is::<StatisticsExec>()
-        || plan.as_any().is::<PlaceholderRowExec>()
-        || plan.as_any().is::<RecursiveQueryExec>()
-        || plan.as_any().is::<StreamingTableExec>()
-        || plan.as_any().is::<InterleaveExec>()
-        || plan.as_any().is::<UnnestExec>()
-        || plan.as_any().is::<WindowAggExec>()
-}

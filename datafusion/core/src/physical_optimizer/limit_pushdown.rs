@@ -24,7 +24,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::utils::is_global_limit;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::physical_plan::limit::GlobalLimitExec;
@@ -35,8 +34,7 @@ use datafusion_common::Result;
 
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-
-use super::utils::is_limit_terminator;
+use datafusion_physical_plan::limit;
 
 #[allow(missing_docs)]
 pub struct LimitPushdown {}
@@ -54,10 +52,6 @@ impl PhysicalOptimizerRule for LimitPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // if this node is not a global limit, then directly return
-        if !is_global_limit(&plan) {
-            return Ok(plan);
-        }
         // we traverse the treenode to try to push down the limit same logic as project push down
         plan.transform_down(&push_down_limit).data()
     }
@@ -71,23 +65,27 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 impl LimitPushdown {}
-fn new_global_limit_with_input() {}
 // try to push down current limit, based on the son
 fn push_down_limit(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    // for pattern like GlobalLimit -> CoalescePartitionsExec -> CoalesceBatchesExec , we convert it into
+    // GlobalLimit->CloalescePartitionExec->CoalesceBatchesExec(new fetch)
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         let input = global_limit.input().as_any();
-        if let Some(_) = input.downcast_ref::<CoalescePartitionsExec>() {
-            return Ok(Transformed::yes(swap_with_coalesce_partition(global_limit)));
-        } else if let Some(coalesce_batches) = input.downcast_ref::<CoalesceBatchesExec>()
+        if let Some(coalesce_partition_batch) =
+            input.downcast_ref::<CoalescePartitionsExec>()
         {
-            return Ok(Transformed::yes(reset_and_get_new_limit(
-                global_limit,
-                coalesce_batches,
-            )));
-        } else if is_limit_terminator(global_limit.input()) {
-            return Ok(Transformed::no(plan));
+            let new_input = coalesce_partition_batch.input().as_any();
+            if let Some(coalesce_batch) = new_input.downcast_ref::<CoalesceBatchesExec>()
+            {
+                return Ok(Transformed::yes(generate_new_limit_pattern(
+                    global_limit,
+                    coalesce_batch,
+                )));
+            } else {
+                return Ok(Transformed::no(plan));
+            }
         } else {
             return Ok(Transformed::no(plan));
         }
@@ -95,38 +93,20 @@ fn push_down_limit(
         return Ok(Transformed::no(plan));
     }
 }
-// swap the coalesce_patition exec with current limit
-fn swap_with_coalesce_partition(plan: &GlobalLimitExec) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalescePartitionsExec::new(make_with_child(
-        plan,
-        &plan.input().children()[0],
-    )))
-}
-
-// create a new node with its child
-fn make_with_child(
-    plan: &GlobalLimitExec,
-    child: &Arc<dyn ExecutionPlan>,
+// generate corresponding pattern
+fn generate_new_limit_pattern(
+    limit_exec: &GlobalLimitExec,
+    coalesce_batch: &CoalesceBatchesExec,
 ) -> Arc<dyn ExecutionPlan> {
+    let mut grand_exec = CoalesceBatchesExec::new(
+        coalesce_batch.input().clone(),
+        coalesce_batch.target_batch_size(),
+    );
+    grand_exec.set_inner_fetch(limit_exec.fetch());
+    let grand_child = Arc::new(grand_exec);
     Arc::new(GlobalLimitExec::new(
-        child.clone(),
-        plan.skip(),
-        plan.fetch(),
-    ))
-}
-
-// reset target size and return a new plan
-fn reset_and_get_new_limit(
-    plan: &GlobalLimitExec,
-    child: &CoalesceBatchesExec,
-) -> Arc<dyn ExecutionPlan> {
-    let fetch = match plan.fetch() {
-        Some(0) | None => child.target_batch_size(),
-        Some(fetch_size) => fetch_size,
-    };
-    Arc::new(GlobalLimitExec::new(
-        Arc::new(CoalesceBatchesExec::new(child.input().clone(), fetch)),
-        plan.skip(),
-        plan.fetch(),
+        Arc::new(CoalescePartitionsExec::new(grand_child)),
+        limit_exec.skip(),
+        limit_exec.fetch(),
     ))
 }

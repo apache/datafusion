@@ -19,6 +19,7 @@
 //! vectorized processing by upstream operators.
 
 use std::any::Any;
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -49,6 +50,8 @@ pub struct CoalesceBatchesExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// the fetch count
+    fetch: Option<usize>,
 }
 
 impl CoalesceBatchesExec {
@@ -60,6 +63,7 @@ impl CoalesceBatchesExec {
             target_batch_size,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            fetch: None,
         }
     }
 
@@ -83,8 +87,8 @@ impl CoalesceBatchesExec {
             input.execution_mode(),                 // Execution Mode
         )
     }
-    pub fn set_target_batch_size(&mut self, siz: usize) {
-        self.target_batch_size = siz;
+    pub fn set_inner_fetch(&mut self, siz: Option<usize>) {
+        self.fetch = siz;
     }
 }
 
@@ -96,11 +100,19 @@ impl DisplayAs for CoalesceBatchesExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "CoalesceBatchesExec: target_batch_size={}",
-                    self.target_batch_size
-                )
+                if let Some(fetch) = self.fetch {
+                    write!(
+                        f,
+                        "CoalesceBatchesExec: target_batch_size={} fetch= {}",
+                        self.target_batch_size, fetch
+                    )
+                } else {
+                    write!(
+                        f,
+                        "CoalesceBatchesExec: target_batch_size={}",
+                        self.target_batch_size
+                    )
+                }
             }
         }
     }
@@ -151,6 +163,11 @@ impl ExecutionPlan for CoalesceBatchesExec {
             input: self.input.execute(partition, context)?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
+            fetch: if let Some(fetch_cnt) = self.fetch {
+                fetch_cnt
+            } else {
+                usize::MAX
+            },
             buffer: Vec::new(),
             buffered_rows: 0,
             is_closed: false,
@@ -174,6 +191,8 @@ struct CoalesceBatchesStream {
     schema: SchemaRef,
     /// Minimum number of rows for coalesces batches
     target_batch_size: usize,
+    /// fetch count passed by upper LimitExec
+    fetch: usize,
     /// Buffered batches
     buffer: Vec<RecordBatch>,
     /// Buffered row count
@@ -219,8 +238,9 @@ impl CoalesceBatchesStream {
             match input_batch {
                 Poll::Ready(x) => match x {
                     Some(Ok(batch)) => {
-                        if batch.num_rows() >= self.target_batch_size
-                            && self.buffer.is_empty()
+                        if (batch.num_rows() >= self.target_batch_size
+                            || batch.num_rows() >= self.fetch)
+                            || self.buffer.is_empty()
                         {
                             return Poll::Ready(Some(Ok(batch)));
                         } else if batch.num_rows() == 0 {
