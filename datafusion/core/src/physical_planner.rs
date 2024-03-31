@@ -1653,11 +1653,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
-            let args = args
-                .iter()
-                .map(|e| create_physical_expr(e, logical_input_schema, execution_props))
-                .collect::<Result<Vec<_>>>()?;
-
+            let args =
+                create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
