@@ -613,6 +613,28 @@ async fn prune_int32_eq_large_in_list() {
 }
 
 #[tokio::test]
+async fn prune_uint32_eq_large_in_list() {
+    // result of sql "SELECT * FROM t where i in (2050...2582)", prune all
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::UInt32Range)
+        .with_query(
+            format!(
+                "SELECT * FROM t where u in ({})",
+                (200050..200082).join(",")
+            )
+            .as_str(),
+        )
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(0))
+        .with_matched_by_bloom_filter(Some(0))
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_expected_rows(0)
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
 async fn prune_f64_lt() {
     RowGroupPruningTest::new()
         .with_scenario(Scenario::Float64)
