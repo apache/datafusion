@@ -238,7 +238,8 @@ impl FileScanConfig {
         })?;
 
         let indices_sorted_by_min = {
-            let mut sort: Vec<_> = statistics.min.iter().enumerate().collect();
+            let mut sort: Vec<_> =
+                statistics.min_by_sort_order.iter().enumerate().collect();
             sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
             sort
         };
@@ -249,7 +250,7 @@ impl FileScanConfig {
             let file_group_to_insert = file_groups_indices.iter_mut().find(|group| {
                 // If our file is non-overlapping and comes _after_ the last file,
                 // it fits in this file group.
-                min > statistics.max.row(
+                min > statistics.max_by_sort_order.row(
                     *group
                         .last()
                         .expect("groups should be nonempty at construction"),
@@ -908,7 +909,6 @@ mod tests {
                 sort: vec![col("value").sort(true, false)],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
-            // FIXME: this test is broken
             TestCase {
                 name: "reverse sort",
                 file_schema: Schema::new(vec![Field::new(

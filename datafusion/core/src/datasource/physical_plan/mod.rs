@@ -509,9 +509,10 @@ fn get_projected_output_ordering(
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
+/// Furthermore, any columns that are reversed in the sort order have their min/max values swapped.
 pub(crate) struct MinMaxStatistics {
-    min: arrow::row::Rows,
-    max: arrow::row::Rows,
+    min_by_sort_order: arrow::row::Rows,
+    max_by_sort_order: arrow::row::Rows,
     sort_order: Vec<PhysicalSortExpr>,
 }
 
@@ -632,7 +633,36 @@ impl MinMaxStatistics {
             DataFusionError::Plan("sort expression must be on column".to_string()),
         )?;
 
-        let [min, max] = [min_values, max_values].map(|values| {
+        // swap min/max if they're reversed in the ordering
+        let (new_min_cols, new_max_cols): (Vec<_>, Vec<_>) = sort_order
+            .iter()
+            .zip(sort_columns.iter().copied())
+            .map(|(sort_expr, column)| {
+                if sort_expr.options.descending {
+                    max_values
+                        .column_by_name(column.name())
+                        .zip(min_values.column_by_name(column.name()))
+                } else {
+                    min_values
+                        .column_by_name(column.name())
+                        .zip(max_values.column_by_name(column.name()))
+                }
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "missing column in MinMaxStatistics::new: '{}'",
+                        column.name()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+
+        let [min, max] = [new_min_cols, new_max_cols].map(|cols| {
+            let values = RecordBatch::try_new(
+                min_values.schema(),
+                cols.into_iter().map(Arc::clone).collect(),
+            )?;
             let sorting_columns = sort_order
                 .iter()
                 .zip(sort_columns.iter().copied())
@@ -669,16 +699,16 @@ impl MinMaxStatistics {
         });
 
         Ok(Self {
-            min: min.map_err(|e| e.context("build min rows"))?,
-            max: max.map_err(|e| e.context("build max rows"))?,
+            min_by_sort_order: min.map_err(|e| e.context("build min rows"))?,
+            max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
             sort_order: sort_order.to_vec(),
         })
     }
 
     fn is_sorted(&self) -> bool {
-        self.max
+        self.max_by_sort_order
             .iter()
-            .zip(self.min.iter().skip(1))
+            .zip(self.min_by_sort_order.iter().skip(1))
             .all(|(max, next_min)| max < next_min)
     }
 }
