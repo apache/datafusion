@@ -264,7 +264,7 @@ where
 ///      Ok(DataType::Float64)
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
-///    fn accumulator(&self, _arg: &DataType, _sort_exprs: &[Expr], _schema: &Schema) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+///    fn accumulator(&self, _arg: &DataType, _sort_exprs: &[Expr], _schema: &Schema, _ignore_nulls: bool, _requirement_satisfied: bool) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
 ///        Ok(vec![DataType::Float64, DataType::UInt32])
 ///    }
@@ -314,22 +314,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// See [`Accumulator::state()`] for more details
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>>;
 
-    /// Default fields including the value field and ordering fields
+    /// Return the fields of the intermediate state. It is mutually exclusive with [`Self::state_type`].
+    /// If you define `state_type`, you don't need to define `state_fields` and vice versa.
+    /// If you want empty fields, you should define empty `state_type`
     fn state_fields(
         &self,
-        name: &str,
-        value_type: DataType,
-        ordering_fields: Vec<Field>,
+        _name: &str,
+        _value_type: DataType,
+        _ordering_fields: Vec<Field>,
     ) -> Result<Vec<Field>> {
-        let value_field = Field::new(
-            format_state_name(name, "default_state_name"),
-            value_type,
-            true,
-        );
-
-        let mut fields = vec![value_field];
-        fields.extend(ordering_fields);
-        Ok(fields)
+        Ok(vec![])
     }
 
     /// If the aggregate expression has a specialized
