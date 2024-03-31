@@ -207,7 +207,7 @@ impl FileScanConfig {
     /// Attempts to do a bin-packing on files into file groups, such that any two files
     /// in a file group are ordered and non-overlapping with respect to their statistics.
     /// It will produce the smallest number of file groups possible.
-    pub fn sort_file_groups(
+    pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         projected_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
@@ -235,7 +235,9 @@ impl FileScanConfig {
             projected_schema,
             flattened_files.iter().copied(),
         )
-        .map_err(|e| e.context("construct min/max statistics for sort_file_groups"))?;
+        .map_err(|e| {
+            e.context("construct min/max statistics for split_groups_by_statistics")
+        })?;
 
         let indices_sorted_by_min = {
             let mut sort: Vec<_> = statistics.min.iter().enumerate().collect();
@@ -841,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sort_file_groups() -> Result<()> {
+    fn test_split_groups_by_statistics() -> Result<()> {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
         use datafusion_expr::execution_props::ExecutionProps;
@@ -1026,7 +1028,7 @@ mod tests {
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
-            let result = FileScanConfig::sort_file_groups(
+            let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
                 &table_schema,
                 &[partitioned_files.clone()],

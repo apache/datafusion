@@ -644,7 +644,7 @@ impl TableProvider for ListingTable {
 
         let output_ordering = self.try_create_output_ordering()?;
         match output_ordering.first().map(|output_ordering| {
-            FileScanConfig::sort_file_groups(
+            FileScanConfig::split_groups_by_statistics(
                 &self.table_schema,
                 &projected_schema,
                 &partitioned_file_lists,
