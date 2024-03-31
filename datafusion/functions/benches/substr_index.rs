@@ -88,10 +88,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let delimiters = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
 
+        let args = [strings, delimiters, counts];
         b.iter(|| {
             black_box(
                 substr_index()
-                    .invoke(&[strings.clone(), delimiters.clone(), counts.clone()])
+                    .invoke(&args)
                     .expect("substr_index should work on valid values"),
             )
         })
