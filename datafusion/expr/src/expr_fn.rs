@@ -743,7 +743,7 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
+        f.debug_struct("AggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
             .field("fun", &"<FUNC>")
@@ -828,8 +828,9 @@ pub struct FirstValue {
 
 impl Debug for FirstValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("FirstValue")
             .field("name", &self.name)
+            .field("signature", &self.signature)
             .field("fun", &"<FUNC>")
             .finish()
     }
