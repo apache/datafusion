@@ -508,13 +508,20 @@ fn get_projected_output_ordering(
     all_orderings
 }
 
-// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
+/// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
+/// The min/max values are ordered by [`Self::sort_order`].
 pub(crate) struct MinMaxStatistics {
     min: arrow::row::Rows,
     max: arrow::row::Rows,
+    sort_order: Vec<PhysicalSortExpr>,
 }
 
 impl MinMaxStatistics {
+    #[allow(unused)]
+    fn sort_order(&self) -> &[PhysicalSortExpr] {
+        &self.sort_order
+    }
+
     fn new_from_files<'a>(
         sort_order: &[PhysicalSortExpr],
         table_schema: &SchemaRef,
@@ -535,29 +542,27 @@ impl MinMaxStatistics {
                 DataFusionError::Plan("Parquet file missing statistics".to_string())
             })?;
 
-        let get_min_max = |i: usize| -> (Vec<ScalarValue>, Vec<ScalarValue>) {
-            statistics_and_partition_values
+        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+            Ok(statistics_and_partition_values
                 .iter()
                 .map(|(s, pv)| {
                     if i < s.column_statistics.len() {
-                        (
-                            s.column_statistics[i]
-                                .min_value
-                                .get_value()
-                                .cloned()
-                                .unwrap_or(ScalarValue::Null),
-                            s.column_statistics[i]
-                                .max_value
-                                .get_value()
-                                .cloned()
-                                .unwrap_or(ScalarValue::Null),
-                        )
+                        s.column_statistics[i]
+                            .min_value
+                            .get_value()
+                            .cloned()
+                            .zip(s.column_statistics[i].max_value.get_value().cloned())
+                            .ok_or_else(|| {
+                                DataFusionError::Plan("statistics not found".to_string())
+                            })
                     } else {
                         let partition_value = &pv[i - s.column_statistics.len()];
-                        (partition_value.clone(), partition_value.clone())
+                        Ok((partition_value.clone(), partition_value.clone()))
                     }
                 })
-                .unzip()
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip())
         };
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = projected_schema
@@ -570,7 +575,7 @@ impl MinMaxStatistics {
                             e,
                             Some(format!("get min/max for field: '{}'", field.name())),
                         )
-                    })?);
+                    })?)?;
                 Ok((
                     ScalarValue::iter_to_array(min)?,
                     ScalarValue::iter_to_array(max)?,
@@ -662,6 +667,7 @@ impl MinMaxStatistics {
         Ok(Self {
             min: min.map_err(|e| e.context("build min rows"))?,
             max: max.map_err(|e| e.context("build max rows"))?,
+            sort_order: sort_order.to_vec(),
         })
     }
 

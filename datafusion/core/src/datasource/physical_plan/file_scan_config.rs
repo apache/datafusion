@@ -225,6 +225,10 @@ impl FileScanConfig {
         // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
         // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
 
+        if flattened_files.is_empty() {
+            return Ok(vec![]);
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
@@ -863,16 +867,17 @@ mod tests {
         }
 
         struct TestCase {
-            #[allow(unused)]
+            name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
             sort: Vec<datafusion_expr::Expr>,
-            expected_result: Result<Vec<Vec<usize>>, &'static str>,
+            expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 
         use datafusion_expr::col;
         let cases = vec![
             TestCase {
+                name: "test sort",
                 file_schema: Schema::new(vec![Field::new(
                     "value".to_string(),
                     DataType::Float64,
@@ -884,9 +889,44 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Ok(vec![vec![0, 1], vec![2]]),
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
+            // same input but file '2' is in the middle
+            // test that we still order correctly
             TestCase {
+                name: "test sort with files ordered differently",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
+            },
+            // FIXME: this test is broken
+            TestCase {
+                name: "reverse sort",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                ],
+                sort: vec![col("value").sort(false, true)],
+                expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
+            },
+            // reject nullable sort columns
+            TestCase {
+                name: "no nullable sort columns",
                 file_schema: Schema::new(vec![Field::new(
                     "value".to_string(),
                     DataType::Float64,
@@ -899,6 +939,62 @@ mod tests {
                 ],
                 sort: vec![col("value").sort(true, false)],
                 expected_result: Err("construct min/max statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column"),
+            },
+            TestCase {
+                name: "all three non-overlapping",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.50, 0.99))]),
+                    File::new("2", "2023-01-02", vec![Some((1.00, 1.49))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0", "1", "2"]]),
+            },
+            TestCase {
+                name: "all three overlapping",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![Some((0.00, 0.49))]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![vec!["0"], vec!["1"], vec!["2"]]),
+            },
+            TestCase {
+                name: "empty input",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Ok(vec![]),
+            },
+            TestCase {
+                name: "one file missing statistics",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    false,
+                )]),
+                files: vec![
+                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
+                    File::new("2", "2023-01-02", vec![None]),
+                ],
+                sort: vec![col("value").sort(true, false)],
+                expected_result: Err("construct min/max statistics\ncaused by\ncollect min/max values\ncaused by\nError during planning: statistics not found"),
             },
         ];
 
@@ -930,31 +1026,47 @@ mod tests {
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
-            let results = FileScanConfig::sort_file_groups(
+            let result = FileScanConfig::sort_file_groups(
                 &table_schema,
                 &table_schema,
                 &[partitioned_files.clone()],
                 &sort_order,
-            )
-            .map(|file_groups| {
-                file_groups
-                    .into_iter()
-                    .map(|file_group| {
-                        file_group
-                            .iter()
-                            .map(|file| {
-                                partitioned_files
-                                    .iter()
-                                    .position(|f| f.object_meta == file.object_meta)
-                                    .unwrap()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map_err(|e| e.to_string().leak() as &'static str);
+            );
+            let results_by_name = result
+                .as_ref()
+                .map(|file_groups| {
+                    file_groups
+                        .iter()
+                        .map(|file_group| {
+                            file_group
+                                .iter()
+                                .map(|file| {
+                                    partitioned_files
+                                        .iter()
+                                        .find_map(|f| {
+                                            if f.object_meta == file.object_meta {
+                                                Some(
+                                                    f.object_meta
+                                                        .location
+                                                        .as_ref()
+                                                        .rsplit('/')
+                                                        .next()
+                                                        .unwrap()
+                                                        .trim_end_matches(".parquet"),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string().leak() as &'static str);
 
-            assert_eq!(results, case.expected_result);
+            assert_eq!(results_by_name, case.expected_result, "{}", case.name);
         }
 
         return Ok(());
