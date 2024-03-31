@@ -17,12 +17,13 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use crate::function::AccumulatorArgs;
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::{Accumulator, Expr};
 use crate::{
     AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{not_impl_err, Result};
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
@@ -169,21 +170,8 @@ impl AggregateUDF {
     }
 
     /// Return an accumulator the given aggregate, given its return datatype
-    pub fn accumulator(
-        &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        ignore_nulls: bool,
-        requirement_satisfied: bool,
-    ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(
-            arg,
-            sort_exprs,
-            schema,
-            ignore_nulls,
-            requirement_satisfied,
-        )
+    pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(acc_args)
     }
 
     /// Return the type of the intermediate state used by this aggregator, given
@@ -294,21 +282,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
     ///
-    /// `arg`: the type of the argument to this accumulator
+    /// `data_type`: the type of the argument to this accumulator
     ///
     /// `sort_exprs`: contains a list of `Expr::SortExpr`s if the
     /// aggregate is called with an explicit `ORDER BY`. For example,
     /// `ARRAY_AGG(x ORDER BY y ASC)`. In this case, `sort_exprs` would contain `[y ASC]`
     ///
     /// `schema` is the input schema to the udaf
-    fn accumulator(
-        &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        ignore_nulls: bool,
-        requirement_satisfied: bool,
-    ) -> Result<Box<dyn Accumulator>>;
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>>;
 
     /// Return the type used to serialize the  [`Accumulator`]'s intermediate state.
     /// See [`Accumulator::state()`] for more details
@@ -388,21 +369,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn accumulator(
-        &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        ignore_nulls: bool,
-        requirement_satisfied: bool,
-    ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(
-            arg,
-            sort_exprs,
-            schema,
-            ignore_nulls,
-            requirement_satisfied,
-        )
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(acc_args)
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {
@@ -460,13 +428,14 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(
         &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        _ignore_nulls: bool,
-        _requirement_satisfied: bool,
+        acc_args: AccumulatorArgs,
+        // data_type: &DataType,
+        // schema: &Schema,
+        // _sort_exprs: &[Expr],
+        // _ignore_nulls: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(arg, sort_exprs, schema)
+        // let acc_args = AccumulatorArgs::new(data_type, schema);
+        (self.accumulator)(acc_args)
     }
 
     fn state_type(&self, return_type: &DataType) -> Result<Vec<DataType>> {

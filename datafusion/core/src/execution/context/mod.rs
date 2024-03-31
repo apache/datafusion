@@ -85,6 +85,7 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use log::debug;
 use parking_lot::RwLock;
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
@@ -1465,7 +1466,16 @@ impl SessionState {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
             Arc::new(create_first_value_accumulator),
         );
-        let _ = new_self.register_udaf(Arc::new(first_value));
+
+        match new_self.register_udaf(Arc::new(first_value)) {
+            Ok(Some(existing_udaf)) => {
+                debug!("Overwrite existing UDF: {}", existing_udaf.name());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                panic!("Failed to register UDF: {}", err);
+            }
+        }
 
         new_self
     }

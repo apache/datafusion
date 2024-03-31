@@ -22,17 +22,16 @@ use crate::expr::{
     Placeholder, ScalarFunction, TryCast,
 };
 use crate::function::{
-    AccumulatorFactoryFunctionForFirstValue, PartitionEvaluatorFactory,
+    AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
 };
 use crate::udaf::format_state_name;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
-    BuiltinScalarFunction, Expr, LogicalPlan, Operator, ScalarFunctionImplementation,
-    ScalarUDF, Signature, Volatility,
+    logical_plan::Subquery, AggregateUDF, BuiltinScalarFunction, Expr, LogicalPlan,
+    Operator, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowUDF, WindowUDFImpl};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{internal_err, Column, Result};
 use std::any::Any;
 use std::fmt::Debug;
@@ -727,7 +726,7 @@ pub fn create_udaf(
 pub fn create_first_value(
     name: &str,
     signature: Signature,
-    accumulator: AccumulatorFactoryFunctionForFirstValue,
+    accumulator: AccumulatorFactoryFunction,
 ) -> AggregateUDF {
     AggregateUDF::from(FirstValue::new(name, signature, accumulator))
 }
@@ -744,7 +743,7 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("FirstValue")
             .field("name", &self.name)
             .field("signature", &self.signature)
             .field("fun", &"<FUNC>")
@@ -811,13 +810,9 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
 
     fn accumulator(
         &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        _ignore_nulls: bool,
-        _requirement_satisfied: bool,
+        acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(arg, sort_exprs, schema)
+        (self.accumulator)(acc_args)
     }
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {
@@ -828,7 +823,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
 pub struct FirstValue {
     name: String,
     signature: Signature,
-    accumulator: AccumulatorFactoryFunctionForFirstValue,
+    accumulator: AccumulatorFactoryFunction,
 }
 
 impl Debug for FirstValue {
@@ -844,7 +839,7 @@ impl FirstValue {
     pub fn new(
         name: impl Into<String>,
         signature: Signature,
-        accumulator: AccumulatorFactoryFunctionForFirstValue,
+        accumulator: AccumulatorFactoryFunction,
     ) -> Self {
         let name = name.into();
         Self {
@@ -874,13 +869,9 @@ impl AggregateUDFImpl for FirstValue {
 
     fn accumulator(
         &self,
-        arg: &DataType,
-        sort_exprs: &[Expr],
-        schema: &Schema,
-        ignore_nulls: bool,
-        requirement_satisfied: bool,
+        acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn crate::Accumulator>> {
-        (self.accumulator)(arg, sort_exprs, schema, ignore_nulls, requirement_satisfied)
+        (self.accumulator)(acc_args)
     }
 
     fn state_type(&self, _return_type: &DataType) -> Result<Vec<DataType>> {

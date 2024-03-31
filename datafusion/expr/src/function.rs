@@ -38,21 +38,37 @@ pub type ScalarFunctionImplementation =
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
-/// Factory that returns an accumulator for the given aggregate, given
-/// its return datatype, the sorting expressions and the schema for ordering.
-pub type AccumulatorFactoryFunction = Arc<
-    dyn Fn(&DataType, &[Expr], &Schema) -> Result<Box<dyn Accumulator>> + Send + Sync,
->;
+/// Arguments passed to create an accumulator
+pub struct AccumulatorArgs<'a> {
+    // default arguments
+    pub data_type: &'a DataType,
+    pub schema: &'a Schema,
+    pub ignore_nulls: bool,
+
+    // ordering arguments
+    pub sort_exprs: &'a [Expr],
+}
+
+impl<'a> AccumulatorArgs<'a> {
+    pub fn new(
+        data_type: &'a DataType,
+        schema: &'a Schema,
+        ignore_nulls: bool,
+        sort_exprs: &'a [Expr],
+    ) -> Self {
+        Self {
+            data_type,
+            schema,
+            ignore_nulls,
+            sort_exprs,
+        }
+    }
+}
 
 /// Factory that returns an accumulator for the given aggregate, given
 /// its return datatype, the sorting expressions and the schema for ordering.
-/// FirstValue needs additional `ignore_nulls` and `requirement_satisfied` flags.
-// TODO: It would be nice if we can have flexible design for arbitrary arguments.
-pub type AccumulatorFactoryFunctionForFirstValue = Arc<
-    dyn Fn(&DataType, &[Expr], &Schema, bool, bool) -> Result<Box<dyn Accumulator>>
-        + Send
-        + Sync,
->;
+pub type AccumulatorFactoryFunction =
+    Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// Factory that creates a PartitionEvaluator for the given window
 /// function

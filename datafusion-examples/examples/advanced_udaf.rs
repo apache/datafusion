@@ -31,7 +31,8 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::{cast::as_float64_array, ScalarValue};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    function::AccumulatorArgs, Accumulator, AggregateUDF, AggregateUDFImpl,
+    GroupsAccumulator, Signature,
 };
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
@@ -86,14 +87,7 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     /// is supported, DataFusion will use this row oriented
     /// accumulator when the aggregate function is used as a window function
     /// or when there are only aggregates (no GROUP BY columns) in the plan.
-    fn accumulator(
-        &self,
-        _arg: &DataType,
-        _sort_exprs: &[Expr],
-        _schema: &Schema,
-        _ignore_nulls: bool,
-        _requirement_satisfied: bool,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(GeometricMean::new()))
     }
 

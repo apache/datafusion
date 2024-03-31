@@ -1666,11 +1666,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
-            let (agg_expr, filter, order_by) = match func_def {
-                AggregateFunctionDefinition::BuiltIn(fun) => {
+
+            let try_create_physical_sort_expr =
+                |order_by: &Option<Vec<Expr>>| -> Result<Option<Vec<PhysicalSortExpr>>> {
                     let physical_sort_exprs = match order_by {
                         Some(e) => Some(
                             e.iter()
@@ -1685,7 +1683,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         ),
                         None => None,
                     };
+                    Ok(physical_sort_exprs)
+                };
 
+            let ignore_nulls = null_treatment
+                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+                == NullTreatment::IgnoreNulls;
+            let (agg_expr, filter, order_by) = match func_def {
+                AggregateFunctionDefinition::BuiltIn(fun) => {
+                    let physical_sort_exprs = try_create_physical_sort_expr(order_by)?;
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = aggregates::create_aggregate_expr(
@@ -1701,21 +1707,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 }
                 AggregateFunctionDefinition::UDF(fun) => {
                     let sort_exprs = order_by.clone().unwrap_or(vec![]);
-                    let physical_sort_exprs = match order_by {
-                        Some(e) => Some(
-                            e.iter()
-                                .map(|expr| {
-                                    create_physical_sort_expr(
-                                        expr,
-                                        logical_input_schema,
-                                        execution_props,
-                                    )
-                                })
-                                .collect::<Result<Vec<_>>>()?,
-                        ),
-                        None => None,
-                    };
-
+                    let physical_sort_exprs = try_create_physical_sort_expr(order_by)?;
                     let ordering_reqs: Vec<PhysicalSortExpr> =
                         physical_sort_exprs.clone().unwrap_or(vec![]);
                     let agg_expr = udaf::create_aggregate_expr(

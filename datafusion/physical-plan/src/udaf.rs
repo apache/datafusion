@@ -17,6 +17,7 @@
 
 //! This module contains functions and structs supporting user-defined aggregate functions.
 
+use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{Expr, GroupsAccumulator};
 use datafusion_physical_expr::expressions::format_state_name;
 use fmt::Debug;
@@ -49,8 +50,6 @@ pub fn create_aggregate_expr(
         .map(|arg| arg.data_type(schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let requirement_satisfied = ordering_req.is_empty();
-
     let ordering_types = ordering_req
         .iter()
         .map(|e| e.expr.data_type(schema))
@@ -67,7 +66,6 @@ pub fn create_aggregate_expr(
         sort_exprs: sort_exprs.to_vec(),
         ordering_req: ordering_req.to_vec(),
         ignore_nulls,
-        requirement_satisfied,
         ordering_fields,
     }))
 }
@@ -86,7 +84,6 @@ pub struct AggregateFunctionExpr {
     // The physical order by expressions
     ordering_req: LexOrdering,
     ignore_nulls: bool,
-    requirement_satisfied: bool,
     ordering_fields: Vec<Field>,
 }
 
@@ -141,23 +138,18 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.fun.accumulator(
+        let acc_args = AccumulatorArgs::new(
             &self.data_type,
-            &self.sort_exprs,
             &self.schema,
             self.ignore_nulls,
-            self.requirement_satisfied,
-        )
+            &self.sort_exprs,
+        );
+
+        self.fun.accumulator(acc_args)
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulator = self.fun.accumulator(
-            &self.data_type,
-            &self.sort_exprs,
-            &self.schema,
-            self.ignore_nulls,
-            self.requirement_satisfied,
-        )?;
+        let accumulator = self.create_accumulator()?;
 
         // Accumulators that have window frame startings different
         // than `UNBOUNDED PRECEDING`, such as `1 PRECEEDING`, need to

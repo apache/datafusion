@@ -29,11 +29,12 @@ use crate::{
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::{Schema, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{Accumulator, Expr};
 
 /// FIRST_VALUE aggregate expression
@@ -218,7 +219,7 @@ impl PartialEq<dyn Any> for FirstValue {
 }
 
 #[derive(Debug)]
-pub struct FirstValueAccumulator {
+struct FirstValueAccumulator {
     first: ScalarValue,
     // At the beginning, `is_set` is false, which means `first` is not seen yet.
     // Once we see the first value, we set the `is_set` flag and do not update `first` anymore.
@@ -393,21 +394,17 @@ impl Accumulator for FirstValueAccumulator {
 }
 
 pub fn create_first_value_accumulator(
-    data_type: &DataType,
-    order_by: &[Expr],
-    schema: &Schema,
-    ignore_nulls: bool,
-    requirement_satisfied: bool,
+    acc_args: AccumulatorArgs,
 ) -> Result<Box<dyn Accumulator>> {
     let mut all_sort_orders = vec![];
 
     // Construct PhysicalSortExpr objects from Expr objects:
     let mut sort_exprs = vec![];
-    for expr in order_by {
+    for expr in acc_args.sort_exprs {
         if let Expr::Sort(sort) = expr {
             if let Expr::Column(col) = sort.expr.as_ref() {
                 let name = &col.name;
-                let e = expressions::col(name, schema)?;
+                let e = expressions::col(name, acc_args.schema)?;
                 sort_exprs.push(PhysicalSortExpr {
                     expr: e,
                     options: SortOptions {
@@ -426,14 +423,16 @@ pub fn create_first_value_accumulator(
 
     let ordering_dtypes = ordering_req
         .iter()
-        .map(|e| e.expr.data_type(schema))
+        .map(|e| e.expr.data_type(acc_args.schema))
         .collect::<Result<Vec<_>>>()?;
 
+    let requirement_satisfied = ordering_req.is_empty();
+
     FirstValueAccumulator::try_new(
-        data_type,
+        acc_args.data_type,
         &ordering_dtypes,
         ordering_req,
-        ignore_nulls,
+        acc_args.ignore_nulls,
     )
     .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
 }

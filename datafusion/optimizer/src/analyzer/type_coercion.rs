@@ -892,7 +892,7 @@ mod test {
             vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_, _, _| Ok(Box::<AvgAccumulator>::default())),
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
@@ -914,7 +914,7 @@ mod test {
         let return_type = DataType::Float64;
         let state_type = vec![DataType::UInt64, DataType::Float64];
         let accumulator: AccumulatorFactoryFunction =
-            Arc::new(|_, _, _| Ok(Box::<AvgAccumulator>::default()));
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
             "MY_AVG",
             Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
