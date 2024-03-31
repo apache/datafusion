@@ -2907,7 +2907,7 @@ pub enum ScalarFunction {
     Power = 64,
     /// 65 was StructFun
     /// 66 was FromUnixtime
-    Atan2 = 67,
+    /// 67 Atan2
     /// 68 was DateBin
     /// 69 was ArrowTypeof
     /// 70 was CurrentDate
@@ -3004,7 +3004,6 @@ impl ScalarFunction {
             ScalarFunction::Translate => "Translate",
             ScalarFunction::Coalesce => "Coalesce",
             ScalarFunction::Power => "Power",
-            ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
@@ -3043,7 +3042,6 @@ impl ScalarFunction {
             "Translate" => Some(Self::Translate),
             "Coalesce" => Some(Self::Coalesce),
             "Power" => Some(Self::Power),
-            "Atan2" => Some(Self::Atan2),
             "Cbrt" => Some(Self::Cbrt),
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),

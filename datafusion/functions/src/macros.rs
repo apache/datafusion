@@ -250,3 +250,31 @@ macro_rules! make_math_unary_udf {
         }
     };
 }
+
+#[macro_export]
+macro_rules! make_function_inputs2 {
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
+    }};
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE1>()
+    }};
+}

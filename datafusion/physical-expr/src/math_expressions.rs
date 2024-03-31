@@ -492,31 +492,6 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Atan2 SQL function
-pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "y",
-            "x",
-            Float64Array,
-            { f64::atan2 }
-        )) as ArrayRef),
-
-        DataType::Float32 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "y",
-            "x",
-            Float32Array,
-            { f32::atan2 }
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function atan2"),
-    }
-}
-
 /// Log SQL function
 pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)

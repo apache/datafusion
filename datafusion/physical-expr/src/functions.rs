@@ -237,9 +237,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::power)(args))
         }
-        BuiltinScalarFunction::Atan2 => {
-            Arc::new(|args| make_scalar_function_inner(math_expressions::atan2)(args))
-        }
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function_inner(math_expressions::log)(args))
         }

@@ -608,7 +608,7 @@ enum ScalarFunction {
   Power = 64;
   // 65 was StructFun
   // 66 was FromUnixtime
-  Atan2 = 67;
+  // 67 Atan2
   // 68 was DateBin
   // 69 was ArrowTypeof
   // 70 was CurrentDate

@@ -37,7 +37,7 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    atan2, cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
+    cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
     ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, find_in_set, floor, gcd, initcap, iszero, lcm, log,
@@ -452,7 +452,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
             ScalarFunction::SubstrIndex => Self::SubstrIndex,
@@ -1379,10 +1378,6 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                 )),
                 ScalarFunction::Log => Ok(log(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),

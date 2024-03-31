@@ -18,11 +18,13 @@
 //! "math" DataFusion functions
 
 mod abs;
+mod atan2;
 mod nans;
 
 // Create UDFs
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(abs::AbsFunc, ABS, abs);
+make_udf_function!(atan2::Atan2, ATAN2, atan2);
 
 make_math_unary_udf!(Log2Func, LOG2, log2, log2, Some(vec![Some(true)]));
 make_math_unary_udf!(Log10Func, LOG10, log10, log10, Some(vec![Some(true)]));
@@ -61,8 +63,9 @@ export_functions!(
     ),
     (tan, num, "returns the tangent of a number"),
     (tanh, num, "returns the hyperbolic tangent of a number"),
-    (atanh, num, "returnd inverse hyperbolic tangent"),
-    (asinh, num, "returnd inverse hyperbolic sine"),
-    (acosh, num, "returnd inverse hyperbolic cosine"),
-    (atan, num, "returnd inverse tangent")
+    (atanh, num, "returns inverse hyperbolic tangent"),
+    (asinh, num, "returns inverse hyperbolic sine"),
+    (acosh, num, "returns inverse hyperbolic cosine"),
+    (atan, num, "returns inverse tangent"),
+    (atan2, y x, "returns inverse tangent of a division given in the argument")
 );
