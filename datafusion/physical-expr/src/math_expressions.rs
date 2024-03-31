@@ -492,31 +492,6 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Atan2 SQL function
-pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "y",
-            "x",
-            Float64Array,
-            { f64::atan2 }
-        )) as ArrayRef),
-
-        DataType::Float32 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
-            &args[1],
-            "y",
-            "x",
-            Float32Array,
-            { f32::atan2 }
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function atan2"),
-    }
-}
-
 /// Log SQL function
 pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
@@ -723,42 +698,6 @@ mod tests {
         assert_eq!(floats.value(1), 4);
         assert_eq!(floats.value(2), 81);
         assert_eq!(floats.value(3), 625);
-    }
-
-    #[test]
-    fn test_atan2_f64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![2.0, -3.0, 4.0, -5.0])), // y
-            Arc::new(Float64Array::from(vec![1.0, 2.0, -3.0, -4.0])), // x
-        ];
-
-        let result = atan2(&args).expect("failed to initialize function atan2");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function atan2");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), (2.0_f64).atan2(1.0));
-        assert_eq!(floats.value(1), (-3.0_f64).atan2(2.0));
-        assert_eq!(floats.value(2), (4.0_f64).atan2(-3.0));
-        assert_eq!(floats.value(3), (-5.0_f64).atan2(-4.0));
-    }
-
-    #[test]
-    fn test_atan2_f32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![2.0, -3.0, 4.0, -5.0])), // y
-            Arc::new(Float32Array::from(vec![1.0, 2.0, -3.0, -4.0])), // x
-        ];
-
-        let result = atan2(&args).expect("failed to initialize function atan2");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function atan2");
-
-        assert_eq!(floats.len(), 4);
-        assert_eq!(floats.value(0), (2.0_f32).atan2(1.0));
-        assert_eq!(floats.value(1), (-3.0_f32).atan2(2.0));
-        assert_eq!(floats.value(2), (4.0_f32).atan2(-3.0));
-        assert_eq!(floats.value(3), (-5.0_f32).atan2(-4.0));
     }
 
     #[test]

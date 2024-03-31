@@ -22914,7 +22914,6 @@ impl serde::Serialize for ScalarFunction {
     {
         let variant = match self {
             Self::Unknown => "unknown",
-            Self::Atan => "Atan",
             Self::Ceil => "Ceil",
             Self::Cos => "Cos",
             Self::Exp => "Exp",
@@ -22931,11 +22930,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Random => "Random",
             Self::Coalesce => "Coalesce",
             Self::Power => "Power",
-            Self::Atan2 => "Atan2",
             Self::Cbrt => "Cbrt",
-            Self::Acosh => "Acosh",
-            Self::Asinh => "Asinh",
-            Self::Atanh => "Atanh",
             Self::Sinh => "Sinh",
             Self::Cosh => "Cosh",
             Self::Pi => "Pi",
@@ -22960,7 +22955,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
     {
         const FIELDS: &[&str] = &[
             "unknown",
-            "Atan",
             "Ceil",
             "Cos",
             "Exp",
@@ -22977,11 +22971,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Random",
             "Coalesce",
             "Power",
-            "Atan2",
             "Cbrt",
-            "Acosh",
-            "Asinh",
-            "Atanh",
             "Sinh",
             "Cosh",
             "Pi",
@@ -23035,7 +23025,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             {
                 match value {
                     "unknown" => Ok(ScalarFunction::Unknown),
-                    "Atan" => Ok(ScalarFunction::Atan),
                     "Ceil" => Ok(ScalarFunction::Ceil),
                     "Cos" => Ok(ScalarFunction::Cos),
                     "Exp" => Ok(ScalarFunction::Exp),
@@ -23052,11 +23041,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Random" => Ok(ScalarFunction::Random),
                     "Coalesce" => Ok(ScalarFunction::Coalesce),
                     "Power" => Ok(ScalarFunction::Power),
-                    "Atan2" => Ok(ScalarFunction::Atan2),
                     "Cbrt" => Ok(ScalarFunction::Cbrt),
-                    "Acosh" => Ok(ScalarFunction::Acosh),
-                    "Asinh" => Ok(ScalarFunction::Asinh),
-                    "Atanh" => Ok(ScalarFunction::Atanh),
                     "Sinh" => Ok(ScalarFunction::Sinh),
                     "Cosh" => Ok(ScalarFunction::Cosh),
                     "Pi" => Ok(ScalarFunction::Pi),

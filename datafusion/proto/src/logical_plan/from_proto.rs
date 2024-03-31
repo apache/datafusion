@@ -37,8 +37,8 @@ use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
 use datafusion_expr::{
-    acosh, asinh, atan, atan2, atanh, cbrt, ceil, coalesce, concat_expr, concat_ws_expr,
-    cos, cosh, cot, degrees, ends_with, exp,
+    cbrt, ceil, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, degrees,
+    ends_with, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, gcd, initcap, iszero, lcm, log,
     logical_plan::{PlanType, StringifiedPlan},
@@ -428,12 +428,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Cot => Self::Cot,
-            ScalarFunction::Atan => Self::Atan,
             ScalarFunction::Sinh => Self::Sinh,
             ScalarFunction::Cosh => Self::Cosh,
-            ScalarFunction::Asinh => Self::Asinh,
-            ScalarFunction::Acosh => Self::Acosh,
-            ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Degrees => Self::Degrees,
@@ -454,7 +450,6 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
-            ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::Iszero => Self::Iszero,
         }
@@ -1318,22 +1313,12 @@ pub fn parse_expr(
 
             match scalar_function {
                 ScalarFunction::Unknown => Err(proto_error("Unknown scalar function")),
-                ScalarFunction::Asinh => {
-                    Ok(asinh(parse_expr(&args[0], registry, codec)?))
-                }
-                ScalarFunction::Acosh => {
-                    Ok(acosh(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry, codec)?)),
-                ScalarFunction::Atanh => {
-                    Ok(atanh(parse_expr(&args[0], registry, codec)?))
-                }
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry, codec)?)),
                 ScalarFunction::Degrees => {
                     Ok(degrees(parse_expr(&args[0], registry, codec)?))
@@ -1384,10 +1369,6 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry, codec)?,
                 )),
                 ScalarFunction::Log => Ok(log(
-                    parse_expr(&args[0], registry, codec)?,
-                    parse_expr(&args[1], registry, codec)?,
-                )),
-                ScalarFunction::Atan2 => Ok(atan2(
                     parse_expr(&args[0], registry, codec)?,
                     parse_expr(&args[1], registry, codec)?,
                 )),
