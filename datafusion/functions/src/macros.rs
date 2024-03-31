@@ -156,6 +156,7 @@ macro_rules! downcast_arg {
 /// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
+/// $MONOTONIC_FUNC: the monotonicity of the function
 macro_rules! make_math_unary_udf {
     ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $MONOTONICITY:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);

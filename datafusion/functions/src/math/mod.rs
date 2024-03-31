@@ -33,10 +33,10 @@ make_math_unary_udf!(AcosFunc, ACOS, acos, acos, None);
 make_math_unary_udf!(AsinFunc, ASIN, asin, asin, None);
 make_math_unary_udf!(TanFunc, TAN, tan, tan, None);
 
-make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh);
-make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh);
-make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh);
-make_math_unary_udf!(AtanFunc, ATAN, atan, atan);
+make_math_unary_udf!(AtanhFunc, ATANH, atanh, atanh, Some(vec![Some(true)]));
+make_math_unary_udf!(AsinhFunc, ASINH, asinh, asinh, Some(vec![Some(true)]));
+make_math_unary_udf!(AcoshFunc, ACOSH, acosh, acosh, Some(vec![Some(true)]));
+make_math_unary_udf!(AtanFunc, ATAN, atan, atan, Some(vec![Some(true)]));
 
 // Export the functions out of this package, both as expr_fn as well as a list of functions
 export_functions!(
