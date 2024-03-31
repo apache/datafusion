@@ -41,12 +41,12 @@ pub type ReturnTypeFunction =
 /// Arguments passed to create an accumulator
 pub struct AccumulatorArgs<'a> {
     // default arguments
-    pub data_type: &'a DataType,    // the return type of the function
-    pub schema: &'a Schema,         // the schema of the input arguments
-    pub ignore_nulls: bool,         // whether to ignore nulls
+    pub data_type: &'a DataType, // the return type of the function
+    pub schema: &'a Schema,      // the schema of the input arguments
+    pub ignore_nulls: bool,      // whether to ignore nulls
 
     // ordering arguments
-    pub sort_exprs: &'a [Expr],     // the expressions of `order by`
+    pub sort_exprs: &'a [Expr], // the expressions of `order by`
 }
 
 impl<'a> AccumulatorArgs<'a> {

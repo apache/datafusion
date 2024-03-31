@@ -426,10 +426,7 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
         Ok(res.as_ref().clone())
     }
 
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
     }
 
