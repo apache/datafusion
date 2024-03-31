@@ -53,10 +53,11 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
-    /// Returns all expressions in the current logical plan node. This
-    /// should not include expressions of any inputs (aka
-    /// non-recursively). These expressions are used for optimizer
-    /// passes and rewrites.
+    /// Returns all expressions in the current logical plan node. This should
+    /// not include expressions of any inputs (aka non-recursively).
+    ///
+    /// These expressions are used for optimizer
+    /// passes and rewrites. See [`LogicalPlan::expressions`] for more details.
     fn expressions(&self) -> Vec<Expr>;
 
     /// A list of output columns (e.g. the names of columns in
@@ -96,6 +97,24 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
         exprs: &[Expr],
         inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode>;
+
+    /// Returns the necessary input columns for this node required to compute
+    /// the columns in the output schema
+    ///
+    /// This is used for projection push-down when DataFusion has determined that
+    /// only a subset of the output columns of this node are needed by its parents.
+    /// This API is used to tell DataFusion which, if any, of the input columns are no longer
+    /// needed.
+    ///
+    /// Return `None`, the default, if this information can not be determined.
+    /// Returns `Some(_)` with the column indices for each child of this node that are
+    /// needed to compute `output_columns`
+    fn necessary_children_exprs(
+        &self,
+        _output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        None
+    }
 
     /// Update the hash `state` with this node requirements from
     /// [`Hash`].
@@ -242,6 +261,24 @@ pub trait UserDefinedLogicalNodeCore:
     // but the doc comments have not been updated.
     #[allow(clippy::wrong_self_convention)]
     fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self;
+
+    /// Returns the necessary input columns for this node required to compute
+    /// the columns in the output schema
+    ///
+    /// This is used for projection push-down when DataFusion has determined that
+    /// only a subset of the output columns of this node are needed by its parents.
+    /// This API is used to tell DataFusion which, if any, of the input columns are no longer
+    /// needed.
+    ///
+    /// Return `None`, the default, if this information can not be determined.
+    /// Returns `Some(_)` with the column indices for each child of this node that are
+    /// needed to compute `output_columns`
+    fn necessary_children_exprs(
+        &self,
+        _output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        None
+    }
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
@@ -281,6 +318,13 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode> {
         Arc::new(self.from_template(exprs, inputs))
+    }
+
+    fn necessary_children_exprs(
+        &self,
+        output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        self.necessary_children_exprs(output_columns)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {

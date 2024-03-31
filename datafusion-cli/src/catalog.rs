@@ -177,7 +177,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
                 // Register the store for this URL. Here we don't have access
                 // to any command options so the only choice is to use an empty collection
                 match scheme {
-                    "s3" | "oss" => {
+                    "s3" | "oss" | "cos" => {
                         state = state.add_table_options_extension(AwsOptions::default());
                     }
                     "gs" | "gcs" => {
@@ -189,7 +189,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
                     &state,
                     table_url.scheme(),
                     url,
-                    state.default_table_options(),
+                    &state.default_table_options(),
                 )
                 .await?;
                 state.runtime_env().register_object_store(url, store);

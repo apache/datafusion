@@ -4506,28 +4506,28 @@ CREATE TABLE src_table (
 query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/0.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/1.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/2.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 10
 
 query PI
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/3.csv'
-(FORMAT CSV);
+STORED AS CSV;
 ----
 10
 

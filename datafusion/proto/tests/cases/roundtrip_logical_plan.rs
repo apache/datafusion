@@ -34,8 +34,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::{FormatOptions, TableOptions};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, FileType, Result, ScalarValue,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -44,8 +44,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    col, create_udaf, lit, Accumulator, AggregateFunction,
-    BuiltinScalarFunction::{Sqrt, Substr},
+    col, create_udaf, lit, Accumulator, AggregateFunction, BuiltinScalarFunction::Sqrt,
     ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, PartitionEvaluator,
     ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
@@ -60,6 +59,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::{from_proto, DefaultLogicalExtensionCodec};
 use datafusion_proto::protobuf;
 
+use datafusion::execution::FunctionRegistry;
 use prost::Message;
 
 #[cfg(feature = "json")]
@@ -314,10 +314,9 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
     let input = create_csv_scan(&ctx).await?;
-
-    let mut table_options =
-        TableOptions::default_from_session_config(ctx.state().config_options());
-    table_options.set("csv.delimiter", ";")?;
+    let mut table_options = ctx.copied_table_options();
+    table_options.set_file_format(FileType::CSV);
+    table_options.set("format.delimiter", ";")?;
 
     let plan = LogicalPlan::Copy(CopyTo {
         input: Arc::new(input),
@@ -605,6 +604,14 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(3), lit(3), lit(2), lit(3), lit(1)]),
             lit(3),
         ),
+        array_replace(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
+        array_replace_n(
+            make_array(vec![lit(1), lit(2), lit(3)]),
+            lit(2),
+            lit(4),
+            lit(1),
+        ),
+        array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1856,17 +1863,28 @@ fn roundtrip_cube() {
 
 #[test]
 fn roundtrip_substr() {
+    let ctx = SessionContext::new();
+
+    let fun = ctx
+        .state()
+        .udf("substr")
+        .map_err(|e| {
+            internal_datafusion_err!("Unable to find expected 'substr' function: {e:?}")
+        })
+        .unwrap();
+
     // substr(string, position)
-    let test_expr =
-        Expr::ScalarFunction(ScalarFunction::new(Substr, vec![col("col"), lit(1_i64)]));
+    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun.clone(),
+        vec![col("col"), lit(1_i64)],
+    ));
 
     // substr(string, position, count)
-    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
-        Substr,
+    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new_udf(
+        fun,
         vec![col("col"), lit(1_i64), lit(1_i64)],
     ));
 
-    let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx.clone());
     roundtrip_expr_test(test_expr_with_count, ctx);
 }

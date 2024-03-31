@@ -46,6 +46,10 @@ struct CustomExec {
 }
 
 impl ExecutionPlan for CustomExec {
+    fn name(&self) {
+        "CustomExec"
+    }
+
     fn execute(
         &self,
         _partition: usize,

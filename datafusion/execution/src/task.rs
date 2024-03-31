@@ -20,10 +20,7 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{
-    config::{ConfigOptions, Extensions},
-    plan_datafusion_err, DataFusionError, Result,
-};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::{
@@ -102,39 +99,6 @@ impl TaskContext {
         }
     }
 
-    /// Create a new task context instance, by first copying all
-    /// name/value pairs from `task_props` into a `SessionConfig`.
-    #[deprecated(
-        since = "21.0.0",
-        note = "Construct SessionConfig and call TaskContext::new() instead"
-    )]
-    pub fn try_new(
-        task_id: String,
-        session_id: String,
-        task_props: HashMap<String, String>,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        runtime: Arc<RuntimeEnv>,
-        extensions: Extensions,
-    ) -> Result<Self> {
-        let mut config = ConfigOptions::new().with_extensions(extensions);
-        for (k, v) in task_props {
-            config.set(&k, &v)?;
-        }
-        let session_config = SessionConfig::from(config);
-        let window_functions = HashMap::new();
-
-        Ok(Self::new(
-            Some(task_id),
-            session_id,
-            session_config,
-            scalar_functions,
-            aggregate_functions,
-            window_functions,
-            runtime,
-        ))
-    }
-
     /// Return the SessionConfig associated with this [TaskContext]
     pub fn session_config(&self) -> &SessionConfig {
         &self.session_config
@@ -160,7 +124,7 @@ impl TaskContext {
         self.runtime.clone()
     }
 
-    /// Update the [`ConfigOptions`]
+    /// Update the [`SessionConfig`]
     pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
         self.session_config = session_config;
         self
@@ -229,7 +193,10 @@ impl FunctionRegistry for TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::{config::ConfigExtension, extensions_options};
+    use datafusion_common::{
+        config::{ConfigExtension, ConfigOptions, Extensions},
+        extensions_options,
+    };
 
     extensions_options! {
         struct TestExtension {

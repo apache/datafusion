@@ -19,9 +19,10 @@
 use arrow::array::Decimal128Array;
 use arrow::{
     array::{
-        Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
+        Array, ArrayRef, BinaryArray, Date32Array, Date64Array, FixedSizeBinaryArray,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -62,14 +63,16 @@ fn init() {
 enum Scenario {
     Timestamps,
     Dates,
-    Int32,
+    Int,
     Int32Range,
+    UInt,
     Float64,
     Decimal,
     DecimalBloomFilterInt32,
     DecimalBloomFilterInt64,
     DecimalLargePrecision,
     DecimalLargePrecisionBloomFilter,
+    ByteArray,
     PeriodsInColumnNames,
 }
 
@@ -117,14 +120,31 @@ impl TestOutput {
         self.metric_value("predicate_evaluation_errors")
     }
 
+    /// The number of row_groups matched by bloom filter
+    fn row_groups_matched_bloom_filter(&self) -> Option<usize> {
+        self.metric_value("row_groups_matched_bloom_filter")
+    }
+
     /// The number of row_groups pruned by bloom filter
     fn row_groups_pruned_bloom_filter(&self) -> Option<usize> {
         self.metric_value("row_groups_pruned_bloom_filter")
     }
 
+    /// The number of row_groups matched by statistics
+    fn row_groups_matched_statistics(&self) -> Option<usize> {
+        self.metric_value("row_groups_matched_statistics")
+    }
+
     /// The number of row_groups pruned by statistics
     fn row_groups_pruned_statistics(&self) -> Option<usize> {
         self.metric_value("row_groups_pruned_statistics")
+    }
+
+    /// The number of row_groups matched by bloom filter or statistics
+    fn row_groups_matched(&self) -> Option<usize> {
+        self.row_groups_matched_bloom_filter()
+            .zip(self.row_groups_matched_statistics())
+            .map(|(a, b)| a + b)
     }
 
     /// The number of row_groups pruned
@@ -368,15 +388,64 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     .unwrap()
 }
 
-/// Return record batch with i32 sequence
+/// Return record batch with i8, i16, i32, and i64 sequences
 ///
 /// Columns are named
-/// "i" -> Int32Array
-fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let v: Vec<i32> = (start..end).collect();
-    let array = Arc::new(Int32Array::from(v)) as ArrayRef;
-    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+/// "i8" -> Int8Array
+/// "i16" -> Int16Array
+/// "i32" -> Int32Array
+/// "i64" -> Int64Array
+fn make_int_batches(start: i8, end: i8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i8", DataType::Int8, true),
+        Field::new("i16", DataType::Int16, true),
+        Field::new("i32", DataType::Int32, true),
+        Field::new("i64", DataType::Int64, true),
+    ]));
+    let v8: Vec<i8> = (start..end).collect();
+    let v16: Vec<i16> = (start as _..end as _).collect();
+    let v32: Vec<i32> = (start as _..end as _).collect();
+    let v64: Vec<i64> = (start as _..end as _).collect();
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int8Array::from(v8)) as ArrayRef,
+            Arc::new(Int16Array::from(v16)) as ArrayRef,
+            Arc::new(Int32Array::from(v32)) as ArrayRef,
+            Arc::new(Int64Array::from(v64)) as ArrayRef,
+        ],
+    )
+    .unwrap()
+}
+
+/// Return record batch with i8, i16, i32, and i64 sequences
+///
+/// Columns are named
+/// "u8" -> UInt8Array
+/// "u16" -> UInt16Array
+/// "u32" -> UInt32Array
+/// "u64" -> UInt64Array
+fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("u8", DataType::UInt8, true),
+        Field::new("u16", DataType::UInt16, true),
+        Field::new("u32", DataType::UInt32, true),
+        Field::new("u64", DataType::UInt64, true),
+    ]));
+    let v8: Vec<u8> = (start..end).collect();
+    let v16: Vec<u16> = (start as _..end as _).collect();
+    let v32: Vec<u32> = (start as _..end as _).collect();
+    let v64: Vec<u64> = (start as _..end as _).collect();
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(UInt8Array::from(v8)) as ArrayRef,
+            Arc::new(UInt16Array::from(v16)) as ArrayRef,
+            Arc::new(UInt32Array::from(v32)) as ArrayRef,
+            Arc::new(UInt64Array::from(v64)) as ArrayRef,
+        ],
+    )
+    .unwrap()
 }
 
 fn make_int32_range(start: i32, end: i32) -> RecordBatch {
@@ -493,6 +562,51 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
 /// of the column. It is *not* a table named service.name
 ///
 /// name | service.name
+fn make_bytearray_batch(
+    name: &str,
+    string_values: Vec<&str>,
+    binary_values: Vec<&[u8]>,
+    fixedsize_values: Vec<&[u8; 3]>,
+) -> RecordBatch {
+    let num_rows = string_values.len();
+    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
+    let service_string: StringArray = string_values.iter().map(Some).collect();
+    let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
+    let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
+        .iter()
+        .map(|value| Some(value.as_slice()))
+        .collect::<Vec<_>>()
+        .into();
+
+    let schema = Schema::new(vec![
+        Field::new("name", name.data_type().clone(), true),
+        // note the column name has a period in it!
+        Field::new("service_string", service_string.data_type().clone(), true),
+        Field::new("service_binary", service_binary.data_type().clone(), true),
+        Field::new(
+            "service_fixedsize",
+            service_fixedsize.data_type().clone(),
+            true,
+        ),
+    ]);
+    let schema = Arc::new(schema);
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(name),
+            Arc::new(service_string),
+            Arc::new(service_binary),
+            Arc::new(service_fixedsize),
+        ],
+    )
+    .unwrap()
+}
+
+/// returns a batch with two columns (note "service.name" is the name
+/// of the column. It is *not* a table named service.name
+///
+/// name | service.name
 fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     let num_rows = service_name_values.len();
     let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
@@ -526,16 +640,24 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_date_batch(TimeDelta::try_days(3600).unwrap()),
             ]
         }
-        Scenario::Int32 => {
+        Scenario::Int => {
             vec![
-                make_int32_batch(-5, 0),
-                make_int32_batch(-4, 1),
-                make_int32_batch(0, 5),
-                make_int32_batch(5, 10),
+                make_int_batches(-5, 0),
+                make_int_batches(-4, 1),
+                make_int_batches(0, 5),
+                make_int_batches(5, 10),
             ]
         }
         Scenario::Int32Range => {
             vec![make_int32_range(0, 10), make_int32_range(200000, 300000)]
+        }
+        Scenario::UInt => {
+            vec![
+                make_uint_batches(0, 5),
+                make_uint_batches(1, 6),
+                make_uint_batches(5, 10),
+                make_uint_batches(250, 255),
+            ]
         }
         Scenario::Float64 => {
             vec![
@@ -585,6 +707,66 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_decimal_batch(vec![100000, 200000, 300000, 400000, 500000], 38, 5),
                 make_decimal_batch(vec![-100000, 200000, 300000, 400000, 600000], 38, 5),
                 make_decimal_batch(vec![100000, 200000, 300000, 400000, 600000], 38, 5),
+            ]
+        }
+        Scenario::ByteArray => {
+            // frontends first, then backends. All in order, except frontends 4 and 7
+            // are swapped to cause a statistics false positive on the 'fixed size' column.
+            vec![
+                make_bytearray_batch(
+                    "all frontends",
+                    vec![
+                        "frontend one",
+                        "frontend two",
+                        "frontend three",
+                        "frontend seven",
+                        "frontend five",
+                    ],
+                    vec![
+                        b"frontend one",
+                        b"frontend two",
+                        b"frontend three",
+                        b"frontend seven",
+                        b"frontend five",
+                    ],
+                    vec![b"fe1", b"fe2", b"fe3", b"fe7", b"fe5"],
+                ),
+                make_bytearray_batch(
+                    "mixed",
+                    vec![
+                        "frontend six",
+                        "frontend four",
+                        "backend one",
+                        "backend two",
+                        "backend three",
+                    ],
+                    vec![
+                        b"frontend six",
+                        b"frontend four",
+                        b"backend one",
+                        b"backend two",
+                        b"backend three",
+                    ],
+                    vec![b"fe6", b"fe4", b"be1", b"be2", b"be3"],
+                ),
+                make_bytearray_batch(
+                    "all backends",
+                    vec![
+                        "backend four",
+                        "backend five",
+                        "backend six",
+                        "backend seven",
+                        "backend eight",
+                    ],
+                    vec![
+                        b"backend four",
+                        b"backend five",
+                        b"backend six",
+                        b"backend seven",
+                        b"backend eight",
+                    ],
+                    vec![b"be4", b"be5", b"be6", b"be7", b"be8"],
+                ),
             ]
         }
         Scenario::PeriodsInColumnNames => {
