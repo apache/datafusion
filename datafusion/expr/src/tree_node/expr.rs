@@ -28,8 +28,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedIterator, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    handle_visit_recursion, internal_err, map_until_stop_and_collect, DataFusionError,
-    Result,
+    handle_visit_recursion, internal_err, map_until_stop_and_collect, Result,
 };
 
 impl TreeNode for Expr {
