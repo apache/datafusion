@@ -61,7 +61,8 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
-use object_store::ObjectStore;
+use itertools::Itertools;
+use object_store::{ObjectMeta, ObjectStore};
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -437,6 +438,82 @@ impl ListingOptions {
             .await?;
 
         self.format.infer_schema(state, &store, &files).await
+    }
+
+    /// TODO: Finish this doc
+    pub async fn validate_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<()> {
+        let partitions = self.infer_partitions(state, table_path).await?;
+
+        if partitions.is_empty() {
+            return Ok(());
+        }
+
+        let table_partition_names = self
+            .table_partition_cols
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<String>>();
+
+        if partitions != table_partition_names {
+            plan_err!(
+                "Expected partitions to be {:?}, but found {:?}",
+                partitions,
+                table_partition_names
+            )
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Infer the partitioning at the given path on the provided object store.
+    /// TODO: Finish this doc
+    async fn infer_partitions(
+        &self,
+        state: &SessionState,
+        table_path: &ListingTableUrl,
+    ) -> Result<Vec<String>> {
+        let store = state.runtime_env().object_store(table_path)?;
+        let files: Vec<ObjectMeta> = table_path
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
+            .try_collect()
+            .await?;
+
+        if files.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // TODO: Avoid using all the files
+        let stripped_path_parts = files.iter().map(|object| {
+            table_path
+                .strip_prefix(&object.location)
+                .unwrap()
+                .collect::<Vec<_>>()
+        });
+
+        let partitions = stripped_path_parts
+            .map(|path_parts| {
+                path_parts
+                    .iter()
+                    .rev()
+                    .skip(1) // skip the file itself
+                    .rev()
+                    .map(|s| s.split_once('=').unwrap().0.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        println!("{:?}", partitions);
+        partitions.into_iter().all_equal_value().map_err(|v| {
+            DataFusionError::Plan(format!(
+                "Found mixed partition values on disk {:?}",
+                v.unwrap()
+            ))
+        })
     }
 }
 

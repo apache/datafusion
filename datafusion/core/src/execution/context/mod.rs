@@ -1108,7 +1108,7 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let table_ref = table_ref.into();
+        let table_ref: TableReference = table_ref.into();
         let table = table_ref.table().to_owned();
         self.state
             .read()
