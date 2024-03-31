@@ -115,7 +115,7 @@ impl AggregateExpr for AggregateFunctionExpr {
         )?;
 
         if !fields.is_empty() {
-            return Ok(fields)
+            return Ok(fields);
         }
 
         // If fields is empty, we will use the default state fields
@@ -134,7 +134,6 @@ impl AggregateExpr for AggregateFunctionExpr {
             .collect::<Vec<Field>>();
 
         Ok(fields)
-        
     }
 
     fn field(&self) -> Result<Field> {
