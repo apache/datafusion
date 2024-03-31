@@ -339,7 +339,7 @@ macro_rules! int_tests {
             async fn [<prune_int $bits _scalar_fun_and_eq >]() {
                 RowGroupPruningTest::new()
                     .with_scenario(Scenario::Int)
-                    .with_query(&format!("SELECT * FROM t where i{} = 1", $bits))
+                    .with_query(&format!("SELECT * FROM t where abs(i{}) = 1 and i{} = 1", $bits, $bits))
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
@@ -492,7 +492,7 @@ macro_rules! uint_tests {
             async fn [<prune_uint $bits _scalar_fun_and_eq >]() {
                 RowGroupPruningTest::new()
                     .with_scenario(Scenario::UInt)
-                    .with_query(&format!("SELECT * FROM t where u{} = 6", $bits))
+                    .with_query(&format!("SELECT * FROM t where power(u{}, 2) = 36 and u{} = 6", $bits, $bits))
                     .with_expected_errors(Some(0))
                     .with_matched_by_stats(Some(1))
                     .with_pruned_by_stats(Some(3))
