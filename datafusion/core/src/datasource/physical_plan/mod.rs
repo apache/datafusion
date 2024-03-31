@@ -462,7 +462,6 @@ fn get_projected_output_ordering(
             let statistics = match MinMaxStatistics::new_from_files(
                 output_ordering,
                 table_schema,
-                projected_schema,
                 group,
             ) {
                 Ok(statistics) => statistics,
@@ -525,7 +524,6 @@ impl MinMaxStatistics {
     fn new_from_files<'a>(
         sort_order: &[PhysicalSortExpr],
         table_schema: &SchemaRef,
-        projected_schema: &SchemaRef,
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
         use datafusion_common::ScalarValue;
@@ -565,6 +563,15 @@ impl MinMaxStatistics {
                 .unzip())
         };
 
+        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
+            DataFusionError::Plan("sort expression must be on column".to_string()),
+        )?;
+
+        let projected_schema = Arc::new(
+            table_schema
+                .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
+        );
+
         let (min_values, max_values): (Vec<_>, Vec<_>) = projected_schema
             .fields()
             .iter()
@@ -589,12 +596,12 @@ impl MinMaxStatistics {
         Self::new(
             sort_order,
             table_schema,
-            RecordBatch::try_new(Arc::clone(projected_schema), min_values).map_err(
+            RecordBatch::try_new(Arc::clone(&projected_schema), min_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
                 },
             )?,
-            RecordBatch::try_new(Arc::clone(projected_schema), max_values).map_err(
+            RecordBatch::try_new(Arc::clone(&projected_schema), max_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
                 },
@@ -621,18 +628,15 @@ impl MinMaxStatistics {
             .map_err(|e| e.context("create sort fields"))?;
         let converter = RowConverter::new(sort_fields)?;
 
+        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
+            DataFusionError::Plan("sort expression must be on column".to_string()),
+        )?;
+
         let [min, max] = [min_values, max_values].map(|values| {
             let sorting_columns = sort_order
                 .iter()
-                .map(|sort_expr| {
-                    let column = sort_expr
-                        .expr
-                        .as_any()
-                        .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-                        .ok_or(DataFusionError::Plan(
-                            "sort expression must be on column".to_string(),
-                        ))?;
-
+                .zip(sort_columns.iter().copied())
+                .map(|(sort_expr, column)| {
                     let schema = values.schema();
 
                     let idx = schema.index_of(column.name())?;
@@ -677,6 +681,19 @@ impl MinMaxStatistics {
             .zip(self.min.iter().skip(1))
             .all(|(max, next_min)| max < next_min)
     }
+}
+
+fn sort_columns_from_physical_sort_exprs(
+    sort_order: &[PhysicalSortExpr],
+) -> Option<Vec<&datafusion_physical_plan::expressions::Column>> {
+    sort_order
+        .iter()
+        .map(|expr| {
+            expr.expr
+                .as_any()
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+        })
+        .collect::<Option<Vec<_>>>()
 }
 
 /// Represents the possible outcomes of a range calculation.

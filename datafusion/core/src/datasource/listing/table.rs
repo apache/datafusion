@@ -646,7 +646,6 @@ impl TableProvider for ListingTable {
         match output_ordering.first().map(|output_ordering| {
             FileScanConfig::split_groups_by_statistics(
                 &self.table_schema,
-                &projected_schema,
                 &partitioned_file_lists,
                 output_ordering,
             )

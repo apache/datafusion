@@ -209,7 +209,6 @@ impl FileScanConfig {
     /// It will produce the smallest number of file groups possible.
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
-        projected_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
         sort_order: &[PhysicalSortExpr],
     ) -> Result<Vec<Vec<PartitionedFile>>> {
@@ -232,7 +231,6 @@ impl FileScanConfig {
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
-            projected_schema,
             flattened_files.iter().copied(),
         )
         .map_err(|e| {
@@ -940,7 +938,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column"),
+                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
             },
             TestCase {
                 name: "all three non-overlapping",
@@ -996,7 +994,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![None]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics\ncaused by\ncollect min/max values\ncaused by\nError during planning: statistics not found"),
+                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nError during planning: statistics not found"),
             },
         ];
 
@@ -1029,7 +1027,6 @@ mod tests {
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
             let result = FileScanConfig::split_groups_by_statistics(
-                &table_schema,
                 &table_schema,
                 &[partitioned_files.clone()],
                 &sort_order,
