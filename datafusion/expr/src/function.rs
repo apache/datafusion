@@ -41,12 +41,12 @@ pub type ReturnTypeFunction =
 /// Arguments passed to create an accumulator
 pub struct AccumulatorArgs<'a> {
     // default arguments
-    pub data_type: &'a DataType,
-    pub schema: &'a Schema,
-    pub ignore_nulls: bool,
+    pub data_type: &'a DataType,    // the return type of the function
+    pub schema: &'a Schema,         // the schema of the input arguments
+    pub ignore_nulls: bool,         // whether to ignore nulls
 
     // ordering arguments
-    pub sort_exprs: &'a [Expr],
+    pub sort_exprs: &'a [Expr],     // the expressions of `order by`
 }
 
 impl<'a> AccumulatorArgs<'a> {
@@ -65,8 +65,7 @@ impl<'a> AccumulatorArgs<'a> {
     }
 }
 
-/// Factory that returns an accumulator for the given aggregate, given
-/// its return datatype, the sorting expressions and the schema for ordering.
+/// Factory that returns an accumulator for the given aggregate function.
 pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 

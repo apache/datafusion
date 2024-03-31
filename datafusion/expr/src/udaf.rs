@@ -429,12 +429,7 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
     fn accumulator(
         &self,
         acc_args: AccumulatorArgs,
-        // data_type: &DataType,
-        // schema: &Schema,
-        // _sort_exprs: &[Expr],
-        // _ignore_nulls: bool,
     ) -> Result<Box<dyn Accumulator>> {
-        // let acc_args = AccumulatorArgs::new(data_type, schema);
         (self.accumulator)(acc_args)
     }
 
