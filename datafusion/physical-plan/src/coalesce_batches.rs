@@ -240,7 +240,7 @@ impl CoalesceBatchesStream {
                     Some(Ok(batch)) => {
                         if (batch.num_rows() >= self.target_batch_size
                             || batch.num_rows() >= self.fetch)
-                            || self.buffer.is_empty()
+                            && self.buffer.is_empty()
                         {
                             return Poll::Ready(Some(Ok(batch)));
                         } else if batch.num_rows() == 0 {
