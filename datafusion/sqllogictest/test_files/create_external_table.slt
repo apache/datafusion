@@ -106,3 +106,52 @@ CREATE EXTERNAL TABLE csv_table (column1 int)
 STORED AS CSV
 LOCATION 'foo.csv'
 OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')
+
+# Wrong partition order error
+
+statement ok
+CREATE EXTERNAL TABLE partitioned (c1 int)
+PARTITIONED BY (p1 string, p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+query ITT
+INSERT INTO partitioned VALUES (1, 'x', 'y');
+----
+1
+
+query error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2", "p1"\]
+CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
+PARTITIONED BY (p2 string, p1 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+statement error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2"\]
+CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
+PARTITIONED BY (p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+# But allows partial partition selection
+
+statement ok
+CREATE EXTERNAL TABLE partial_partitioned (c1 int)
+PARTITIONED BY (p1 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+
+query IT
+SELECT * FROM partial_partitioned;
+----
+1 x
+
+statement ok
+CREATE EXTERNAL TABLE inner_partition (c1 int)
+PARTITIONED BY (p2 string)
+STORED AS parquet
+LOCATION 'test_files/scratch/create_external_table/bad_partitioning/p1=x/';
+
+query IT
+SELECT * FROM inner_partition;
+----
+1 y

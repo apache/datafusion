@@ -440,7 +440,10 @@ impl ListingOptions {
         self.format.infer_schema(state, &store, &files).await
     }
 
-    /// TODO: Finish this doc
+    /// Infers the partition columns stored in `LOCATION` and comapres
+    /// it with the columns provided in `PARTITIONED BY` to help prevent
+    /// accidental corrupts of partitioned tables.
+    /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
         state: &SessionState,
@@ -459,15 +462,27 @@ impl ListingOptions {
             .map(|(col_name, _)| col_name.clone())
             .collect_vec();
 
-        if inferred == table_partition_names {
-            Ok(())
-        } else {
-            plan_err!(
+        if inferred.len() < table_partition_names.len() {
+            return plan_err!(
                 "Inferred partitions to be {:?}, but got {:?}",
                 inferred,
                 table_partition_names
-            )
+            );
         }
+
+        // match prefix to allow creating a tables using
+        // some of the partition keys
+        for (idx, col) in table_partition_names.iter().enumerate() {
+            if &inferred[idx] != col {
+                return plan_err!(
+                    "Inferred partitions to be {:?}, but got {:?}",
+                    inferred,
+                    table_partition_names
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Infer the partitioning at the given path on the provided object store.
@@ -503,7 +518,7 @@ impl ListingOptions {
         let partition_keys = stripped_path_parts
             .map(|path_parts| {
                 path_parts
-                    .iter()
+                    .into_iter()
                     .rev()
                     .skip(1) // get parent only; skip the file itself
                     .rev()
@@ -520,9 +535,9 @@ impl ListingOptions {
                     diff
                 ))
             } else {
-                DataFusionError::Internal(format!(
-                    "Tried infering partitions using a non-hive partition",
-                )) // should be unreachable
+                DataFusionError::Internal(
+                    "Tried infering partitions using a non-hive partition".to_string(),
+                ) // should be unreachable
             }
         })
     }
