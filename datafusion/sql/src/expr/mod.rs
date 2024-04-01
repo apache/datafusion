@@ -605,10 +605,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("Struct fields are not supported yet");
         }
 
-        if values.iter().any(|value| matches!(value, SQLExpr::Named { .. })) {
+        if values
+            .iter()
+            .any(|value| matches!(value, SQLExpr::Named { .. }))
+        {
             self.create_named_struct(values, input_schema, planner_context)
-        }
-        else  {
+        } else {
             self.create_struct(values, input_schema, planner_context)
         }
     }
@@ -692,7 +694,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             args,
         )))
     }
-
 
     fn parse_array_agg(
         &self,
