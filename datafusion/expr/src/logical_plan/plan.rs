@@ -54,6 +54,7 @@ use datafusion_common::{
 };
 
 // backwards compatibility
+use crate::display::PgJsonVisitor;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -1302,6 +1303,26 @@ impl LogicalPlan {
         Wrapper(self)
     }
 
+    /// Return a displayable structure that produces plan in postgresql JSON format.
+    ///
+    /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
+    pub fn display_pg_json(&self) -> impl Display + '_ {
+        // Boilerplate structure to wrap LogicalPlan with something
+        // that that can be formatted
+        struct Wrapper<'a>(&'a LogicalPlan);
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                let mut visitor = PgJsonVisitor::new(f);
+                visitor.with_schema(true);
+                match self.0.visit(&mut visitor) {
+                    Ok(_) => Ok(()),
+                    Err(_) => Err(fmt::Error),
+                }
+            }
+        }
+        Wrapper(self)
+    }
+
     /// Return a `format`able structure that produces lines meant for
     /// graphical display using the `DOT` language. This format can be
     /// visualized using software from
@@ -2368,7 +2389,7 @@ impl DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
@@ -2778,6 +2799,67 @@ digraph {
         let graphviz = format!("{}", plan.display_graphviz());
 
         assert_eq!(expected_graphviz, graphviz);
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_pg_json() -> Result<()> {
+        let plan = display_plan()?;
+
+        let expected_pg_json = r#"[
+  {
+    "Plan": {
+      "Expressions": [
+        "employee_csv.id"
+      ],
+      "Node Type": "Projection",
+      "Output": [
+        "id"
+      ],
+      "Plans": [
+        {
+          "Condition": "employee_csv.state IN (<subquery>)",
+          "Node Type": "Filter",
+          "Output": [
+            "id",
+            "state"
+          ],
+          "Plans": [
+            {
+              "Node Type": "Subquery",
+              "Output": [
+                "state"
+              ],
+              "Plans": [
+                {
+                  "Node Type": "TableScan",
+                  "Output": [
+                    "state"
+                  ],
+                  "Plans": [],
+                  "Relation Name": "employee_csv"
+                }
+              ]
+            },
+            {
+              "Node Type": "TableScan",
+              "Output": [
+                "id",
+                "state"
+              ],
+              "Plans": [],
+              "Relation Name": "employee_csv"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]"#;
+
+        let pg_json = format!("{}", plan.display_pg_json());
+
+        assert_eq!(expected_pg_json, pg_json);
         Ok(())
     }
 

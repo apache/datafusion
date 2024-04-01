@@ -544,17 +544,17 @@ enum ScalarFunction {
   unknown = 0;
   //  1 was Acos
   //  2 was Asin
-  Atan = 3;
+  // 3 was Atan
   // 4 was Ascii
   Ceil = 5;
   Cos = 6;
   // 7 was Digest
   Exp = 8;
   Floor = 9;
-  Ln = 10;
+  // 10 was Ln
   Log = 11;
-  Log10 = 12;
-  Log2 = 13;
+  // 12 was Log10
+  // 13 was Log2
   Round = 14;
   Signum = 15;
   Sin = 16;
@@ -572,8 +572,8 @@ enum ScalarFunction {
   // 28 was DatePart
   // 29 was DateTrunc
   InitCap = 30;
-  Left = 31;
-  Lpad = 32;
+  // 31 was Left
+  // 32 was Lpad
   // 33 was Lower
   // 34 was Ltrim
   // 35 was MD5
@@ -583,9 +583,9 @@ enum ScalarFunction {
   // 39 was RegexpReplace
   // 40 was Repeat
   // 41 was Replace
-  Reverse = 42;
-  Right = 43;
-  Rpad = 44;
+  // 42 was Reverse
+  // 43 was Right
+  // 44 was Rpad
   // 45 was Rtrim
   // 46 was SHA224
   // 47 was SHA256
@@ -593,31 +593,31 @@ enum ScalarFunction {
   // 49 was SHA512
   // 50 was SplitPart
   // StartsWith = 51;
-  Strpos = 52;
-  Substr = 53;
+  // 52 was Strpos
+  // 53 was Substr
   // ToHex = 54;
   // 55 was ToTimestamp
   // 56 was ToTimestampMillis
   // 57 was ToTimestampMicros
   // 58 was ToTimestampSeconds
   // 59 was Now
-  Translate = 60;
+  // 60 was Translate
   // Trim = 61;
   // Upper = 62;
   Coalesce = 63;
   Power = 64;
   // 65 was StructFun
   // 66 was FromUnixtime
-  Atan2 = 67;
+  // 67 Atan2
   // 68 was DateBin
   // 69 was ArrowTypeof
   // 70 was CurrentDate
   // 71 was CurrentTime
   // 72 was Uuid
   Cbrt = 73;
-  Acosh = 74;
-  Asinh = 75;
-  Atanh = 76;
+  // 74 Acosh
+  // 75 was Asinh
+  // 76 was Atanh
   Sinh = 77;
   Cosh = 78;
   // Tanh = 79;
@@ -665,8 +665,8 @@ enum ScalarFunction {
   // 123 is ArrayExcept
   // 124 was ArrayPopFront
   // 125 was Levenshtein
-  SubstrIndex = 126;
-  FindInSet = 127;
+  // 126 was SubstrIndex
+  // 127 was FindInSet
   // 128 was ArraySort
   // 129 was ArrayDistinct
   // 130 was ArrayResize

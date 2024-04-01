@@ -33,8 +33,6 @@ pub mod sort_properties;
 pub mod string_expressions;
 pub mod tree_node;
 pub mod udf;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
 pub mod utils;
 pub mod window;
 

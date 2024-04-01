@@ -116,6 +116,7 @@ Here are some active projects using DataFusion:
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
+- [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
@@ -140,12 +141,13 @@ Here are some less active projects that used DataFusion:
 [kamu]: https://github.com/kamu-data/kamu-cli
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
 [horaedb]: https://github.com/apache/incubator-horaedb
-[influxdb iox]: https://github.com/influxdata/influxdb_iox
+[influxdb]: https://github.com/influxdata/influxdb
 [parseable]: https://github.com/parseablehq/parseable
 [prql-query]: https://github.com/prql/prql-query
 [qv]: https://github.com/timvw/qv
 [roapi]: https://github.com/roapi/roapi
 [seafowl]: https://github.com/splitgraph/seafowl
+[spice.ai]: https://github.com/spiceai/spiceai
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
 [vegafusion]: https://vegafusion.io/
@@ -167,6 +169,7 @@ provide integrations with other systems, some of which are described below:
 
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
+- [datafusion-federation](https://github.com/datafusion-contrib/datafusion-federation)
 
 ## Why DataFusion?
 
