@@ -253,7 +253,7 @@ macro_rules! make_math_unary_udf {
 
 /// Macro to create a binary math UDF.
 ///
-/// A binary math function takes an argument of type Float32 or Float64,
+/// A binary math function takes two arguments of types Float32 or Float64,
 /// applies a binary floating function to the argument, and returns a value of the same type.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
