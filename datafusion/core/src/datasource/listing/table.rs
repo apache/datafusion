@@ -446,26 +446,27 @@ impl ListingOptions {
         state: &SessionState,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
-        let partitions = self.infer_partitions(state, table_path).await?;
+        let inferred = self.infer_partitions(state, table_path).await?;
 
-        if partitions.is_empty() {
+        // no files found on disk or path is not a partitioned table
+        if inferred.is_empty() {
             return Ok(());
         }
 
         let table_partition_names = self
             .table_partition_cols
             .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<String>>();
+            .map(|(col_name, _)| col_name.clone())
+            .collect_vec();
 
-        if partitions != table_partition_names {
+        if inferred == table_partition_names {
+            Ok(())
+        } else {
             plan_err!(
-                "Expected partitions to be {:?}, but found {:?}",
-                partitions,
+                "Inferred partitions to be {:?}, but got {:?}",
+                inferred,
                 table_partition_names
             )
-        } else {
-            Ok(())
         }
     }
 
@@ -477,9 +478,14 @@ impl ListingOptions {
         table_path: &ListingTableUrl,
     ) -> Result<Vec<String>> {
         let store = state.runtime_env().object_store(table_path)?;
+
+        // only use 10 files for inference
+        // This can fail to detect inconsistent partition keys
+        // A DFS traversal approach can be helpful
         let files: Vec<ObjectMeta> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
+            .take(10)
             .try_collect()
             .await?;
 
@@ -487,32 +493,37 @@ impl ListingOptions {
             return Ok(vec![]);
         }
 
-        // TODO: Avoid using all the files
-        let stripped_path_parts = files.iter().map(|object| {
+        let stripped_path_parts = files.iter().map(|file| {
             table_path
-                .strip_prefix(&object.location)
+                .strip_prefix(&file.location)
                 .unwrap()
                 .collect::<Vec<_>>()
         });
 
-        let partitions = stripped_path_parts
+        let partition_keys = stripped_path_parts
             .map(|path_parts| {
                 path_parts
                     .iter()
                     .rev()
-                    .skip(1) // skip the file itself
+                    .skip(1) // get parent only; skip the file itself
                     .rev()
-                    .map(|s| s.split_once('=').unwrap().0.to_string())
+                    .map(|s| s.split_once('='))
+                    .filter_map(|result| result.map(|(col_name, _)| col_name.to_string()))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        println!("{:?}", partitions);
-        partitions.into_iter().all_equal_value().map_err(|v| {
-            DataFusionError::Plan(format!(
-                "Found mixed partition values on disk {:?}",
-                v.unwrap()
-            ))
+        partition_keys.into_iter().all_equal_value().map_err(|v| {
+            if let Some(diff) = v {
+                DataFusionError::Plan(format!(
+                    "Found mixed partition values on disk {:?}",
+                    diff
+                ))
+            } else {
+                DataFusionError::Internal(format!(
+                    "Tried infering partitions using a non-hive partition",
+                )) // should be unreachable
+            }
         })
     }
 }
