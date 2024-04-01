@@ -175,13 +175,13 @@ impl CommonSubexprEliminate {
     ) -> Result<LogicalPlan> {
         let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
-        let mut expr_set = ExprSet::new();
+        let mut expr_set = ExprSet::default();
 
         // Visit expr list and build expr identifier to occuring count map (`expr_set`).
-        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+        expr_set.populate_expr_set(expr, input_schema, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
-            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
+            self.rewrite_expr(&[expr], input, &expr_set, config)?;
 
         // Since projection expr changes, schema changes also. Use try_new method.
         Projection::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))
@@ -193,25 +193,13 @@ impl CommonSubexprEliminate {
         filter: &Filter,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let mut expr_set = ExprSet::new();
+        let mut expr_set = ExprSet::default();
         let predicate = &filter.predicate;
         let input_schema = Arc::clone(filter.input.schema());
-        let mut id_array = vec![];
-        expr_to_identifier(
-            predicate,
-            &mut expr_set,
-            &mut id_array,
-            input_schema,
-            ExprMask::Normal,
-        )?;
+        expr_set.expr_to_identifier(predicate, input_schema, ExprMask::Normal)?;
 
-        let (mut new_expr, new_input) = self.rewrite_expr(
-            &[&[predicate.clone()]],
-            &[&[id_array]],
-            &filter.input,
-            &expr_set,
-            config,
-        )?;
+        let (mut new_expr, new_input) =
+            self.rewrite_expr(&[&[predicate.clone()]], &filter.input, &expr_set, config)?;
 
         if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
             Ok(LogicalPlan::Filter(Filter::try_new(
@@ -396,11 +384,11 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let Sort { expr, input, fetch } = sort;
-        let mut expr_set = ExprSet::new();
+        let mut expr_set = ExprSet::default();
 
         let input_schema = Arc::clone(input.schema());
         // Visit expr list and build expr identifier to occuring count map (`expr_set`).
-        expr_set.populate_expr_set(&expr, input_schema, ExprMask::Normal)?;
+        expr_set.populate_expr_set(expr, input_schema, ExprMask::Normal)?;
 
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[&expr], input, &expr_set, config)?;
